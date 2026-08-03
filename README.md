@@ -8,6 +8,14 @@ create a character, and walk around the school.
 
 ## About this project
 
+The servers went away; the client did not. The campus, the characters and the scripts
+are all still on the disc, intact and unreachable. This is the half that vanished,
+rebuilt from the outside by watching what the client asks for.
+
+It does not bring the game back, and the next section is blunt about how much is gone
+for good. What it does is make the part that survived reachable again, on your own
+machine, for as long as you care to keep a copy.
+
 This is an independent implementation of the game's network protocol, produced by
 analysing how the client communicates, for the purpose of interoperability: letting an
 existing client program reach a server again.
@@ -266,6 +274,7 @@ you to discover.
 | `server/state.py`, `common.py` | session state and shared service plumbing |
 | `server/llb_server.py`, `login_server.py`, `updater_server.py`, `auth_http_server.py`, `world_server.py` | the smaller services |
 | `reference/mapgraph.json` | grid size, collision and doorways for the 78 maps |
+| `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
 
 `reference/mapgraph.json` is the only data file. Without it the map graph is empty, the
 server says `warps go unchecked`, and moving between maps stops working.
@@ -289,3 +298,9 @@ marks a message this server has seen but does not answer yet.
 That covers this repository's own code and documentation, and nothing else. It grants no
 rights in *Tokimeki Memorial ONLINE* or in any KONAMI property, and section 6 of the
 license says as much about trademarks.
+
+[`NOTICE`](NOTICE) carries the attribution, and the statement that nothing here comes
+out of KONAMI's software. Section 4(d) of the license makes that travel: if you
+redistribute this or anything derived from it, that text has to go along. Which is the
+point — those are the sentences that should still be attached to this code after it has
+passed through hands that never read this README.
