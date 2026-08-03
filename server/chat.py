@@ -691,7 +691,7 @@ def respond(
     if word == "scl":
         names = script.available()
         if not names:
-            return Reply(["台本なし: tools/sscops.py export <名前> を先に"])
+            return Reply(["台本なし: runtime/scripts/ が空"])
         return Reply([" ".join(names[:10])])
 
     if word == "sc":
@@ -784,7 +784,7 @@ def respond(
         words = rest.split()
         if not words:
             if not known:
-                return Reply(["ドラマ表なし: tools/dramaevents.py export を先に"])
+                return Reply(["ドラマ表なし: runtime/drama_events.json が無い"])
             names = " ".join(f"{e['genre']}:{e['index']}={e['ssb'][:-4]}" for e in known)
             return Reply([f"{len(known)}件"] + [names[i:i + 90]
                                                 for i in range(0, len(names), 90)][:3])
