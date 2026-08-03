@@ -279,7 +279,7 @@ marks a message this server has seen but does not answer yet.
 
 ## License
 
-[Apache License 2.0](LICENSE). Copyright 2026 Akirasora and contributors.
+[Apache License 2.0](LICENSE). Copyright 2026 Shu Akirasora and contributors.
 
 That covers this repository's own code and documentation, and nothing else. It grants no
 rights in *Tokimeki Memorial ONLINE* or in any KONAMI property, and section 6 of the
