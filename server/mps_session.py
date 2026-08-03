@@ -1712,8 +1712,9 @@ class MpsServer:
                     target = (values[0], values[1])
                     if mapgraph.walkable(session.map_id, target) is False:
                         print(
-                            f"[{self.tag}] WALKABILITY 反例: map {session.map_id} "
-                            f"{target} 被判为无地板，客户端却走上去了"
+                            f"[{self.tag}] WALKABILITY counterexample: map "
+                            f"{session.map_id} {target} reads as having no floor, "
+                            f"and the client walked onto it anyway"
                         )
                     session.pos = target
                 elif msg_type == MSG_CL_REQUEST_CHARA_WARP:
