@@ -22,11 +22,14 @@ endorsed by, or connected to KONAMI in any way.
 
 ## What this is not
 
-- **Not a restored game.** What works today is: logging in, creating a character, walking
-  around, moving between maps, position persistence, and chat. The original server's game
-  logic — NPC behaviour, event scripts, the dating-sim progression — did not survive
-  alongside the client, and none of it is reimplemented here. What you get is a campus you
-  can walk into, not a game you can play through.
+- **Not a restored game.** What works today: logging in, creating a character, walking
+  around, moving between maps, position persistence, chat, putting NPCs on the map, a
+  report card and a timetable, the class bells, and a romance state stored per character.
+  Nearly all of it is driven by hand from the chat console; there is no game loop tying it
+  together. The original server's own logic — how NPCs behaved, when events fired, what
+  actually advanced the dating-sim progression — did not survive alongside the client, and
+  none of it is reimplemented here. What you get is a campus you can walk into and a set of
+  levers, not a game you can play through.
 - **Not a public service.** There is no server to join, this repository will never run
   one, and nothing here is or will be sold.
 - **Not a source of game files.** No client, no assets, no patched executable. You supply
@@ -190,18 +193,46 @@ proceeds into the game. Two things that looked like obstacles turned out not to 
 
 ## Commands
 
-Typed into the game's own chat bar and handled by this server:
+Typed into the game's own chat bar and handled by this server. They are a console for
+driving the protocol rather than gameplay: most of them exist because sending a message by
+hand was the only way to find out what the client would do with it.
 
 | Command | Effect |
 |---|---|
-| `/go <map name or id>` | move to a map |
+| `/cmds` | list them in the game |
+| `/go <map name or id> [x y]` | move to a map |
 | `/pos` | print where you are |
 | `/maps <name>` | search the map table |
-| `/cmds` | list these |
+| `/dirs` | drop a marker for each of the sixteen direction values |
+| `/npc <cat>:<id> [<cat>:<id>]` | put an NPC on the map; a second key names a script |
+| `/npca [<first> <last> [category]]` | place every romance candidate who has appeared |
+| `/npcx` | stop replacing them |
+| `/rom [name] [debut\|talk\|ev\|p <n>]` | read and move the romance state |
+| `/nev [<cat>:<id>]` | set the conversation-event key |
+| `/card [...]` | the report card |
+| `/jikan [day]` | the timetable |
+| `/bell [<subject>\|ready]` | ring the warning and start bells by hand |
+| `/lopt [seats\|speech\|words] <n>` | knobs on the lesson message |
+| `/sc`, `/scn`, `/sce`, `/scl`, `/sel` | script playback — see the next section |
+| `/de [<genre>:<index>]` | the drama-event list — likewise |
+| `/dms` | open the matching screen |
 
 The client intercepts a number of words itself — `/help` and `/where` among them — and
 never puts them on the wire, so those names are unavailable no matter what the server
 does.
+
+### What needs data this repository does not ship
+
+`/sc` plays one of the game's own cut-scene scripts back to the client instruction by
+instruction, and `/de` sends the list of drama events. Both read JSON out of `runtime/`,
+and that JSON is made from the game's own content — so neither the files nor a way to
+produce them is included here.
+
+With `runtime/scripts/` empty, `/scl` reports that there are no scripts and `/sc` cannot
+find one; with no `runtime/drama_events.json`, `/de` cannot name an event, though it will
+still send a key given directly as `<genre>:<index>`. Nothing else on the list above
+depends on either file. This is a gap, and it is stated here as one rather than left for
+you to discover.
 
 ## Layout
 
@@ -211,11 +242,17 @@ does.
 | `set_auth_address.py` | the four-byte address change described under "Connecting a client" |
 | `server/run_all.py` | binds every service in one asyncio loop |
 | `server/mps_session.py` | packet layer, key exchange, message dispatch — the bulk of it |
+| `server/mps_cipher.py` | the Blowfish variant the session layer speaks |
 | `server/characters.py` | character creation, listing, entering the world, movement, map changes |
 | `server/chat.py` | chat broadcast, and the server-side commands above |
 | `server/mapgraph.py` | map geometry and doorway table |
+| `server/romance.py` | the five romance candidates and the state kept for each |
+| `server/curriculum.py`, `lesson.py` | report card and timetable; bells, classroom entry, school clock |
+| `server/script.py` | cut-scene playback — see "What needs data this repository does not ship" |
+| `server/facing.py` | the four-bit direction mask |
 | `server/message_names.py` | message id to name |
-| `server/llb_server.py`, `login_server.py`, `updater_server.py`, `auth_http_server.py` | the smaller services |
+| `server/state.py`, `common.py` | session state and shared service plumbing |
+| `server/llb_server.py`, `login_server.py`, `updater_server.py`, `auth_http_server.py`, `world_server.py` | the smaller services |
 | `reference/mapgraph.json` | grid size, collision and doorways for the 78 maps |
 
 `reference/mapgraph.json` is the only data file. Without it the map graph is empty, the
