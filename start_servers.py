@@ -76,9 +76,17 @@ def main(argv: list[str]) -> int:
     )
     PIDFILE.write_text(str(proc.pid))
     time.sleep(1.2)
-    if not _pid_alive(proc.pid):
-        print("failed to start; log tail:")
+    # poll(), not _pid_alive(): this one is our own child, and a child that has
+    # exited but not been waited on is a zombie. A zombie still answers kill(pid, 0),
+    # so the probe above would call a server that died on startup a live one --
+    # which is what happens on a LibreSSL-backed Python, where run_all.py raises
+    # before it binds anything. poll() reaps it and gives the real exit status.
+    if proc.poll() is not None:
+        print(f"failed to start (exit {proc.returncode}); log tail:")
         print(LOG.read_text()[-2000:])
+        # Leaving the pidfile behind would point start_servers.py at a pid that is
+        # not ours the moment the number is recycled; see scripts/stop_servers.sh.
+        PIDFILE.unlink(missing_ok=True)
         return 1
     print(f"started pid={proc.pid}")
     print(LOG.read_text()[-1500:])
