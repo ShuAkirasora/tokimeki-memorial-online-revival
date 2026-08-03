@@ -1,0 +1,10 @@
+# Everything the server writes while it runs: logs, packet dumps, the character
+# store, and the self-signed certificate generated on first start. None of it
+# belongs in the repository, and runtime/certs/ holds a private key.
+runtime/
+
+.venv/
+
+__pycache__/
+*.pyc
+.DS_Store
