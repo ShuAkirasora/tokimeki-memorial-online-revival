@@ -68,10 +68,15 @@ kill "$(cat runtime/run_all.pid)"
 Everything runs in one process. `[system] all services started` in the log means it is up.
 
 If the pidfile is gone, or the process was started by hand and never wrote one,
-`scripts/stop_servers.sh` finds the server by the ports it listens on instead. It also
-removes the pidfile, which the `kill` above does not: a pidfile left pointing at a dead
-process is harmless until that number gets recycled, at which point `start_servers.py`
-sees a live pid and refuses to start.
+`stop_servers.py` finds the server by the ports it listens on instead:
+
+```sh
+.venv/bin/python stop_servers.py
+```
+
+It also removes the pidfile, which the `kill` above does not: a pidfile left pointing at
+a dead process is harmless until that number gets recycled, at which point
+`start_servers.py` sees a live pid and refuses to start.
 
 ### Serving players on other machines
 
@@ -245,7 +250,7 @@ you to discover.
 | Path | |
 |---|---|
 | `start_servers.py` | launcher; the supported way to start everything |
-| `scripts/stop_servers.sh` | stop by port when the pidfile is missing or stale |
+| `stop_servers.py` | stop by port when the pidfile is missing or stale |
 | `set_auth_address.py` | the four-byte address change described under "Connecting a client" |
 | `server/run_all.py` | binds every service in one asyncio loop |
 | `server/mps_session.py` | packet layer, key exchange, message dispatch — the bulk of it |
@@ -271,7 +276,7 @@ server says `warps go unchecked`, and moving between maps stops working.
 |---|---|
 | `ssl.SSLError: ('No cipher can be selected.',)` | LibreSSL-backed Python; see Requirements |
 | `warps go unchecked` in the log | `reference/mapgraph.json` missing |
-| `already running pid=N` | a previous instance is still up; leave it, or `scripts/stop_servers.sh` |
+| `already running pid=N` | a previous instance is still up; leave it, or `stop_servers.py` |
 | `[authhttp] skip :443` | not running with the privileges to bind a low port |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`

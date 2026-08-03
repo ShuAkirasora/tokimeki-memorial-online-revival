@@ -3,10 +3,14 @@
 
 Arguments are handed to server/run_all.py untouched, so a public deployment is
 
-    ./start_servers.py --advertise-ip 203.0.113.7
+    .venv/bin/python start_servers.py --advertise-ip 203.0.113.7
 
 with the address players reach this machine at. See run_all.py for why that
 cannot be worked out from the sockets.
+
+Name the interpreter rather than relying on the shebang: on macOS that would
+pick the system python3, which is built against LibreSSL and cannot start the
+TLS listeners. stop_servers.py is run the same way.
 """
 from __future__ import annotations
 
@@ -33,7 +37,20 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def _free_ports() -> None:
+def stop_listeners() -> list[int]:
+    """SIGTERM whatever is listening on our ports. Returns the pids signalled.
+
+    Shared with stop_servers.py, which is this and a pidfile removal and nothing
+    else: clearing the ports before a start and stopping the server are the same
+    operation, so there is one port list and one way of killing rather than a
+    second copy that can drift out of step.
+
+    Ports rather than a process name, because a name match would also catch an
+    editor with run_all.py open. Everything binds in one process, so one hit is
+    normally the whole server; the rest of the list is what catches an instance
+    that failed partway through binding.
+    """
+    killed: list[int] = []
     for port in PORTS:
         try:
             out = subprocess.check_output(
@@ -45,9 +62,17 @@ def _free_ports() -> None:
             continue
         for line in out.split():
             try:
-                os.kill(int(line.strip()), signal.SIGTERM)
-            except (ValueError, OSError):
-                pass
+                pid = int(line.strip())
+            except ValueError:
+                continue
+            if pid in killed:          # the same process, holding another port
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                continue
+            killed.append(pid)
+    return killed
 
 
 def main(argv: list[str]) -> int:
@@ -61,7 +86,7 @@ def main(argv: list[str]) -> int:
             print(f"already running pid={old}")
             return 0
 
-    _free_ports()
+    stop_listeners()
     time.sleep(0.5)
 
     log_f = open(LOG, "a", buffering=1)
