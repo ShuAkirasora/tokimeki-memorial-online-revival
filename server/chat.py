@@ -701,10 +701,17 @@ def respond(
         # check would only be able to enforce this end's guesses.
         words = rest.split()
         if not words:
-            return Reply([f"/sc <名前> [ctrl] [actor:npcId]  例: /sc amm_s001"])
-        found = script.load(words[0])
-        if found is None:
-            return Reply([f"台本が見つからない: {words[0]}"])
+            return Reply([f"/sc <名前|scriptId> [ctrl] [actor:npcId]  例: /sc amm_s001"])
+        if words[0].isdigit():
+            # ⭐ A bare id starts a stub: no cast, no instruction list, no
+            # branches (see script.stub). Everything downstream is the same
+            # code as a loaded script, so a difference between `/sc amm_s001`
+            # and `/sc 57344` is a difference the export made, and nothing else.
+            found = script.stub(int(words[0]))
+        else:
+            found = script.load(words[0])
+            if found is None:
+                return Reply([f"台本が見つからない: {words[0]}"])
         if found.script_id is None:
             return Reply([f"{found.file} に scriptId がない"])
         ctrl = int(words[1]) if len(words) > 1 and words[1].isdigit() else 0

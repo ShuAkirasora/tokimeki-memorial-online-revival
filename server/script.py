@@ -38,16 +38,29 @@ Shapes, from the client's own deserialisers:
   rounds 30-32 spent themselves on and it does nothing useful; it is kept only
   for the manual ``/sc`` driver.
 
-``ctrl`` is still a guess and so is whether ``npcInfo[]`` may be empty — the
-``.ssb`` already declares its own cast. Both stay ``/sc`` arguments rather than
-constants, because each wrong guess otherwise costs a whole client run
-(an earlier lesson).
+⭐ **``npcInfo[]`` may be empty.** Measured, and it used to be the open half of
+this paragraph: the same NPC conversation was played twice, once with the cast
+announced from an export and once with nothing announced at all, and the client
+answered ``OkScriptReady`` and ran to ``OP_END`` both times. The ``.ssb``
+declares its own actors and that is enough for it. ``ctrl`` is still a guess,
+and stays a ``/sc`` argument rather than a constant, because a wrong guess
+costs a whole client run (an earlier lesson).
 
 The instruction list comes from ``runtime/scripts/<name>.json``, written by
 ``the script exporter``. That indirection is the publishing boundary: the
 exporter reads the game's content (the decrypted ``.ssb`` tree and
 ``reference/idlist/script.txt``), this module reads neither. Missing file means
 "no such script" rather than an error, the way mapgraph.py degrades.
+
+⭐ **What an export is still needed for is one field: ``branches``.** The run
+above pinned the rest down as dispensable — the id arrives from the client, the
+cast can be empty, the instruction list is only ever printed, ``codeBase`` only
+converts ips for that printing, and a select needs no option count (see
+``select_params``). Without ``branches`` a scene plays through to its own
+``OP_END`` and a choice box is drawn and answered; what is lost is the answer
+mattering, because every ``OP_BR`` then falls through. A branch target lives in
+the instruction's operands and operands never go on the wire, so this is the
+one thing that cannot be recovered by watching a script run.
 """
 
 from __future__ import annotations
@@ -232,6 +245,30 @@ def load(name: str) -> Script | None:
         return None
 
 
+def stub(script_id: int) -> Script:
+    """A Script with an id and nothing else, for playing without an export.
+
+    ⭐ **A stub plays.** Round 37 established that the client runs the VM; what
+    a stub tested is the assumption round 37 left standing, that the cast this
+    end announces in ``MsgSvRequestScriptReady`` is needed at all. It is not.
+    The same NPC conversation was played twice, once from an export and once
+    from a stub built out of nothing but the id the client had just asked for,
+    and both were accepted and both ran to the script's own ``OP_END``.
+
+    Every field a stub lacks degrades into a path that already exists: ``at()``
+    returns None and the log says ``<not an instruction start>``, ``selects``
+    is empty and the query goes out as ``SELECT_ALL`` regardless, ``branches``
+    is empty so every ``OP_BR`` falls through. ``codeBase`` 0 makes the
+    *printed* local ip half the wire ip, which is wrong as a label and harmless
+    as an answer, because every ip that goes back on the wire is in wire units.
+
+    Only the last of those costs anything: a scene plays either way, but with
+    no branch table a choice cannot take its branch. See the module docstring.
+    """
+    return Script({"file": f"<stub {script_id}>", "scriptId": script_id,
+                   "codeBase": 0, "actors": [], "instructions": []})
+
+
 def ready_params(script_id: int, npc_infos: list[tuple[int, int]]) -> bytes:
     """A MsgSvRequestScriptReady body.
 
@@ -272,8 +309,16 @@ def select_params(select: int, timer_count: int) -> bytes:
 
     ⚠️ **The box is built once, when the Begin is answered.** A second query
     with a wider mask changes nothing on screen — 7 was sent to the same box
-    and it stayed at two options. Whatever this field is going to be, it has to
-    be right the first time.
+    and it stayed at two options. So the field has to be right the first time,
+    which is what the next paragraph is about.
+
+    ⭐ **All bits set draws every option the script has, and no more.** The
+    reading is settled by two measurements that only make sense together: 3
+    against a three-option box drew *two* lines, which is what makes this a
+    mask rather than a count, and 0xFFFFFFFF against the same box on a first
+    query drew *three* — the script's own number, not thirty-two. The client
+    caps to what the ``.ssb`` declares, so this end never has to know how many
+    options there are, and ``select_query`` does not try to.
     """
     return struct.pack(">IQ", select & 0xFFFFFFFF, timer_count)
 
@@ -289,16 +334,24 @@ def command_end_params(wire_ip: int, op: int) -> bytes:
 # "0 = expire now" are equally plausible readings and one of them loses.
 DEFAULT_SELECT_TIMER = 60000
 
+# Every bit set, for a select whose option count this end does not know.
+SELECT_ALL = 0xFFFFFFFF
 
-def select_query(entry: dict | None) -> tuple[int, int]:
-    """`(select, timerCount)` for one INPUT_SELECT, from its exported entry.
 
-    Every option on: the script itself decides which lines a player may take,
-    through the `OP_STR 0x1e80+k = 1` run it puts in front of the command, and
-    this end has no state with which to second-guess it.
+def select_query() -> tuple[int, int]:
+    """`(select, timerCount)` for any INPUT_SELECT.
+
+    Every option on, and no arithmetic to get there: the client caps the mask
+    to the number of lines the script declares (`select_params`), and the
+    script itself decides which of them a player may take, through the
+    `OP_STR 0x1e80+k = 1` run it puts in front of the command. This end has no
+    state with which to second-guess either, and now no need to count.
+
+    ⚠️ This used to derive the mask from the exported option list, which made a
+    choice box the one thing a stub could not answer — with nothing exported it
+    computed `(1 << 0) - 1`, a box offering no lines at all.
     """
-    options = (entry or {}).get("options", [])
-    return (1 << len(options)) - 1, DEFAULT_SELECT_TIMER
+    return SELECT_ALL, DEFAULT_SELECT_TIMER
 
 
 class Runner:

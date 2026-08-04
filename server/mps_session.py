@@ -856,7 +856,9 @@ class MpsServer:
     def _script_command(self, session: "_Session", seen: int, action) -> bytes:
         """Act on /sc, /scn or /sce."""
         if action.kind == "start":
-            found = script.load(action.name)
+            # A digit string is a scriptId rather than a name; see chat.py.
+            found = (script.stub(int(action.name)) if action.name.isdigit()
+                     else script.load(action.name))
             if found is None or found.script_id is None:
                 return b""      # chat.respond already said so
             return self._script_start(session, seen, found, action.ctrl, action.npc_infos)
@@ -1004,11 +1006,18 @@ class MpsServer:
             reply = self._answer(session, seen, script.MSG_SV_OK_NPC_EVENT_START, b"")
             found = script.by_script_id(npc_event_id)
             if found is None:
+                # ⭐ No export for this id, so push a stub instead of giving up.
+                # The client has already read the id out of its own table and
+                # is waiting to be told to run it; answering with the id alone
+                # is the whole question — whether an export was ever needed on
+                # this path. Returning the bare Ok is the one outcome that
+                # teaches nothing, because it ends in スクリプトエラー
+                # ID:65535 whether or not the data would have helped.
                 print(
                     f"[{self.tag}] npc event {npc_event_id} has no exported script "
-                    f"— the script exporter it first"
+                    f"— starting a stub (cast empty)"
                 )
-                return reply
+                found = script.stub(npc_event_id)
             # The cast comes out of the script's own header rather than from
             # this end: each .ssb names its actors, which is why 223 placement
             # scripts can all say NPC#1 and still be 223 different people.
@@ -1181,19 +1190,18 @@ class MpsServer:
 
     def _script_select(self, session: "_Session", seen: int, local_ip: int) -> bytes:
         """Answer a stopped INPUT_SELECT with MsgSvQueryScriptCommandSelect."""
-        entry = session.script.script.selects.get(local_ip)
-        select, timer = script.select_query(entry)
+        select, timer = script.select_query()
         if session.select_override is not None:
             select, timer = session.select_override
+        # The export no longer decides the answer, only what the log can say
+        # the box is about to show. Having no entry is ordinary — a stub has
+        # none — so it is reported as an absence rather than as a fault.
+        entry = session.script.script.selects.get(local_ip)
         if entry is not None:
             print(f"[{self.tag}] 選択肢 ip={local_ip}「{entry['prompt']}」: "
                   + " / ".join(entry["options"]))
         else:
-            # No exported entry means the running script predates the exporter
-            # knowing about selects, or the ip is not where we think it is.
-            # Sending the query anyway is still the experiment; saying so is
-            # what keeps a silent client from being read as a silent server.
-            print(f"[{self.tag}] 選択肢 ip={local_ip} は台本に無い（要 re-export）")
+            print(f"[{self.tag}] 選択肢 ip={local_ip}（文面は台本にしかない）")
         print(f"[{self.tag}] -> QueryScriptCommandSelect select={select} timer={timer}")
         return self._answer(session, seen,
                             script.MSG_SV_QUERY_SCRIPT_COMMAND_SELECT,
