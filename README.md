@@ -63,7 +63,7 @@ school list. Those are inventions, and the comments say so where they appear.
 ## Requirements
 
 - **Python with a real OpenSSL.** Tested on 3.14. Only the standard library is used — no
-  third-party packages.
+  third-party packages, so there is nothing to install and no virtualenv to create.
 
   On macOS, the system `python3` is built against LibreSSL and cannot start the TLS
   listeners; it dies with `ssl.SSLError: ('No cipher can be selected.',)`. Use a
@@ -74,8 +74,7 @@ school list. Those are inventions, and the comments say so where they appear.
 ## Running the server
 
 ```sh
-python3 -m venv .venv
-.venv/bin/python start_servers.py
+python3 start_servers.py
 ```
 
 `start_servers.py` frees the ports it needs, starts the services in a detached session,
@@ -91,7 +90,7 @@ If the pidfile is gone, or the process was started by hand and never wrote one,
 `stop_servers.py` finds the server by the ports it listens on instead:
 
 ```sh
-.venv/bin/python stop_servers.py
+python3 stop_servers.py
 ```
 
 It also removes the pidfile, which the `kill` above does not: a pidfile left pointing at
@@ -110,7 +109,7 @@ remote player back to their own computer.
 So tell the server the address clients reach it at:
 
 ```sh
-.venv/bin/python start_servers.py --advertise-ip 203.0.113.7
+python3 start_servers.py --advertise-ip 203.0.113.7
 ```
 
 or set `TMO_ADVERTISE_IP`. The startup log says which one is in use:
