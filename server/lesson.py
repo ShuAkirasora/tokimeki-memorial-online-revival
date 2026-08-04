@@ -13,8 +13,13 @@ send to a player standing in the wrong room when it does.
     0x6003 MsgSvNgLessonReady             u8 reason
     0x6004 MsgSvNotifyLessonStartImpossible u8 reason
     0x6100 MsgSvNotifyLessonStart         counted, 66B entries — the seat list
+    0x6103 MsgSvNotifyLessonQuestionStart the question, as three numbers
+    0x6105 MsgClCastLessonAnswer          u8 questionNo, u8 choiceId
+    0x6106 MsgSvNotifyLessonAnswer        u32 senderId, u8 correctAnswerflg
+    0x6104 MsgSvNotifyLessonQuestionEnd   u16 gradingWordsId
+    0x6102 MsgSvNotifyLessonEnd           結果発表
 
-Six of the eight bodies are empty or a single byte, and `0x6001` — the client
+Six of the eight handshake bodies are empty or a single byte, and `0x6001` — the client
 saying it wants in — carries **nothing at all**: no subject, no room, no seat.
 The client is not asserting anything the server could check. Every condition the
 manual lists (`p06_02`: in your own 組's classroom, waiting when the bell goes,
@@ -36,9 +41,12 @@ mode first and asks afterwards. Refusing is therefore never free — it costs a
 scene reload either way, which is an argument for checking what can be checked
 *before* ringing rather than after.
 
-⚠️ What happens after an Ok has not been seen. The client presumably then waits
-for 0x6100 MsgSvNotifyLessonStart and its seat list, which this file does not
-build yet.
+The whole chain has since been run: an Ok is followed by 0x6100 and the client
+draws the room, the backdrop, the player at a desk and the panel above it. What
+this file adds on top of that is the lesson itself — ``Lesson`` down at the
+bottom is the ten-question loop, and it is a clocked state machine rather than a
+set of handlers because only one of its five messages is something the client
+sends.
 """
 from __future__ import annotations
 
@@ -54,6 +62,11 @@ MSG_SV_NG_LESSON_READY = 0x6003
 MSG_SV_NOTIFY_LESSON_START_IMPOSSIBLE = 0x6004
 MSG_SV_NOTIFY_BEFORE_LESSON_START = 0x6005
 MSG_SV_NOTIFY_LESSON_START = 0x6100
+MSG_SV_NOTIFY_LESSON_END = 0x6102
+MSG_SV_NOTIFY_LESSON_QUESTION_START = 0x6103
+MSG_SV_NOTIFY_LESSON_QUESTION_END = 0x6104
+MSG_CL_CAST_LESSON_ANSWER = 0x6105
+MSG_SV_NOTIFY_LESSON_ANSWER = 0x6106
 
 # 一般教室校舎 has an 「自分の教室」 pseudo-map at key 128 that no ordinary warp
 # leads to. Not used here — the room a lesson happens in is a real map, the one
@@ -127,7 +140,12 @@ LESSON_BACKGROUND = (17, 17, 23, 17, 17, 38, 24, 22)
 # through the defaults.
 PROBE = {
     "seats": 1,        # how many seatInfo entries go out
-    "speech_ms": 600_000,
+    # How long the 開始台詞 runs, and therefore how long until question one:
+    # 0x6100's speechEndTime and Lesson's opening phase both read this, so the
+    # knob cannot put them out of step. It was 600_000 while the only question
+    # about this field was whether the client cared (it did not visibly), and ten
+    # minutes of silence is no longer a sensible lesson.
+    "speech_ms": 8_000,
     "words": -1,       # -1 = the subject's own 開始台詞
     "charaid": -1,     # -1 = the session's own; see the id namespace below
     "testlv": -1,      # -1 = the 通知表's own 試験レベル
@@ -416,3 +434,359 @@ def start_params(
 def ng_params(reason: int) -> bytes:
     """MsgSvNgLessonReady / MsgSvNotifyLessonStartImpossible. One u8."""
     return reason.to_bytes(1, "big")
+
+
+# ── 出題と採点 ──────────────────────────────────────────────────────────────
+# `p06_02` lays the loop out step by step, and it matches the five messages the
+# protocol has exactly one for one:
+#
+#   1）先生から問題が出題されます。…キャラクターがひらめいて選択肢が絞り込まれる
+#      ことがあります                     → 0x6103, flashId[]/flashChoiceId[]
+#   2）答えを選択し左クリックで解答します。一度解答すると変更できません
+#                                          → 0x6105 (client)
+#   3）残り時間が０になると正解が発表され、○・×が生徒ごとに表示されます
+#                                          → 0x6106, one per student
+#   4）先生が今回の問題についての正解率と感想を述べます
+#                                          → 0x6104 gradingWordsId
+#   5）1）〜4）を繰り返して１０問終了すると、結果発表になります
+#                                          → 0x6102 resultInfo
+#
+# ⭐ Step 3 answers something the 評価前台詞 had left open. That line is
+# 「今の問題の正答率は……$00か。」, `$00` is a client-side substitution, and 0x6104
+# carries nothing but a sentence id — so the rate had to reach the client some
+# other way. It already has: the client has seen one 0x6106 per student and can
+# count them. There is no rate field because there does not need to be one.
+#
+# Step 3 also says *when*: at zero, not on the answer. With one student in the
+# room those differ only in that the reveal waits, and the reveal is what the
+# manual describes, so that is what happens here — see Lesson.pump.
+
+# 「１回の授業につき１０問出題されます」 (`p06_02`).
+QUESTIONS_PER_LESSON = 10
+
+# ⚠️ INVENTED, all three, and they are pacing rather than rules.
+#
+# `p06_02` puts a 「残り時間」 on the panel and says to answer before it reaches
+# zero, without ever saying what it starts at; nothing in `lesson.bin`,
+# `quiz_level.bin` or `error_message.bin` holds a duration either. Twenty seconds
+# is a guess that leaves time to read four choices.
+#
+# GRADING_SECONDS is a gap this server has to fill because it drives beats the
+# client used to be driven through: how long the 評価 takes before the next
+# question goes out. The original's was however long its own animation ran.
+#
+# The opening pause is not here — it is PROBE["speech_ms"], because 0x6100 has to
+# tell the client the same number and one knob for both cannot drift.
+ANSWER_SECONDS = 20
+GRADING_SECONDS = 6
+
+# Where 高評価 / 並評価 / 低評価 divide, on **this question's** class-wide rate —
+# 「先生が今回の問題についての正解率と感想を述べます」, so it is the one question
+# and not the 通算 figure. INVENTED, and with a single student in the room only
+# the two ends are reachable at all: one student's rate is 0% or 100%.
+GRADING_GOOD = 0.75
+GRADING_FAIR = 0.40
+
+# tmn::NUM_OF_CHARA_ABILITY, and `chara_ability_type.bin` has the same six:
+# 文系 理系 芸術 雑学 運動 スタミナ.
+ABILITIES = 6
+# (0xE6 - 0x26) / 6 — the client's item buffer in 0x6102. A capacity, not a count.
+MAX_ITEMS = 32
+
+
+def question_params(
+    quiz_type: int,
+    quiz_lv: int,
+    quiz_id: int,
+    choice_ids: "list[int]",
+    start_time: int,
+    end_time: int,
+    flash_ids: "list[int]" | None = None,
+    flash_choice_ids: "list[int]" | None = None,
+) -> bytes:
+    """MsgSvNotifyLessonQuestionStart. Deserializer 0x008E4AD0, slot by slot.
+
+        u16 quizType
+        u16 quizLv
+        u16 quizId
+        u16 n; u8  × n   choiceId
+        u16 m; u32 × m   flashId
+        u16 k; u8  × k   flashChoiceId
+        i64 startTime                (vt+0x10, same signed 64-bit as speechEndTime)
+        i64 endTime
+
+    The three counts come *before* their arrays on the wire but the arrays live
+    *before* the counts in the struct, which is what makes the capacities
+    readable: choiceId is bytes +0x0E…+0x11 with its count at +0x12, so **four**;
+    flashId is +0x14 stride 4 with its count at +0x38, so **nine**;
+    flashChoiceId is +0x3A…+0x3D with its count at +0x3E, so four again.
+
+    ⚠️ Nine is the same nine as the seat list, so flashId is a list of charaIds
+    and not of choices — 「キャラクターがひらめいて選択肢が絞り込まれる」, the
+    characters who had the flash. Both flash arrays go out empty here: ひらめき
+    belongs to the お助けスキル set and none of it is modelled.
+    """
+    out = bytearray(struct.pack(">HHH", quiz_type, quiz_lv, quiz_id))
+    kept = list(choice_ids)[:4]
+    out += struct.pack(">H", len(kept)) + bytes(value & 0xFF for value in kept)
+    flashes = list(flash_ids or [])[:MAX_SEATS]
+    out += struct.pack(">H", len(flashes))
+    for chara_id in flashes:
+        out += struct.pack(">I", chara_id)
+    narrowed = list(flash_choice_ids or [])[:4]
+    out += struct.pack(">H", len(narrowed)) + bytes(v & 0xFF for v in narrowed)
+    out += struct.pack(">qq", start_time, end_time)
+    return bytes(out)
+
+
+def answer_params(sender_id: int, correct: bool) -> bytes:
+    """MsgSvNotifyLessonAnswer: u32 senderId, u8 correctAnswerflg. 0x009BB390.
+
+    One per student, and it is both the ○/× over each desk and — counted — the
+    class rate the 評価前台詞 substitutes into `$00`.
+    """
+    return struct.pack(">IB", sender_id, 1 if correct else 0)
+
+
+def question_end_params(grading_words: int) -> bytes:
+    """MsgSvNotifyLessonQuestionEnd: one u16 gradingWordsId. 0x008DB8E0."""
+    return struct.pack(">H", grading_words)
+
+
+def end_params(
+    end_words: int,
+    attendance_count: int,
+    stress: int = 0,
+    condition: int = 0,
+    ability: "list[int]" | None = None,
+    before_ability: "list[int]" | None = None,
+    items: "list[tuple[int, int, int]]" | None = None,
+) -> bytes:
+    """MsgSvNotifyLessonEnd, the 結果発表. Deserializer 0x008E4520.
+
+        u16 endWordsId
+        u32 attendanceCount
+        u8  stress
+        i8  condition                (vt+0x1C — signed, like 0x6100's subjectId)
+        u16 × 6  ability.abilityParam         (tmn::NUM_OF_CHARA_ABILITY)
+        u16 × 6  beforeAblity.abilityParam
+        u16 count; { u16 itemId.categoryId, u16 itemId.id, u8 param.count } × count
+
+    The item array sits at +0x26 with a stride of 6 and its count at +0xE6, so
+    the client can hold 32 — a capacity, not a number, and this sends none.
+
+    ⚠️ INVENTED / not modelled, in descending order of how visible each is:
+
+    * ``ability`` and ``before_ability``. 「授業に参加することにより、科目に応じて
+      能力パラメータが増減します」 (`p06_02`) and this message is where that
+      lands, but the six 能力 do not exist anywhere in this server: there is no
+      value to raise. They therefore go out **equal**, which draws a result
+      screen that reports no change — the honest rendering of a system that is
+      not there, rather than a number invented on the spot.
+
+      What is known and not yet enough: every `lesson.bin` record carries two
+      identical triples of values in 0…5, which is exactly `chara_ability_type`'s
+      range, and the manual's 「国語なら文系、数学なら理系」 matches the first of
+      each. Two of the eight subjects read oddly under that story, so it is a
+      measurement waiting for a verdict rather than a table to use. Do not build
+      on it here until one subject's triple has been shown to move the six
+      values the way the result screen draws them.
+    * ``stress`` and ``condition``. ストレス／ノイローゼ is a whole subsystem
+      (`p06_02`) with an entry condition and a set of places that reduce it, and
+      none of it exists; zero is the value of a thing that is never raised.
+    * ``items``. ご褒美 「その授業での成績によっては、ご褒美のアイテムが手に入る
+      こともあります」 — there is no inventory to put one in.
+
+    ``attendance_count`` and ``end_words`` are the two that are real.
+    """
+    out = bytearray(struct.pack(">HIBb", end_words, attendance_count,
+                                stress & 0xFF, max(-128, min(127, condition))))
+    for values in (ability, before_ability):
+        row = list(values or [])[:ABILITIES]
+        row += [0] * (ABILITIES - len(row))
+        for value in row:
+            out += struct.pack(">H", value)
+    rewards = list(items or [])[:MAX_ITEMS]
+    out += struct.pack(">H", len(rewards))
+    for category_id, item_id, quantity in rewards:
+        out += struct.pack(">HHB", category_id, item_id, quantity & 0xFF)
+    return bytes(out)
+
+
+class Lesson:
+    """One period in progress, for one session: the ten questions and the tally.
+
+    The bells in ``Bell`` decide *whether* a lesson happens; this is what
+    happens during it. It is a small clocked state machine rather than a
+    request/response handler because four of its five messages are pushes the
+    client never asks for — 0x6105 is the only thing it sends, and only if the
+    player answers at all.
+
+    ``pump`` is therefore the whole thing: it is called with the current time,
+    returns whatever is now due, and the caller sends it. Nothing here is saved;
+    a period that a disconnect interrupts is a period that did not happen, which
+    is also what walking out of the room does in the original.
+    """
+
+    # Phases, in order. Each ends at ``self.due``.
+    OPENING = "opening"    # the teacher's 開始台詞 is running
+    ASKING = "asking"      # a question is out and 残り時間 is counting down
+    GRADING = "grading"    # 正解 revealed, 評価 being said
+    OVER = "over"
+
+    def __init__(self, subject: int, chara_id: int,
+                 now: datetime | None = None) -> None:
+        self.subject = subject
+        self.chara_id = chara_id
+        self.phase = self.OPENING
+        self.due = (now or datetime.now()) + timedelta(
+            seconds=max(0, int(PROBE["speech_ms"])) / 1000
+        )
+        # 1-based, and it is what 0x6105's questionNo is checked against: a stale
+        # answer to the previous question must not count for this one.
+        self.question_no = 0
+        self.question = None      # quiz.Question, while one is out
+        self.reported: int | None = None
+        self.asked = 0
+        self.right = 0
+
+    # ── the client's one contribution ───────────────────────────────────────
+
+    def take_answer(self, question_no: int, choice_id: int) -> bool:
+        """MsgClCastLessonAnswer. True if it was taken.
+
+        Refused when it names the wrong question, when nothing is out, or when
+        one has already been given — 「一度解答すると変更できませんので慎重に
+        答えを選びましょう」 makes the last of those a rule and not just
+        defensiveness. There is a MsgSvErrorLessonAnswer (0x6107, one u8) for
+        saying so, but what it draws is unknown and a silent refusal costs the
+        player nothing, so the caller only logs.
+        """
+        if self.phase != self.ASKING or self.question is None:
+            return False
+        if self.reported is not None:
+            return False
+        # ⚠️ Whether the client counts questions from one or from zero is not
+        # settled — nothing on the wire has said, and the deserializer only says
+        # it is a u8. Both are accepted, because the cost of guessing wrong is a
+        # lesson in which every answer is silently refused and every question
+        # marked wrong, which looks like broken marking rather than a mismatched
+        # convention. The cost of being lenient is much smaller: the only thing
+        # it lets through is an answer to the previous question arriving during
+        # this one, and a player can only click once per question anyway.
+        #
+        # Which one it is will be obvious the first time this runs against a
+        # client, because the log line below prints what arrived.
+        if question_no not in (self.question_no, self.question_no - 1):
+            return False
+        self.reported = choice_id
+        return True
+
+    def would_be_right(self) -> bool:
+        """How the answer on the table will be marked when the timer ends.
+
+        For the log only. The mark itself is computed in ``pump`` at the moment
+        it goes out, so that this can never be the thing that decided it.
+        """
+        return (
+            self.question is not None
+            and self.reported is not None
+            and self.question.judge(self.reported)
+        )
+
+    # ── the clock ───────────────────────────────────────────────────────────
+
+    def pump(self, now: datetime, client_now_ms: int,
+             rng=None) -> "list[tuple[int, bytes]]":
+        """Whatever is due, as ``(msgType, params)`` in the order to send.
+
+        ``client_now_ms`` is the client's own clock — 0x6103's startTime and
+        endTime live in the same frame as 0x6100's speechEndTime, so they can
+        only be named through the timesync mapping. See _Session.client_now.
+
+        Returns [] when nothing is due yet, which is the common case: this gets
+        called on every wake.
+        """
+        import quiz  # local: only lessons need the bank, and only while one runs
+
+        if self.phase == self.OVER or now < self.due:
+            return []
+
+        if self.phase == self.GRADING or self.phase == self.OPENING:
+            if self.question_no >= QUESTIONS_PER_LESSON:
+                self.phase = self.OVER
+                return []
+            question = quiz.pick(self.subject, rng)
+            if question is None:
+                # No bank, or an empty category. Ending the period is better
+                # than asking a quizId the client cannot resolve.
+                self.phase = self.OVER
+                return []
+            self.question = question
+            self.question_no += 1
+            self.reported = None
+            self.phase = self.ASKING
+            self.due = now + timedelta(seconds=ANSWER_SECONDS)
+            start_ms = client_now_ms
+            return [(
+                MSG_SV_NOTIFY_LESSON_QUESTION_START,
+                question_params(
+                    question.quiz_type,
+                    question.level,
+                    question.quiz_id,
+                    question.choice_ids,
+                    start_ms,
+                    start_ms + ANSWER_SECONDS * 1000,
+                ),
+            )]
+
+        # ASKING, and 残り時間 has reached zero: reveal, then grade.
+        question = self.question
+        correct = question is not None and self.reported is not None \
+            and question.judge(self.reported)
+        self.asked += 1
+        self.right += 1 if correct else 0
+        self.phase = self.GRADING
+        self.due = now + timedelta(seconds=GRADING_SECONDS)
+        return [
+            (MSG_SV_NOTIFY_LESSON_ANSWER, answer_params(self.chara_id, correct)),
+            (MSG_SV_NOTIFY_LESSON_QUESTION_END,
+             question_end_params(self.grading_words(correct, rng))),
+        ]
+
+    def grading_words(self, correct: bool, rng=None) -> int:
+        """Which 評価台詞 the teacher uses for the question just marked.
+
+        On this question's class-wide rate, which with one student is 0% or 100%.
+        Each band has two lines in `lesson_npc_sentence` and the choice between
+        them is arbitrary, so it is random.
+        """
+        import random
+
+        rng = rng or random
+        rate = 1.0 if correct else 0.0
+        if rate >= GRADING_GOOD:
+            band = WORDS_GOOD
+        elif rate >= GRADING_FAIR:
+            band = WORDS_FAIR
+        else:
+            band = WORDS_POOR
+        return words(self.subject, rng.choice(band))
+
+    def end_words(self, rng=None) -> int:
+        """終了台詞, or 全問正解時台詞 if the player got every one.
+
+        `lesson_npc_sentence` keeps those as separate pairs, which is the only
+        statement anywhere that a perfect round is remarked on at all.
+        """
+        import random
+
+        rng = rng or random
+        band = WORDS_PERFECT if self.right == QUESTIONS_PER_LESSON else WORDS_END
+        return words(self.subject, rng.choice(band))
+
+    def finished(self) -> bool:
+        return self.phase == self.OVER
+
+    def summary(self) -> str:
+        return f"{self.right}/{self.asked}"

@@ -21,9 +21,10 @@ analysing how the client communicates, for the purpose of interoperability: lett
 existing client program reach a server again.
 
 It contains no code, artwork, audio or text taken from KONAMI's software. It does
-contain one small table of integers, read mechanically out of the client's data files,
-because there is one decision this server is asked to make that it cannot make without
-them; "Cut-scenes, and the one table that ships" says which and why. Message names, map
+contain two small tables of integers, read mechanically out of the client's data files,
+because there are decisions this server is asked to make that it cannot make without them;
+"Cut-scenes, and the branch table" and "Lessons, and the answer key" say which and why,
+one section each. Message names, map
 names and structure offsets appear here because they are the identifiers the protocol
 itself uses — a client will not accept any other wording for them.
 
@@ -40,7 +41,7 @@ talking to this one.
 | ![School select](screenshots/school-select.jpg) | ![Character creation](screenshots/character-create.jpg) |
 | **Choosing a school.** The ten entries come from `MsgSvResultSchoolList`, which pairs each id with a student count. This server sends zero for every one of them, and 生徒募集中 is what the client prints when the count is zero. | **Making a character.** The client sends the finished sheet as one 74-byte `MsgClRequestCharacterCreate`; the server keeps the block verbatim and answers with a charaId. Three per account is the client's own limit, not a policy. |
 | ![On the map](screenshots/map.jpg) | ![A conversation](screenshots/conversation.jpg) |
-| **Standing in the courtyard.** Neither figure is there on the client's own initiative: the player is put into the scene by `MsgSvNotifyCharacterAdd`, the NPC by one of the `/npc` commands below. Without those pushes the scene loads empty. | **A scripted scene.** The client runs the script out of its own copy of the game and reports where it has got to; this end only answers the questions it stops on. A fresh clone reaches this picture — walking up to an NPC is enough, and the script itself is never sent by this end. What a clone does carry is where each choice leads, which is the subject of "Cut-scenes, and the one table that ships". |
+| **Standing in the courtyard.** Neither figure is there on the client's own initiative: the player is put into the scene by `MsgSvNotifyCharacterAdd`, the NPC by one of the `/npc` commands below. Without those pushes the scene loads empty. | **A scripted scene.** The client runs the script out of its own copy of the game and reports where it has got to; this end only answers the questions it stops on. A fresh clone reaches this picture — walking up to an NPC is enough, and the script itself is never sent by this end. What a clone does carry is where each choice leads, which is the subject of "Cut-scenes, and the branch table". |
 
 ## What this is not
 
@@ -55,9 +56,10 @@ talking to this one.
 - **Not a public service.** There is no server to join, this repository will never run
   one, and nothing here is or will be sold.
 - **Not a source of game files.** No client, no assets, no patched executable. You supply
-  your own copy. The one thing here that was read out of the game rather than off the wire
-  is `reference/branches.json`, and it is integers only — see "Cut-scenes, and the one
-  table that ships" for what is in it and why it could not be left out.
+  your own copy. Two files here were read out of the game rather than off the wire —
+  `reference/branches.json` and `reference/quizkeys.json` — and both are integers only.
+  "Cut-scenes, and the branch table" and "Lessons, and the answer key" say what is in
+  each and why neither could be left out.
 
 Not every number in this server is a fact. The wire format — message ids, structure
 layouts, field offsets — was read off the protocol and is verifiable, as are the branch
@@ -248,6 +250,7 @@ hand was the only way to find out what the client would do with it.
 | `/jikan [day]` | the timetable |
 | `/bell [<subject>\|ready]` | ring the warning and start bells by hand |
 | `/lopt [seats\|speech\|words] <n>` | knobs on the lesson message |
+| `/quiz [sec <n>\|wait <n>]` | the question in progress and which choice is right; question and grading timers |
 | `/sc`, `/scn`, `/sce`, `/scl`, `/sel` | script playback — see the next section |
 | `/de [<genre>:<index>]` | the drama-event list — likewise |
 | `/dms` | open the matching screen |
@@ -256,7 +259,7 @@ The client intercepts a number of words itself — `/help` and `/where` among th
 never puts them on the wire, so those names are unavailable no matter what the server
 does.
 
-### Cut-scenes, and the one table that ships
+### Cut-scenes, and the branch table
 
 Walk up to an NPC, start a conversation, and the cut-scene plays. The client finds the
 script id in its own tables and asks for it, reads the script out of its own copy of the
@@ -298,6 +301,34 @@ picks up that script's branches from the table; `/sc <name>` reads an export and
 rest with them. Neither works cold — a script offered to a client that has not asked for one
 is ignored — so both are for steering a conversation already under way.
 
+### Lessons, and the answer key
+
+A lesson is a quiz: ten questions, and the message that asks one carries three numbers and
+no text at all — a type, a difficulty and an index. The questions are in the client, where
+they have to be, and it is this end that picks which one is asked and this end that says
+whether the answer was right. Marking is the whole of the server's part, so an answer key is
+the whole of what it needs.
+
+It needs less of one than that sounds like. For the four-choice half of the bank — 6320 of
+the 9186 questions — nothing ships at all, because the client's own files always put the
+right answer first and it is this server that shuffles them before sending the order to draw
+them in. It already knows where it dealt the right one; there is nothing to look up. That
+leaves the true-or-false half, 2866 questions, one bit each, which split almost evenly and
+so are simply the answers. Alongside them: how many questions each of the 80 categories
+holds, because an index past the end of a category is one the client cannot resolve.
+
+`reference/quizkeys.json` is those two things and is about 6 KiB. Per category, a count and
+— for true-or-false ones — a string of `0`s and `1`s, one character per question. No question
+text, no choice wording, no subject names; nothing in it can show anyone a question, and
+like the branch table it means nothing without your own copy of the game.
+
+What is not modelled, and would be visible to anyone who knows the original: the six ability
+parameters a lesson should move, stress and the breakdown that follows it, the reward items,
+and the hint skills. The result screen reports no change to any of them because there is
+nothing there to change, which is a gap stated rather than a number invented. The grade a
+lesson awards is this server's own curve over the running score — the manual names the
+inputs and never the arithmetic.
+
 ## Layout
 
 | Path | |
@@ -313,20 +344,23 @@ is ignored — so both are for steering a conversation already under way.
 | `server/mapgraph.py` | map geometry and doorway table |
 | `server/romance.py` | the five romance candidates and the state kept for each |
 | `server/curriculum.py`, `lesson.py` | report card and timetable; bells, classroom entry, school clock |
-| `server/script.py` | cut-scene playback — see "Cut-scenes, and the one table that ships" |
+| `server/script.py` | cut-scene playback — see "Cut-scenes, and the branch table" |
 | `server/facing.py` | the four-bit direction mask |
 | `server/message_names.py` | message id to name |
 | `server/state.py`, `common.py` | session state and shared service plumbing |
 | `server/llb_server.py`, `login_server.py`, `updater_server.py`, `auth_http_server.py`, `world_server.py` | the smaller services |
 | `reference/mapgraph.json` | grid size, collision and doorways for the 78 maps |
 | `reference/branches.json` | where a scenario branch goes when a choice is taken |
+| `reference/quizkeys.json` | how many questions each lesson category holds, and the true-or-false answers |
 | `screenshots/` | the four pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
 
-Those two are the only data files, and both are tables of integers the server needs in
+Those three are the only data files, and each is a table of integers the server needs in
 order to decide something. Without `mapgraph.json` the map graph is empty, the server says
 `warps go unchecked`, and moving between maps stops working. Without `branches.json` every
-branch falls through, silently: scenes still play, choices stop mattering.
+branch falls through, silently: scenes still play, choices stop mattering. Without
+`quizkeys.json` a lesson draws the room and the teacher's opening line and then asks
+nothing, because a question this server cannot mark is one it should not ask.
 
 ## Troubleshooting
 
@@ -335,6 +369,7 @@ branch falls through, silently: scenes still play, choices stop mattering.
 | `ssl.SSLError: ('No cipher can be selected.',)` | LibreSSL-backed Python; see Requirements |
 | `warps go unchecked` in the log | `reference/mapgraph.json` missing |
 | every branch logs `fall-through`, choices do nothing | `reference/branches.json` missing |
+| `no question bank, no questions`, a lesson asks nothing | `reference/quizkeys.json` missing |
 | `already running pid=N` | a previous instance is still up; leave it, or `stop_servers.py` |
 | `[authhttp] skip :443` | not running with the privileges to bind a low port |
 
@@ -350,8 +385,8 @@ rights in *Tokimeki Memorial ONLINE* or in any KONAMI property, and section 6 of
 license says as much about trademarks.
 
 [`NOTICE`](NOTICE) carries the attribution, and the statement of what here does and does
-not come out of KONAMI's software — no code, artwork, audio or text; one table of integers,
-and why a server cannot arbitrate without it. Section 4(d) of the license makes that
+not come out of KONAMI's software — no code, artwork, audio or text; two tables of
+integers, and why a server cannot arbitrate without them. Section 4(d) of the license makes that
 travel: if you redistribute this or anything derived from it, that text has to go along.
 Which is the point — those are the sentences that should still be attached to this code
 after it has passed through hands that never read this README.

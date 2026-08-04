@@ -320,6 +320,18 @@ class ScoreCard:
         self.attendance += [0] * (len(SUBJECTS) - len(self.attendance))
         self.estimation = [int(v) for v in estimation[: len(SUBJECTS)]]
         self.estimation += [ESTIMATION_MIN] * (len(SUBJECTS) - len(self.estimation))
+        # 通算, per subject: every lesson question ever asked and every one got
+        # right. `p06_02` is explicit that these are lifetime and not per-period
+        # 「その授業時間内の正解率ではなく、科目の通算正解率となります」, which is
+        # also why they belong in the save file rather than in the Lesson object.
+        # They feed 0x6100's seatInfo, where the 正解率 on the panel over the desk
+        # comes from, and 成績 below is derived from them.
+        asked = saved.get("asked") or []
+        right = saved.get("right") or []
+        self.asked = [int(v) for v in asked[: len(SUBJECTS)]]
+        self.asked += [0] * (len(SUBJECTS) - len(self.asked))
+        self.right = [int(v) for v in right[: len(SUBJECTS)]]
+        self.right += [0] * (len(SUBJECTS) - len(self.right))
         # scores[subject][course] = (lastScore, maxScore)
         self.scores: list[list[tuple[int, int]]] = []
         for index in range(len(SUBJECTS)):
@@ -401,10 +413,62 @@ class ScoreCard:
 
     # ── mutation ────────────────────────────────────────────────────────────
 
+    def rate(self, subject: int) -> float:
+        """通算正解率 for one subject, 0.0…1.0. No questions yet reads as 0.
+
+        This is the number the 授業 panel prints as 「正解率」 and it is a lifetime
+        figure, not this period's — `p06_02` says so in as many words. Which is
+        the whole reason ``asked``/``right`` are saved rather than kept in the
+        Lesson: a period ends, the tally does not.
+        """
+        return self.right[subject] / self.asked[subject] if self.asked[subject] else 0.0
+
+    def answered(self, subject: int, asked: int, right: int) -> None:
+        """File a period's questions into the subject's 通算 tallies."""
+        self.asked[subject] += max(0, asked)
+        self.right[subject] += max(0, right)
+
     def attend(self, subject: int) -> int:
         """One lesson sat through. Returns the new 出席回数."""
         self.attendance[subject] += 1
         return self.attendance[subject]
+
+    # 授業の成績 (Ａ〜Ｅ) as a function of 通算正解率.
+    #
+    # ⚠️ INVENTED, and the curve is the invented part rather than the inputs.
+    # `p06_01` names 「授業の成績」 as one of the three 課程 conditions and
+    # `p06_02` puts 正解率 on the same panel, but neither states how one becomes
+    # the other, and there is nowhere left for a curve to be hiding: `lesson.bin`
+    # is fully accounted for (eight per-subject ids, the two ability triples, and
+    # the twenty bytes of 課程 thresholds, all of which the 通知表 confirmed on
+    # screen), `error_message.bin`'s 965 strings have nothing, and 成績 has never
+    # been on the wire in either direction except as the u8 this server sends.
+    #
+    # So these five bands are a shape that satisfies the sentence and no more.
+    # They are stated as the lower bound of each grade, Ｅ first, and the top one
+    # is deliberately reachable — REQUIRED_ESTIMATION asks for Ａ to finish the
+    # last 課程, so a curve that cannot award Ａ would wall off 試験レベル 4.
+    ESTIMATION_BANDS = (0.0, 0.40, 0.60, 0.75, 0.90)
+
+    def grade_from_rate(self, subject: int) -> int:
+        """成績 for one subject, from its 通算正解率. See ESTIMATION_BANDS."""
+        rate = self.rate(subject)
+        grade = ESTIMATION_MIN
+        for step, floor in enumerate(self.ESTIMATION_BANDS):
+            if rate >= floor:
+                grade = ESTIMATION_MIN + step
+        return min(grade, ESTIMATION_MAX)
+
+    def regrade(self, subject: int) -> int:
+        """Bring 成績 into line with the tallies. Returns the new grade.
+
+        Called when a period ends, so that in ordinary play there is exactly one
+        writer of ``estimation`` and it cannot drift from ``asked``/``right``.
+        ``set_estimation`` stays for /card, which is a probe and is allowed to
+        lie — a hand-set grade survives until the next lesson in that subject.
+        """
+        self.estimation[subject] = self.grade_from_rate(subject)
+        return self.estimation[subject]
 
     def set_estimation(self, subject: int, estimation: int) -> bool:
         """Set 授業の成績 for one subject. False if out of the Ａ〜Ｅ range."""
@@ -477,6 +541,8 @@ class ScoreCard:
             "attendance": list(self.attendance),
             "estimation": list(self.estimation),
             "scores": [[list(pair) for pair in row] for row in self.scores],
+            "asked": list(self.asked),
+            "right": list(self.right),
         }
 
     def lines(self) -> list[str]:
@@ -497,6 +563,16 @@ class ScoreCard:
         ]
         out.append(", ".join(parts[:half]))
         out.append(", ".join(parts[half:]))
+        # 通算正解率, but only for subjects that have sat a lesson. Printing all
+        # eight would clip the way the single-line version of this method did,
+        # and 「0%(0/0)」 eight times over says nothing.
+        rates = [
+            f"{name} {self.rate(index):.0%}({self.right[index]}/{self.asked[index]})"
+            for index, name in enumerate(SUBJECTS)
+            if self.asked[index]
+        ]
+        if rates:
+            out.append("正解率 " + ", ".join(rates))
         return out
 
     def summary(self) -> str:
