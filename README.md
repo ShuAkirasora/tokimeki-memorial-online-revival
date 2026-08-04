@@ -349,8 +349,9 @@ That covers this repository's own code and documentation, and nothing else. It g
 rights in *Tokimeki Memorial ONLINE* or in any KONAMI property, and section 6 of the
 license says as much about trademarks.
 
-[`NOTICE`](NOTICE) carries the attribution, and the statement that nothing here comes
-out of KONAMI's software. Section 4(d) of the license makes that travel: if you
-redistribute this or anything derived from it, that text has to go along. Which is the
-point — those are the sentences that should still be attached to this code after it has
-passed through hands that never read this README.
+[`NOTICE`](NOTICE) carries the attribution, and the statement of what here does and does
+not come out of KONAMI's software — no code, artwork, audio or text; one table of integers,
+and why a server cannot arbitrate without it. Section 4(d) of the license makes that
+travel: if you redistribute this or anything derived from it, that text has to go along.
+Which is the point — those are the sentences that should still be attached to this code
+after it has passed through hands that never read this README.
