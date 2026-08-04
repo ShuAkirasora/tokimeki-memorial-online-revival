@@ -153,7 +153,7 @@ HELP = (
     "/bell [<科目番号>|ready] 予鈴/本鈴を手で鳴らす",
     "/npcx 補充をやめる (画面上の分は地図を跨ぐまで残る)",
     "/nev [<cat>:<id>] 会話イベントキー (既定 16:1)",
-    "/sc <名前> [ctrl] [actor:npcId] 台本開始",
+    "/sc <名前|scriptId> [ctrl] [actor:npcId] 台本開始",
     "/scn 次の命令へ  /sce 台本終了  /scl 一覧",
     "/sel [<select> [timer]] 選択肢を問い直す (無引数で既定に戻す)",
     "/de [<genre>:<番号>|un007 …] ドラマ一覧通知",
