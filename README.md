@@ -241,6 +241,24 @@ does not enforce it, so a locally generated self-signed certificate is accepted;
 part of the client has to be disabled to get through this step, including its encryption,
 which stays on from the first packet to the last.
 
+### Starting the game
+
+The entry point is `BootFirst.exe`, not `tmo.exe`. It starts `UpdateClient.exe`, which
+performs the update check on port 12000, and that in turn starts `tmo.exe`.
+
+On Windows, run `BootFirst.exe` **as administrator**. Without it you get
+
+```
+アップデートクライアントの起動に失敗しました
+```
+
+and nothing at all reaches this server, because nothing was ever started. The cause is on
+the client's side and no server can answer it: `UpdateClient.exe` is a 32-bit binary with
+no manifest and "Update" in its name, which is exactly what Windows' installer detection
+looks for, so the system decides it requires elevation — and `BootFirst.exe` starts it with
+`CreateProcess`, which cannot elevate. Beginning the chain already elevated is the whole of
+the fix.
+
 ### Playing from another machine
 
 The listeners are on `0.0.0.0`, so a client elsewhere can reach them. What it cannot do is
@@ -355,6 +373,7 @@ to change, and the grade it awards is this server's own curve over the running s
 | `[authhttp] skip :443` | no privileges to bind a low port — or, on Windows, something else has it |
 | `openssl is not on PATH` | nothing to generate the auth certificate with; see Requirements |
 | `[WinError 10013]` on a bind, and the server exits | that port is reserved or already held; see "On Windows" |
+| `アップデートクライアントの起動に失敗しました`, and the log stays empty | `BootFirst.exe` was not run as administrator; see "Starting the game" |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`
 marks a message this server has seen but does not answer yet.
