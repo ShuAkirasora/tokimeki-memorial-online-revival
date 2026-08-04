@@ -3,14 +3,15 @@
 
 Arguments are handed to server/run_all.py untouched, so a public deployment is
 
-    .venv/bin/python start_servers.py --advertise-ip 203.0.113.7
+    python3 start_servers.py --advertise-ip 203.0.113.7
 
 with the address players reach this machine at. See run_all.py for why that
 cannot be worked out from the sockets.
 
-Name the interpreter rather than relying on the shebang: on macOS that would
-pick the system python3, which is built against LibreSSL and cannot start the
-TLS listeners. stop_servers.py is run the same way.
+Whichever interpreter runs this file is the one run_all.py is started with, so
+it has to be a Python with a real OpenSSL: the macOS system python3 is built
+against LibreSSL and cannot start the TLS listeners. stop_servers.py is run
+the same way.
 """
 from __future__ import annotations
 
