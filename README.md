@@ -36,12 +36,59 @@ endorsed by, or connected to KONAMI in any way.
 An original client, with nothing changed about it but where it looks for a server,
 talking to this one.
 
-| | |
-|---|---|
-| ![School select](screenshots/school-select.jpg) | ![Character creation](screenshots/character-create.jpg) |
-| **Choosing a school.** The ten entries come from `MsgSvResultSchoolList`, which pairs each id with a student count. This server sends zero for every one of them, and 生徒募集中 is what the client prints when the count is zero. | **Making a character.** The client sends the finished sheet as one 74-byte `MsgClRequestCharacterCreate`; the server keeps the block verbatim and answers with a charaId. Three per account is the client's own limit, not a policy. |
-| ![On the map](screenshots/map.jpg) | ![A conversation](screenshots/conversation.jpg) |
-| **Standing in the courtyard.** Neither figure is there on the client's own initiative: the player is put into the scene by `MsgSvNotifyCharacterAdd`, the NPC by one of the `/npc` commands below. Without those pushes the scene loads empty. | **A scripted scene.** The client runs the script out of its own copy of the game and reports where it has got to; this end only answers the questions it stops on. A fresh clone reaches this picture — walking up to an NPC is enough, and the script itself is never sent by this end. What a clone does carry is where each choice leads, which is the subject of "Cut-scenes, and the branch table". |
+<!-- An HTML table rather than a markdown one for the width="50%": all four shots are
+     1280x960, but a markdown table sizes its columns from their content, and the longer
+     captions on the right would take the extra width and stretch those two pictures. -->
+<table>
+<tr>
+<td width="50%" valign="top">
+
+![School select](screenshots/school-select.jpg)
+
+</td>
+<td width="50%" valign="top">
+
+![Character creation](screenshots/character-create.jpg)
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Choosing a school.** The ten entries come from `MsgSvResultSchoolList`, which pairs each id with a student count. This server sends zero for every one of them, and 生徒募集中 is what the client prints when the count is zero.
+
+</td>
+<td valign="top">
+
+**Making a character.** The client sends the finished sheet as one 74-byte `MsgClRequestCharacterCreate`; the server keeps the block verbatim and answers with a charaId. Three per account is the client's own limit, not a policy.
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+![On the map](screenshots/map.jpg)
+
+</td>
+<td valign="top">
+
+![A conversation](screenshots/conversation.jpg)
+
+</td>
+</tr>
+<tr>
+<td valign="top">
+
+**Standing in the courtyard.** Neither figure is there on the client's own initiative: the player is put into the scene by `MsgSvNotifyCharacterAdd`, the NPC by one of the `/npc` commands below. Without those pushes the scene loads empty.
+
+</td>
+<td valign="top">
+
+**A scripted scene.** The client runs the script out of its own copy of the game and reports where it has got to; this end only answers the questions it stops on. A fresh clone reaches this picture — walking up to an NPC is enough, and the script itself is never sent by this end. What a clone does carry is where each choice leads, which is the subject of "Cut-scenes, and the branch table".
+
+</td>
+</tr>
+</table>
 
 ## What this is not
 
