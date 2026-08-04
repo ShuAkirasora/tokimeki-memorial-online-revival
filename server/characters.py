@@ -622,7 +622,7 @@ class CharacterStore:
         self.records: list[dict[str, object]] = []
         if path.exists():
             try:
-                self.records = json.loads(path.read_text())
+                self.records = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError) as exc:
                 print(f"[characters] ignoring unreadable {path}: {exc}")
 
@@ -820,4 +820,4 @@ class CharacterStore:
 
     def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.records, indent=2))
+        self.path.write_text(json.dumps(self.records, indent=2), encoding="utf-8")

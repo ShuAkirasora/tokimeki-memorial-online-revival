@@ -11,6 +11,26 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+
+def _utf8_output() -> None:
+    """Say what encoding this server's output is in, rather than inheriting one.
+
+    Half of what gets printed here is Japanese -- the name of a lesson, a line of
+    dialogue the client stopped on, which bell just rang -- and none of it is
+    optional decoration: it is the content of the messages being traced.
+
+    Redirected into start_servers.py's log file, print() encodes with the
+    locale's encoding, and on Windows that is cp1252 or cp932, neither of which
+    can hold all of it. The first bell would then end the log in a
+    UnicodeEncodeError rather than a line. Attached to a console instead, Python
+    is already on UTF-8 and this changes nothing.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass  # already replaced with something that is not a text stream
+
 from auth_http_server import AuthHttpServer
 from characters import CharacterStore
 from common import ServiceConfig, parse_ipv4
@@ -146,4 +166,5 @@ async def main(advertise_ip: str = DEFAULT_ADVERTISE_IP) -> None:
 
 
 if __name__ == "__main__":
+    _utf8_output()
     asyncio.run(main(parse_args().advertise_ip))

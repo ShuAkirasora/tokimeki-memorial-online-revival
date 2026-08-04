@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import struct
 import subprocess
+import sys
 from pathlib import Path
 
 from common import ServiceConfig, ensure_runtime_dirs, write_packet_log
@@ -93,7 +94,17 @@ class LlbServer:
         self.tag = f"llb{config.port}"
 
     def _recv_q(self, peer_port: int) -> int | None:
-        """Bytes sitting unread in the *client's* kernel receive queue."""
+        """Bytes sitting unread in the *client's* kernel receive queue.
+
+        None where that cannot be asked, which is everywhere but the BSDs. The
+        queue depths are read out of netstat, and only the BSD one prints them:
+        Windows netstat has no such column at all, and Linux spells both the
+        flags and the addresses differently. So this is a diagnostic that exists
+        on the machine it was written on and reports "not observable" elsewhere,
+        rather than a parse that quietly returns a wrong number.
+        """
+        if not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")):
+            return None
         try:
             out = subprocess.run(
                 ["netstat", "-an", "-p", "tcp"], capture_output=True, text=True, timeout=5
@@ -114,6 +125,8 @@ class LlbServer:
 
     def _queues(self, peer_port: int, label: str) -> None:
         """Log kernel socket queues, to see which side data is sitting on."""
+        if not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")):
+            return  # see _recv_q: the queue columns are a BSD netstat thing
         try:
             out = subprocess.run(
                 ["netstat", "-an", "-p", "tcp"], capture_output=True, text=True, timeout=5
@@ -222,7 +235,10 @@ class LlbServer:
     async def _confirm_read(self, peer_port: int, nbytes: int) -> None:
         await asyncio.sleep(2.0)
         q = self._recv_q(peer_port)
-        if q == 0:
+        if q is None:
+            # Not the same statement as "still unread": nothing was measured.
+            print(f"[{self.tag}] sent the {nbytes}B reply; peer queue not observable here")
+        elif q == 0:
             print(f"[{self.tag}] client consumed the {nbytes}B reply")
         else:
             print(f"[{self.tag}] reply still unread: peer Recv-Q={q}")
