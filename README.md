@@ -38,7 +38,7 @@ talking to this one.
 | ![School select](screenshots/school-select.jpg) | ![Character creation](screenshots/character-create.jpg) |
 | **Choosing a school.** The ten entries come from `MsgSvResultSchoolList`, which pairs each id with a student count. This server sends zero for every one of them, and 生徒募集中 is what the client prints when the count is zero. | **Making a character.** The client sends the finished sheet as one 74-byte `MsgClRequestCharacterCreate`; the server keeps the block verbatim and answers with a charaId. Three per account is the client's own limit, not a policy. |
 | ![On the map](screenshots/map.jpg) | ![A conversation](screenshots/conversation.jpg) |
-| **Standing in the courtyard.** Neither figure is there on the client's own initiative: the player is put into the scene by `MsgSvNotifyCharacterAdd`, the NPC by one of the `/npc` commands below. Without those pushes the scene loads empty. | **A scripted scene**, sent to the client one instruction at a time. ⚠️ This is the one picture here you cannot reproduce from a fresh clone — it needs script data the repository does not ship, for the reasons under "What needs data this repository does not ship". |
+| **Standing in the courtyard.** Neither figure is there on the client's own initiative: the player is put into the scene by `MsgSvNotifyCharacterAdd`, the NPC by one of the `/npc` commands below. Without those pushes the scene loads empty. | **A scripted scene.** The client runs the script out of its own copy of the game and reports where it has got to; this end only answers the questions it stops on. A fresh clone reaches this picture — walking up to an NPC is enough, and no script data has to be present for the scene to play. What is missing without it is under "Cut-scenes, and what is not shipped". |
 
 ## What this is not
 
@@ -252,18 +252,36 @@ The client intercepts a number of words itself — `/help` and `/where` among th
 never puts them on the wire, so those names are unavailable no matter what the server
 does.
 
-### What needs data this repository does not ship
+### Cut-scenes, and what is not shipped
 
-`/sc` plays one of the game's own cut-scene scripts back to the client instruction by
-instruction, and `/de` sends the list of drama events. Both read JSON out of `runtime/`,
-and that JSON is made from the game's own content — so neither the files nor a way to
-produce them is included here.
+Walk up to an NPC, start a conversation, and the cut-scene plays. The client finds the
+script id in its own tables and asks for it, reads the script out of its own copy of the
+game, and runs it; this end is only asked to arbitrate. The client reports each instruction
+as it passes and waits at the two it may not decide alone — a branch, and a choice box.
 
-With `runtime/scripts/` empty, `/scl` reports that there are no scripts and `/sc` cannot
-find one; with no `runtime/drama_events.json`, `/de` cannot name an event, though it will
-still send a key given directly as `<genre>:<index>`. Nothing else on the list above
-depends on either file. This is a gap, and it is stated here as one rather than left for
-you to discover.
+None of that needs data from here. The same conversation was run twice, once with the
+script exported to `runtime/scripts/` and once with that directory empty. Both reached the
+script's own `OP_END`. The second was offered no cast at all and accepted it, because the
+script already declares its own actors.
+
+What an export adds is the branch table, and what the branch table buys is consequence.
+Every branch asks the same question — does the condition hold? — and the condition lives in
+a VM this end does not run, so the standing answer is no. A scene plays through on that. A
+choice does not survive it: the box is drawn and answered, the script then asks "was it
+option k?" once per option, collects a no each time, and falls out of the chain into the
+end of the scene. Branch targets sit in an instruction's operands, and operands never go on
+the wire, so this is the one thing that watching a script run cannot recover.
+
+Those JSON files are made from the game's own content, so neither they nor a tool for
+producing them is included here. `runtime/drama_events.json` is the same case: without it
+`/de` cannot name an event, though a key given directly as `<genre>:<index>` is still sent.
+Nothing else on the command list depends on either file. The gap is real and is stated here
+rather than left for you to find, but it is narrower than it sounds — what is missing is
+not the scenes, it is whether a choice sticks.
+
+`/sc <name>` is the manual driver and reads an export; `/sc <id>` starts from an id alone
+and does not. Neither works cold — a script offered to a client that has not asked for one
+is ignored — so both are for steering a conversation already under way.
 
 ## Layout
 
@@ -280,7 +298,7 @@ you to discover.
 | `server/mapgraph.py` | map geometry and doorway table |
 | `server/romance.py` | the five romance candidates and the state kept for each |
 | `server/curriculum.py`, `lesson.py` | report card and timetable; bells, classroom entry, school clock |
-| `server/script.py` | cut-scene playback — see "What needs data this repository does not ship" |
+| `server/script.py` | cut-scene playback — see "Cut-scenes, and what is not shipped" |
 | `server/facing.py` | the four-bit direction mask |
 | `server/message_names.py` | message id to name |
 | `server/state.py`, `common.py` | session state and shared service plumbing |
