@@ -46,21 +46,39 @@ declares its own actors and that is enough for it. ``ctrl`` is still a guess,
 and stays a ``/sc`` argument rather than a constant, because a wrong guess
 costs a whole client run (an earlier lesson).
 
-The instruction list comes from ``runtime/scripts/<name>.json``, written by
-``the script exporter``. That indirection is the publishing boundary: the
-exporter reads the game's content (the decrypted ``.ssb`` tree and
-``reference/idlist/script.txt``), this module reads neither. Missing file means
-"no such script" rather than an error, the way mapgraph.py degrades.
+Two sources, and the difference between them is the whole shape of this module
+--------------------------------------------------------------------------
 
-⭐ **What an export is still needed for is one field: ``branches``.** The run
-above pinned the rest down as dispensable — the id arrives from the client, the
-cast can be empty, the instruction list is only ever printed, ``codeBase`` only
-converts ips for that printing, and a select needs no option count (see
-``select_params``). Without ``branches`` a scene plays through to its own
-``OP_END`` and a choice box is drawn and answered; what is lost is the answer
-mattering, because every ``OP_BR`` then falls through. A branch target lives in
-the instruction's operands and operands never go on the wire, so this is the
-one thing that cannot be recovered by watching a script run.
+⭐ **One field of a script cannot be watched off the wire: ``branches``.** The
+run above pinned the rest down as dispensable — the id arrives from the client,
+the cast can be empty, the instruction list is only ever printed, and a select
+needs no option count (see ``select_params``). Without branch targets a scene
+still plays through to its own ``OP_END`` and a choice box is still drawn and
+answered; what is lost is the answer *mattering*, because every ``OP_BR`` then
+falls through. A branch target lives in the instruction's operands, and
+operands never go on the wire, so it is the one thing no amount of watching
+recovers.
+
+So it ships, in ``reference/branches.json``:
+
+* Keyed by scriptId, because that is all the client ever names — a conversation
+  arrives as ``MsgClRequestNpcEventStart`` carrying an id it read out of its own
+  tables, with no filename anywhere.
+* Two integers per branch, plus each script's ``codeBase`` so that ips can be
+  converted at all (see ``wire_ip``), and nothing else. No text, no options, no
+  cast, no instruction stream.
+* Only the branches this end can actually answer: the run of ``OP_BR`` that
+  follows a choice box, one per option (see ``Runner.resolve_branch``). Every
+  other branch in the game tests a script variable, which this end always
+  answers "no" to, and a "no" needs no target — it is the reported ip plus
+  ``OP_BR_WIDTH``. 5125 entries survive that cut out of 15586 branches.
+
+``runtime/scripts/<name>.json``, written by ``the script exporter``, is the
+other source and is *not* shipped: it carries the instruction stream, the cast
+and a choice box's own prompt and option text, all of it read straight out of
+the game's content. That file is for driving a script by name from ``/sc``
+while working on this end. Both sources are optional in the same way
+mapgraph.py's graph is — missing means "nothing known", never an error.
 """
 
 from __future__ import annotations
@@ -70,6 +88,34 @@ import struct
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent / "runtime" / "scripts"
+BRANCH_PATH = Path(__file__).resolve().parent.parent / "reference" / "branches.json"
+
+
+def _load_branches() -> dict[int, dict]:
+    """``{scriptId: {"codeBase": int, "branches": {ip: target}}}``, ips local.
+
+    Silent when the file is simply absent, unlike mapgraph.py's loader: a server
+    with no branch table answers every branch with its fall-through, which is
+    exactly what this server did before the table existed. Nothing is unchecked
+    and nothing is refused — choices just stop having consequences, and the
+    branch log says ``fall-through`` on every line, which is the same diagnostic
+    printed in longer form.
+    """
+    try:
+        raw = json.loads(BRANCH_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {
+        int(script_id): {
+            "codeBase": entry["codeBase"],
+            "branches": {int(ip): target
+                         for ip, target in entry["branches"].items()},
+        }
+        for script_id, entry in raw.items()
+    }
+
+
+BRANCHES = _load_branches()
 
 MSG_SV_REQUEST_SCRIPT_READY = 0x7200
 MSG_CL_OK_SCRIPT_READY = 0x7201
@@ -156,17 +202,25 @@ def available() -> list[str]:
 
 
 def by_script_id(script_id: int) -> Script | None:
-    """The exported script whose scriptId matches, or None.
+    """What is known about a scriptId — an export, or the branch table, or None.
 
     The client asks for events by number (MsgClRequestNpcEventStart carries the
     id it read out of the id table, not a name), so the lookup has to go the
-    other way from `load`. Linear over a directory of a handful of files.
+    other way from `load`. Exports are searched first and are linear over a
+    directory of a handful of files; they are the richer of the two sources and
+    exist only on a machine that made them.
+
+    ⭐ **The second half is the one a shipped copy takes.** With no exports at
+    all, an id in `reference/branches.json` still comes back as a Script that
+    can answer a choice — which is the entire reason the table is shipped. None
+    now means what it says: nothing on this machine knows anything about this
+    id, not merely that nobody exported it.
     """
     for name in available():
         found = load(name)
         if found is not None and found.script_id == script_id:
             return found
-    return None
+    return stub(script_id) if script_id in BRANCHES else None
 
 
 def npc_map_object_event_params(event: tuple[int, int], npc_id: int) -> bytes:
@@ -186,9 +240,16 @@ class Script:
         self.file: str = data["file"]
         self.script_id: int | None = data.get("scriptId")
         self.actors: list[dict] = data.get("actors", [])
+        # What the shipped table knows about this id, if anything. It is the
+        # only source a stub has, and the fallback for an export that predates
+        # `branches` — an export that has them is a superset, since the table is
+        # deliberately cut down to the branches this end can answer.
+        known = BRANCHES.get(self.script_id) or {}
         # Byte offset of the code section inside the .ssb. Differs per file
         # (464 in amm_c011, 364 in amm_s001), so it has to be carried along.
-        self.code_base: int = data.get("codeBase", 0)
+        # Never legitimately zero — it is past the header of every .ssb there
+        # is — so `or` picks the table without having to test for absence.
+        self.code_base: int = data.get("codeBase") or known.get("codeBase", 0)
         # (ip, op, name, operands) — ip is in u16 words from the start of the
         # code section, which is the unit the labels and jumps inside the file
         # agree on. The wire does NOT use this unit; see wire_ip below.
@@ -201,7 +262,7 @@ class Script:
         # strings; local ip units throughout, same as `instructions`.
         self.branches: dict[int, int] = {
             int(ip): target for ip, target in data.get("branches", {}).items()
-        }
+        } or dict(known.get("branches", {}))
         # {INPUT_SELECT ip: {"prompt": str, "options": [str, ...]}}
         self.selects: dict[int, dict] = {
             int(ip): entry for ip, entry in data.get("selects", {}).items()
@@ -227,9 +288,11 @@ class Script:
     def branch_roads(self, wire: int) -> tuple[int, int | None]:
         """Both ways out of the OP_BR at a wire ip: `(fall_through, taken)`.
 
-        Taken is None when the exported script has no branch recorded there,
-        which means either the ip is not an OP_BR or the JSON predates
-        `branches` — either way the caller has only the fall-through to offer.
+        Taken is None when neither source has a branch recorded there: the ip is
+        not an OP_BR, or it is one of the two thirds the table leaves out
+        because this end could never answer it anyway. Either way the caller has
+        only the fall-through to offer, which for those two thirds is the right
+        answer rather than a degraded one.
         """
         target = self.branches.get(self.local_ip(wire))
         return wire + OP_BR_WIDTH, None if target is None else self.wire_ip(target)
@@ -257,15 +320,23 @@ def stub(script_id: int) -> Script:
 
     Every field a stub lacks degrades into a path that already exists: ``at()``
     returns None and the log says ``<not an instruction start>``, ``selects``
-    is empty and the query goes out as ``SELECT_ALL`` regardless, ``branches``
-    is empty so every ``OP_BR`` falls through. ``codeBase`` 0 makes the
-    *printed* local ip half the wire ip, which is wrong as a label and harmless
-    as an answer, because every ip that goes back on the wire is in wire units.
+    is empty and the query goes out as ``SELECT_ALL`` regardless.
 
-    Only the last of those costs anything: a scene plays either way, but with
-    no branch table a choice cannot take its branch. See the module docstring.
+    ⭐ **Two of those fields a stub no longer lacks.** ``branches`` and
+    ``codeBase`` come from ``reference/branches.json`` when the id is in it
+    (see ``Script.__init__``), which is what makes a choice stick on a machine
+    that has never exported anything — the case every copy but this one is in.
+    They were the only two that cost anything: a scene plays either way, but
+    with no branch table a choice cannot take its branch, and with ``codeBase``
+    0 the *printed* local ip is half the wire ip, wrong as a label though
+    harmless as an answer, since every ip that goes back on the wire is in wire
+    units. The name says which of the two happened, because "the choice did
+    nothing" and "the table has never heard of this script" look identical from
+    the outside and are not the same bug.
     """
-    return Script({"file": f"<stub {script_id}>", "scriptId": script_id,
+    known = script_id in BRANCHES
+    return Script({"file": f"<{'branch table' if known else 'stub'} {script_id}>",
+                   "scriptId": script_id,
                    "codeBase": 0, "actors": [], "instructions": []})
 
 
