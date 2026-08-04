@@ -28,6 +28,18 @@ them.
 *Tokimeki Memorial* is a trademark of KONAMI. This project is not affiliated with,
 endorsed by, or connected to KONAMI in any way.
 
+## What it looks like
+
+An original client, with nothing changed about it but where it looks for a server,
+talking to this one.
+
+| | |
+|---|---|
+| ![School select](screenshots/school-select.jpg) | ![Character creation](screenshots/character-create.jpg) |
+| **Choosing a school.** The ten entries come from `MsgSvResultSchoolList`, which pairs each id with a student count. This server sends zero for every one of them, and 生徒募集中 is what the client prints when the count is zero. | **Making a character.** The client sends the finished sheet as one 74-byte `MsgClRequestCharacterCreate`; the server keeps the block verbatim and answers with a charaId. Three per account is the client's own limit, not a policy. |
+| ![On the map](screenshots/map.jpg) | ![A conversation](screenshots/conversation.jpg) |
+| **Standing in the courtyard.** Neither figure is there on the client's own initiative: the player is put into the scene by `MsgSvNotifyCharacterAdd`, the NPC by one of the `/npc` commands below. Without those pushes the scene loads empty. | **A scripted scene**, sent to the client one instruction at a time. ⚠️ This is the one picture here you cannot reproduce from a fresh clone — it needs script data the repository does not ship, for the reasons under "What needs data this repository does not ship". |
+
 ## What this is not
 
 - **Not a restored game.** What works today: logging in, creating a character, walking
@@ -274,6 +286,7 @@ you to discover.
 | `server/state.py`, `common.py` | session state and shared service plumbing |
 | `server/llb_server.py`, `login_server.py`, `updater_server.py`, `auth_http_server.py`, `world_server.py` | the smaller services |
 | `reference/mapgraph.json` | grid size, collision and doorways for the 78 maps |
+| `screenshots/` | the four pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
 
 `reference/mapgraph.json` is the only data file. Without it the map graph is empty, the
