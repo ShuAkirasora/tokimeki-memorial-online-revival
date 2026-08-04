@@ -1,12 +1,65 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import shutil
 import ssl
 import subprocess
 from pathlib import Path
 from urllib.parse import parse_qs
 
 from common import ServiceConfig, ensure_runtime_dirs, write_packet_log
+
+
+def _windows_openssl() -> list[Path]:
+    """Where an openssl.exe is likely to be sitting, unannounced.
+
+    Windows ships none, and unlike macOS and Linux there is no package manager
+    that will have put one on PATH as a side effect of something else. What is
+    on these machines is Git for Windows -- which carries a complete openssl in
+    its own bin directories and adds neither to PATH -- so look there before
+    telling anyone to go and install something they already have.
+    """
+    if os.name != "nt":
+        return []
+    roots = [
+        os.environ.get("ProgramFiles"),
+        os.environ.get("ProgramFiles(x86)"),
+        os.environ.get("ProgramW6432"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs"),
+    ]
+    relative = [
+        Path("Git") / "usr" / "bin" / "openssl.exe",
+        Path("Git") / "mingw64" / "bin" / "openssl.exe",
+        Path("OpenSSL-Win64") / "bin" / "openssl.exe",
+    ]
+    return [Path(root) / rel for root in roots if root for rel in relative]
+
+
+def openssl_path() -> str:
+    """The openssl to run, or a failure that says what to do about it.
+
+    This is the one thing outside the standard library, and it is needed once:
+    the client will not accept a certificate that is not 1024-bit RSA signed
+    with SHA-1 (see _ensure_cert), and the ssl module can read such a thing but
+    not produce one.
+    """
+    found = shutil.which("openssl")
+    if found:
+        return found
+    for candidate in _windows_openssl():
+        if candidate.exists():
+            return str(candidate)
+    hint = (
+        " Git for Windows ships one; add its usr\\bin directory to PATH, or"
+        " install OpenSSL for Windows."
+        if os.name == "nt"
+        else ""
+    )
+    raise RuntimeError(
+        "openssl is not on PATH, and the auth endpoint's certificate cannot be"
+        f" generated without it.{hint}"
+    )
 
 
 class AuthHttpServer:
@@ -61,7 +114,7 @@ class AuthHttpServer:
         san = ",".join(f"IP:{addr}" for addr in addresses)
         subprocess.run(
             [
-                "openssl",
+                openssl_path(),
                 "req",
                 "-x509",
                 "-newkey",
@@ -82,6 +135,10 @@ class AuthHttpServer:
             check=True,
             capture_output=True,
         )
+        # The file holds the private key as well as the certificate. On Windows
+        # chmod reaches only the read-only bit and this does nothing; the key is
+        # protected there by whatever the runtime\certs directory inherits,
+        # which for a directory under a user profile is that user alone.
         self.cert.chmod(0o600)
 
     def _make_ssl_ctx(self) -> ssl.SSLContext:
@@ -173,11 +230,11 @@ class AuthHttpServer:
         path = self.cert.parent / "csk.pem"
         if not path.exists():
             subprocess.run(
-                ["openssl", "genrsa", "-out", str(path), "1024"],
+                [openssl_path(), "genrsa", "-out", str(path), "1024"],
                 check=True, capture_output=True,
             )
             path.chmod(0o600)
-        return [ln for ln in path.read_text().splitlines() if ln]
+        return [ln for ln in path.read_text(encoding="ascii").splitlines() if ln]
 
     def _csk_half(self, index: str) -> str:
         """Half the key PEM, keeping the armour line that belongs with it.

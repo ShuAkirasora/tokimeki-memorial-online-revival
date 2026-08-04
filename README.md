@@ -24,9 +24,9 @@ It contains no code, artwork, audio or text taken from KONAMI's software. It doe
 contain two small tables of integers, read mechanically out of the client's data files,
 because there are decisions this server is asked to make that it cannot make without them;
 "Cut-scenes, and the branch table" and "Lessons, and the answer key" say which and why,
-one section each. Message names, map
-names and structure offsets appear here because they are the identifiers the protocol
-itself uses — a client will not accept any other wording for them.
+one section each. Message names, map names and structure offsets appear here because they
+are the identifiers the protocol itself uses — a client will not accept any other wording
+for them.
 
 *Tokimeki Memorial* is a trademark of KONAMI. This project is not affiliated with,
 endorsed by, or connected to KONAMI in any way.
@@ -69,14 +69,33 @@ comments say so where they appear.
 
 ## Requirements
 
-- **Python with a real OpenSSL.** Tested on 3.14. Only the standard library is used — no
-  third-party packages, so there is nothing to install and no virtualenv to create.
+Only the standard library is used — no third-party packages, nothing to install, no
+virtualenv to create. Two things have to be true of the machine:
 
-  On macOS, the system `python3` is built against LibreSSL and cannot start the TLS
-  listeners; it dies with `ssl.SSLError: ('No cipher can be selected.',)`. Use a
-  python.org, Homebrew or pyenv build.
-- **`openssl` on PATH.** A self-signed certificate for the auth endpoint is generated on
-  first run, into `runtime/certs/`.
+- **A Python with a real OpenSSL.** Tested on 3.14. On macOS the system `python3` is built
+  against LibreSSL and cannot start the TLS listeners; it dies with
+  `ssl.SSLError: ('No cipher can be selected.',)`. Use a python.org, Homebrew or pyenv
+  build. The python.org build for Windows carries a real OpenSSL, so there is nothing to
+  check for there.
+- **An `openssl` binary — once.** A self-signed certificate for the auth endpoint is
+  generated on the first run, into `runtime/certs/`, and deliberately never regenerated
+  after that. A run that finds `auth.pem` and `csk.pem` already there never looks for
+  openssl at all, so this is a requirement for starting from an empty `runtime/certs/` and
+  for nothing else — the two files can equally be made on another machine and copied in.
+
+  macOS and Linux either ship one or have a package manager that has already dropped one
+  in. Windows has neither, but Git for Windows carries a complete openssl in `Git\usr\bin`
+  and by default puts it on PATH inside Git Bash and nowhere else — so **if you have Git
+  you have openssl and need do nothing**, because those install locations are searched
+  directly whether PATH knows about them or not. Failing that, winget, scoop and
+  chocolatey all carry a package, as does the Win64 OpenSSL installer.
+
+**Which system.** Written and run on macOS, and written to run on Windows. The server
+itself is plain asyncio with no assumption about the platform in it; the launcher has
+three that matter — finding what holds a port, asking whether a pid is still alive, and
+detaching the child — and each of those has a Windows path written against how Windows
+does that thing, rather than a POSIX call that happens to compile. Every instruction below
+is the same on both, `py` in place of `python3`. Where that is not enough, it says so.
 
 ## Running the server
 
@@ -85,24 +104,55 @@ python3 start_servers.py
 ```
 
 `start_servers.py` frees the ports it needs, starts the services in a detached session,
-writes the pid to `runtime/run_all.pid` and appends to `runtime/run_all.log`. To stop:
+writes the pid to `runtime/run_all.pid` and appends to `runtime/run_all.log`. Everything
+runs in one process, and `[system] all services started` in the log means it is up.
 
-```sh
-kill "$(cat runtime/run_all.pid)"
-```
-
-Everything runs in one process. `[system] all services started` in the log means it is up.
-
-If the pidfile is gone, or the process was started by hand and never wrote one,
-`stop_servers.py` finds the server by the ports it listens on instead:
+To stop:
 
 ```sh
 python3 stop_servers.py
 ```
 
-It also removes the pidfile, which the `kill` above does not: a pidfile left pointing at
-a dead process is harmless until that number gets recycled, at which point
-`start_servers.py` sees a live pid and refuses to start.
+That finds the server by the ports it is listening on rather than by the pidfile, so it
+works when the pidfile was lost or was never written because `run_all.py` was started by
+hand, and it removes the pidfile afterwards.
+
+Killing the pid in `runtime/run_all.pid` ends the same process, and leaves the pidfile
+behind:
+
+```sh
+kill "$(cat runtime/run_all.pid)"                     # macOS and Linux
+Stop-Process -Id (Get-Content runtime\run_all.pid)    # Windows, from PowerShell
+```
+
+Which costs nothing now and something later: a pidfile pointing at a dead process is
+harmless until the number gets recycled, at which point `start_servers.py` sees a live pid
+and refuses to start.
+
+### On Windows
+
+The same two commands, `py` in place of `python3`. Three things differ underneath them.
+
+**Stopping is a hard kill** — and no less hard anywhere else. Windows has no SIGTERM, and
+a process detached from every console (which is what `start_servers.py` asks for, so that
+closing the window it was started from does not take the server with it) cannot be sent a
+Ctrl-Break either, so it is terminated outright. That reads like a downgrade and is not
+one: nothing here installs a SIGTERM handler, and an unhandled SIGTERM ends a process just
+as abruptly. Nothing is lost either way, because no service writes its state on the way
+out — `runtime/characters.json` is rewritten at each change, so what is on disk when the
+process stops is everything it knew.
+
+**Low ports are free, and taken anyway.** Windows asks for no privileges to bind 443, 80
+or 50, so `[authhttp] skip` means something else there — not "run me as an administrator"
+but "something already has this". IIS, BranchCache and anything else built on HTTP.sys are
+the usual holders of 80 and 443. Harder to diagnose, and not confined to low ports:
+Hyper-V and WSL reserve blocks of ports at boot, and a block covering 25573–25575 stops
+the server dead rather than being skipped. List those with
+`netsh int ipv4 show excludedportrange protocol=tcp`.
+
+**The firewall asks once.** Windows Defender Firewall wants to know, the first time,
+whether Python may accept connections. Answering no leaves a client on the same machine
+working and every client anywhere else unable to arrive.
 
 ### Serving players on other machines
 
@@ -147,8 +197,9 @@ whichever auth port it uses, so open them on any firewall in between.
 | 80, 12012 | account auth stub, plaintext |
 | 12010, 12020 | early stubs; the current login flow does not use them |
 
-Ports below 1024 need privileges. If they cannot be bound, that is not fatal — the server
-logs `[authhttp] skip :443 (...)` and carries on. Whether you need them depends on which
+Ports below 1024 need privileges, except on Windows, which asks for none and tends to have
+something else holding them instead. Either way it is not fatal: the server logs
+`[authhttp] skip :443 (...)` and carries on. Whether you need them depends on which
 endpoint your client asks for.
 
 ## Connecting a client
@@ -176,10 +227,14 @@ The two hostnames:
 | `tmollb.tokimekionline.com` | login-server lookup, the first thing the game does after the update check |
 
 Resolve those to the machine running the server — a hosts-file entry each, or a local
-resolver for the domain, whichever your setup makes easier. Everything after them follows
-along on its own: the login, game and school servers are reached at whatever address the
-login-server lookup hands back, and this server hands back the one it was started with
-(`--advertise-ip`, default `127.0.0.1` — see "Serving players on other machines").
+resolver for the domain, whichever your setup makes easier. The client is a Windows
+program, so the file to edit is the one on the machine it runs on:
+`C:\Windows\System32\drivers\etc\hosts`, which needs an editor started as administrator.
+
+Everything after those two follows along on its own: the login, game and school servers
+are reached at whatever address the login-server lookup hands back, and this server hands
+back the one it was started with (`--advertise-ip`, default `127.0.0.1` — see "Serving
+players on other machines").
 
 ### The third one is authentication, and it is an address, not a name
 
@@ -334,7 +389,7 @@ inputs and never the arithmetic.
 | Path | |
 |---|---|
 | `start_servers.py` | launcher; the supported way to start everything |
-| `stop_servers.py` | stop by port when the pidfile is missing or stale |
+| `stop_servers.py` | the way to stop it; goes by port, so it works with no pidfile or a stale one |
 | `set_auth_address.py` | the four-byte address change described under "Connecting a client" |
 | `server/run_all.py` | binds every service in one asyncio loop |
 | `server/mps_session.py` | packet layer, key exchange, message dispatch — the bulk of it |
@@ -371,7 +426,9 @@ nothing, because a question this server cannot mark is one it should not ask.
 | every branch logs `fall-through`, choices do nothing | `reference/branches.json` missing |
 | `no question bank, no questions`, a lesson asks nothing | `reference/quizkeys.json` missing |
 | `already running pid=N` | a previous instance is still up; leave it, or `stop_servers.py` |
-| `[authhttp] skip :443` | not running with the privileges to bind a low port |
+| `[authhttp] skip :443` | no privileges to bind a low port — or, on Windows, something else has it |
+| `openssl is not on PATH` | nothing to generate the auth certificate with; see Requirements |
+| `[WinError 10013]` on a bind, and the server exits | that port is reserved or already held; see "On Windows" |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`
 marks a message this server has seen but does not answer yet.
@@ -386,7 +443,8 @@ license says as much about trademarks.
 
 [`NOTICE`](NOTICE) carries the attribution, and the statement of what here does and does
 not come out of KONAMI's software — no code, artwork, audio or text; two tables of
-integers, and why a server cannot arbitrate without them. Section 4(d) of the license makes that
-travel: if you redistribute this or anything derived from it, that text has to go along.
+integers, and why a server cannot arbitrate without them. Section 4(d) of the license
+makes that travel: if you redistribute this or anything derived from it, that text has to
+go along.
 Which is the point — those are the sentences that should still be attached to this code
 after it has passed through hands that never read this README.
