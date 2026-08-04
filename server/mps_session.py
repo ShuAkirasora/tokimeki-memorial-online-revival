@@ -44,6 +44,7 @@ import asyncio
 import secrets
 import struct
 import time
+from datetime import datetime
 from pathlib import Path
 
 from characters import (
@@ -73,6 +74,7 @@ import facing
 import lesson
 import mapgraph
 import mps_cipher
+import quiz
 import romance
 import script
 from common import ServiceConfig, ensure_runtime_dirs, inet_u32, write_packet_log
@@ -615,6 +617,10 @@ class _Session:
         # that rang while nobody was logged in is not owed to anyone afterwards.
         # It stays quiet until 登校 primes it — see the school-login handler.
         self.bell = lesson.Bell()
+        # The period actually in progress, once 0x6100 has gone out. Not saved,
+        # for the same reason: ten questions half answered are not owed to
+        # anybody, and the original ends a lesson you walk out of too.
+        self.lesson: lesson.Lesson | None = None
         # どの組に在籍しているか. Ａ組 until something sets it, which is also
         # what MsgSvResultScoreCard's inClass has been sending all along. It
         # decides the room a lesson happens in, via curriculum.CLASSROOM.
@@ -690,6 +696,25 @@ class _Session:
         if not self.clock_at:
             return 0
         return self.clock_t1 + int((time.monotonic() - self.clock_at) * 1000)
+
+    def next_wake(self) -> float | None:
+        """Seconds until something is due to be pushed, or None if nothing is.
+
+        Everything else this server sends is either an answer or rides on an
+        arriving packet, and the timesync every thirty seconds has been a good
+        enough heartbeat for all of it: a bell that is up to half a minute late
+        against a fifteen-minute period is not a bell anyone can catch out.
+
+        A question's 残り時間 is different in kind. The client counts it down on
+        screen from the endTime the server named, and 「残り時間が０になると正解が
+        発表され」 — so the reveal has a moment, the player is watching it arrive,
+        and being thirty seconds late is the difference between a lesson and a
+        hang. Hence a real deadline; see MpsServer.handle, which waits on the
+        socket for exactly this long instead of the idle timeout.
+        """
+        if self.lesson is None or self.lesson.finished():
+            return None
+        return max(0.0, (self.lesson.due - datetime.now()).total_seconds())
 
     def markers(self) -> tuple[tuple[str, int, int], ...]:
         """The stand-ins for the current map, computed once per map change.
@@ -1222,11 +1247,26 @@ class MpsServer:
         buf = b""
         try:
             while True:
+                # Wait on the socket until either something arrives or something
+                # is due to go out. Only a lesson in progress ever sets a
+                # deadline; with none, this is the plain idle timeout it always
+                # was. See _Session.next_wake for why questions need one.
+                due = session.next_wake()
                 try:
-                    chunk = await asyncio.wait_for(reader.read(65536), timeout=300.0)
+                    chunk = await asyncio.wait_for(
+                        reader.read(65536), timeout=due if due is not None else 300.0
+                    )
                 except asyncio.TimeoutError:
-                    print(f"[{self.tag}] idle timeout peer={peer}")
-                    break
+                    if due is None:
+                        print(f"[{self.tag}] idle timeout peer={peer}")
+                        break
+                    push = self._drains(session)
+                    if push:
+                        write_packet_log(self.packet_dir, self.tag, "out", push)
+                        writer.write(push)
+                        await writer.drain()
+                        print(f"[{self.tag}] -> {len(push)}B (timer): {push.hex()}")
+                    continue
                 if not chunk:
                     print(f"[{self.tag}] EOF peer={peer}")
                     break
@@ -1242,12 +1282,7 @@ class MpsServer:
                         continue
                     print(f"[{self.tag}] <- tag=0x{tag:04x} ({name}) {len(body)}B: {body.hex()}")
                     reply = self._reply(session, tag, body)
-                    # Any arriving packet is a chance to flush the out-of-band
-                    # console, including the timesync that keeps coming while a
-                    # script has the client's input locked.
-                    reply = (reply or b"") + self._drain_console(session)
-                    reply += self._drain_bells(session)
-                    reply += self._drain_pending_say(session)
+                    reply = (reply or b"") + self._drains(session)
                     if not reply:
                         continue
                     write_packet_log(self.packet_dir, self.tag, "out", reply)
@@ -1646,6 +1681,28 @@ class MpsServer:
                 # time out, and it does not come back. The seat list is what it
                 # is waiting for, so it goes out in the same packet.
                 return reply + self._lesson_start(session, sequence, subject)
+            if msg_type == lesson.MSG_CL_CAST_LESSON_ANSWER:
+                # 「答えを選択し左クリックで解答します」. Two u8: which question it
+                # is answering and which choice was clicked. Deserializer
+                # 0x008E4FF0 — u8 at +4, u8 at +5, nothing else.
+                #
+                # Nothing goes back now. `p06_02` step 3 puts the reveal at
+                # 「残り時間が０になると」, not at the click, so the 0x6106 this
+                # earns is sent by the clock in _drain_lesson. A Cast has no
+                # reply by convention anyway.
+                question_no, choice_id = struct.unpack_from(">BB", params, 0) \
+                    if len(params) >= 2 else (0, 0)
+                period = session.lesson
+                if period is None or not period.take_answer(question_no, choice_id):
+                    print(f"[{self.tag}] answer ignored: questionNo={question_no} "
+                          f"choiceId={choice_id}")
+                    return b""
+                print(f"[{self.tag}] answer: questionNo={question_no} "
+                      f"(ours is {period.question_no}, so the client counts from "
+                      f"{'one' if question_no == period.question_no else 'zero'}) "
+                      f"choiceId={choice_id} "
+                      f"({'○' if period.would_be_right() else '×'} once time is up)")
+                return b""
             if msg_type == MSG_CL_REQUEST_MINIMAP_START:
                 # The map button greys itself out and waits. Answering unblocks
                 # it; the dots that then appear are whatever the server pushes as
@@ -1892,7 +1949,9 @@ class MpsServer:
         info = self.characters.find(session.chara_id)
         love = self.characters.romance(session.chara_id)
         card = self.characters.scorecard(session.chara_id)
-        answer = chat.respond(said, session.map_id, session.pos, love, card)
+        answer = chat.respond(
+            said, session.map_id, session.pos, love, card, session.lesson
+        )
         if answer.romance_save and love is not None:
             self.characters.set_romance(session.chara_id, love)
         if answer.scorecard_save and card is not None:
@@ -2032,8 +2091,12 @@ class MpsServer:
                 else (card.test_level() - 1 if card is not None else 0)
             ),
             stress=0,
-            question_count=0,
-            correct_count=0,
+            # 通算, not this period's — `p06_02` is explicit, and this is where
+            # the 「正解率」 on the panel over the desk comes from. Zero until a
+            # lesson has actually been sat; it used to be hardcoded zero because
+            # there was nothing to count.
+            question_count=card.asked[subject] if card is not None else 0,
+            correct_count=card.right[subject] if card is not None else 0,
             looks=[fields[key] for key in LOOKS],
             accessory=[fields[key] for key in ACCESSORY],
         )
@@ -2056,7 +2119,90 @@ class MpsServer:
             f"startWordsId={struct.unpack_from('>H', params, 0)[0]}, "
             f"speechEndTime={speech_end}, {len(seats)} seat(s)"
         )
+        # Ten questions start once the teacher has finished the 開始台詞. The
+        # period drives itself from here on a deadline of its own; see
+        # _drain_lesson. Without a question bank there is nothing to ask, so the
+        # room is drawn and nothing follows — better than asking a quizId the
+        # client cannot look up, and it says so in the log.
+        if quiz.loaded():
+            session.lesson = lesson.Lesson(subject, session.chara_id)
+        else:
+            print(f"[{self.tag}] lesson start: no question bank, no questions")
         return self._answer(session, seen, lesson.MSG_SV_NOTIFY_LESSON_START, params)
+
+    def _drains(self, session: "_Session") -> bytes:
+        """Everything the server owes that nobody asked for, in order.
+
+        Called from two places and it matters that they run the same list: after
+        every arriving packet — any packet is a chance to flush, including the
+        timesync that keeps coming while a script has the client's input locked —
+        and when a deadline fires with the socket quiet, which is how a question
+        gets its 正解発表 on time.
+        """
+        out = self._drain_console(session)
+        out += self._drain_bells(session)
+        out += self._drain_lesson(session)
+        out += self._drain_pending_say(session)
+        return out
+
+    def _drain_lesson(self, session: "_Session") -> bytes:
+        """Push whatever the period in progress has become due for.
+
+        seen=0: none of these answer a message of the client's. 0x6105 is the
+        only thing it sends all lesson, and its reply is the 0x6106 that goes out
+        when the timer ends rather than when the answer arrives.
+        """
+        period = session.lesson
+        if period is None:
+            return b""
+        out = b""
+        for msg_type, params in period.pump(datetime.now(), session.client_now()):
+            name = MESSAGE_NAMES.get(msg_type, "?")
+            print(f"[{self.tag}] lesson {period.question_no}/"
+                  f"{lesson.QUESTIONS_PER_LESSON}: {name} (0x{msg_type:04x}) "
+                  f"{params.hex()}")
+            out += self._answer(session, 0, msg_type, params)
+        if period.finished():
+            out += self._lesson_end(session, period)
+            session.lesson = None
+        return out
+
+    def _lesson_end(self, session: "_Session", period: "lesson.Lesson") -> bytes:
+        """0x6102, the 結果発表, and the only place a lesson touches the save file.
+
+        Three things are filed, and the split between them is the point:
+
+        * 出席回数 — recovered. `p06_01` counts attendance towards 課程修了 and
+          0x6102 carries the new total, so the client is told the number the
+          server just wrote.
+        * 通算 questions and correct answers — recovered as a quantity
+          (`p06_02`: 「科目の通算正解率」), and they are what the panel over the
+          desk prints next period.
+        * 成績 — the arithmetic is INVENTED; see ScoreCard.ESTIMATION_BANDS.
+
+        Everything else in resultInfo is not modelled at all, which end_params
+        spells out one field at a time.
+        """
+        card = self.characters.scorecard(session.chara_id)
+        attendance = 0
+        if card is not None:
+            attendance = card.attend(period.subject)
+            card.answered(period.subject, period.asked, period.right)
+            grade = card.regrade(period.subject)
+            self.characters.set_scorecard(session.chara_id, card)
+            print(f"[{self.tag}] lesson end: {curriculum.SUBJECTS[period.subject]} "
+                  f"{period.summary()}, 出席 {attendance} 回, "
+                  f"通算 {card.rate(period.subject):.0%}, "
+                  f"成績 {curriculum.grade_letter(grade)}")
+        else:
+            print(f"[{self.tag}] lesson end: no charaId={session.chara_id}, "
+                  f"nothing filed")
+        return self._answer(
+            session,
+            0,
+            lesson.MSG_SV_NOTIFY_LESSON_END,
+            lesson.end_params(period.end_words(), attendance),
+        )
 
     def _drain_bells(self, session: "_Session") -> bytes:
         """Ring whatever the wall clock has made due.

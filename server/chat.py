@@ -47,6 +47,7 @@ import curriculum
 import facing
 import lesson
 import mapgraph
+import quiz
 import romance
 import script
 
@@ -151,6 +152,7 @@ HELP = (
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words] <数> 0x6100 の実験用つまみ",
     "/bell [<科目番号>|ready] 予鈴/本鈴を手で鳴らす",
+    "/quiz [sec <秒>|wait <秒>] 出題の状態と正解 (採点の検証用)",
     "/npcx 補充をやめる (画面上の分は地図を跨ぐまで残る)",
     "/nev [<cat>:<id>] 会話イベントキー (既定 16:1)",
     "/sc <名前|scriptId> [ctrl] [actor:npcId] 台本開始",
@@ -308,13 +310,15 @@ def respond(
     pos: tuple[int, int],
     love: "romance.Romance | None" = None,
     card: "curriculum.ScoreCard | None" = None,
+    period: "lesson.Lesson | None" = None,
 ) -> Reply:
     """Answer one chat line.
 
     ``love`` is the speaking character's 恋愛 state, mutated in place when a
     command changes it — the session owns the file, so writing is asked for
     through ``Reply.romance_save`` the same way every other side effect is.
-    ``card`` is the same arrangement for the 通知表.
+    ``card`` is the same arrangement for the 通知表. ``period`` is the lesson in
+    progress, read-only and only by /quiz.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -526,6 +530,8 @@ def respond(
             card.attendance[:] = blank.attendance
             card.estimation[:] = blank.estimation
             card.scores[:] = blank.scores
+            card.asked[:] = blank.asked
+            card.right[:] = blank.right
             return Reply(["通知表を白紙に戻した"], scorecard_save=True)
         subject = None
         if verb in [name.lower() for name in curriculum.SUBJECTS]:
@@ -626,6 +632,63 @@ def respond(
                 lesson.before_lesson_start_params(subject),
             )],
         )
+
+    if word == "quiz":
+        # ⭐ Why this exists: the questions are in the client and the answer key
+        # is on the server, so neither side alone can tell whether marking works.
+        # A tester reads the question off the screen, asks here which choice the
+        # server will accept, clicks that one, and sees whether the client draws
+        # ○. Without it, an inverted ○×-to-choiceId mapping or a wrong reading of
+        # 0x6105's choiceId looks exactly like a lesson working — the ○ and × on
+        # screen are drawn from what the server said, so they always agree with it.
+        #
+        # That it also hands out answers is not a problem worth solving. This is
+        # a single-player server on the player's own machine and /go teleports
+        # anywhere; a chat command is not where cheating gets interesting.
+        words_in = rest.split()
+        if words_in and words_in[0].lower() == "sec":
+            try:
+                lesson.ANSWER_SECONDS = max(1, int(words_in[1], 0))
+            except (IndexError, ValueError):
+                return Reply(["/quiz sec <秒>"])
+            return Reply([f"残り時間 {lesson.ANSWER_SECONDS} 秒"])
+        if words_in and words_in[0].lower() == "wait":
+            try:
+                lesson.GRADING_SECONDS = max(0, int(words_in[1], 0))
+            except (IndexError, ValueError):
+                return Reply(["/quiz wait <秒>"])
+            return Reply([f"評価 {lesson.GRADING_SECONDS} 秒"])
+        out = []
+        if not quiz.loaded():
+            out.append("問題データが読めていない (reference/quizkeys.json)")
+        if period is None:
+            subject = curriculum.current_subject()
+            pairs = quiz.available(subject)
+            out.append(f"授業中ではない。{curriculum.SUBJECTS[subject]}: "
+                       + ", ".join(f"{'○×' if t == 0 else '４択'}L{v}"
+                                   f"×{quiz.count(subject, t, v)}" for t, v in pairs))
+        else:
+            question = period.question
+            out.append(f"{curriculum.SUBJECTS[period.subject]} "
+                       f"{period.question_no}/{lesson.QUESTIONS_PER_LESSON}問目, "
+                       f"{period.phase}, ここまで {period.summary()}")
+            if question is not None:
+                # Which number to click. For 4択 the right one is raw choice 0,
+                # so it is whichever slot the shuffle put it in; for ○× it is
+                # the 0-is-○ mapping, which is the invented half.
+                right = (
+                    question.choice_ids.index(0)
+                    if question.quiz_type == quiz.TYPE_CHOICE
+                    else (0 if question.answer else 1)
+                )
+                out.append(
+                    f"{'○×' if question.quiz_type == 0 else '４択'} "
+                    f"難易度{question.level + 1} quizId={question.quiz_id}, "
+                    f"choiceId={question.choice_ids}, 正解は choiceId {right}"
+                )
+        out.append(f"/quiz [sec <秒>|wait <秒>] — 今 {lesson.ANSWER_SECONDS}"
+                   f"/{lesson.GRADING_SECONDS} 秒")
+        return Reply(out)
 
     if word == "lopt":
         # Knobs for the 0x6100 probe. They live on the server because the packet
