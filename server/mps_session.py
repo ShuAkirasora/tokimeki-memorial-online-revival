@@ -50,6 +50,7 @@ from characters import (
     LOOKS,
     ACCESSORY,
     MARK_DOORS,
+    MAX_CHARACTERS,
     SPAWN_POS,
     SPAWN_MAP_ID,
     WARP_SWEEP,
@@ -186,9 +187,22 @@ MSG_CL_QUERY_CHARACTER_LIST = 0x0318
 MSG_SV_RESULT_CHARACTER_LIST = 0x0319
 MSG_CL_REQUEST_CHARACTER_CREATE = 0x030C
 MSG_SV_OK_CHARACTER_CREATE = 0x030D
+MSG_SV_NG_CHARACTER_CREATE = 0x030E
 MSG_CL_REQUEST_CHARACTER_DESTROY = 0x030F
 MSG_SV_OK_CHARACTER_DESTROY = 0x0310
 MSG_SV_NG_CHARACTER_DESTROY = 0x0311
+
+# The payload both character refusals carry. Input_MsgSvNgCharacterCreate and
+# Input_MsgSvNgCharacterDestroy share deserializer 0x8D84A0, which pulls one
+# value through the stream's read-int8 slot (vt+0x1C), and each class's dump
+# method names that field 「reason=%d」 -- so a refusal is one byte on the wire,
+# not the empty message the Ok side of the pair sends (0x8CB9A0, `xor eax,eax;
+# ret 8`, reads nothing).
+#
+# ⚠️ The value is a placeholder, not a finding. Nothing in the client was found
+# reading the field back, so which codes it distinguishes -- if it distinguishes
+# any -- is unknown. Zero is sent because the reader consumes a byte either way.
+NG_REASON = b"\x00"
 MSG_CL_REQUEST_SCHOOL_LOGIN = 0x0306
 MSG_SV_OK_SCHOOL_LOGIN = 0x0307
 MSG_CL_REQUEST_SCHOOL_LOGOUT = 0x0309
@@ -1298,6 +1312,19 @@ class MpsServer:
             if msg_type == 0x0300:
                 return self._answer(session, sequence, 0x0301, school_list_params())
             if msg_type == MSG_CL_REQUEST_CHARACTER_CREATE:
+                # Three per account, and the cap belongs here because the client
+                # has no defence of its own: see characters.MAX_CHARACTERS for
+                # what a fourth entry does to its list buffer. KONAMI's server
+                # would never have sent one, so refusing is what the client was
+                # built to meet.
+                if self.characters.full():
+                    print(
+                        f"[{self.tag}] create refused: account already has "
+                        f"{MAX_CHARACTERS}; {self.characters.summary()}"
+                    )
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_CHARACTER_CREATE, NG_REASON
+                    )
                 # Output_MsgSvOkCharacterCreate::serialize (0x8DCD80) writes one
                 # u32 through the stream's write-u32 slot, and nothing else.
                 chara_id = self.characters.add(params)
@@ -1307,18 +1334,18 @@ class MpsServer:
                 )
             if msg_type == MSG_CL_REQUEST_CHARACTER_DESTROY:
                 # 「キャラクターを削除しています」. The request is one u32 charaId
-                # (listshape: 0x030f scalar reads=4), and both answers of the
-                # trio take nothing off the wire — Input_MsgSvOkCharacterDestroy
-                # and Input_MsgSvNgCharacterDestroy share deserializer 0x8CB9A0,
-                # the same ``xor eax,eax; ret 8`` stub MsgSvOkSchoolLogin uses.
-                # So Ng costs nothing to send, and an unknown id gets one rather
+                # (listshape: 0x030f scalar reads=4). Ok takes nothing off the
+                # wire — Input_MsgSvOkCharacterDestroy's deserializer is 0x8CB9A0,
+                # the same ``xor eax,eax; ret 8`` stub MsgSvOkSchoolLogin uses —
+                # but Ng is not that stub and does read one byte, so it goes out
+                # with NG_REASON. Either way an unknown id gets an answer rather
                 # than silence, which would leave the dialog spinning forever.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
                 if self.characters.remove(chara_id):
                     print(f"[{self.tag}] deleted charaId={chara_id}; left: {self.characters.summary()}")
                     return self._answer(session, sequence, MSG_SV_OK_CHARACTER_DESTROY, b"")
                 print(f"[{self.tag}] destroy: no charaId={chara_id}, answering Ng")
-                return self._answer(session, sequence, MSG_SV_NG_CHARACTER_DESTROY, b"")
+                return self._answer(session, sequence, MSG_SV_NG_CHARACTER_DESTROY, NG_REASON)
             if msg_type == MSG_CL_REQUEST_REENTRANCE:
                 # 「再入学しています」, the 再入学する button on the character-select
                 # screen. Request is one u32 charaId (listshape: 0x031b scalar

@@ -222,6 +222,23 @@ MARK_DOORS = False
 # client-side decision taken straight off this record, with no server round trip.
 NO_CAPTURED_NPC = 0xFFFF
 
+# Characters per account, and it is a hard limit rather than a policy: the
+# client's reader has room for this many and no bound of its own.
+#
+# The manual states the rule (manual/p03_01: 「最大３人までキャラクターを作成する
+# ことができます」) and Input_MsgSvResultCharacterListFromAccount::deserialize
+# (0x8F9620) shows why it is the client's number too. Entries land at +8 with
+# stride 0x100 and the u16 count sits at +0x308, so 8 + 3 * 0x100 lands exactly
+# on the count -- the array is sized for three and ends where the count begins.
+# The loop re-reads its bound from that field on every pass (0x8F9934, ``movzx
+# edx, word ptr [ecx]``), so a longer list writes past the array with nothing
+# stopping it.
+#
+# KONAMI's server could not have sent a fourth entry, so nothing in the client
+# was ever written to survive one. Both directions are guarded here: create is
+# refused at the cap, and entries() truncates whatever the store happens to hold.
+MAX_CHARACTERS = 3
+
 # Extra notebooks on the キャラクター選択 screen, the same instrument as
 # PROBE_POSITIONS but pointed at a different question. The screen holds three,
 # the message struct has room for exactly three (entries start at +8, stride
@@ -609,6 +626,14 @@ class CharacterStore:
             except (OSError, ValueError) as exc:
                 print(f"[characters] ignoring unreadable {path}: {exc}")
 
+    def full(self) -> bool:
+        """True when this account cannot take another character.
+
+        The caller answers MsgSvNgCharacterCreate instead of creating one; see
+        MAX_CHARACTERS for why silently allowing a fourth is not an option.
+        """
+        return len(self.records) >= MAX_CHARACTERS
+
     def add(self, info: bytes) -> int:
         chara_id = max(
             (int(r["charaId"]) for r in self.records), default=CHARA_ID_BASE - 1
@@ -704,6 +729,17 @@ class CharacterStore:
                         couple_flag=couple,
                     )
                 )
+        if len(parts) > MAX_CHARACTERS:
+            # Reachable two ways: a characters.json written before the cap
+            # existed, and LIST_PROBES set past the free notebooks. Neither is
+            # worth sending a list the client cannot hold, so cut it and say so
+            # -- silently dropping a character the player can see in the file
+            # would be the more confusing failure.
+            print(
+                f"[characters] {len(parts)} entries exceeds the client's "
+                f"{MAX_CHARACTERS}; sending the first {MAX_CHARACTERS}"
+            )
+            parts = parts[:MAX_CHARACTERS]
         return struct.pack(">H", len(parts)) + b"".join(parts)
 
     def find(self, chara_id: int) -> bytes | None:
