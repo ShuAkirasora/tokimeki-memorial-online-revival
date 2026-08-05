@@ -382,11 +382,11 @@ class ScoreCard:
     def total_estimation(self) -> int:
         """総合評価, 1-based (1=Ｊ … 10=Ａ).
 
-        ⚠️ INVENTED. `p06_01` says only 「現在の成績と全課程の修了状況により
-        決定される」 — the inputs, never the arithmetic — and unlike the
-        thresholds there is nothing in `lesson.bin` left over to hold a curve.
-        The tail is fully accounted for: eight bytes of per-subject ids, the two
-        ability triples, and the twenty bytes of thresholds.
+        ⚠️ INVENTED, and unrecoverable for the same reason 成績 is — see
+        ESTIMATION_BANDS. `p06_01` gives the inputs and never the arithmetic
+        (「現在の成績と全課程の修了状況により決定される」), and 総合評価 reaches
+        the client the same way 成績 does: as one byte this server writes, on a
+        message that carries neither of the two inputs.
 
         So this is a shape that satisfies the sentence and no more: the mean
         成績 over the eight subjects supplies half the range and the fraction of
@@ -435,14 +435,43 @@ class ScoreCard:
 
     # 授業の成績 (Ａ〜Ｅ) as a function of 通算正解率.
     #
-    # ⚠️ INVENTED, and the curve is the invented part rather than the inputs.
-    # `p06_01` names 「授業の成績」 as one of the three 課程 conditions and
-    # `p06_02` puts 正解率 on the same panel, but neither states how one becomes
-    # the other, and there is nowhere left for a curve to be hiding: `lesson.bin`
-    # is fully accounted for (eight per-subject ids, the two ability triples, and
-    # the twenty bytes of 課程 thresholds, all of which the 通知表 confirmed on
-    # screen), `error_message.bin`'s 965 strings have nothing, and 成績 has never
-    # been on the wire in either direction except as the u8 this server sends.
+    # ⚠️ INVENTED, and the invented part is the curve rather than the inputs.
+    # Read the split before changing anything here.
+    #
+    # The inputs are an argument, and a decent one. `p06_01` lists 「授業の成績」
+    # beside 「試験の点数」 and 「出席回数」 as the three 課程 conditions, so it has
+    # to be something lessons produce; the only per-subject lifetime quantity a
+    # lesson produces is the 通算正解率 (attendance being already spoken for),
+    # and the game cares enough about that rate to ship questionCount and
+    # correctAnswerCount to the client so the panel over the desk can print it.
+    #
+    # ⚠️ A rival reading survives and always will: 成績 could be a stock that
+    # moves a notch per period rather than a function of the lifetime rate.
+    # `p06_02` hangs ご褒美 on 「**その授業での**成績」, which is a per-period
+    # sense of the word, and the per-question 高／並／低評価 machinery shows the
+    # game grading period by period. H1 (a function of the rate) is what runs
+    # here because it is stateless and recomputable — edit the tallies and the
+    # grade follows — not because H2 was ruled out.
+    #
+    # The curve is not merely unrecovered, it is **unrecoverable from what we
+    # have**, so do not go looking and do not let a later session think a screen
+    # can settle it:
+    #
+    #   * 成績 appears on the wire exactly once, server → client, as the u8 in
+    #     0x430D. That message carries no rate; 0x6100 carries the rate but no
+    #     成績; 0x6102 carries neither.
+    #   * /card ruler sent 1,2,3,4,5 against arbitrary attendance and the 通知表
+    #     drew Ｅ Ｄ Ｃ Ｂ Ａ, so the client echoes this byte the way it echoes
+    #     completionFlag. Reading a grade off the screen reads back this file.
+    #   * Which is also why the curve is in no client-side table, and why that
+    #     absence is not evidence of a bad search: a server constant only shows
+    #     up in client data when the client has to draw it (the 通知表 prints the
+    #     required 成績, so lesson.bin carries those). No screen ever shows a
+    #     rate-to-grade mapping, so the client was never given one. Searched
+    #     anyway, 2026-08-05: all 105 idlist tables for 成績|評価|正解 (only
+    #     lesson_npc_sentence, teacher dialogue), lesson.bin field by field, the
+    #     quiz_*/subject_*/class tables, error_message.bin's 965 strings, and the
+    #     official site including the beta manual. Nothing states the arithmetic.
     #
     # So these five bands are a shape that satisfies the sentence and no more.
     # They are stated as the lower bound of each grade, Ｅ first, and the top one
