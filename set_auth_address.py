@@ -33,6 +33,19 @@ This script changes that address, and nothing else.  It writes four bytes.
   where the sequence is missing or ambiguous, the script stops rather than guess
   which bytes to overwrite.
 
+  The other half: two names
+  -------------------------
+  Pointing the authentication step at your server is necessary but not
+  sufficient.  The client also looks up tmollb.tokimekionline.com (which tells
+  it where the login, game and school servers are) and tmoupd.tokimekionline.com
+  (the update check), and those are names, so they belong to your resolver
+  rather than to this script.  Give them to your hosts file and both arrive.
+
+  Because forgetting that half looks exactly like a server that will not answer,
+  the script resolves the two names after it is done and tells you what they
+  currently point at.  That is one DNS lookup each and nothing else; --no-lookup
+  turns it off.
+
   Usage
   -----
       set_auth_address.py <tmo.exe>              print the address it currently uses
@@ -53,6 +66,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import shutil
+import socket
 import sys
 from pathlib import Path
 
@@ -62,6 +76,10 @@ IMAGE_BASE = 0x400000
 # nothing answers there now; whoever holds the address today has nothing to do
 # with this game.
 ORIGINAL_ADDRESS = "133.221.34.229"
+
+# The two names the client resolves for itself.  Nothing in this script writes
+# them; they are listed so it can tell you where they currently lead.
+CLIENT_NAMES = ("tmollb.tokimekionline.com", "tmoupd.tokimekionline.com")
 
 STORE_IMM = b"\xc6\x44\x24"  # mov byte [esp+disp8], imm8
 STORE_BL = b"\x88\x5c\x24"  # mov byte [esp+disp8], bl
@@ -126,6 +144,41 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def report_names(expected: str | None) -> None:
+    """Say where the two names the client resolves currently lead.
+
+    `expected` is the address they ought to reach, or None when there is nothing
+    to compare against -- a client still pointed at the original address is not
+    pointed at anybody's server, so no verdict is possible.
+    """
+    print("  the two names the client resolves for itself:")
+    wrong = []
+    for name in CLIENT_NAMES:
+        try:
+            answer: str | None = socket.gethostbyname(name)
+        except OSError:
+            answer = None
+        verdict = ""
+        if expected is not None:
+            if answer == expected:
+                verdict = "  ok"
+            else:
+                verdict = "  <- not your server"
+                wrong.append(name)
+        print(f"    {name:26s} -> {answer or 'no answer':15s}{verdict}".rstrip())
+
+    if not wrong:
+        return
+
+    print()
+    print("  Those have to reach the server too, and only your resolver can send")
+    print("  them there.  Put these in your hosts file:")
+    for name in wrong:
+        print(f"      {expected}  {name}")
+    print("  which is /etc/hosts, or on Windows")
+    print(r"  C:\Windows\System32\drivers\etc\hosts (editable as administrator).")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Point the client's authentication step at a different address.",
@@ -146,6 +199,11 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="report what would change and write nothing",
+    )
+    ap.add_argument(
+        "--no-lookup",
+        action="store_true",
+        help="skip the check on the two names the client resolves for itself",
     )
     args = ap.parse_args()
 
@@ -178,12 +236,25 @@ def main() -> int:
     print(f"{args.exe.name}  sha256 {digest(data)}")
     print(f"  authentication address {current}  (built at {va:#x})")
 
+    # What the names ought to answer: where we are about to point this copy, or
+    # where it already points.  A copy still on the original address is not
+    # pointed at a server at all, so there is nothing to hold the names to.
+    expected = target if target is not None else current
+    if expected == ORIGINAL_ADDRESS:
+        expected = None
+
+    def done(code: int = 0) -> int:
+        if not args.no_lookup:
+            print()
+            report_names(expected)
+        return code
+
     if target is None:
-        return 0
+        return done()
 
     if current == target:
         print(f"  already {target}; nothing to do")
-        return 0
+        return done()
 
     print(f"  writing 4 bytes -> {target}")
     for k in range(4):
@@ -195,7 +266,7 @@ def main() -> int:
 
     if args.dry_run:
         print("  dry run, nothing written")
-        return 0
+        return done()
 
     backup = args.exe.with_name(args.exe.name + ".orig")
     if backup.exists():
@@ -219,7 +290,7 @@ def main() -> int:
         return 1
 
     print(f"  done  sha256 {digest(data)}")
-    return 0
+    return done()
 
 
 if __name__ == "__main__":
