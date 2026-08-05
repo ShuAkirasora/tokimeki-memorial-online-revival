@@ -1714,12 +1714,14 @@ class MpsServer:
                 # the bell goes out rather than only here.
                 refusal = session.bell.admit(session.map_id, session.in_class)
                 if refusal is not None:
-                    print(f"[{self.tag}] lesson ready refused, reason={refusal}")
+                    sent = lesson.refusal_reason(refusal)
+                    note = "" if sent == refusal else f" (probe, really {refusal})"
+                    print(f"[{self.tag}] lesson ready refused, reason={sent}{note}")
                     return self._answer(
                         session,
                         sequence,
                         lesson.MSG_SV_NG_LESSON_READY,
-                        lesson.ng_params(refusal),
+                        lesson.ng_params(sent),
                     )
                 subject = session.bell.subject
                 print(

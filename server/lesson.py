@@ -94,28 +94,46 @@ MY_CLASSROOM_MAP = 128
 # look up rather than a constant it can send.
 
 # ── 断られる理由 ────────────────────────────────────────────────────────────
-# ⚠️ INVENTED, all of them. MsgSvNgLessonReady and NotifyLessonStartImpossible
-# each carry one u8 the dump calls `reason`. `error_message.bin`'s 965 strings
-# were decoded and searched: it has 授業-adjacent entries, but every one of them
-# is an お助けスキル gate on 試験レベル (545/549/553/559) and none is a refusal to
-# let anyone into a room. So these are not indices into that table, and the
-# client is presumably mapping them to strings from somewhere else. Until one is
-# seen on screen the numbers mean what this file says and nothing more.
+# ⚠️ INVENTED, all of them -- and now known to be inconsequential: the client
+# does not read this byte. Both messages carry one u8 the client's own dump
+# calls `reason`, and both draw a fixed pair of strings regardless of its value.
+#
+# For 0x6004 that is settled twice over. The dialog is built at 0x6B2A6B with
+# `push 0x266` / `push 0x265` -- msg_text 614 「上限人数オーバー」 and 613
+# 「授業開始エラー確認」, hardcoded immediates in a function that has no reason
+# parameter -- and sending 0, 1, 2, 3 and 255 drew five identical screens.
+#
+# For 0x6003 the static trail ends at a delegate bound at run time, so it was
+# settled the other way: 0xFF, which the client reads as -1 and which is the
+# furthest out of range a byte can go, drew the same 「授業起動失敗」 and the
+# same return to the lobby as 0 does.
+#
+# So these names describe what the *server* means, and nothing the player will
+# ever see. They are kept because the server still has to decide, and a named
+# decision is worth more than a bare 0.
 REASON_NOT_IN_CLASSROOM = 0  # 自分の組の教室にいない
 REASON_ALREADY_STARTED = 1   # 途中から参加することはできません (`p06_02`)
 REASON_LESSON_OFF = 2        # オプション →「授業の有無」が OFF
 REASON_NEUROSIS = 3          # ノイローゼ (`p06_02`: 参加できなくなります)
 
-# What a refusal looks like from the player's side, measured: MsgSvNgLessonReady
-# with reason=0 put up a システムメッセージ reading 「授業起動失敗」 and dropped
-# the client back out of 授業モード. Whether the other reasons draw anything
-# different is untested — one string may well cover all of them, since the
-# client had already torn the scene down by the time it asked.
+# What a refusal looks like from the player's side, measured. MsgSvNgLessonReady
+# puts up a dialog reading 「授業起動失敗」 over 「ロビーに戻ります。」 --
+# `msg_text.bin` 611 and 612 -- and then does exactly that. The client is
+# obeying its own message, not falling over.
 #
-# ⭐ That text is `msg_text.bin` 611, and 612 — the line right after it — reads
-# 「ロビーに戻ります。」. The disconnection that follows a refusal is the client
-# doing what it just said it would do, not falling over. 614 is 「上限人数オーバー」,
-# which reads like a refusal reason, but nothing ties it to this message.
+# ⭐ It waits for the player. The connection drops when 確認 is clicked, not on
+# any timer, which is the whole of the "sometimes at once, sometimes a minute
+# later" that this was written down as for two rounds. That minute was a person.
+#
+# 0x6004 NotifyLessonStartImpossible draws its own dialog -- 613 over 614,
+# 「上限人数オーバー」 -- and does *not* disconnect, because nothing has been torn
+# down when it arrives.
+#
+# ⚠️ That is not a licence to use it as a general "you cannot attend" notice.
+# 614 says the room is full, which is `p06_02`'s ~100-student limit and not
+# "you are in the wrong room"; sending it for the wrong reason would put an
+# official-looking falsehood on screen, every quarter of an hour, in a modal.
+# It is the right message for a capacity limit, if this server ever grows one.
 
 
 # How long after the bell a 0x6001 is still taken. The manual bans joining a
@@ -159,6 +177,34 @@ PROBE = {
     "charaid": -1,     # -1 = the session's own; see the id namespace below
     "testlv": -1,      # -1 = the 通知表's own 試験レベル
 }
+
+# ── refusal knobs ───────────────────────────────────────────────────────────
+# Settable from chat with /bell, and here for the same reason as PROBE: what
+# they test costs a login per attempt.
+#
+# ✅ They have answered the question they were built for, and it was not "what
+# does each reason mean" -- which is unanswerable from this side, since which
+# value the original server sent in which situation only ever went
+# server-to-client, and this is the server now. It was: is any value survivable?
+#
+# No. 0xFF, read by the client as -1 and as far out of range as a byte goes,
+# drew the same 「授業起動失敗」 over 「ロビーに戻ります。」 as 0 does. What
+# costs the connection is being refused after the scene has already come down,
+# not the number in the refusal, so Bell.poll's suppression stays.
+#
+# They are kept because they are the only way to ask this message anything, and
+# the next question about it will want them.
+#
+#   reason   the byte a refusal carries; None means the real one
+#   force    let /bell ready ring from outside the classroom, which is otherwise
+#            refused precisely because it logs the player out
+NG_PROBE: dict[str, int | None] = {"reason": None, "force": 0}
+
+
+def refusal_reason(real: int) -> int:
+    """The byte to actually send, honouring the probe knob."""
+    override = NG_PROBE["reason"]
+    return real if override is None else override
 
 # ⚠️ charaId and testLv were both 1 in the seat that killed the client, and the
 # faulting register held 1. Which of the two the classifier was applied to is not
@@ -257,11 +303,11 @@ class Bell:
 
         ⚠️ This is an inference, not something read off the wire: the original
         server cannot have rung 本鈴 at players in corridors either, or every
-        one of them would have been disconnected on the quarter hour. The
-        untested alternative is that it did ring, and that our refusal is what
-        the client dislikes — reason=0 is our invention (the reason codes were
-        never recovered), so a different value might be handled gracefully. If
-        that is ever tested and holds, this suppression can go.
+        one of them would have been disconnected on the quarter hour.
+
+        ✅ The alternative that used to be recorded here — that it did ring, and
+        that what the client disliked was our invented reason=0 — has been
+        tested and does not hold. See NG_PROBE.
         """
         now = when or datetime.now()
         owed: list[tuple[str, int]] = []
