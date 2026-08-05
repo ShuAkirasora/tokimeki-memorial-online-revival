@@ -8,7 +8,7 @@ send to a player standing in the wrong room when it does.
 
     0x6005 MsgSvNotifyBeforeLessonStart   u16 type          — 予鈴, five minutes out
     0x6000 MsgSvNotifyLessonReady         (empty)           — 本鈴
-    0x6001 MsgClRequestLessonReady        (empty)           — 「出ます」
+    0x6001 MsgClRequestLessonReady        (empty)           — sent by the client itself
     0x6002 MsgSvOkLessonReady             (empty)
     0x6003 MsgSvNgLessonReady             u8 reason
     0x6004 MsgSvNotifyLessonStartImpossible u8 reason
@@ -111,12 +111,21 @@ REASON_NEUROSIS = 3          # ノイローゼ (`p06_02`: 参加できなくな�
 # the client back out of 授業モード. Whether the other reasons draw anything
 # different is untested — one string may well cover all of them, since the
 # client had already torn the scene down by the time it asked.
+#
+# ⭐ That text is `msg_text.bin` 611, and 612 — the line right after it — reads
+# 「ロビーに戻ります。」. The disconnection that follows a refusal is the client
+# doing what it just said it would do, not falling over. 614 is 「上限人数オーバー」,
+# which reads like a refusal reason, but nothing ties it to this message.
 
 
-# How long after the bell a 「出ます」 is still taken. The manual bans joining a
+# How long after the bell a 0x6001 is still taken. The manual bans joining a
 # lesson in progress and says nothing about how much of a moment the client gets
 # to answer in; this is the round trip plus the up-to-30s the timesync-driven
 # bell can be late by, which is a fact about this server and not the original.
+#
+# ⚠️ In practice this is unreachable: the client answers 0x6000 within the same
+# few packets, with no prompt in between, so nothing ever arrives late enough
+# to be turned away by this.
 GRACE_SECONDS = 45
 
 

@@ -202,9 +202,14 @@ MSG_SV_NG_CHARACTER_DESTROY = 0x0311
 # not the empty message the Ok side of the pair sends (0x8CB9A0, `xor eax,eax;
 # ret 8`, reads nothing).
 #
-# ⚠️ The value is a placeholder, not a finding. Nothing in the client was found
-# reading the field back, so which codes it distinguishes -- if it distinguishes
-# any -- is unknown. Zero is sent because the reader consumes a byte either way.
+# ⚠️ The value is a placeholder, not a finding, and following it statically ends
+# at a wall rather than at an answer. The only place in the whole image that
+# visibly reads the field back is the message's own debug dump; whoever else
+# consumes it is reached through a delegate bound at run time, so "the client
+# ignores it" cannot be concluded either. Zero is sent because the reader
+# consumes a byte no matter what.
+#
+# The slot is read-int8, i.e. **signed**: a byte above 127 arrives negative.
 NG_REASON = b"\x00"
 MSG_CL_REQUEST_SCHOOL_LOGIN = 0x0306
 MSG_SV_OK_SCHOOL_LOGIN = 0x0307
@@ -1698,13 +1703,15 @@ class MpsServer:
                     sheet.result_params(card.test_level() - 1),
                 )
             if msg_type == lesson.MSG_CL_REQUEST_LESSON_READY:
-                # 「出ます」. The body is empty — the client asserts nothing, not
-                # even which lesson it means — so every condition `p06_02` lists
-                # is checked here or not at all.
+                # The client sends this by itself, as part of tearing the scene
+                # down after 0x6000 — there is no prompt and no button, so the
+                # player never chose to be here. The body is empty: it asserts
+                # nothing, not even which lesson it means, so every condition
+                # `p06_02` lists is checked here or not at all.
                 #
-                # ⚠️ First contact. Nothing about this exchange has been on the
-                # wire before, including whether an Ok is enough to make the
-                # client wait for MsgSvNotifyLessonStart rather than time out.
+                # ⚠️ Refusing costs the player the connection (see NG_REASON and
+                # Bell.poll), which is why the conditions are also checked before
+                # the bell goes out rather than only here.
                 refusal = session.bell.admit(session.map_id, session.in_class)
                 if refusal is not None:
                     print(f"[{self.tag}] lesson ready refused, reason={refusal}")
