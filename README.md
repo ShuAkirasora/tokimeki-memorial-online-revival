@@ -113,16 +113,19 @@ virtualenv to create. Two things have to be true of the machine:
 
 - **A Python with a real OpenSSL.** Tested on 3.14. On macOS the system `python3` is built
   against LibreSSL and cannot start the TLS listeners; use a python.org, Homebrew or pyenv
-  build instead. The python.org build for Windows is fine as it comes.
+  build instead. The python.org build for Windows and a distribution's own `python3` on
+  Linux are both fine as they come.
 - **An `openssl` binary — once.** The certificate for the auth endpoint is generated on the
   first run, into `runtime/certs/`, and never regenerated, so this only matters when
-  starting from an empty `runtime/certs/`. macOS and Linux have one already. Windows ships
-  none, but Git for Windows carries a complete one and its install location is searched
-  directly, so **if you have Git you need do nothing**; failing that, winget, scoop and
-  chocolatey all have a package.
+  starting from an empty `runtime/certs/`. macOS and Linux have one already, though on some
+  Linux distributions it needs persuading — see "On Linux". Windows ships none, but Git for
+  Windows carries a complete one and its install location is searched directly, so **if you
+  have Git you need do nothing**; failing that, winget, scoop and chocolatey all have a
+  package.
 
-Written and run on macOS, and written to run on Windows. Every command below is the same on
-both, with `py` in place of `python3`; where that is not enough, it says so.
+Written and run on macOS and on Linux (Debian 12, Python 3.11), and the Windows paths have
+been run on Windows. Every command below is the same on all three, with `py` in place of
+`python3` on Windows; where that is not enough, it says so.
 
 ## Running the server
 
@@ -157,6 +160,37 @@ The same two commands. Three things worth knowing:
 - **The firewall asks once.** Answering no leaves a client on this machine working and
   every client anywhere else unable to arrive.
 
+### On Linux
+
+The same two commands, and still nothing to install: what holds a port is read out of
+`/proc`, not out of `lsof`, which is not on a Linux machine unless somebody put it there.
+Two things are worth knowing before the first run.
+
+**Low ports are privileged, and 443 and 50 are the two the auth step is most likely to
+want.** `[authhttp] skip :443 (...)` in the log is exactly that, and the server carries on
+without them. Either start it as root, or lift the restriction for everyone once:
+
+```sh
+sudo sysctl -w net.ipv4.ip_unprivileged_port_start=50
+```
+
+The startup log suggests the same line when it is the reason a port was skipped, and a file
+in `/etc/sysctl.d/` makes it survive a reboot; with it applied, an ordinary user's server
+takes all three. Check what already holds 80 and 443 before blaming privileges — on a
+machine with a web server installed, something usually does.
+
+**The auth certificate has to be SHA-1, and your distribution may refuse to make one.** The
+client accepts no other kind (see "Connecting a client"), while RHEL, Fedora and their
+derivatives run every OpenSSL process under a system-wide crypto policy that since RHEL 9
+will not *produce* a SHA-1 signature. The first run notices that refusal and repeats the
+command with the policy overridden for that one process — nothing about the machine's own
+policy changes, and nothing else on it will accept anything it did not accept before. If
+even that fails, the server stops and prints what openssl said, rather than coming up with
+an auth endpoint that cannot complete a handshake.
+
+Firewalls are the last thing: if `ufw` or `firewalld` is running, the ports under "Playing
+from another machine" have to be opened there too.
+
 ### Ports
 
 | Port | Service |
@@ -172,7 +206,8 @@ The same two commands. Three things worth knowing:
 
 Ports below 1024 need privileges, except on Windows. Either way it is not fatal: the server
 logs `[authhttp] skip :443 (...)` and carries on. Whether you need them depends on which
-endpoint your client asks for.
+endpoint your client asks for, and on Linux there is a way to have them without running as
+root — see "On Linux".
 
 ## Connecting a client
 
@@ -196,7 +231,9 @@ hostnames:
 Resolve those to the machine running the server — a hosts-file entry each, or a local
 resolver for the domain. The client is a Windows program, so the file to edit is the one on
 the machine it runs on: `C:\Windows\System32\drivers\etc\hosts`, which needs an editor
-started as administrator.
+started as administrator. Under Wine the machine it runs on is the Linux one and Wine has
+no resolver of its own, so the file is that host's `/etc/hosts` — though running the client
+that way has not been tried here.
 
 Everything after those two follows along on its own: the login, game and school servers are
 reached at whatever address the login-server lookup hands back, and this server hands back
@@ -372,6 +409,7 @@ to change, and the grade it awards is this server's own curve over the running s
 | `already running pid=N` | a previous instance is still up; leave it, or `stop_servers.py` |
 | `[authhttp] skip :443` | no privileges to bind a low port — or, on Windows, something else has it |
 | `openssl is not on PATH` | nothing to generate the auth certificate with; see Requirements |
+| `openssl did not produce the auth certificate` | it refused, and the retry did too — usually a crypto policy that forbids SHA-1; see "On Linux" |
 | `[WinError 10013]` on a bind, and the server exits | that port is reserved or already held; see "On Windows" |
 | `アップデートクライアントの起動に失敗しました`, and the log stays empty | `BootFirst.exe` was not run as administrator; see "Starting the game" |
 

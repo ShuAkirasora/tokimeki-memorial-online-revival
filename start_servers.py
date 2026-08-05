@@ -13,9 +13,10 @@ it has to be a Python with a real OpenSSL: the macOS system python3 is built
 against LibreSSL and cannot start the TLS listeners. stop_servers.py is run
 the same way.
 
-Runs on Windows as well, where three things below are done differently rather
-than done at all: finding what holds a port, asking whether a pid is alive, and
-detaching the child. Each is marked where it happens.
+Runs on Windows and on Linux as well. Three things below cannot be asked the
+same way everywhere -- what holds a port, whether a pid is alive, and how to
+detach the child -- and each is marked where it happens. Everything else,
+including every path in this file, is what it is on all three.
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ PIDFILE = ROOT / "runtime" / "run_all.pid"
 PORTS = (12000, 12010, 12011, 12012, 12020, 8011, 443, 50, 80, 35573, 25573, 25574, 25575)
 
 WINDOWS = os.name == "nt"
+LINUX = sys.platform.startswith("linux")
 
 
 def _pid_alive_windows(pid: int) -> bool:
@@ -100,28 +102,24 @@ def _run(argv: list[str]) -> str:
         return ""
 
 
-def _listener_pids(ports: tuple[int, ...]) -> list[int]:
-    """Pids listening on any of ``ports``, however this platform is asked.
+def _listener_pids_lsof(ports: tuple[int, ...]) -> list[int]:
+    """lsof: it takes the filter itself and answers with pids and nothing else,
+    so one call per port costs nothing and its output is the list."""
+    pids: list[int] = []
+    for port in ports:
+        out = _run(["lsof", "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"])
+        pids += [int(tok) for tok in out.split() if tok.isdigit()]
+    return pids
 
-    lsof takes the filter itself and answers with pids and nothing else, so one
-    call per port costs nothing and its output is the list.
 
-    Windows has no lsof. netstat's -o adds the owning pid to each row, and it is
-    on every Windows there is, which is why it is preferred to
-    Get-NetTCPConnection -- no PowerShell in the path, nothing to install. It
-    cannot filter by port, so it is asked once for everything and the ports are
-    picked out here; asking it thirteen times would be thirteen full snapshots
-    of the connection table.
-    """
-    if not WINDOWS:
-        pids: list[int] = []
-        for port in ports:
-            out = _run(["lsof", "-nP", "-t", f"-iTCP:{port}", "-sTCP:LISTEN"])
-            pids += [int(tok) for tok in out.split() if tok.isdigit()]
-        return pids
-
+def _listener_pids_netstat(ports: tuple[int, ...]) -> list[int]:
+    """Windows: netstat's -o adds the owning pid to each row, and it is on every
+    Windows there is, which is why it is preferred to Get-NetTCPConnection -- no
+    PowerShell in the path, nothing to install. It cannot filter by port, so it
+    is asked once for everything and the ports are picked out here; asking it
+    thirteen times would be thirteen full snapshots of the connection table."""
     wanted = {str(port) for port in ports}
-    pids = []
+    pids: list[int] = []
     # proto, local address, foreign address, state, pid -- and UDP rows, which
     # have no state and no business here, are dropped by the column count.
     for line in _run(["netstat", "-ano"]).splitlines():
@@ -136,6 +134,90 @@ def _listener_pids(ports: tuple[int, ...]) -> list[int]:
         if sep and tail in wanted and cols[4].isdigit():
             pids.append(int(cols[4]))
     return pids
+
+
+def _listening_inodes(ports: tuple[int, ...]) -> set[str] | None:
+    """Linux: inodes of the sockets listening on ``ports``. None if /proc cannot say.
+
+    /proc/net/tcp and its v6 twin are the table lsof, ss and netstat all read on
+    this platform, so going to it directly is not a lesser answer -- it is the
+    same one without the dependency. Both files are read because the socket
+    holding a port need not be this server's: something bound to :: holds the
+    port for v4 as well, on the usual setting of net.ipv6.bindv6only, and it
+    appears in the second file only.
+
+    The row names its socket only by inode; which process holds it is the next
+    function's question, and nothing in the kernel's table answers it.
+    """
+    inodes: set[str] = set()
+    answered = False
+    for name in ("tcp", "tcp6"):
+        try:
+            rows = Path("/proc/net", name).read_text().splitlines()
+        except OSError:
+            continue  # no /proc, or this kernel has no IPv6 -- try the other
+        answered = True
+        # sl, local_address, rem_address, st, tx:rx, tr:when, retrnsmt, uid,
+        # timeout, inode. Addresses and state are hex; 0A is TCP_LISTEN.
+        for row in rows[1:]:
+            cols = row.split()
+            if len(cols) < 10 or cols[3] != "0A":
+                continue
+            _, _, port_hex = cols[1].rpartition(":")
+            try:
+                port = int(port_hex, 16)
+            except ValueError:
+                continue
+            if port in ports:
+                inodes.add(cols[9])
+    return inodes if answered else None
+
+
+def _pids_holding(inodes: set[str]) -> list[int]:
+    """Linux: which processes have those sockets open.
+
+    An fd in /proc/<pid>/fd is a symlink reading "socket:[<inode>]", and that
+    scan is the whole of the inode-to-pid mapping -- it is what lsof does here
+    too. Processes belonging to another user have an fd directory this account
+    cannot read and are skipped, which is the blind spot lsof has without
+    privileges as well, and never covers the server this script started.
+    """
+    wanted = {f"socket:[{inode}]" for inode in inodes}
+    pids: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            fds = list((entry / "fd").iterdir())
+        except OSError:
+            continue  # not ours to look at, or it exited while we were looking
+        for fd in fds:
+            try:
+                held = os.readlink(fd)
+            except OSError:
+                continue  # closed between the listing and the read
+            if held in wanted:
+                pids.append(int(entry.name))
+                break
+    return pids
+
+
+def _listener_pids(ports: tuple[int, ...]) -> list[int]:
+    """Pids listening on any of ``ports``, however this platform is asked.
+
+    Linux goes to /proc rather than to lsof because lsof is not on a Linux
+    machine unless somebody installed it, and a stop that quietly finds nothing
+    is worse than one that fails: the ports would stay held and the next start
+    would lose the bind. lsof stays as the fallback for a host where /proc is
+    not mounted.
+    """
+    if WINDOWS:
+        return _listener_pids_netstat(ports)
+    if LINUX:
+        inodes = _listening_inodes(ports)
+        if inodes is not None:
+            return _pids_holding(inodes) if inodes else []
+    return _listener_pids_lsof(ports)
 
 
 def stop_listeners() -> list[int]:

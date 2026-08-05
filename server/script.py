@@ -299,9 +299,22 @@ class Script:
 
 
 def load(name: str) -> Script | None:
-    """A script by name (`amm_s001`, with or without `.ssb`), or None."""
-    stem = name[:-4] if name.endswith(".ssb") else name
+    """A script by name (`amm_s001`, with or without `.ssb`), or None.
+
+    The name is matched without regard to case if the exact one is not there,
+    which on macOS and Windows is what happens anyway -- their filesystems do
+    not distinguish, and a name typed into the chat bar has always been allowed
+    to arrive in any case. On Linux the same typing would miss the file and
+    report the export as absent, which is a worse answer than the file.
+    """
+    stem = name[:-4] if name.lower().endswith(".ssb") else name
     path = SCRIPT_DIR / f"{stem}.json"
+    if not path.exists():
+        wanted = f"{stem}.json".lower()
+        try:
+            path = next(p for p in SCRIPT_DIR.iterdir() if p.name.lower() == wanted)
+        except (StopIteration, OSError):
+            return None
     try:
         return Script(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError, KeyError):

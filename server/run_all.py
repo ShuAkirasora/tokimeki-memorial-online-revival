@@ -149,11 +149,30 @@ async def main(advertise_ip: str = DEFAULT_ADVERTISE_IP) -> None:
     servers.append(await mps_login.run())
     servers.append(await mps_game.run())
     servers.append(await mps_school.run())
+    denied: list[int] = []
     for srv in (auth_443, auth_50, auth_80):
         try:
             servers.append(await srv.run())
         except OSError as exc:
             print(f"[authhttp] skip :{srv.config.port} ({exc})")
+            if isinstance(exc, PermissionError):
+                denied.append(srv.config.port)
+
+    # A refused low port is not fatal -- only the endpoint a given client dials
+    # has to be up -- but on Linux it is refused for a reason with a one-line
+    # answer, and whoever is reading this log is the one who can apply it. Said
+    # only there: macOS has the same restriction and no such switch, Windows
+    # never had the restriction, and a port refused for being taken rather than
+    # for being privileged is a different problem with a different fix.
+    if denied and sys.platform.startswith("linux") and os.geteuid() != 0:
+        lowest = min(denied)
+        print(
+            f"[system] {', '.join(str(p) for p in denied)}: ports under 1024 need"
+            " privileges on Linux. Either start this as root, or lower the bar"
+            " for everyone once with `sudo sysctl -w"
+            f" net.ipv4.ip_unprivileged_port_start={lowest}` (a file in"
+            " /etc/sysctl.d/ keeps it across reboots)."
+        )
 
     print("[system] all services started")
 
