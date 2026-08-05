@@ -34,31 +34,33 @@ sighting of the same three arrays in the same order.
 What the screen does with each field, all of it read back off screenshots
 measured pixel by pixel rather than inferred:
 
-    abilityParam   six rows in `chara_ability_type.bin` key order, one to one,
-                   drawn as 「レベルＮ」 with N = max(1, ceil(値 / 250)).
-                   Exact on thirteen points from 16 to 10000, and 1062 → 5
-                   is what rules out floor.
-                   ⚠️ Only up to 10000. Above it the display drifts (12500,
-                   20000, 25000 draw 49, 79, 98 where the rule says 50, 80,
-                   100), and from 32768 up it switches to a different rule
-                   altogether: 32768, 40000, 50000, 65535 draw 12, 15, 19, 25,
-                   every one of them exactly round(値 × 25 / 65536). 32768 is
-                   the u16 sign bit and this field is u16 on the wire, so a
-                   signed read on the far side is the obvious suspect — but
-                   the switch has only been bracketed to 25000 < 値 ≤ 32768,
-                   not found. Keep values at or below 10000 and the screen
-                   means what it says.
-    progress bar   within-level progress on a 180px track:
-                     fill = max(0, 0.62·(値 − 250·(L−1)) + 14 − 3.75·L)
-                   Fitted below 10000, then confirmed by predicting three
-                   points on the far side of the drift region (12500, 20000,
-                   25000 → 140, 28, 111 px predicted against 139, 26, 113
-                   measured). The −3.75·L term is why the bar looks like it
-                   shrinks with the value: each level's peak is shorter than
-                   the one before, and from level 4 up the bar stays empty
-                   over the first few points of a level.
-    virtue         drawn as 「人　徳」 on the same sheet, same レベル rule;
-                   0 still draws レベル1.
+    abilityParam   six rows in `chara_ability_type.bin` key order, one to one.
+                   The u16 is an 8.8 fixed-point number — the high byte is the
+                   level, the low byte is the progress inside that level, and
+                   the screen draws the two halves separately:
+
+                     「レベルＮ」  N    = (値 >> 8) + 1
+                     progress bar  fill = (値 & 0xFF) / 256   of the track
+
+                   Thirty points agree, and 値 = 0 needs no special case: the
+                   shift draws レベル1 on its own. Two earlier readings —
+                   ceil(値/250), then ceil(値/256) — each needed a max(1, …)
+                   patch for exactly that value, which is the tell that both
+                   were the wrong shape. Neither could be separated from the
+                   shift by the samples then in hand: ceil and floor+1 differ
+                   only where 値 is an exact multiple of 256, and thirty-odd
+                   measurements had never once landed on one. 256, 512 and
+                   2560 do, and they draw レベル 2, 3 and 11 with an empty bar
+                   where ceil predicts 1, 2 and 10 with a full one.
+                   ⚠️ 値 ≥ 32768 — the u16 sign bit, and this field is u16 on
+                   the wire — switches to a different rule altogether: 32768,
+                   40000, 50000, 65535 draw 12, 15, 19, 25, every one of them
+                   exactly round(値 × 25 / 65536). A signed read on the far
+                   side is the obvious suspect, but the switch has been
+                   bracketed, not found. Keep values below 32768 and the
+                   screen means what it says.
+    virtue         drawn as 「人　徳」 on the same sheet, same レベル rule,
+                   which is why 0 reads as レベル1 there too.
     stress         「ストレス：Ｎ／１００」 with N = min(100, floor(値·100/257)).
                    The 257 is measured from both sides: 257 → 100 caps it
                    from above, 200 → 77 from below. The bar's colour tracks it
