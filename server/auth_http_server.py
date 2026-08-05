@@ -505,6 +505,18 @@ class AuthHttpServer:
             )
             transport.close()
             return
+        if tls_transport is None:
+            # start_tls hands back the SSL protocol's own transport, and that
+            # attribute is cleared the instant the connection is lost -- so a
+            # peer that finishes the handshake and hangs up in the same breath,
+            # which is what a port scan or a health check looks like, arrives
+            # here as None rather than as an exception.
+            print(
+                f"[authhttp] TLS-GONE port={self.config.port} peer={peer}: "
+                "peer closed as the handshake completed"
+            )
+            transport.close()
+            return
         if not served:
             protocol.connection_made(tls_transport)
 
