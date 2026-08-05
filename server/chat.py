@@ -153,7 +153,7 @@ HELP = (
     "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words] <数> 0x6100 の実験用つまみ",
-    "/bell [<科目番号>|ready] 予鈴/本鈴を手で鳴らす",
+    "/bell [<科目番号>|ready|force|ng <値|off>|imp <値>] 予鈴/本鈴/入場拒否の実験",
     "/quiz [sec <秒>|wait <秒>|ab [before|after] <値×6>|ab off] 出題の状態と正解 (採点の検証用)",
     "/npcx 補充をやめる (画面上の分は地図を跨ぐまで残る)",
     "/nev [<cat>:<id>] 会話イベントキー (既定 16:1)",
@@ -703,20 +703,75 @@ def respond(
         # a subjectId it has no name for is a question about the client, and this
         # is the only thing that can ask it.
         argument = rest.strip().lower()
-        if argument in ("ready", "hon", "本"):
+        words_in = argument.split()
+
+        # The refusal probe. `/bell ng <n>` picks the byte the next 0x6003
+        # carries, `/bell ng off` gives the real reason back, and `/bell force`
+        # rings from outside the classroom, which the guard below otherwise
+        # refuses. Together they ask the one question worth an experiment: is
+        # there a reason the client does not answer by going back to the lobby?
+        if words_in and words_in[0] == "ng":
+            if len(words_in) < 2:
+                return Reply([f"/bell ng <値|off>  今: {lesson.NG_PROBE['reason']}"])
+            if words_in[1] == "off":
+                lesson.NG_PROBE["reason"] = None
+                return Reply(["0x6003 の reason は本来の値に戻した"])
+            try:
+                value = int(words_in[1], 0)
+            except ValueError:
+                return Reply(["/bell ng <値|off>"])
+            if not -128 <= value <= 255:
+                return Reply(["reason は int8 の槽 (vt+0x1C): -128〜255"])
+            lesson.NG_PROBE["reason"] = value & 0xFF
+            signed = value - 256 if value > 127 else value
+            return Reply([
+                f"次の入場拒否は 0x6003 reason={value & 0xFF} で返す"
+                f"（クライアントは符号付きで {signed} と読む）",
+            ])
+
+        # 0x6004 NotifyLessonStartImpossible carries the same one byte, but
+        # unprompted: nothing has been torn down when it arrives. If it draws
+        # something civil, then telling a player they cannot attend need not
+        # cost them the connection at all, and this whole question changes
+        # shape. Sending it costs nothing, so it is the cheap probe to run first.
+        if words_in and words_in[0] in ("imp", "impossible"):
+            try:
+                value = int(words_in[1], 0) if len(words_in) > 1 else 0
+            except ValueError:
+                return Reply(["/bell imp [<値>]"])
+            if not 0 <= value <= 255:
+                return Reply(["reason は 1 バイト"])
+            return Reply(
+                [f"0x6004 NotifyLessonStartImpossible reason={value} を送った"],
+                sends=[(
+                    lesson.MSG_SV_NOTIFY_LESSON_START_IMPOSSIBLE,
+                    lesson.ng_params(value),
+                )],
+            )
+
+        forced = bool(words_in) and words_in[0] in ("force", "!")
+        if forced or argument in ("ready", "hon", "本"):
             # Refusing to ring is friendlier than ringing and being refused.
             # 0x6000 makes the client tear its scene down and ask to come in by
             # itself; if admit() then says no, the 0x6003 carrying that no makes
             # the client close the connection. From outside the classroom this
-            # command's only possible outcome is a logout, so it does not fire.
+            # command's only possible outcome is a logout, so it does not fire
+            # unless the caller says `force`, which is the experiment.
             room = lesson.classroom_of(in_class)
-            if map_id != room:
+            if map_id != room and not forced:
                 return Reply([
                     f"本鈴は鳴らさない: 今 map {map_id}、教室は map {room}",
                     f"鳴らすと入場を断られ、クライアントが切断する。先に /go {room}",
+                    "実験でわざと鳴らすなら /bell force",
                 ])
+            lines = ["本鈴 (0x6000 NotifyLessonReady) を鳴らした"]
+            if map_id != room:
+                lines.append(
+                    f"⚠️ 教室 (map {room}) の外なので入場は断られる。"
+                    f"reason={lesson.NG_PROBE['reason']}"
+                )
             return Reply(
-                ["本鈴 (0x6000 NotifyLessonReady) を鳴らした"],
+                lines,
                 sends=[(lesson.MSG_SV_NOTIFY_LESSON_READY, b"")],
             )
         try:
