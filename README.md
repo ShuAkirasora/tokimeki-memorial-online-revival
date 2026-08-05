@@ -231,9 +231,14 @@ hostnames:
 Resolve those to the machine running the server — a hosts-file entry each, or a local
 resolver for the domain. The client is a Windows program, so the file to edit is the one on
 the machine it runs on: `C:\Windows\System32\drivers\etc\hosts`, which needs an editor
-started as administrator. Under Wine the machine it runs on is the Linux one and Wine has
-no resolver of its own, so the file is that host's `/etc/hosts` — though running the client
-that way has not been tried here.
+started as administrator. Under Wine the machine it runs on is the host, and Wine has no
+resolver of its own, so the file is the host's `/etc/hosts`. That route has been used here:
+a client under Wine on macOS, two entries in the host's `/etc/hosts`, and a server on a
+different machine — update check, login-server lookup, authentication, login, game and
+school all arrived.
+
+Nothing in the client's own files has to be edited for this. `update.ini` ships with the
+update hostname in it, so a hosts entry covers that too and the file can be left alone.
 
 Everything after those two follows along on its own: the login, game and school servers are
 reached at whatever address the login-server lookup hands back, and this server hands back
@@ -252,6 +257,12 @@ python3 set_auth_address.py /path/to/tmo.exe 192.168.1.5
 
 with the address of the machine running the server. Run it with no address to see what your
 copy currently points at, and `--revert` to put the original address back.
+
+Both halves fail the same way — a server that never answers — so when the script is done it
+looks up the two hostnames above and prints where they currently lead. A hosts entry you
+forgot, or a resolver that answers for names that do not exist, says so on the spot instead
+of looking like a server that is down. That is one DNS lookup per name and nothing else;
+`--no-lookup` skips it.
 
 **What that changes, exactly.** The client builds the address one octet at a time, straight
 onto the stack, and hands the result to `connect()`:
