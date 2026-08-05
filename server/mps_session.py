@@ -1997,7 +1997,8 @@ class MpsServer:
         card = self.characters.scorecard(session.chara_id)
         sheet = self.characters.ability(session.chara_id)
         answer = chat.respond(
-            said, session.map_id, session.pos, love, card, session.lesson, sheet
+            said, session.map_id, session.pos, love, card, session.lesson,
+            sheet, session.in_class,
         )
         if answer.romance_save and love is not None:
             self.characters.set_romance(session.chara_id, love)
@@ -2269,8 +2270,20 @@ class MpsServer:
         if session.chara_id == 0:
             return b""
         out = b""
-        for kind, subject in session.bell.poll():
+        # Whether this player could be let in if the 本鈴 rang this instant.
+        # Bell.poll needs it up front, because ringing at someone who would be
+        # refused logs them out — the client asks to come in on its own and
+        # closes the connection when told no. See Bell.poll.
+        admits = session.map_id == lesson.classroom_of(session.in_class)
+        for kind, subject in session.bell.poll(admits=admits):
             name = curriculum.SUBJECTS[subject]
+            if kind == "skip":
+                print(
+                    f"[{self.tag}] 本鈴 {name}: not ringing, player is on map "
+                    f"{session.map_id}, not classroom "
+                    f"{lesson.classroom_of(session.in_class)}"
+                )
+                continue
             if kind == "pre":
                 print(f"[{self.tag}] 予鈴: 次は{name}")
                 out += self._answer(

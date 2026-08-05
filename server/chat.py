@@ -316,6 +316,7 @@ def respond(
     card: "curriculum.ScoreCard | None" = None,
     period: "lesson.Lesson | None" = None,
     sheet: "ability.AbilitySheet | None" = None,
+    in_class: int = 0,
 ) -> Reply:
     """Answer one chat line.
 
@@ -324,7 +325,8 @@ def respond(
     through ``Reply.romance_save`` the same way every other side effect is.
     ``card`` is the same arrangement for the 通知表 and ``sheet`` for the 能力
     パラメータ. ``period`` is the lesson in progress, read-only and only by
-    /quiz.
+    /quiz. ``in_class`` is only there so /bell can tell whether ringing would
+    throw the player off the server; see the guard in that branch.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -702,6 +704,17 @@ def respond(
         # is the only thing that can ask it.
         argument = rest.strip().lower()
         if argument in ("ready", "hon", "本"):
+            # Refusing to ring is friendlier than ringing and being refused.
+            # 0x6000 makes the client tear its scene down and ask to come in by
+            # itself; if admit() then says no, the 0x6003 carrying that no makes
+            # the client close the connection. From outside the classroom this
+            # command's only possible outcome is a logout, so it does not fire.
+            room = lesson.classroom_of(in_class)
+            if map_id != room:
+                return Reply([
+                    f"本鈴は鳴らさない: 今 map {map_id}、教室は map {room}",
+                    f"鳴らすと入場を断られ、クライアントが切断する。先に /go {room}",
+                ])
             return Reply(
                 ["本鈴 (0x6000 NotifyLessonReady) を鳴らした"],
                 sends=[(lesson.MSG_SV_NOTIFY_LESSON_READY, b"")],

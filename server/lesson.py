@@ -223,10 +223,36 @@ class Bell:
         self.in_lesson: datetime | None = None
         self.subject = -1
 
-    def poll(self, when: datetime | None = None) -> list[tuple[str, int]]:
+    def poll(
+        self, when: datetime | None = None, *, admits: bool = True
+    ) -> list[tuple[str, int]]:
         """Which bells are owed, as ``(kind, subjectId)`` in the order to send.
 
-        ``kind`` is "pre" for 予鈴 and "start" for 本鈴.
+        ``kind`` is "pre" for 予鈴, "start" for 本鈴, and "skip" for a 本鈴 that
+        is due but must not go out — see ``admits``.
+
+        ``admits`` is whether this player could actually be let in right now.
+        Ringing anyway is not free, and not merely untidy:
+
+          0x6000 makes the client tear its scene down (0x4003) and then ask to
+          come in (0x6001) **by itself** — there is no prompt and no button, so
+          the player cannot decline. If admit() then refuses, the 0x6003 that
+          says so makes the client close the connection. A bell rung at someone
+          standing outside their classroom therefore logs them out, every
+          fifteen minutes, with nothing they can do about it.
+
+        So the condition is checked *before* the invitation goes out rather than
+        after it comes back. The caller passes what it knows; a False only
+        suppresses the 本鈴, never the 予鈴, because the 予鈴 is exactly the
+        warning that sends a player to the right room in time.
+
+        ⚠️ This is an inference, not something read off the wire: the original
+        server cannot have rung 本鈴 at players in corridors either, or every
+        one of them would have been disconnected on the quarter hour. The
+        untested alternative is that it did ring, and that our refusal is what
+        the client dislikes — reason=0 is our invention (the reason codes were
+        never recovered), so a different value might be handled gracefully. If
+        that is ever tested and holds, this suppression can go.
         """
         now = when or datetime.now()
         owed: list[tuple[str, int]] = []
@@ -241,8 +267,17 @@ class Bell:
         # its start is where slot_start already points.
         started = curriculum.slot_start(now)
         if self.start_rung != started:
+            # Mark the slot either way, so a suppressed bell is skipped once
+            # rather than reconsidered on every packet for fifteen minutes.
             self.start_rung = started
-            owed.append(("start", self.rang(curriculum.current_subject(now), now)))
+            current = curriculum.current_subject(now)
+            if admits:
+                # rang() is what opens the door; a bell that never went out must
+                # not leave rang_at behind, or admit() would honour a door that
+                # was never there.
+                owed.append(("start", self.rang(current, now)))
+            else:
+                owed.append(("skip", current))
         return owed
 
     def rang(self, subject: int, when: datetime | None = None) -> int:
