@@ -150,7 +150,7 @@ HELP = (
     "/npca 登場済みの恋愛候補生を配置 / <始> <終> [分類] で生キー",
     "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
-    "/ab [ruler|clear|<能力> <値>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
+    "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words] <数> 0x6100 の実験用つまみ",
     "/bell [<科目番号>|ready] 予鈴/本鈴を手で鳴らす",
@@ -575,6 +575,11 @@ def respond(
         # single screenshot says which 能力 the client draws in which row.
         # AbilitySheet.ruler documents the whole pattern and why each value was
         # chosen.
+        #
+        # ⚠️ Values above 10000 do not draw what they mean — see ability.py for
+        # where the display leaves the ceil(値/250) rule and what it does
+        # instead. Nothing here clamps them, because the way that was found was
+        # by sending them.
         if sheet is None:
             return Reply(["能力が読めない (キャラ未選択?)"])
         words = rest.split()
@@ -587,6 +592,28 @@ def respond(
         if verb == "clear":
             sheet.clear()
             return Reply(["能力を白紙に戻した"], ability_save=True)
+        # Batch forms, because every one of these is typed by hand into the
+        # game's own chat line: `p` takes the six 能力 positionally and `club`
+        # takes one club's pair. Reading the screen means putting a whole row
+        # of values up at once, and one message beats six chances to mistype.
+        if verb in ("p", "params"):
+            try:
+                values = [int(word, 0) for word in words[1:]]
+            except ValueError:
+                return Reply(["/ab p <文系> <理系> … 最大 6 個"])
+            for index, value in enumerate(values[: len(ability.ABILITIES)]):
+                sheet.params[index] = max(0, value)
+            return Reply(sheet.lines(), ability_save=True)
+        if verb in ("club", "部活"):
+            try:
+                index, level, gauge = (int(word, 0) for word in words[1:4])
+            except ValueError:
+                return Reply(["/ab club <番号 0-15> <level> <gauge>"])
+            if not 0 <= index < ability.CLUBS:
+                return Reply([f"部活番号は 0-{ability.CLUBS - 1}"])
+            sheet.club_level[index] = max(0, level)
+            sheet.club_gauge[index] = max(0, gauge)
+            return Reply(sheet.lines(), ability_save=True)
         # 徳/ストレス/体調/経過日数 are keyed by name because they are one of a
         # kind; the six 能力 are keyed by name *or* index, like /card's 科目.
         scalars = {
@@ -601,7 +628,7 @@ def respond(
         }
         if len(words) < 2:
             return Reply([
-                "/ab [ruler|clear|<能力> <値>|徳|ストレス|体調|日数 <値>]",
+                "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>]",
                 "能力: " + " ".join(ability.ABILITIES),
             ])
         try:
@@ -618,7 +645,7 @@ def respond(
             index = int(verb)
         if index is None:
             return Reply([
-                "/ab [ruler|clear|<能力> <値>|徳|ストレス|体調|日数 <値>]",
+                "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>]",
                 "能力: " + " ".join(ability.ABILITIES),
             ])
         sheet.params[index] = max(0, value)

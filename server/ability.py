@@ -31,6 +31,52 @@ buffer — the mistake an earlier lesson is about. The same u16×6 / u8[16] / u8
 is the head of the 238-byte character list entry in 2.10, which is a second
 sighting of the same three arrays in the same order.
 
+What the screen does with each field, all of it read back off screenshots
+measured pixel by pixel rather than inferred:
+
+    abilityParam   six rows in `chara_ability_type.bin` key order, one to one,
+                   drawn as 「レベルＮ」 with N = max(1, ceil(値 / 250)).
+                   Exact on thirteen points from 16 to 10000, and 1062 → 5
+                   is what rules out floor.
+                   ⚠️ Only up to 10000. Above it the display drifts (12500,
+                   20000, 25000 draw 49, 79, 98 where the rule says 50, 80,
+                   100), and from 32768 up it switches to a different rule
+                   altogether: 32768, 40000, 50000, 65535 draw 12, 15, 19, 25,
+                   every one of them exactly round(値 × 25 / 65536). 32768 is
+                   the u16 sign bit and this field is u16 on the wire, so a
+                   signed read on the far side is the obvious suspect — but
+                   the switch has only been bracketed to 25000 < 値 ≤ 32768,
+                   not found. Keep values at or below 10000 and the screen
+                   means what it says.
+    progress bar   within-level progress on a 180px track:
+                     fill = max(0, 0.62·(値 − 250·(L−1)) + 14 − 3.75·L)
+                   Fitted below 10000, then confirmed by predicting three
+                   points on the far side of the drift region (12500, 20000,
+                   25000 → 140, 28, 111 px predicted against 139, 26, 113
+                   measured). The −3.75·L term is why the bar looks like it
+                   shrinks with the value: each level's peak is shorter than
+                   the one before, and from level 4 up the bar stays empty
+                   over the first few points of a level.
+    virtue         drawn as 「人　徳」 on the same sheet, same レベル rule;
+                   0 still draws レベル1.
+    stress         「ストレス：Ｎ／１００」 with N = min(100, floor(値·100/257)).
+                   The 257 is measured from both sides: 257 → 100 caps it
+                   from above, 200 → 77 from below. The bar's colour tracks it
+                   (38 cyan, 77 yellow, 100 red); where the thresholds sit is
+                   not known.
+    condition      an index into `chara_condition.bin` — 0 健康, 1 ノイローゼ,
+                   2 怪我, 3 ドクターストップ — confirmed on 0 and 2. Out of
+                   range draws nothing, which is why -3 once looked like a
+                   field the client ignores.
+    elapsedDays    no text of its own; it sets the バイオリズム graph's phase.
+    clubParamInfo  the 「部　活」 tab, and only eight of the sixteen: keys 1-8,
+                   野球部 through 家庭科部. 無所属, 未定部１…６ and 番長 are
+                   never drawn whatever they hold. level is 0-based the way
+                   testLevel is — level[1] = 50 draws 「レベル５１」 — and
+                   gauge reads against a full scale near 255 (99 filled 37.8%
+                   of the track; one point only, so the offset the ability bar
+                   carries was not separated out).
+
 ⚠️ Widths differ between messages for the same quantity, so do not share a
 packer: `stress` is u16 here and u8 in 0x6102's 結果発表, and `condition` is i8
 in both. Reading one off the other would have gone unnoticed until a value
