@@ -378,6 +378,20 @@ GAME_PORT = 25574
 SCHOOL_PORT = 25575
 
 
+# Both of these are round-tripped by the client and neither is checked by it,
+# which was measured rather than assumed: setting them to 0x0BADC0DE and 4242
+# for one login left the whole flow — login, school select, character list,
+# school login — unchanged, and both values came straight back, the authCode in
+# MsgClNotifyAuthCode and the accountId in MsgClRequestGameServerLogin's
+# `version[12+1]={%c}accountId=%d` tail. So they are ours to choose.
+#
+# That matters for the account isolation this server does not do. The client
+# never names the account it is asking about — MsgClQueryCharacterListFromAccount
+# goes out with no parameters at all — so a server that wanted to keep players
+# apart would have to bind connection to account itself, and these two are the
+# only tokens that arrive early enough to bind with: 0x0020 is the first message
+# on the game connection and 0x0200 is the second. Neither is a secret and
+# neither is validated, so this is addressing, not authentication.
 AUTH_CODE = 0x1234ABCD
 ACCOUNT_ID = 1
 
@@ -1665,7 +1679,9 @@ class MpsServer:
                 # 課程 finished is 試験レベル１ by `p06_01`, test_level() says 1,
                 # and the screen drew 「試験レベル２」. Same base as 0x430D's
                 # testLv (curriculum.TESTLV_BASE), which was measured the same
-                # way and off by one in the same direction.
+                # way and off by one in the same direction. The correction has
+                # since been read back off the screen too: the same character
+                # now draws 「試験レベル１」.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
                 sheet = self.characters.ability(chara_id)
                 card = self.characters.scorecard(chara_id)
