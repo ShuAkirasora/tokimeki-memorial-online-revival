@@ -36,6 +36,41 @@ MSG_LOGIN_SERVER_LOGIN = 0x7000
 # order until the client acts on one.
 PARAM_HEADER_CANDIDATES = (b"\x00\x00\x00\x00", b"\x00\x00\x00\x06")
 
+# Two ways of asking the kernel how much is sitting in a socket queue, and which
+# of them exists is a property of the platform rather than of what is installed.
+BSD = sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd"))
+LINUX = sys.platform.startswith("linux")
+
+
+def _proc_tcp_rows() -> list[tuple[int, int, int, int]]:
+    """Linux: (local port, remote port, tx queue, rx queue) for every TCP socket.
+
+    /proc/net/tcp is where Linux keeps what BSD netstat prints, queue depths
+    included: column 5 is tx_queue:rx_queue, hexadecimal like the addresses
+    beside it. ss reads this file and so does netstat, so going to it directly
+    is the same answer without the parse -- and it is why this diagnostic works
+    here, while reading Linux netstat's own output would mean a second format
+    with different column names to keep straight.
+    """
+    rows: list[tuple[int, int, int, int]] = []
+    for name in ("tcp", "tcp6"):
+        try:
+            lines = Path("/proc/net", name).read_text().splitlines()
+        except OSError:
+            continue
+        for line in lines[1:]:
+            cols = line.split()
+            if len(cols) < 5:
+                continue
+            try:
+                _, _, lport = cols[1].rpartition(":")
+                _, _, rport = cols[2].rpartition(":")
+                tx, _, rx = cols[4].partition(":")
+                rows.append((int(lport, 16), int(rport, 16), int(tx, 16), int(rx, 16)))
+            except ValueError:
+                continue
+    return rows
+
 
 def result_login_server_payload(ip: str, port: int, *, inet_order: bool = False) -> bytes:
     """Body of MsgSvResultLoginServer: u32 address + u16 port, 6 bytes.
@@ -96,14 +131,18 @@ class LlbServer:
     def _recv_q(self, peer_port: int) -> int | None:
         """Bytes sitting unread in the *client's* kernel receive queue.
 
-        None where that cannot be asked, which is everywhere but the BSDs. The
-        queue depths are read out of netstat, and only the BSD one prints them:
-        Windows netstat has no such column at all, and Linux spells both the
-        flags and the addresses differently. So this is a diagnostic that exists
-        on the machine it was written on and reports "not observable" elsewhere,
-        rather than a parse that quietly returns a wrong number.
+        Two platforms can answer, each out of its own table: the BSDs print the
+        queue depths in netstat, Linux keeps them in /proc/net/tcp. Windows can
+        not be asked at all -- its netstat has no such column -- and there this
+        returns None, which reads as "not observable" at the call site rather
+        than as a parse that quietly produces a wrong number.
         """
-        if not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")):
+        if LINUX:
+            for lport, rport, _tx, rxq in _proc_tcp_rows():
+                if lport == peer_port and rport == self.config.port:
+                    return rxq
+            return None
+        if not BSD:
             return None
         try:
             out = subprocess.run(
@@ -125,8 +164,13 @@ class LlbServer:
 
     def _queues(self, peer_port: int, label: str) -> None:
         """Log kernel socket queues, to see which side data is sitting on."""
-        if not sys.platform.startswith(("darwin", "freebsd", "openbsd", "netbsd")):
-            return  # see _recv_q: the queue columns are a BSD netstat thing
+        if LINUX:
+            for lport, rport, txq, rxq in _proc_tcp_rows():
+                if peer_port in (lport, rport):
+                    print(f"[{self.tag}] proc({label}) {lport}->{rport} tx={txq} rx={rxq}")
+            return
+        if not BSD:
+            return  # see _recv_q: there is no third table to read
         try:
             out = subprocess.run(
                 ["netstat", "-an", "-p", "tcp"], capture_output=True, text=True, timeout=5

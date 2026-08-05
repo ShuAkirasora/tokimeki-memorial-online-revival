@@ -5,6 +5,7 @@ import os
 import shutil
 import ssl
 import subprocess
+import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -62,11 +63,74 @@ def openssl_path() -> str:
     )
 
 
+# An openssl configuration that says SHA-1 signatures are allowed, for the
+# distributions that say they are not. See _generate_cert; it is handed to one
+# openssl process through OPENSSL_CONF and changes nothing about the machine.
+#
+# The [req] section is here because naming a configuration file replaces the
+# system one entirely, and openssl req wants that section to exist. It can be
+# empty: the subject and the extensions are on the command line.
+SHA1_OPENSSL_CONF = """\
+openssl_conf = openssl_init
+
+[openssl_init]
+alg_section = evp_properties
+
+[evp_properties]
+rh-allow-sha1-signatures = yes
+
+[req]
+distinguished_name = req_distinguished_name
+
+[req_distinguished_name]
+"""
+
+
+class _TlsAcceptor(asyncio.Protocol):
+    """Holds a new connection still until TLS has been put underneath it.
+
+    connection_made always runs before any data_received, so pausing the
+    transport here means the ClientHello cannot be handed to the wrong protocol:
+    it stays in the kernel until start_tls has the SSL layer in place and resumes
+    reading. That is this class's whole job.
+
+    ⚠️ Why it exists at all. This used to accept with asyncio.start_server and
+    upgrade inside the handler with ``writer.start_tls()``, and that is a race
+    against the client that the client wins whenever its ClientHello arrives
+    before the handler is scheduled: the bytes go to the StreamReader, which is
+    not the TLS layer and cannot give them back, and the handshake then waits out
+    its timeout for a hello that has already been and gone. On Linux it is not a
+    race but a certainty -- epoll reports the accept and the data together, the
+    handler is always second, and *every* connection to 443 timed out. macOS had
+    been winning the same race on scheduling, which is luck reading as
+    correctness.
+    """
+
+    def __init__(self, server: "AuthHttpServer") -> None:
+        self._server = server
+        self._upgrade: asyncio.Task | None = None
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        transport.pause_reading()
+        # Kept on the instance because the loop holds only a weak reference to a
+        # bare task, and this one must outlive the callback that made it.
+        self._upgrade = asyncio.get_running_loop().create_task(
+            self._server.upgrade_and_serve(transport)  # type: ignore[arg-type]
+        )
+
+
 class AuthHttpServer:
     """Konami ID auth stub.
 
-    Accepts TCP first (so failed TLS handshakes are still logged), then
-    optionally upgrades with start_tls.
+    A TLS port is accepted plain and upgraded before a byte of it is read (see
+    _TlsAcceptor), which keeps what the upgrade was there for -- a connection
+    that arrives and a handshake that fails are two different log lines -- and
+    loses the race that the obvious form of it has. Handing the context to the
+    listener instead would also be race-free, but asyncio then reports a failed
+    handshake to nobody at all: not to the handler, which never runs, and not to
+    the loop's exception handler, which was asked and receives nothing. A
+    client that cannot get through this step is exactly the case the log is
+    read for.
     """
 
     def __init__(
@@ -112,7 +176,7 @@ class AuthHttpServer:
         if self.advertise_ip not in addresses:
             addresses.append(self.advertise_ip)
         san = ",".join(f"IP:{addr}" for addr in addresses)
-        subprocess.run(
+        self._generate_cert(
             [
                 openssl_path(),
                 "req",
@@ -131,15 +195,77 @@ class AuthHttpServer:
                 f"/CN={self.advertise_ip}",
                 "-addext",
                 f"subjectAltName={san},DNS:localhost,DNS:sctrl01.game.konaminet.jp",
-            ],
-            check=True,
-            capture_output=True,
+            ]
         )
         # The file holds the private key as well as the certificate. On Windows
         # chmod reaches only the read-only bit and this does nothing; the key is
         # protected there by whatever the runtime\certs directory inherits,
         # which for a directory under a user profile is that user alone.
         self.cert.chmod(0o600)
+
+    def _generate_cert(self, argv: list[str]) -> None:
+        """Run openssl, and if the refusal is about SHA-1, ask once more.
+
+        SHA-1 is not a preference here (see _ensure_cert), and it is precisely
+        what a current Linux distribution has arranged for openssl to refuse:
+        RHEL, Fedora and their derivatives put every OpenSSL process under a
+        system-wide crypto policy that since RHEL 9 declines to *produce* a
+        SHA-1 signature, so this command exits non-zero on a stock install and
+        the server cannot start. Their setting for it lives in the openssl
+        configuration, and naming a configuration file in the environment
+        applies it to this one process: the machine's own policy is untouched,
+        and nothing else on the host will accept anything it did not before.
+
+        The override is a retry rather than the first attempt because the
+        setting is theirs -- an OpenSSL that never had the restriction rejects
+        the name outright, so passing it everywhere would break generation on
+        the platforms that were working. If the retry fails too, the error
+        reported is the *first* one, that being the one this machine gave to the
+        command as it is normally run.
+
+        Both attempts are judged by the file rather than by the exit status,
+        because neither failure looks the way it should. A run that stops after
+        the key is written leaves half a PEM, since key and certificate go to
+        the same path -- keep it and the next start finds a file, skips
+        generation, and hands the ssl module something with nothing to serve.
+        And an openssl given a configuration file it does not understand (a
+        LibreSSL, say) prints its complaint, writes nothing at all, and still
+        exits 0. Asking what is on disk covers both without having to know which
+        openssl this is.
+        """
+        first = subprocess.run(argv, capture_output=True, text=True, errors="replace")
+        if first.returncode == 0 and self._cert_complete():
+            return
+        self.cert.unlink(missing_ok=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            conf = Path(tmp) / "sha1.cnf"
+            conf.write_text(SHA1_OPENSSL_CONF, encoding="ascii")
+            retry = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                env={**os.environ, "OPENSSL_CONF": str(conf)},
+            )
+        if retry.returncode == 0 and self._cert_complete():
+            return
+        self.cert.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"openssl did not produce the auth certificate (exit {first.returncode})."
+            " It has to be 1024-bit RSA signed with SHA-1, which is all this"
+            " client will accept, and a distribution crypto policy that forbids"
+            " SHA-1 signatures refuses to make one; that was retried with the"
+            " policy overridden for the one command, and it also failed."
+            f" openssl said: {(first.stderr or '').strip()}"
+        )
+
+    def _cert_complete(self) -> bool:
+        """Is there a PEM on disk with both halves in it?"""
+        try:
+            text = self.cert.read_text(encoding="ascii", errors="replace")
+        except OSError:
+            return False
+        return "PRIVATE KEY-----" in text and "CERTIFICATE-----" in text
 
     def _make_ssl_ctx(self) -> ssl.SSLContext:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -298,31 +424,12 @@ class AuthHttpServer:
 
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
-        print(f"[authhttp] ACCEPT port={self.config.port} peer={peer} tls_pending={self.use_tls}")
+        # Reaching here at all means the handshake is done, so this says what was
+        # agreed rather than what is about to be attempted.
+        tls = writer.get_extra_info("ssl_object")
+        how = f"{tls.version()} {tls.cipher()[0]}" if tls else "plain"
+        print(f"[authhttp] ACCEPT port={self.config.port} peer={peer} ({how})")
         write_packet_log(self.packet_dir, "authhttp", f"accept-{self.config.port}", b"")
-
-        if self.use_tls and self.ssl_ctx is not None:
-            try:
-                # Server-side upgrade: context is PROTOCOL_TLS_SERVER (no server_side kw).
-                await asyncio.wait_for(writer.start_tls(self.ssl_ctx), timeout=20.0)
-                print(f"[authhttp] TLS-OK port={self.config.port} peer={peer}")
-            except Exception as exc:
-                print(
-                    f"[authhttp] TLS-FAIL port={self.config.port} peer={peer}: "
-                    f"{type(exc).__name__}: {exc}"
-                )
-                write_packet_log(
-                    self.packet_dir,
-                    "authhttp",
-                    f"tls-fail-{self.config.port}",
-                    str(exc).encode("utf-8", errors="replace"),
-                )
-                writer.close()
-                try:
-                    await writer.wait_closed()
-                except Exception:
-                    pass
-                return
 
         # The client runs the whole KONAMI-ID sequence -- getkeylen, getkey x2,
         # login -- down ONE connection, and it does not reconnect.  Closing
@@ -360,9 +467,57 @@ class AuthHttpServer:
                 pass
             print(f"[authhttp] CLOSE port={self.config.port} peer={peer}")
 
+    async def upgrade_and_serve(self, transport: asyncio.Transport) -> None:
+        """Put TLS under a held connection, then serve it as ordinary streams.
+
+        The streams are built by hand because start_tls is what creates the
+        transport they have to sit on. Whether it also announces that transport
+        to the protocol differs between Python versions -- it passes
+        call_connection_made=False today, and the flag is not ours -- so the
+        callback records that it ran and the announcement is made here only if
+        it did not happen already. Either way handle() is entered exactly once.
+        """
+        loop = asyncio.get_running_loop()
+        peer = transport.get_extra_info("peername")
+        reader = asyncio.StreamReader(loop=loop)
+        served = False
+
+        def connected(r: asyncio.StreamReader, w: asyncio.StreamWriter):
+            nonlocal served
+            served = True
+            return self.handle(r, w)
+
+        protocol = asyncio.StreamReaderProtocol(reader, connected, loop=loop)
+        try:
+            tls_transport = await loop.start_tls(
+                transport, protocol, self.ssl_ctx, server_side=True, ssl_handshake_timeout=20.0
+            )
+        except Exception as exc:
+            print(
+                f"[authhttp] TLS-FAIL port={self.config.port} peer={peer}: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            write_packet_log(
+                self.packet_dir,
+                "authhttp",
+                f"tls-fail-{self.config.port}",
+                str(exc).encode("utf-8", errors="replace"),
+            )
+            transport.close()
+            return
+        if not served:
+            protocol.connection_made(tls_transport)
+
     async def run(self) -> asyncio.AbstractServer:
-        # Always bind plain TCP; TLS is applied per-connection in handle().
-        server = await asyncio.start_server(self.handle, self.config.host, self.config.port)
+        if self.ssl_ctx is not None:
+            loop = asyncio.get_running_loop()
+            server = await loop.create_server(
+                lambda: _TlsAcceptor(self), self.config.host, self.config.port
+            )
+        else:
+            server = await asyncio.start_server(
+                self.handle, self.config.host, self.config.port
+            )
         mode = "tcp+tls" if self.use_tls else "plain"
         print(f"[authhttp] listening on {self.config.host}:{self.config.port} ({mode})")
         return server
