@@ -131,11 +131,14 @@ class Question:
     those: position 0 of the client's file is the right answer, so whichever
     slot holds the value 0 is the right slot, and the server dealt the deck.
 
-    ⚠️ Which end of `0x6105 MsgClCastLessonAnswer`'s `choiceId` the client
-    reports — the slot it drew in, or the value this list put there — is not
-    settled. `judge` accepts either reading, because for a permutation both are
-    answerable and the two agree exactly when the answer is right, which is the
-    only bit `0x6106` carries. See there.
+    ⭐ Which end of `0x6105 MsgClCastLessonAnswer`'s `choiceId` the client
+    reports — the slot it drew in, or the value this list put there — is
+    settled: **the value**. Twelve 4択 over two lessons, the player clicking the
+    same screen position throughout each, returned this list's entry for that
+    position every time (slot 1: 2, 3, 1, 0; slot 2: 2, 0, 2, 1, 2, 3, 1, 2).
+    The slot reading predicts one constant per lesson — 0 for the first, 1 for
+    the second — and nine of the twelve contradict it. A report of 0 also rules
+    out slots counted from one. See `judge`.
     """
 
     def __init__(self, subject: int, quiz_type: int, level: int, quiz_id: int,
@@ -151,34 +154,35 @@ class Question:
     def judge(self, reported: int) -> bool:
         """Was that right?
 
-        4択: the right choice is the one the file put first, so it is right if
-        the player's report points at raw choice 0 — either directly, or as the
-        slot whose ``choice_ids`` entry is 0. Both readings are checked because
-        they cannot be told apart from the disassembly, and they disagree only
-        on wrong answers, never on right ones: exactly one slot holds 0 and
-        exactly one raw value is 0.
+        4択: the client reports the raw choice, and the file puts the right one
+        first, so the answer is right exactly when the report is 0. Nothing here
+        needs ``choice_ids`` — the deal is what turned the raw number into a
+        screen position on the way out, and the report undoes it on the way back.
 
-        ⚠️ That tolerance is deliberate but it is not free. If the client turns
-        out to report slots, a player who picks the slot *numbered* 0 while the
-        right answer sits elsewhere would be marked right. The knob that removes
-        this is one measurement — ask a 4択 with a known deal and see which
-        number comes back — and until then this errs towards the player.
+        ⚠️ This used to also accept ``choice_ids[reported] == 0``, on the reading
+        that the report might be a slot. That tolerance marked wrong answers
+        right twice in the two lessons that measured it away — a player clicking
+        the slot that happens to hold raw 0's *index* is not the player clicking
+        raw 0 — and both times the mark on screen agreed, because the mark is
+        this function's own output coming back.
 
-        ○×: the report selects one of the two options this server sent in
-        ``choice_ids``, and 0 is ○. ⭐ **Measured on screen**, which it had to be
-        — `quiz_type.bin` only names the type 「○×」 in that order, which is
-        suggestive and not evidence. A 芸術 level-3 ○× question came up asking
-        whether 東大寺南大門's style is called 「宋様」; the bank says false, the
-        player clicked × and the client sent choiceId 1, and this server's answer
-        of "correct" was the ○ the client then drew over the desk. Three things
-        agreeing — the bank, the click, and the mark — is what settles it; the
-        mark alone never could, since the client draws whatever this end says.
+        ○×: the report is 1 for ○ and 0 for ×, so the answer is right exactly
+        when ``reported == 1`` matches what the bank says. ⭐ Measured against
+        the bank and the click together, never against the mark: eight ○× over
+        two lessons, the player clicking ○ throughout the first (six reports,
+        all 1) and × throughout the second (two reports, both 0). Ground truth —
+        what the bank holds for that quizId, and which symbol was clicked —
+        agrees with this reading on all eight.
+
+        ⚠️ This branch was inverted until 2026-08-05, on a single earlier
+        observation recalled as a × that reported 1. Nothing caught it in the
+        lessons between, because the ○/× drawn over the desk is `0x6106`, which
+        is this function speaking: a wrong mapping marks every ○× backwards and
+        looks perfectly self-consistent doing it. Only the bank can referee.
         """
         if self.quiz_type == TYPE_CHOICE:
-            if reported == 0:
-                return True
-            return 0 <= reported < len(self.choice_ids) and self.choice_ids[reported] == 0
-        return (reported == 0) == bool(self.answer)
+            return reported == 0
+        return (reported == 1) == bool(self.answer)
 
 
 def pick(subject: int, rng: random.Random | None = None) -> Question | None:
