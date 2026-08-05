@@ -106,47 +106,321 @@ layouts, field offsets — was read off the protocol and is verifiable. Some val
 exist because the client needs *something* there: movement speed, spawn positions, the
 school list. Those are inventions, and the comments say so where they appear.
 
-## Requirements
+## Setting it up
 
-Only the standard library is used — no third-party packages, nothing to install, no
-virtualenv to create. Two things have to be true of the machine:
+Two things have to be true before the game can reach this server: **the server has to be
+running**, and **your copy of the client has to be told where it is**. The steps below do
+both, in order, and assume nothing beyond being able to open a terminal window and type
+into it.
 
-- **A Python with a real OpenSSL.** Tested on 3.14. On macOS the system `python3` is built
-  against LibreSSL and cannot start the TLS listeners; use a python.org, Homebrew or pyenv
-  build instead. The python.org build for Windows and a distribution's own `python3` on
-  Linux are both fine as they come.
-- **An `openssl` binary — once.** The certificate for the auth endpoint is generated on the
-  first run, into `runtime/certs/`, and never regenerated, so this only matters when
-  starting from an empty `runtime/certs/`. macOS and Linux have one already, though on some
-  Linux distributions it needs persuading — see "On Linux". Windows ships none, but Git for
-  Windows carries a complete one and its install location is searched directly, so **if you
-  have Git you need do nothing**; failing that, winget, scoop and chocolatey all have a
-  package.
+Nothing here is bought, signed up for, or installed beyond Python itself. Everything the
+server needs is in this repository, and every change made to your copy of the client is
+four bytes that can be put back.
 
-Written and run on macOS and on Linux (Debian 12, Python 3.11), and the Windows paths have
-been run on Windows. Every command below is the same on all three, with `py` in place of
-`python3` on Windows; where that is not enough, it says so.
+**What you need first:** your own copy of the original client — this repository does not
+distribute it and does not point at where to find one — and a computer to run the server
+on. Windows, macOS and Linux all work.
 
-## Running the server
+<details>
+<summary><b>The short version</b>, if the words below are already familiar</summary>
+
+```sh
+python3 start_servers.py [--advertise-ip <server>]   # a Python with real OpenSSL
+# two lines in the hosts file of the machine the *game* runs on:
+#   <server>  tmollb.tokimekionline.com
+#   <server>  tmoupd.tokimekionline.com
+python3 set_auth_address.py /path/to/tmo.exe <server>
+# then run BootFirst.exe (as administrator on Windows) and watch runtime/run_all.log
+```
+
+`<server>` is `127.0.0.1` when the game runs on the same machine as the server. The steps
+below are the same four things, said in full.
+</details>
+
+### Step 0 — Which of the two shapes are you in?
+
+Everything below asks for *your server address*, and which one it is depends on where the
+game runs relative to the server. Decide this first and keep the answer to hand.
+
+| Your setup | Your server address is |
+|---|---|
+| **One computer.** The server and the game run on the same machine — including the game running under Wine on a Mac or a Linux box, since Wine uses that machine's own network rather than one of its own. | `127.0.0.1` |
+| **Two computers.** The server runs on one machine and the game on another: a second PC, or a Windows virtual machine on the same host. | the server machine's address on your local network, usually starting `192.168.` or `10.` |
+
+To find that address, ask the **machine that will run the server** — not the one the game
+is on, and not your public internet address:
+
+| | |
+|---|---|
+| **Windows** | open Command Prompt, run `ipconfig`, and read the `IPv4 Address` line of the adapter you actually use |
+| **macOS** | `ipconfig getifaddr en0` — if that prints nothing, try `en1`; or System Settings → Network → the connected service → Details |
+| **Linux** | `hostname -I` and take the first address |
+
+The examples below use `192.168.1.5` wherever your own address goes. If you are on one
+computer, `127.0.0.1` goes in the same places.
+
+### Step 1 — Install Python
+
+Only the standard library is used: no `pip install`, no virtualenv, nothing to download
+after Python itself. Any current Python 3 will do — this has been run on 3.11 and on 3.14.
+
+**Windows.** Get the installer from [python.org](https://www.python.org/downloads/) and run
+it. On the first screen tick **Add python.exe to PATH** before pressing *Install Now* —
+without it the commands below will not be found. Then open a *new* Command Prompt and check:
+
+```
+py --version
+```
+
+**On Windows, every `python3` in this README is `py`.** That is the only difference.
+
+**macOS.** Install from [python.org](https://www.python.org/downloads/), or with Homebrew:
+
+```sh
+brew install python
+```
+
+**Do not use the `python3` that comes with macOS.** It is built against LibreSSL and cannot
+start this server's TLS listeners. To see which one you have:
+
+```sh
+python3 -c "import ssl; print(ssl.OPENSSL_VERSION)"
+```
+
+If that says `LibreSSL`, the wrong one is first in your PATH — the fix is to call the one
+you just installed by its full path, which the python.org installer reports at the end and
+Homebrew prints under `brew --prefix python`.
+
+**Linux.** You almost certainly have it; `python3 --version` says so. If not, your
+distribution's own package (`sudo apt install python3`, `sudo dnf install python3`) is
+fine as it comes. Also make sure `openssl` is installed — most distributions have it, and
+`openssl version` tells you.
+
+> **What `openssl` is for.** The certificate this server's authentication endpoint needs is
+> generated on the very first run, into `runtime/certs/`, and never again. macOS and Linux
+> have the tool already. Windows does not, but Git for Windows carries a complete copy and
+> this server looks there directly, **so if you have Git you need do nothing**. Failing
+> that, `winget install openssl` (or scoop, or chocolatey) is enough. You will know it
+> matters only if the first run says `openssl is not on PATH`.
+
+### Step 2 — Get this server
+
+With git:
+
+```sh
+git clone https://github.com/ShuAkirasora/tokimeki-memorial-online-revival.git
+cd tokimeki-memorial-online-revival
+```
+
+Without it, use the green **Code** button on that page → **Download ZIP**, unpack it
+anywhere you like, and open a terminal in the unpacked folder. There is nothing to build
+and nothing to install; the folder is the program.
+
+**Every command from here on is run from inside that folder.**
+
+### Step 3 — Start the server
+
+One computer:
 
 ```sh
 python3 start_servers.py
 ```
 
-frees the ports it needs, starts every service in one detached process, writes the pid to
-`runtime/run_all.pid` and appends to `runtime/run_all.log`. `[system] all services started`
-in the log means it is up.
+Two computers — tell it the address players reach it at, from step 0:
+
+```sh
+python3 start_servers.py --advertise-ip 192.168.1.5
+```
+
+Either way you should see `started pid=…` followed by a few lines of log ending in
+
+```
+[system] all services started
+```
+
+That is the server up. It runs detached, so you can close the terminal; it keeps going
+until you stop it.
+
+> **Why the second form needs telling.** Logging in is a chain of hops and each one answers
+> with the address of the next. Those answers default to `127.0.0.1`, which is correct for a
+> game on the same machine and sends every remote player back to their own computer. The
+> address cannot be worked out from the socket, because behind a router the address a client
+> must dial is not one this machine can see on any interface of its own. `TMO_ADVERTISE_IP`
+> in the environment does the same thing, and the startup log says which is in use.
+
+Two platform-specific things can bite on the first run — **a Windows firewall prompt, and
+low ports on Linux**. Both are under "Platform notes" below, and neither stops you getting
+to step 4.
+
+### Step 4 — Point the two hostnames at your server
+
+The game looks for two of its three servers by name:
+
+```
+tmollb.tokimekionline.com
+tmoupd.tokimekionline.com
+```
+
+Nothing inside the client decides where those two lead — your computer's `hosts` file does,
+and two lines in it are the whole of this step.
+
+⚠️ **The file to edit is on the machine the *game* runs on, not the machine the server runs
+on.** If the game runs in a Windows virtual machine, it is that VM's file. If the game runs
+under Wine, Wine has no name resolution of its own and uses the Mac's or Linux box's, so it
+is that machine's `/etc/hosts` — not anything inside the Wine folder.
+
+The two lines to add, with your address from step 0 in front:
+
+```
+192.168.1.5  tmollb.tokimekionline.com
+192.168.1.5  tmoupd.tokimekionline.com
+```
+
+**On Windows:**
+
+1. Press Start, type `notepad`, right-click **Notepad** in the results and choose **Run as
+   administrator**. Answer *Yes*. (Opening the file any other way will not be allowed to
+   save it.)
+2. **File → Open**, paste `C:\Windows\System32\drivers\etc\hosts` into the filename box and
+   press Enter. If the folder looks empty when you browse to it, set the file-type dropdown
+   at the bottom right to **All Files**.
+3. Go to the end of the file and add the two lines.
+4. **File → Save**.
+
+**On macOS and Linux:**
+
+```sh
+sudo nano /etc/hosts
+```
+
+It asks for your login password — nothing appears on screen while you type it, which is
+normal. Move to the bottom of the file, add the two lines, then press `Ctrl-O` and `Enter`
+to save and `Ctrl-X` to leave.
+
+> **Nothing inside the game's own folder has to be edited for this.** The update check is
+> also configurable, as `SERVER_ADDRESS` in the client's `update.ini`, but that file ships
+> with the hostname in it — so the hosts entry covers it too and the file can be left alone.
+
+Step 5 checks this step for you, so there is nothing to verify by hand yet.
+
+### Step 5 — Point the authentication step at your server
+
+The client's third destination is not a name at all: it opens a connection straight to a
+fixed numeric address that was KONAMI's, and no amount of name resolution can redirect an
+address that is never looked up. That one is told to the client directly, by changing the
+four bytes of the address inside `tmo.exe`:
+
+```sh
+python3 set_auth_address.py /path/to/tmo.exe 192.168.1.5
+```
+
+`/path/to/tmo.exe` is your own copy, wherever the game is installed. On Windows that looks
+like `py set_auth_address.py "C:\Games\TokimekiOnline\tmo.exe" 192.168.1.5`; under Wine the
+file sits inside the bottle or prefix and your Mac or Linux `python3` can reach it there
+directly.
+
+> **Which machine to run this on.** Whichever one holds `tmo.exe` — so on a two-computer
+> setup, install Python there as well (step 1), or copy `tmo.exe` to the server machine,
+> run the command, and copy it back.
+
+It prints what it is about to do, keeps a copy of the original as `tmo.exe.orig` before
+writing anything, and then reports where the two hostnames from step 4 currently lead:
+
+```
+  the two names the client resolves for itself:
+    tmollb.tokimekionline.com  -> 192.168.1.5      ok
+    tmoupd.tokimekionline.com  -> 192.168.1.5      ok
+```
+
+**Two `ok` lines means step 4 is done as well.** Anything else and it prints the lines you
+are missing. If it still shows an old answer after you have edited the file, your computer
+has the previous lookup cached:
+
+| | |
+|---|---|
+| **Windows** | `ipconfig /flushdns` |
+| **macOS** | `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` |
+| **Linux** | `sudo resolvectl flush-caches` |
+
+Other things the script takes: no address at all to report what your copy currently points
+at without changing anything, `--revert` to put KONAMI's original address back, `-n` to say
+what it would do and write nothing, and `--no-lookup` to skip the hostname check. What
+exactly those four bytes are, and why this is the only part of the client that changes, is
+under "What changes in your copy of the client" below.
+
+### Step 6 — Start the game
+
+**The program to run is `BootFirst.exe`, not `tmo.exe`.** It starts `UpdateClient.exe`,
+which performs the update check, and that in turn starts the game.
+
+On Windows, run `BootFirst.exe` **as administrator** — right-click it and choose *Run as
+administrator*. Without that you get
+
+```
+アップデートクライアントの起動に失敗しました
+```
+
+and nothing at all reaches this server, because nothing was ever started. The cause is on
+the client's side and no server can answer it: `UpdateClient.exe` is a 32-bit binary with
+no manifest and "Update" in its name, which is exactly what Windows' installer detection
+looks for, so the system decides it requires elevation — and `BootFirst.exe` starts it with
+`CreateProcess`, which cannot elevate. Beginning the chain already elevated is the whole of
+the fix.
+
+Under Wine this has not come up: the same chain starts as it is.
+
+### Step 7 — Check that it worked
+
+Everything the client does arrives in the log, `runtime/run_all.log`, in order. Watch it
+while you start the game:
+
+```sh
+tail -f runtime/run_all.log
+```
+
+On Windows, in PowerShell:
+
+```
+Get-Content runtime\run_all.log -Wait -Tail 20
+```
+
+Each line below is one of the steps above proving itself, and the first one **missing**
+tells you which step to go back to:
+
+| A line like this | Means |
+|---|---|
+| `[system] all services started` | the server is up — step 3 |
+| `[updater] … sent UPDATE_DONE` | the update check found you: `tmoupd` resolves — step 4 |
+| `[llb35573] -> MsgSvResultLoginServer` | the login-server lookup found you: `tmollb` resolves — step 4 |
+| `[authhttp] ACCEPT port=443` | authentication reached you: the four bytes are right — step 5 |
+| `[mpslogin25573] …` | login accepted |
+| `[mpsgame25574] …`, `[mpsschool25575] …` | the game and school servers; you are in |
+
+After that you are at the school-select screen, and everything from there on is the game
+itself. "Commands" below is what you can do once you are standing on the map.
+
+### Stopping it, and starting it again later
 
 ```sh
 python3 stop_servers.py
 ```
 
-stops it again. That goes by the ports rather than the pidfile, so it still works when the
-pidfile is stale or was never written.
+Starting it again is the same command as step 3. Steps 1, 2, 4 and 5 are done once and stay
+done — unless you reinstall the game, which puts the original `tmo.exe` back, or your server
+machine's address changes, which is worth pinning in your router if you are on the
+two-computer setup.
+
+Stopping goes by which ports are held rather than by the recorded process id, so it still
+works if that record is stale or was never written.
+
+## Platform notes
+
+This server was written and run on macOS and on Linux (Debian 12), and the Windows paths
+have been run on Windows. Every command above is the same on all three, with `py` in place
+of `python3` on Windows. Neither list below is required reading before you start — each is
+the small print for one platform, and the walkthrough points at them where they matter.
 
 ### On Windows
-
-The same two commands. Three things worth knowing:
 
 - **Stopping is a hard kill** — and no less hard anywhere else. Windows has no SIGTERM, and
   a process detached from every console cannot be sent a Ctrl-Break either. Nothing is lost
@@ -157,18 +431,18 @@ The same two commands. Three things worth knowing:
   HTTP.sys service. Hyper-V and WSL also reserve blocks of ports at boot, and a block
   covering 25573–25575 stops the server dead rather than being skipped; list them with
   `netsh int ipv4 show excludedportrange protocol=tcp`.
-- **The firewall asks once.** Answering no leaves a client on this machine working and
-  every client anywhere else unable to arrive.
+- **The firewall asks once**, on the first start. Answering no leaves a game on this machine
+  working and every game anywhere else unable to arrive.
 
 ### On Linux
 
-The same two commands, and still nothing to install: what holds a port is read out of
-`/proc`, not out of `lsof`, which is not on a Linux machine unless somebody put it there.
-Two things are worth knowing before the first run.
+Nothing has to be installed: what holds a port is read out of `/proc`, not out of `lsof`,
+which is not on a Linux machine unless somebody put it there. Two things are worth knowing
+before the first run.
 
-**Low ports are privileged, and 443 and 50 are the two the auth step is most likely to
-want.** `[authhttp] skip :443 (...)` in the log is exactly that, and the server carries on
-without them. Either start it as root, or lift the restriction for everyone once:
+**Low ports are privileged, and 443 and 50 are the two the authentication step is most
+likely to want.** `[authhttp] skip :443 (...)` in the log is exactly that, and the server
+carries on without them. Either start it as root, or lift the restriction for everyone once:
 
 ```sh
 sudo sysctl -w net.ipv4.ip_unprivileged_port_start=50
@@ -179,17 +453,17 @@ in `/etc/sysctl.d/` makes it survive a reboot; with it applied, an ordinary user
 takes all three. Check what already holds 80 and 443 before blaming privileges — on a
 machine with a web server installed, something usually does.
 
-**The auth certificate has to be SHA-1, and your distribution may refuse to make one.** The
-client accepts no other kind (see "Connecting a client"), while RHEL, Fedora and their
-derivatives run every OpenSSL process under a system-wide crypto policy that since RHEL 9
-will not *produce* a SHA-1 signature. The first run notices that refusal and repeats the
-command with the policy overridden for that one process — nothing about the machine's own
-policy changes, and nothing else on it will accept anything it did not accept before. If
-even that fails, the server stops and prints what openssl said, rather than coming up with
-an auth endpoint that cannot complete a handshake.
+**The authentication certificate has to be SHA-1, and your distribution may refuse to make
+one.** The client accepts no other kind, while RHEL, Fedora and their derivatives run every
+OpenSSL process under a system-wide crypto policy that since RHEL 9 will not *produce* a
+SHA-1 signature. The first run notices that refusal and repeats the command with the policy
+overridden for that one process — nothing about the machine's own policy changes, and
+nothing else on it will accept anything it did not accept before. If even that fails, the
+server stops and prints what openssl said, rather than coming up with an authentication
+endpoint that cannot complete a handshake.
 
-Firewalls are the last thing: if `ufw` or `firewalld` is running, the ports under "Playing
-from another machine" have to be opened there too.
+Firewalls are the last thing: if `ufw` or `firewalld` is running, the ports below have to be
+opened there too.
 
 ### Ports
 
@@ -204,68 +478,42 @@ from another machine" have to be opened there too.
 | 80, 12012 | account auth stub, plaintext |
 | 12010, 12020 | early stubs; the current login flow does not use them |
 
+The listeners are on `0.0.0.0`, so a game on another machine can reach them. Ports 25573,
+25574, 25575 and 35573 have to be reachable from it in addition to whichever authentication
+port it uses, so open those on any firewall in between.
+
 Ports below 1024 need privileges, except on Windows. Either way it is not fatal: the server
 logs `[authhttp] skip :443 (...)` and carries on. Whether you need them depends on which
 endpoint your client asks for, and on Linux there is a way to have them without running as
 root — see "On Linux".
 
-## Connecting a client
+## What changes in your copy of the client
 
-You need your own copy of the original client; this repository neither distributes it nor
-points at where to find one.
+**One thing changes: where it looks for a server. Nothing about how it behaves does.** Its
+connections are Blowfish-enciphered, and this server implements that layer and speaks it as
+the protocol's other endpoint. No check is bypassed, no encryption is switched off, and
+every piece of code that ships in the binary is the code that runs.
 
-**One thing about your copy of the client changes: where it looks for the server. Nothing
-about how it behaves does.** Its connections are Blowfish-enciphered, and this server
-implements that layer and speaks it as the protocol's other endpoint. No check is
-bypassed, no encryption is switched off, and every piece of code that ships in the binary
-is the code that runs.
+So the whole job is addressing, and the client has three starting points — which is why the
+setup above has two separate steps for it:
 
-So the whole job is addressing, and the client has three starting points. Two are
-hostnames:
+| | How the client finds it | How it is redirected |
+|---|---|---|
+| `tmoupd.tokimekionline.com` | hostname — the update check | name resolution: step 4 |
+| `tmollb.tokimekionline.com` | hostname — the login-server lookup, the first thing the game does after the update check | name resolution: step 4 |
+| `133.221.34.229` | a fixed numeric address, straight to `connect()` | the four bytes: step 5 |
 
-| Hostname | What it is |
-|---|---|
-| `tmoupd.tokimekionline.com` | the update check — also plainly configurable, as `SERVER_ADDRESS` in the client's own `update.ini` |
-| `tmollb.tokimekionline.com` | login-server lookup, the first thing the game does after the update check |
+Everything after those three follows along on its own: the login, game and school servers
+are reached at whatever address the login-server lookup hands back, and this server hands
+back the one it was started with.
 
-Resolve those to the machine running the server — a hosts-file entry each, or a local
-resolver for the domain. The client is a Windows program, so the file to edit is the one on
-the machine it runs on: `C:\Windows\System32\drivers\etc\hosts`, which needs an editor
-started as administrator. Under Wine the machine it runs on is the host, and Wine has no
-resolver of its own, so the file is the host's `/etc/hosts`. That route has been used here:
-a client under Wine on macOS, two entries in the host's `/etc/hosts`, and a server on a
-different machine — update check, login-server lookup, authentication, login, game and
-school all arrived.
+The third one takes a different route because it has to. The hostname
+`sctrl01.game.konaminet.jp` travels along with that connection, but only as request
+metadata in the `Host:` header, and takes no part in deciding where to connect — so no
+amount of name resolution reaches an address that was never looked up.
 
-Nothing in the client's own files has to be edited for this. `update.ini` ships with the
-update hostname in it, so a hosts entry covers that too and the file can be left alone.
-
-Everything after those two follows along on its own: the login, game and school servers are
-reached at whatever address the login-server lookup hands back, and this server hands back
-the one it was started with.
-
-### The third one is an address, not a name
-
-The client opens TLS straight to a fixed `133.221.34.229`. The hostname
-`sctrl01.game.konaminet.jp` travels along only as request metadata, in the `Host:` header,
-and takes no part in deciding where to connect — so no amount of name resolution reaches an
-address that was never looked up. This one is told to the client directly:
-
-```sh
-python3 set_auth_address.py /path/to/tmo.exe 192.168.1.5
-```
-
-with the address of the machine running the server. Run it with no address to see what your
-copy currently points at, and `--revert` to put the original address back.
-
-Both halves fail the same way — a server that never answers — so when the script is done it
-looks up the two hostnames above and prints where they currently lead. A hosts entry you
-forgot, or a resolver that answers for names that do not exist, says so on the spot instead
-of looking like a server that is down. That is one DNS lookup per name and nothing else;
-`--no-lookup` skips it.
-
-**What that changes, exactly.** The client builds the address one octet at a time, straight
-onto the stack, and hands the result to `connect()`:
+**What the four bytes are, exactly.** The client builds the address one octet at a time,
+straight onto the stack, and hands the result to `connect()`:
 
 ```
 mov byte [esp+0x28], 133
@@ -289,44 +537,9 @@ does not enforce it, so a locally generated self-signed certificate is accepted;
 part of the client has to be disabled to get through this step, including its encryption,
 which stays on from the first packet to the last.
 
-### Starting the game
-
-The entry point is `BootFirst.exe`, not `tmo.exe`. It starts `UpdateClient.exe`, which
-performs the update check on port 12000, and that in turn starts `tmo.exe`.
-
-On Windows, run `BootFirst.exe` **as administrator**. Without it you get
-
-```
-アップデートクライアントの起動に失敗しました
-```
-
-and nothing at all reaches this server, because nothing was ever started. The cause is on
-the client's side and no server can answer it: `UpdateClient.exe` is a 32-bit binary with
-no manifest and "Update" in its name, which is exactly what Windows' installer detection
-looks for, so the system decides it requires elevation — and `BootFirst.exe` starts it with
-`CreateProcess`, which cannot elevate. Beginning the chain already elevated is the whole of
-the fix.
-
-### Playing from another machine
-
-The listeners are on `0.0.0.0`, so a client elsewhere can reach them. What it cannot do is
-*find* them: logging in is a chain of hops, and each one answers with the address of the
-next. Those answers default to `127.0.0.1`, which is right for a client on this machine and
-sends every remote player back to their own computer. So tell the server the address
-clients reach it at:
-
-```sh
-python3 start_servers.py --advertise-ip 203.0.113.7
-```
-
-or set `TMO_ADVERTISE_IP`. The startup log says which one is in use. It is not worked out
-from the socket because it cannot be: behind NAT, the address a client must dial is not one
-this machine can see on any interface of its own. It is also not the same thing as the
-address you gave `set_auth_address.py`, which covers the authentication step only, though
-on a single-box deployment both are the same address.
-
-Ports 25573, 25574, 25575 and 35573 have to be reachable from the client in addition to
-whichever auth port it uses, so open them on any firewall in between.
+The route in step 4 has been used here end to end: a client under Wine on macOS, two
+entries in the host's `/etc/hosts`, and a server on a different machine — update check,
+login-server lookup, authentication, login, game and school all arrived.
 
 ## Commands
 
@@ -406,6 +619,7 @@ to change, and the grade it awards is this server's own curve over the running s
 | `set_auth_address.py` | the four-byte address change described above |
 | `server/` | the services themselves; `run_all.py` binds them all in one asyncio loop and `mps_session.py`, the packet layer, is the bulk of it |
 | `reference/` | the three tables above |
+| `runtime/` | created on the first run: the log, the certificate, and your characters |
 | `screenshots/` | the four pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
 
@@ -413,16 +627,20 @@ to change, and the grade it awards is this server's own curve over the running s
 
 | Symptom | Cause |
 |---|---|
-| `ssl.SSLError: ('No cipher can be selected.',)` | LibreSSL-backed Python; see Requirements |
+| the game starts but the log stays completely empty | `BootFirst.exe` was not run as administrator — step 6 |
+| `アップデートクライアントの起動に失敗しました` | the same thing, said by the client — step 6 |
+| the log stops after `[updater]`, no `[llb35573]` | only one of the two hosts lines is there, or it is on the wrong machine — step 4 |
+| the log stops after `[llb35573]`, no `[authhttp]` | the four bytes were not written, or were written to a different copy of `tmo.exe` — step 5; if the log also says `[authhttp] skip :443`, that port was refused or taken |
+| the log stops after `[authhttp]`, no `[mpslogin25573]` | the game could not reach port 25573 at the address the lookup gave it: either a firewall in between, or the server was started without the right `--advertise-ip` — step 3 |
+| every remote player is sent back to their own computer | the server was started without `--advertise-ip` — step 3 |
+| `ssl.SSLError: ('No cipher can be selected.',)` | the LibreSSL-backed Python; see step 1 |
+| `openssl is not on PATH` | nothing to generate the authentication certificate with; see step 1 |
+| `openssl did not produce the auth certificate` | it refused, and the retry did too — usually a crypto policy that forbids SHA-1; see "On Linux" |
+| `already running pid=N` | a previous instance is still up; leave it, or run `stop_servers.py` |
+| `[WinError 10013]` on a bind, and the server exits | that port is reserved or already held; see "On Windows" |
 | `warps go unchecked` in the log | `reference/mapgraph.json` missing |
 | every branch logs `fall-through`, choices do nothing | `reference/branches.json` missing |
 | `no question bank, no questions`, a lesson asks nothing | `reference/quizkeys.json` missing |
-| `already running pid=N` | a previous instance is still up; leave it, or `stop_servers.py` |
-| `[authhttp] skip :443` | no privileges to bind a low port — or, on Windows, something else has it |
-| `openssl is not on PATH` | nothing to generate the auth certificate with; see Requirements |
-| `openssl did not produce the auth certificate` | it refused, and the retry did too — usually a crypto policy that forbids SHA-1; see "On Linux" |
-| `[WinError 10013]` on a bind, and the server exits | that port is reserved or already held; see "On Windows" |
-| `アップデートクライアントの起動に失敗しました`, and the log stays empty | `BootFirst.exe` was not run as administrator; see "Starting the game" |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`
 marks a message this server has seen but does not answer yet.
