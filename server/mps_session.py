@@ -2250,7 +2250,9 @@ class MpsServer:
             session,
             0,
             lesson.MSG_SV_NOTIFY_LESSON_END,
-            lesson.end_params(period.end_words(), attendance),
+            lesson.end_params(period.end_words(), attendance,
+                              ability=lesson.END_ABILITY_AFTER,
+                              before_ability=lesson.END_ABILITY_BEFORE),
         )
 
     def _drain_bells(self, session: "_Session") -> bytes:

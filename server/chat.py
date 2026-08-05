@@ -154,7 +154,7 @@ HELP = (
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words] <数> 0x6100 の実験用つまみ",
     "/bell [<科目番号>|ready] 予鈴/本鈴を手で鳴らす",
-    "/quiz [sec <秒>|wait <秒>] 出題の状態と正解 (採点の検証用)",
+    "/quiz [sec <秒>|wait <秒>|ab [before|after] <値×6>|ab off] 出題の状態と正解 (採点の検証用)",
     "/npcx 補充をやめる (画面上の分は地図を跨ぐまで残る)",
     "/nev [<cat>:<id>] 会話イベントキー (既定 16:1)",
     "/sc <名前|scriptId> [ctrl] [actor:npcId] 台本開始",
@@ -750,6 +750,62 @@ def respond(
             except (IndexError, ValueError):
                 return Reply(["/quiz wait <秒>"])
             return Reply([f"評価 {lesson.GRADING_SECONDS} 秒"])
+        if words_in and words_in[0].lower() == "ab":
+            # The 結果発表 ruler: 0x6102 carries ability and beforeAbility and
+            # this server has always sent them equal, so nothing recorded says
+            # whether they reach the screen at all. Bare `ab` loads the ruler
+            # against a zero `before`, which is the arrangement that makes a
+            # change maximally visible — if the screen draws nothing then, the
+            # twelve u16 are not what paints it.
+            #
+            # ⚠️ Unlike /ab this never touches the save. It is server-wide and
+            # stays until `off`; leave it set and a later round reads a lesson
+            # that raised six abilities.
+            words_ab = words_in[1:]
+            if words_ab and words_ab[0].lower() in ("off", "clear"):
+                lesson.END_ABILITY_AFTER = None
+                lesson.END_ABILITY_BEFORE = None
+                return Reply(["結果発表の目盛りを外した (両方を等しく送る)"])
+            # `still` puts the same row on both sides. The screen animates the
+            # bars from beforeAbility up to ability, and the first attempt only
+            # ever photographed that climb — every row still read Lv.1 while it
+            # was under way. With no distance to travel there is nothing to
+            # animate, so the panel shows its final state from the first frame.
+            still = False
+            side = "after"
+            if words_ab and words_ab[0].lower() in ("still", "same"):
+                still = True
+                words_ab.pop(0)
+            elif words_ab and words_ab[0].lower() in ("before", "after"):
+                side = words_ab.pop(0).lower()
+            if not words_ab:
+                row = list(lesson.END_ABILITY_RULER)
+                lesson.END_ABILITY_AFTER = row
+                lesson.END_ABILITY_BEFORE = (list(row) if still
+                                             else [0] * lesson.ABILITIES)
+            else:
+                try:
+                    values = [int(word, 0) for word in words_ab]
+                except ValueError:
+                    return Reply(["/quiz ab [still|before|after] <値×6> | off"])
+                row = [max(0, value) for value in values[: lesson.ABILITIES]]
+                row += [0] * (lesson.ABILITIES - len(row))
+                if still:
+                    lesson.END_ABILITY_AFTER = row
+                    lesson.END_ABILITY_BEFORE = list(row)
+                elif side == "before":
+                    lesson.END_ABILITY_BEFORE = row
+                    lesson.END_ABILITY_AFTER = (lesson.END_ABILITY_AFTER
+                                                or [0] * lesson.ABILITIES)
+                else:
+                    lesson.END_ABILITY_AFTER = row
+                    lesson.END_ABILITY_BEFORE = (lesson.END_ABILITY_BEFORE
+                                                 or [0] * lesson.ABILITIES)
+            return Reply([
+                f"結果発表 before {lesson.END_ABILITY_BEFORE}",
+                f"結果発表 after  {lesson.END_ABILITY_AFTER}",
+                "(" + " ".join(ability.ABILITIES) + ")",
+            ])
         out = []
         if not quiz.loaded():
             out.append("問題データが読めていない (reference/quizkeys.json)")
@@ -796,6 +852,13 @@ def respond(
                 )
         out.append(f"/quiz [sec <秒>|wait <秒>] — 今 {lesson.ANSWER_SECONDS}"
                    f"/{lesson.GRADING_SECONDS} 秒")
+        # Say so while it is loaded. A ruler left in is the failure mode /ab
+        # already has on record: a later round reads the measuring values as
+        # progress, and here they would look like a lesson that taught something.
+        if (lesson.END_ABILITY_AFTER is not None
+                or lesson.END_ABILITY_BEFORE is not None):
+            out.append(f"⚠️ 結果発表に目盛り: before {lesson.END_ABILITY_BEFORE}"
+                       f" → after {lesson.END_ABILITY_AFTER} (/quiz ab off で外す)")
         return Reply(out)
 
     if word == "lopt":

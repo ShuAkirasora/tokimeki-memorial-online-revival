@@ -493,6 +493,27 @@ ABILITIES = 6
 # (0xE6 - 0x26) / 6 — the client's item buffer in 0x6102. A capacity, not a count.
 MAX_ITEMS = 32
 
+# A ruler for the 結果発表, set by `/quiz ab` and nothing else. None means send
+# the two ability arrays equal, which is what a server with no 能力 subsystem
+# honestly reports; a list overrides one side of that so the screen has to draw
+# something. These are INVENTED measuring values, and unlike `/ab`'s sheet they
+# are never written to a save — the point is to find out *whether* 0x6102's
+# twelve u16 reach the screen at all, which nothing recorded so far answers.
+#
+# ⚠️ Module-level like ANSWER_SECONDS, so it is server-wide and survives until
+# cleared. Clear it once the screen has been read: a later round finding these
+# values still set would read them as a lesson that raised an ability.
+END_ABILITY_AFTER: "list[int] | None" = None
+END_ABILITY_BEFORE: "list[int] | None" = None
+
+# The default ruler, chosen so one screenshot is readable under any of the
+# three ways the screen could draw these (an earlier lesson). ceil(値/250) maps them to
+# 1 2 4 8 16 32, so the row a value landed in is recoverable if the screen
+# prints the レベル; the values themselves are equally distinct if it prints the
+# number; and against a `before` of zeros the difference is the value again.
+# All six stay ≤ 10000, the range where 2.30's レベル rule was shown to hold.
+END_ABILITY_RULER = (250, 500, 1000, 2000, 4000, 8000)
+
 
 def question_params(
     quiz_type: int,
