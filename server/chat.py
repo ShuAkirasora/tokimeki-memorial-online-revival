@@ -43,6 +43,7 @@ import struct
 from datetime import timedelta
 from typing import NamedTuple
 
+import ability
 import curriculum
 import facing
 import lesson
@@ -149,6 +150,7 @@ HELP = (
     "/npca 登場済みの恋愛候補生を配置 / <始> <終> [分類] で生キー",
     "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
+    "/ab [ruler|clear|<能力> <値>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words] <数> 0x6100 の実験用つまみ",
     "/bell [<科目番号>|ready] 予鈴/本鈴を手で鳴らす",
@@ -302,6 +304,8 @@ class Reply(NamedTuple):
     romance_save: bool = False
     # Same, for the 通知表; see /card.
     scorecard_save: bool = False
+    # Same, for the 能力パラメータ sheet; see /ab.
+    ability_save: bool = False
 
 
 def respond(
@@ -311,14 +315,16 @@ def respond(
     love: "romance.Romance | None" = None,
     card: "curriculum.ScoreCard | None" = None,
     period: "lesson.Lesson | None" = None,
+    sheet: "ability.AbilitySheet | None" = None,
 ) -> Reply:
     """Answer one chat line.
 
     ``love`` is the speaking character's 恋愛 state, mutated in place when a
     command changes it — the session owns the file, so writing is asked for
     through ``Reply.romance_save`` the same way every other side effect is.
-    ``card`` is the same arrangement for the 通知表. ``period`` is the lesson in
-    progress, read-only and only by /quiz.
+    ``card`` is the same arrangement for the 通知表 and ``sheet`` for the 能力
+    パラメータ. ``period`` is the lesson in progress, read-only and only by
+    /quiz.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -559,6 +565,65 @@ def respond(
             card.record_exam(subject, course, numbers[3])
         return Reply(card.lines(), scorecard_save=True)
 
+    if word == "ab":
+        # 能力パラメータ, readable and pokeable — the same arrangement as /card
+        # and for the same reason. Nothing in this server raises an ability, so
+        # until 授業's 能力増減 is settled this is the only thing that puts a
+        # number on that screen.
+        #
+        # ``ruler`` is the one that matters: powers of two across the six, so a
+        # single screenshot says which 能力 the client draws in which row.
+        # AbilitySheet.ruler documents the whole pattern and why each value was
+        # chosen.
+        if sheet is None:
+            return Reply(["能力が読めない (キャラ未選択?)"])
+        words = rest.split()
+        if not words:
+            return Reply(sheet.lines())
+        verb = words[0].lower()
+        if verb == "ruler":
+            sheet.ruler()
+            return Reply(["目盛りを入れた"] + sheet.lines(), ability_save=True)
+        if verb == "clear":
+            sheet.clear()
+            return Reply(["能力を白紙に戻した"], ability_save=True)
+        # 徳/ストレス/体調/経過日数 are keyed by name because they are one of a
+        # kind; the six 能力 are keyed by name *or* index, like /card's 科目.
+        scalars = {
+            "徳": "virtue",
+            "virtue": "virtue",
+            "ストレス": "stress",
+            "stress": "stress",
+            "体調": "condition",
+            "condition": "condition",
+            "日数": "elapsed_days",
+            "days": "elapsed_days",
+        }
+        if len(words) < 2:
+            return Reply([
+                "/ab [ruler|clear|<能力> <値>|徳|ストレス|体調|日数 <値>]",
+                "能力: " + " ".join(ability.ABILITIES),
+            ])
+        try:
+            value = int(words[1], 0)
+        except ValueError:
+            return Reply(["/ab <能力|徳|ストレス|体調|日数> <値>"])
+        if verb in scalars:
+            setattr(sheet, scalars[verb], value)
+            return Reply(sheet.lines(), ability_save=True)
+        index = None
+        if words[0] in ability.ABILITIES:
+            index = ability.ABILITIES.index(words[0])
+        elif verb.isdigit() and int(verb) < len(ability.ABILITIES):
+            index = int(verb)
+        if index is None:
+            return Reply([
+                "/ab [ruler|clear|<能力> <値>|徳|ストレス|体調|日数 <値>]",
+                "能力: " + " ".join(ability.ABILITIES),
+            ])
+        sheet.params[index] = max(0, value)
+        return Reply(sheet.lines(), ability_save=True)
+
     if word == "jikan":
         # The server's own reading of the 時間割, printed so it can be held up
         # against the client's 「生徒情報」→「時間割」 tab in the same session.
@@ -673,18 +738,34 @@ def respond(
                        f"{period.question_no}/{lesson.QUESTIONS_PER_LESSON}問目, "
                        f"{period.phase}, ここまで {period.summary()}")
             if question is not None:
-                # Which number to click. For 4択 the right one is raw choice 0,
-                # so it is whichever slot the shuffle put it in; for ○× it is
-                # the 0-is-○ mapping, which is the invented half.
+                # What a correct answer *reports*, which is the number judge()
+                # is handed and therefore the only one worth printing under
+                # that name. For 4択 that is raw 0 — the client reports the
+                # value out of choiceId[], not the slot it was drawn in — and
+                # for ○× it is 1 for ○, 0 for ×.
+                #
+                # ⚠️ Both halves of this were wrong until 2026-08-05 and in the
+                # same way: they were the readings judge() was corrected away
+                # from in round 51, left behind here because a debug command
+                # mirrors the rule instead of calling it. The smoke suite
+                # answers with this number, so the two disagreeing showed up as
+                # 「全部正解のはずが 2/10」 and not as anything about /quiz.
+                # Where a mirror is unavoidable, print both sides — hence 番目.
                 right = (
-                    question.choice_ids.index(0)
+                    0
                     if question.quiz_type == quiz.TYPE_CHOICE
-                    else (0 if question.answer else 1)
+                    else int(bool(question.answer))
+                )
+                where = (
+                    f"{question.choice_ids.index(0)} 番目をクリック"
+                    if question.quiz_type == quiz.TYPE_CHOICE
+                    else ("○ をクリック" if question.answer else "× をクリック")
                 )
                 out.append(
                     f"{'○×' if question.quiz_type == 0 else '４択'} "
                     f"難易度{question.level + 1} quizId={question.quiz_id}, "
                     f"choiceId={question.choice_ids}, 正解は choiceId {right}"
+                    f"（{where}）"
                 )
         out.append(f"/quiz [sec <秒>|wait <秒>] — 今 {lesson.ANSWER_SECONDS}"
                    f"/{lesson.GRADING_SECONDS} 秒")

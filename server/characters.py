@@ -29,6 +29,7 @@ import json
 import struct
 from pathlib import Path
 
+import ability
 import curriculum
 import facing
 import romance
@@ -797,6 +798,28 @@ class CharacterStore:
             if int(record["charaId"]) != chara_id:
                 continue
             record["curriculum"] = card.to_json()
+            self._save()
+            return True
+        return False
+
+    def ability(self, chara_id: int) -> ability.AbilitySheet | None:
+        """This character's 能力パラメータ, defaults included, or None if unknown.
+
+        Same treatment as ``romance`` and ``scorecard``, for the same reasons.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            saved = record.get("ability")
+            return ability.AbilitySheet(saved if isinstance(saved, dict) else None)
+        return None
+
+    def set_ability(self, chara_id: int, sheet: "ability.AbilitySheet") -> bool:
+        """Write one character's 能力パラメータ back. False if it is not ours."""
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            record["ability"] = sheet.to_json()
             self._save()
             return True
         return False

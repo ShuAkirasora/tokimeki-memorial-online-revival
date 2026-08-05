@@ -68,6 +68,7 @@ from characters import (
     minimap_params,
     parse_create_info,
 )
+import ability
 import chat
 import curriculum
 import facing
@@ -1651,6 +1652,35 @@ class MpsServer:
                     curriculum.MSG_SV_RESULT_SCORE_CARD,
                     card.params(names[0], names[1]),
                 )
+            if msg_type == ability.MSG_CL_QUERY_CHARA_MENU_ABILITY:
+                # 「生徒情報」→ the ability tab. One u32 charaId, the same shape
+                # and for the same reason as the 通知表 query above.
+                #
+                # testLevel is taken from the ScoreCard rather than stored on
+                # the sheet: it is a function of which 課程 are 修了, and the
+                # 通知表 already answers it. Two copies would be two answers.
+                #
+                # ⚠️ …minus one, because this field is zero-based and
+                # ScoreCard.test_level() is not. Measured: a character with no
+                # 課程 finished is 試験レベル１ by `p06_01`, test_level() says 1,
+                # and the screen drew 「試験レベル２」. Same base as 0x430D's
+                # testLv (curriculum.TESTLV_BASE), which was measured the same
+                # way and off by one in the same direction.
+                chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+                sheet = self.characters.ability(chara_id)
+                card = self.characters.scorecard(chara_id)
+                if sheet is None or card is None:
+                    print(f"[{self.tag}] ability: no charaId={chara_id}, answering Error")
+                    return self._answer(
+                        session, sequence, ability.MSG_SV_ERROR_CHARA_MENU_ABILITY, bytes(1)
+                    )
+                print(f"[{self.tag}] ability for charaId={chara_id}: {sheet.summary()}")
+                return self._answer(
+                    session,
+                    sequence,
+                    ability.MSG_SV_RESULT_CHARA_MENU_ABILITY,
+                    sheet.result_params(card.test_level() - 1),
+                )
             if msg_type == lesson.MSG_CL_REQUEST_LESSON_READY:
                 # 「出ます」. The body is empty — the client asserts nothing, not
                 # even which lesson it means — so every condition `p06_02` lists
@@ -1949,13 +1979,16 @@ class MpsServer:
         info = self.characters.find(session.chara_id)
         love = self.characters.romance(session.chara_id)
         card = self.characters.scorecard(session.chara_id)
+        sheet = self.characters.ability(session.chara_id)
         answer = chat.respond(
-            said, session.map_id, session.pos, love, card, session.lesson
+            said, session.map_id, session.pos, love, card, session.lesson, sheet
         )
         if answer.romance_save and love is not None:
             self.characters.set_romance(session.chara_id, love)
         if answer.scorecard_save and card is not None:
             self.characters.set_scorecard(session.chara_id, card)
+        if answer.ability_save and sheet is not None:
+            self.characters.set_ability(session.chara_id, sheet)
         if answer.npc_event is not None:
             session.npc_event = answer.npc_event
         if answer.select is not None:
