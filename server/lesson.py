@@ -359,18 +359,32 @@ class Bell:
         if now >= begins - timedelta(minutes=curriculum.PRE_BELL_MINUTES):
             self.pre_rung = begins
 
-    def admit(self, map_id: int, in_class: int, when: datetime | None = None) -> int | None:
+    def admit(
+        self,
+        map_id: int,
+        in_class: int,
+        when: datetime | None = None,
+        *,
+        neurotic: bool = False,
+    ) -> int | None:
         """Let this player into the lesson now starting, or say why not.
 
-        Returns None on success — `p06_02`'s two conditions and no more:
-        「あなたが在籍しているクラスの教室で」 and 「授業の途中から参加すること
-        はできません」. The other two reasons above belong to state this server
-        does not keep yet (the 授業の有無 option lives in the client, ストレス is
-        not tracked), so nothing returns them.
+        Returns None on success — three of `p06_02`'s four conditions:
+        「あなたが在籍しているクラスの教室で」, 「授業の途中から参加すること
+        はできません」, and ノイローゼ's 「学業に参加できなくなります」. The
+        fourth, the 授業の有無 option, lives in the client and never reaches
+        here.
+
+        ``neurotic`` rather than a whole AbilitySheet: the only thing this rule
+        reads is one boolean, and lesson.py has no other reason to know what a
+        体調 is. Whoever calls it must suppress the 本鈴 on the same condition —
+        see Bell.poll for why refusing after the bell costs the connection.
         """
         now = when or datetime.now()
         if map_id != classroom_of(in_class):
             return REASON_NOT_IN_CLASSROOM
+        if neurotic:
+            return REASON_NEUROSIS
         if self.rang_at is None or now - self.rang_at > timedelta(seconds=GRACE_SECONDS):
             return REASON_ALREADY_STARTED
         self.in_lesson = self.rang_at

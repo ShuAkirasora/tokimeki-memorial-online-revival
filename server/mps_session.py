@@ -78,6 +78,7 @@ import mps_cipher
 import quiz
 import romance
 import script
+import stress
 from common import ServiceConfig, ensure_runtime_dirs, inet_u32, write_packet_log
 
 # All 675 ids, recovered from tmo.exe's parser tables and the category base each
@@ -659,6 +660,20 @@ class _Session:
         # Which way the character is turned. Kept up to date from two places:
         # the client's own turn casts, and the direction a walk ended up going.
         self.direction = facing.DEFAULT
+        # 休憩: whether the player is sitting, and since when by the monotonic
+        # clock. Not saved — a pose is a moment, like a bell, and a character
+        # who logs out sitting has stopped sitting. ``sat_at`` doubles as the
+        # accounting cursor: recovery consumes seconds off it rather than
+        # resetting it, so the remainder that was not worth a whole point stays
+        # on the clock instead of being thrown away every drain.
+        self.pose = stress.POSE_STANDING
+        self.sat_at = 0.0
+        # The last stress/condition this session actually pushed, so the two
+        # notifies go out on change rather than on every packet. -1 is "nothing
+        # sent yet", which is not the same as 0: 0 is a real reading and the
+        # client has to be told about it to take the bar away.
+        self.sent_stress = -1
+        self.sent_condition = -1
         # The markers standing in the scene, cached so the lobby's stand-ins and
         # the answers to MsgClQueryCharaInfo about them cannot disagree. Warping
         # changes the map, so this is rebuilt rather than computed once.
@@ -1522,13 +1537,22 @@ class MpsServer:
                 )
                 session.chara_id = 0
                 return self._answer(session, sequence, MSG_SV_OK_SCHOOL_LOGOUT, b"")
-            if msg_type == MSG_CL_QUERY_POOL_MESSAGE and session.pending_say:
+            if msg_type == MSG_CL_QUERY_POOL_MESSAGE:
                 # Last step of the reload the client runs after a cutscene:
                 # 0x4000, then the character and the NPCs go down, then it asks
                 # for its own info and its pooled messages. This is the earliest
-                # point a queued line survives; see _drain_pending_say. Falls
-                # through to the table for the Ok.
-                session.say_armed = True
+                # point a *push* survives; see _drain_pending_say. Falls through
+                # to the table for the Ok.
+                if session.pending_say:
+                    session.say_armed = True
+                # ⚠️ The ストレスバー is in the same boat, and it took a screenshot
+                # to notice: a 0x4811 sent while the lobby is still loading is
+                # accepted and then thrown away with the scene, so a player who
+                # logged in with stress on the clock had no bar at all until
+                # something moved the number. Forgetting what was sent makes the
+                # next drain state it again, on this side of the reload.
+                session.sent_stress = -1
+                session.sent_condition = -1
             if msg_type == MSG_CL_REQUEST_LOBBY_DATA_START:
                 # The Ok alone is not enough: the client sat here silently, never
                 # sending MsgClRequestLobbyDataEnd, with a black screen. Nothing
@@ -1712,7 +1736,10 @@ class MpsServer:
                 # ⚠️ Refusing costs the player the connection (see NG_REASON and
                 # Bell.poll), which is why the conditions are also checked before
                 # the bell goes out rather than only here.
-                refusal = session.bell.admit(session.map_id, session.in_class)
+                refusal = session.bell.admit(
+                    session.map_id, session.in_class,
+                    neurotic=self._neurotic(session),
+                )
                 if refusal is not None:
                     sent = lesson.refusal_reason(refusal)
                     note = "" if sent == refusal else f" (probe, really {refusal})"
@@ -1797,6 +1824,31 @@ class MpsServer:
                 return reply + self._answer(
                     session, sequence, MSG_SV_NOTIFY_MINIMAP, minimap_params(session.map_id, dots)
                 )
+            if msg_type == stress.MSG_CL_CAST_CHARA_POSE:
+                # [Insert], per `p05_04`'s 【休憩】: 「マップキャラが座ります。
+                # 座ると、ストレスを徐々に回復させることができます」. So this is
+                # not decoration — it is the only input the stress system has.
+                #
+                # ⚠️ Answer it. The client does not sit down on its own: it
+                # casts, then waits, and an unanswered cast wedges its input for
+                # the rest of the session exactly the way the turn cast did.
+                # Both of those cost a session before the rule was written down.
+                if not params:
+                    return None
+                session.pose = params[0]
+                if session.pose == stress.POSE_SITTING:
+                    session.sat_at = time.monotonic()
+                print(
+                    f"[{self.tag}] pose charaId={session.chara_id} -> "
+                    f"{'座る' if session.pose == stress.POSE_SITTING else '立つ'}"
+                    f"({session.pose})"
+                )
+                return self._answer(
+                    session,
+                    sequence,
+                    stress.MSG_SV_NOTIFY_CHARA_POSE,
+                    stress.pose_params(session.chara_id, session.pose),
+                )
             if msg_type in MOVEMENT_SHAPES:
                 # Ground truth for coordinates. Every one of these is the client
                 # volunteering where it thinks the player is or wants to be, so
@@ -1817,6 +1869,21 @@ class MpsServer:
                 # position made every move exactly one cell, so a five-cell walk
                 # was given one cell's worth of time.
                 prev_pos = session.pos
+                # 「マップ上で座ってじっとしていると」 — walking is not sitting
+                # still, and neither is changing maps. The client stands its
+                # character up by itself when either happens and does not cast a
+                # pose to say so, so the server has to notice: without this a
+                # player who sat down once went on recovering for the rest of the
+                # session while walking around, which was visible in the log as
+                # 休憩 lines arriving from the far side of the campus.
+                #
+                # ⚠️ An inference from the client's animation, not from the wire.
+                # If a pose=0 cast is ever seen arriving on its own after a move,
+                # this is redundant rather than wrong.
+                if session.pose != stress.POSE_STANDING:
+                    print(f"[{self.tag}] pose: 立つ (moved)")
+                    session.pose = stress.POSE_STANDING
+                    session.sat_at = 0.0
                 if msg_type == MSG_CL_CAST_CHARA_TURN:
                     # Alt+left-click, per the manual's 【向きを変える】: turn on
                     # the spot without walking.
@@ -2089,6 +2156,10 @@ class MpsServer:
             map_id, pos_x, pos_y, direction = answer.warp
             session.map_id, session.pos = map_id, (pos_x, pos_y)
             session.direction = direction
+            # The scene is torn down and rebuilt, and the character comes back
+            # standing. Same reason as the move cast; see the pose branch there.
+            session.pose = stress.POSE_STANDING
+            session.sat_at = 0.0
             self.characters.set_position(session.chara_id, session.pos, map_id)
             print(
                 f"[{self.tag}] chat warp charaId={session.chara_id} -> map "
@@ -2201,7 +2272,76 @@ class MpsServer:
         out = self._drain_console(session)
         out += self._drain_bells(session)
         out += self._drain_lesson(session)
+        out += self._drain_vitals(session)
         out += self._drain_pending_say(session)
+        return out
+
+    def _drain_vitals(self, session: "_Session") -> bytes:
+        """Let a sitting player recover, and tell the client what changed.
+
+        Rides on arriving packets like the bells do, so the resolution is one
+        timesync — but unlike a bell this is a rate rather than an event, so
+        being late costs nothing: the elapsed seconds are what is metered, and
+        whatever they were worth is credited whenever the drain next runs.
+
+        seen=0: neither notify answers a message of the client's.
+        """
+        if session.chara_id == 0:
+            return b""
+        sheet = self.characters.ability(session.chara_id)
+        if sheet is None:
+            return b""
+        if session.pose == stress.POSE_SITTING and session.sat_at:
+            now = time.monotonic()
+            removed = stress.recover(sheet, now - session.sat_at, session.map_id)
+            if removed:
+                # Consume rather than reset, so the seconds that were not worth
+                # a whole point stay owed instead of being dropped every drain.
+                session.sat_at += removed * (
+                    stress.HEALING_SECONDS_PER_POINT
+                    if stress.healing(session.map_id)
+                    else stress.SIT_SECONDS_PER_POINT
+                )
+                self.characters.set_ability(session.chara_id, sheet)
+                print(
+                    f"[{self.tag}] 休憩: ストレス -{removed} -> {sheet.stress} "
+                    f"({stress.screen(sheet.stress)}/100), 体調 "
+                    f"{stress.name(sheet.condition)}"
+                )
+        return self._push_vitals(session, sheet)
+
+    def _neurotic(self, session: "_Session") -> bool:
+        """Is this player currently barred from 学業?
+
+        ドクターストップ is 「ノイローゼと怪我が重なった状態」, so it bars 学業
+        as well; 怪我 alone bars クラブ活動, which this server does not have.
+        """
+        sheet = self.characters.ability(session.chara_id)
+        return sheet is not None and sheet.condition in (
+            stress.NEUROSIS, stress.DOCTOR_STOP
+        )
+
+    def _push_vitals(self, session: "_Session", sheet) -> bytes:
+        """0x4811 / 0x4812, but only where the value has actually moved.
+
+        Both are pushes with no request behind them, so sending them every drain
+        would be thirty bytes a second saying nothing. Sending them on change
+        also makes the log a record of what the screen was told, which is what a
+        screenshot has to be checked against.
+        """
+        out = b""
+        if sheet.stress != session.sent_stress:
+            session.sent_stress = sheet.stress
+            out += self._answer(
+                session, 0, stress.MSG_SV_NOTIFY_CHARACTER_STRESS,
+                stress.stress_params(sheet.stress),
+            )
+        if sheet.condition != session.sent_condition:
+            session.sent_condition = sheet.condition
+            out += self._answer(
+                session, 0, stress.MSG_SV_NOTIFY_CHARACTER_CONDITION,
+                stress.condition_params(sheet.condition),
+            )
         return out
 
     def _drain_lesson(self, session: "_Session") -> bytes:
@@ -2265,15 +2405,38 @@ class MpsServer:
             print(f"[{self.tag}] lesson end: no charaId={session.chara_id}, "
                   f"nothing filed")
         after, before = lesson.END_ABILITY_AFTER, lesson.END_ABILITY_BEFORE
-        if after is None and before is None:
+        # The ruler being set means this period is a measurement rather than a
+        # lesson, and that has to hold for every value the message carries, not
+        # only the six abilities it was named after: a 結果発表 read off the
+        # must not have moved ストレス either.
+        measuring = not (after is None and before is None)
+        if not measuring:
             after, before = self._file_ability(session, period)
-        return self._answer(
+        sheet = self.characters.ability(session.chara_id)
+        stress_now, condition_now = 0, stress.HEALTHY
+        if sheet is not None and measuring:
+            stress_now, condition_now = sheet.stress, sheet.condition
+        elif sheet is not None:
+            added, condition_now = stress.after_lesson(sheet)
+            stress_now = sheet.stress
+            self.characters.set_ability(session.chara_id, sheet)
+            print(f"[{self.tag}] lesson end: ストレス +{added} -> {stress_now} "
+                  f"({stress.screen(stress_now)}/100), 体調 "
+                  f"{stress.name(condition_now)}")
+        out = self._answer(
             session,
             0,
             lesson.MSG_SV_NOTIFY_LESSON_END,
             lesson.end_params(period.end_words(), attendance,
+                              stress=stress_now, condition=condition_now,
                               ability=after, before_ability=before),
         )
+        # The 結果発表 carries both values itself, but that screen goes away and
+        # the bar under the character does not — and the client was told about
+        # the bar by 0x4811, not by this. So push the pair as well.
+        if sheet is not None:
+            out += self._push_vitals(session, sheet)
+        return out
 
     def _file_ability(
         self, session: "_Session", period: "lesson.Lesson"
@@ -2323,15 +2486,19 @@ class MpsServer:
         # Bell.poll needs it up front, because ringing at someone who would be
         # refused logs them out — the client asks to come in on its own and
         # closes the connection when told no. See Bell.poll.
-        admits = session.map_id == lesson.classroom_of(session.in_class)
+        neurotic = self._neurotic(session)
+        admits = (
+            session.map_id == lesson.classroom_of(session.in_class) and not neurotic
+        )
         for kind, subject in session.bell.poll(admits=admits):
             name = curriculum.SUBJECTS[subject]
             if kind == "skip":
-                print(
-                    f"[{self.tag}] 本鈴 {name}: not ringing, player is on map "
-                    f"{session.map_id}, not classroom "
-                    f"{lesson.classroom_of(session.in_class)}"
+                why = (
+                    "player is ノイローゼ" if neurotic
+                    else f"player is on map {session.map_id}, not classroom "
+                         f"{lesson.classroom_of(session.in_class)}"
                 )
+                print(f"[{self.tag}] 本鈴 {name}: not ringing, {why}")
                 continue
             if kind == "pre":
                 print(f"[{self.tag}] 予鈴: 次は{name}")
