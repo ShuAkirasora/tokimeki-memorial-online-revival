@@ -605,6 +605,53 @@ END_ABILITY_BEFORE: "list[int] | None" = None
 END_ABILITY_RULER = (250, 500, 1000, 2000, 4000, 8000)
 
 
+# ── 能力増減 ────────────────────────────────────────────────────────────────
+# 「授業に参加することにより、科目に応じて能力パラメータが増減します」(`p06_02`).
+# *Which* abilities is read off `lesson.bin` — curriculum.SUBJECT_ABILITY. *How
+# much* is nowhere: no table holds a step, and the client cannot hold one either,
+# because it never computes an ability, it only draws the two arrays 0x6102 sends
+# it. So the number below is INVENTED, and it is invented in the one unit the
+# screen has already settled.
+#
+# abilityParam is 8.8 fixed point — レベル = (値 >> 8) + 1, and the bar under the
+# number is (値 & 0xFF) / 256. So the honest way to state a step is in 256ths of
+# a level, and a step is legible on screen exactly when it moves the bar.
+#
+# ABILITY_STEP = 64 is a quarter of a level **per slot**, so a perfect lesson
+# raises each of a subject's two abilities by a quarter — or one ability by a
+# half, for the four subjects that name the same one twice. Against 課程修了's
+# 「必要な出席回数 7 / 40 / 100」 that puts a first 課程 around レベル 2 and a
+# third somewhere near レベル 25. Nothing verifies that shape; 64 is chosen so a
+# single lesson visibly moves the bar — a step too small to see is a step nobody
+# can check — while a whole level still costs several lessons.
+#
+# 増減, not 増: the manual says the value can go either way, so the step is
+# signed by how the lesson went. `2 * rate - 1` is the cheapest reading of that
+# — all ten right is +ABILITY_STEP, all ten wrong is -ABILITY_STEP, and five is
+# nothing. It is this lesson's own rate and not the 通算 one, matching the same
+# 「その授業での成績」 the manual uses for ご褒美.
+#
+# ⚠️ Not modelled and deliberately so: the biorhythm the third slot names, ご褒美
+# items, and any dependence on 試験レベル or on how far the ability already is.
+ABILITY_STEP = 64
+
+
+def ability_delta(subject: int, right: int, asked: int) -> "list[int]":
+    """One lesson's 能力増減, six values in `chara_ability_type` key order.
+
+    INVENTED; see ABILITY_STEP for what part of it is and is not recovered. A
+    lesson that asked nothing moves nothing, which is what walking out mid-period
+    already does everywhere else in this server.
+    """
+    delta = [0] * ABILITIES
+    if asked <= 0:
+        return delta
+    step = round(ABILITY_STEP * (2 * right / asked - 1))
+    for index in curriculum.SUBJECT_ABILITY[subject % len(curriculum.SUBJECT_ABILITY)]:
+        delta[index] += step
+    return delta
+
+
 def question_params(
     quiz_type: int,
     quiz_lv: int,
@@ -690,18 +737,15 @@ def end_params(
 
     * ``ability`` and ``before_ability``. 「授業に参加することにより、科目に応じて
       能力パラメータが増減します」 (`p06_02`) and this message is where that
-      lands, but the six 能力 do not exist anywhere in this server: there is no
-      value to raise. They therefore go out **equal**, which draws a result
-      screen that reports no change — the honest rendering of a system that is
-      not there, rather than a number invented on the spot.
+      lands. *Which* abilities move is read off `lesson.bin`
+      (curriculum.SUBJECT_ABILITY); *how much* is invented, in the 256ths the
+      screen turned out to count in — see ABILITY_STEP and ability_delta.
 
-      What is known and not yet enough: every `lesson.bin` record carries two
-      identical triples of values in 0…5, which is exactly `chara_ability_type`'s
-      range, and the manual's 「国語なら文系、数学なら理系」 matches the first of
-      each. Two of the eight subjects read oddly under that story, so it is a
-      measurement waiting for a verdict rather than a table to use. Do not build
-      on it here until one subject's triple has been shown to move the six
-      values the way the result screen draws them.
+      ⚠️ The two arrays are not two pieces of data. ``before_ability`` is where
+      the bar starts and ``ability`` is where it ends, and the client **animates
+      between them**, so a screenshot taken mid-climb reads the wrong number.
+      Send them equal when the point is to read a value off the screen; that is
+      what `/quiz ab still` is for.
     * ``stress`` and ``condition``. ストレス／ノイローゼ is a whole subsystem
       (`p06_02`) with an entry condition and a set of places that reduce it, and
       none of it exists; zero is the value of a thing that is never raised.
