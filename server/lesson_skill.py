@@ -122,62 +122,74 @@ LEVEL_GATE = {
 
 
 # ── refusal reasons ─────────────────────────────────────────────────────────
-# Every Ng/Error in this family is one u8 the client calls `reason`, and half of
-# what it means is now recovered.
+# Every Ng/Error in this family is one u8 the client calls `reason`, and all
+# eight are now RESTORED — from the data, and confirmed on screen.
 #
-# It is **not** an `error_message.bin` index — that table runs past 900 and the
-# field is a byte. What the client holds is a table at VA 0x00DB3640 (file offset
-# 0x009B3640), **581 records of 12 bytes**, `(key1, key2, errorMessageId)`. The
-# code that reads it is at 0x00817237:
+# ⭐⭐ The answer is written in `error_message.bin` itself. Each 102-byte record
+# opens with a five-byte prefix, and that prefix is
 #
-#     mov  esi, 0xdb517c      ; end
-#     push esi
-#     push 0xdb3640           ; begin
-#     call 0x816a28           ; find_if over both key fields
-#     cmp  eax, esi           ; == end -> the default string at 0xdb6b4c
-#     jne  0x0081725f
-#     mov  eax, [eax + 8]     ; the errorMessageId
+#     (u16 own id, u16 message id, u8 reason)
 #
-# So the record is `(key, key, value)` and 581 × 12 = 0x1B3C = end − begin
-# exactly. The table covers ids 0…580; ids above that live in further tables.
+# so a record *names the message it belongs to and its index within it*. Record
+# 529 is (529, 0x6111, 0); record 530 is (530, 0x6111, 1). **`reason` is that
+# index: which sentence of this message's own list to draw, counted from zero.**
 #
-# ⭐ `reason` has to be **key2**: key1 runs to 800-odd in this range alone and
-# could never arrive in a byte. key1 is the client's own half, supplied at the
-# point the dialog is drawn.
+# The client agrees. The handler for 0x6111 at 0x0076cfb7 pushes the message id
+# and the byte, `movsx ecx, byte ptr [ecx + 4]`, and the path underneath
+# (0x0079ec56 -> 0x0081702a) reaches a record and does `add esi, 5` — stepping
+# over exactly this prefix to get at the text.
 #
-# ⭐ For four of the eight messages every situation that message can refuse for
-# lands in **one** key1, with distinct key2 — a complete, self-consistent set,
-# and those four send real codes:
+# ⚠️ The (key1, key2, errorMessageId) table at 0x00DB3640 is a **different code
+# path** and does not answer server refusals. Its key1 column holds 83 distinct
+# values in 6…802 and the lookup at 0x008171d0 has exactly 83 call sites: those
+# are the client's own local checks, each site passing its own key1. A server
+# refusal never reaches it — the msgid->key mapper at 0x008163e9 leaves every
+# 0x6xxx message unmapped, returning the id unchanged, and 0x6111 = 24849 is far
+# outside 6…802.
 #
-#     0x6111 助けてコール   key1 501   解答済み 2   制限時間 3
-#     0x6114 早弁           key1 502   お弁当なし 1   ストレスなし 2
-#     0x6117 直感           key1 503   制限時間 0   解答済み 1   選択肢１つ 3
-#     0x611B カンニング     key1 511   制限時間 0   解答済み 2   対象不明 3
-#                                      対象未解答 4
-#
-# ⚠️ The other four **spill across key1 values** and are not explained: 精神集中
-# over 511/512/603, そっと応援 over 702/703/710, 明鏡止水 over 716/717,
-# ティーチング over 800/801. A message whose refusals need three different key1
-# values cannot be picking key1 from the message alone, and what else it could be
-# picking it from is the open half. Those four still send zero.
-#
-# ⚠️ **None of this is verified on screen.** Being able to name a plausible byte
-# is not the same as having seen the sentence it draws — REASON_PROBE overrides
-# any of them so one client run can settle it, the same arrangement
-# lesson.NG_PROBE has for the bell.
+# ⭐ How it was caught: a refusal drew a システムメッセージ box that was **empty**
+# and the client asked the server for nothing afterwards. The fallback string at
+# 0xdb6b4c is an empty string, so an empty box *is* the lookup missing. Under
+# the old reading the byte we sent was valid and the box should have had text.
 REASON_UNSPECIFIED = 0
 
-# (refusal message, situation) -> the key2 to send. Situations are the strings
-# check_common and _skill_effect raise; anything absent falls back to zero.
+# (refusal message, situation) -> the reason byte. Situations are the strings
+# check_common and _skill_effect raise. Straight out of the record prefixes:
+# every entry below is `error_message.bin` saying so, and the ones marked
+# システムエラー are the original's own slots for server-internal faults, which
+# we have no situation for.
 REASON = {
-    MSG_SV_ERROR_LESSON_HELP: {"解答済み": 2, "制限時間外": 3},
-    MSG_SV_ERROR_LESSON_LUNCH: {"お弁当を所持していない": 1,
-                                "ストレスがたまっていない": 2},
-    MSG_SV_NG_LESSON_FEELING: {"制限時間外": 0, "解答済み": 1,
-                               "選択肢が１つしかない": 3},
-    MSG_SV_NG_LESSON_CHEATING: {"制限時間外": 0, "解答済み": 2,
-                                "対象が解決できない": 3,
-                                "対象がまだ解答していない": 4},
+    # 529, 530
+    MSG_SV_ERROR_LESSON_HELP: {"解答済み": 0, "制限時間外": 1},
+    # 531…533
+    MSG_SV_ERROR_LESSON_LUNCH: {"お弁当を所持していない": 0,
+                                "ストレスがたまっていない": 1,
+                                "制限時間外": 2},
+    # 534…537 (3 = システムエラー（出席者情報異常）)
+    MSG_SV_NG_LESSON_FEELING: {"解答済み": 0, "制限時間外": 1,
+                               "選択肢が１つしかない": 2},
+    # 538…542 (4 = システムエラー)
+    MSG_SV_NG_LESSON_CHEATING: {"制限時間外": 0, "解答済み": 1,
+                                "対象が解決できない": 2,
+                                "対象がまだ解答していない": 3},
+    # 543…547 (4 = システムエラー)
+    MSG_SV_NG_LESSON_COOL: {"解答済み": 0, "制限時間外": 1,
+                            "試験レベル不足": 2,
+                            "既に選択肢が絞られている": 3},
+    # 548…550 — no 解答済み sentence exists for this one; see check_common
+    MSG_SV_ERROR_LESSON_SUPPORT: {"制限時間外": 0, "試験レベル不足": 1,
+                                  "対象が解決できない": 2},
+    # 551…555 (4 = システムエラー)
+    MSG_SV_NG_LESSON_MEIKYOUSHISUI: {"解答済み": 0, "制限時間外": 1,
+                                     "試験レベル不足": 2,
+                                     "選択肢が１つしかない": 3},
+    # 556…561. Slot 1 is literally labelled 「未使用：：：回答済み」 in the data —
+    # the original reserved a 解答済み sentence here and never used it.
+    MSG_SV_ERROR_LESSON_TEACHING: {"制限時間外": 0,
+                                   "既に選択肢が絞られている": 2,
+                                   "試験レベル不足": 3,
+                                   "対象が解決できない": 4,
+                                   "対象が既に解答している": 5},
 }
 REASON_PROBE: "dict[int, int]" = {}
 
@@ -350,6 +362,12 @@ TARGETED = (
     MSG_CL_CAST_LESSON_TEACHING,
 )
 
+# The two skills you may still use after you have answered — see check_common.
+ANSWERED_IS_FINE = (
+    MSG_CL_CAST_LESSON_SUPPORT,
+    MSG_CL_CAST_LESSON_TEACHING,
+)
+
 # Every client message this module answers, and for each one the reply to refuse
 # with. Cast skills refuse with an Error, Request skills with an Ng — the client
 # named them differently and they are kept apart.
@@ -422,8 +440,27 @@ def check_common(period, msg_type: int, question_no: int, test_level: int) -> No
     if question_no not in (period.question_no, period.question_no - 1):
         raise Refused(msg_type, "制限時間外",
                       f"questionNo {question_no} は今の問題ではない")
+    # ⭐ RESTORED by absence: six of the eight have a 解答済み sentence and the
+    # two that help *someone else* do not. そっと応援 has none at all, and
+    # ティーチング has the slot 「未使用：：：回答済み」 — reserved and left unused.
+    # So having answered stops you helping yourself, not helping others.
+    if msg_type in ANSWERED_IS_FINE:
+        return
     if period.reported is not None:
         raise Refused(msg_type, "解答済み")
+
+
+def check_not_narrowed(period, msg_type: int) -> None:
+    """精神集中 and ティーチング refuse once the choices are already narrowed.
+
+    RESTORED: 546 「既に選択肢が絞られていますので、「精神集中」は効果がありません」
+    and 558, the same sentence for ティーチング. They are the two skills whose
+    reply is a counted array, so they are the two that can collide with
+    themselves — nothing else in the family carries this sentence.
+    """
+    if period.narrowed is not None:
+        raise Refused(msg_type, "既に選択肢が絞られている",
+                      f"残り {len(period.narrowed)} 択")
 
 
 def live_choices(period) -> "list[int]":
