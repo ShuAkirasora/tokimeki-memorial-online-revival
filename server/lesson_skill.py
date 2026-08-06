@@ -122,30 +122,76 @@ LEVEL_GATE = {
 
 
 # ── refusal reasons ─────────────────────────────────────────────────────────
-# ⚠️ Every Ng/Error in this family is one u8 the client calls `reason`, and what
-# number means what is **not settled**. It cannot be read off `error_message.bin`
-# directly: that table's ids run past 900 and the field is a byte.
+# Every Ng/Error in this family is one u8 the client calls `reason`, and half of
+# what it means is now recovered.
 #
-# What the client actually holds is a sorted lookup table at file offset
-# 0x009B3648, 12-byte records of (errorMessageId, group, code), 1128 of them. The
-# skill strings 529…561 all live in it, so `reason` is the `code` half of a key
-# whose `group` half the client supplies from somewhere else. Which group each
-# message contributes is the part still open — the groups those rows carry do not
-# fall on skill boundaries, and at least one (group, code) pair appears twice,
-# so the record is not simply a two-column key and one more pass is owed to it.
+# It is **not** an `error_message.bin` index — that table runs past 900 and the
+# field is a byte. What the client holds is a table at VA 0x00DB3640 (file offset
+# 0x009B3640), **581 records of 12 bytes**, `(key1, key2, errorMessageId)`. The
+# code that reads it is at 0x00817237:
 #
-# Until that pass happens every refusal here sends zero, and REASON_PROBE exists
-# to settle it by experiment instead: set it, trigger a refusal, read the dialog
-# the client draws. That is the same arrangement lesson.NG_PROBE already uses for
-# the bell, and for the same reason — the meaning of a server-to-client byte can
-# only be recovered by sending it.
+#     mov  esi, 0xdb517c      ; end
+#     push esi
+#     push 0xdb3640           ; begin
+#     call 0x816a28           ; find_if over both key fields
+#     cmp  eax, esi           ; == end -> the default string at 0xdb6b4c
+#     jne  0x0081725f
+#     mov  eax, [eax + 8]     ; the errorMessageId
+#
+# So the record is `(key, key, value)` and 581 × 12 = 0x1B3C = end − begin
+# exactly. The table covers ids 0…580; ids above that live in further tables.
+#
+# ⭐ `reason` has to be **key2**: key1 runs to 800-odd in this range alone and
+# could never arrive in a byte. key1 is the client's own half, supplied at the
+# point the dialog is drawn.
+#
+# ⭐ For four of the eight messages every situation that message can refuse for
+# lands in **one** key1, with distinct key2 — a complete, self-consistent set,
+# and those four send real codes:
+#
+#     0x6111 助けてコール   key1 501   解答済み 2   制限時間 3
+#     0x6114 早弁           key1 502   お弁当なし 1   ストレスなし 2
+#     0x6117 直感           key1 503   制限時間 0   解答済み 1   選択肢１つ 3
+#     0x611B カンニング     key1 511   制限時間 0   解答済み 2   対象不明 3
+#                                      対象未解答 4
+#
+# ⚠️ The other four **spill across key1 values** and are not explained: 精神集中
+# over 511/512/603, そっと応援 over 702/703/710, 明鏡止水 over 716/717,
+# ティーチング over 800/801. A message whose refusals need three different key1
+# values cannot be picking key1 from the message alone, and what else it could be
+# picking it from is the open half. Those four still send zero.
+#
+# ⚠️ **None of this is verified on screen.** Being able to name a plausible byte
+# is not the same as having seen the sentence it draws — REASON_PROBE overrides
+# any of them so one client run can settle it, the same arrangement
+# lesson.NG_PROBE has for the bell.
 REASON_UNSPECIFIED = 0
+
+# (refusal message, situation) -> the key2 to send. Situations are the strings
+# check_common and _skill_effect raise; anything absent falls back to zero.
+REASON = {
+    MSG_SV_ERROR_LESSON_HELP: {"解答済み": 2, "制限時間外": 3},
+    MSG_SV_ERROR_LESSON_LUNCH: {"お弁当を所持していない": 1,
+                                "ストレスがたまっていない": 2},
+    MSG_SV_NG_LESSON_FEELING: {"制限時間外": 0, "解答済み": 1,
+                               "選択肢が１つしかない": 3},
+    MSG_SV_NG_LESSON_CHEATING: {"制限時間外": 0, "解答済み": 2,
+                                "対象が解決できない": 3,
+                                "対象がまだ解答していない": 4},
+}
 REASON_PROBE: "dict[int, int]" = {}
 
 
-def reason_for(msg_type: int) -> int:
-    """The byte a refusal of `msg_type` carries, honouring the probe knob."""
-    return int(REASON_PROBE.get(msg_type, REASON_UNSPECIFIED)) & 0xFF
+def reason_for(msg_type: int, why: str = "") -> int:
+    """The byte a refusal of `msg_type` carries, honouring the probe knob.
+
+    `msg_type` here is the client's message; the table is keyed by the refusal
+    that answers it.
+    """
+    refusal = REFUSAL.get(msg_type, msg_type)
+    if refusal in REASON_PROBE:
+        return int(REASON_PROBE[refusal]) & 0xFF
+    return int(REASON.get(refusal, {}).get(why, REASON_UNSPECIFIED)) & 0xFF
 
 
 # ── what the rules are ──────────────────────────────────────────────────────
@@ -345,13 +391,19 @@ def parse_request(msg_type: int, params: bytes) -> "tuple[int, int]":
 
 
 class Refused(Exception):
-    """A skill the rules do not allow. Carries the reason byte to send."""
+    """A skill the rules do not allow. Carries the reason byte to send.
 
-    def __init__(self, msg_type: int, why: str) -> None:
-        super().__init__(why)
+    `situation` is one of the fixed strings REASON is keyed by — it names *which*
+    `error_message.bin` sentence this refusal is, so it must not be formatted.
+    `detail` is for the log and may say anything.
+    """
+
+    def __init__(self, msg_type: int, situation: str, detail: str = "") -> None:
+        super().__init__(situation)
         self.msg_type = msg_type
-        self.why = why
-        self.reason = reason_for(msg_type)
+        self.situation = situation
+        self.why = f"{situation}（{detail}）" if detail else situation
+        self.reason = reason_for(msg_type, situation)
 
 
 def check_common(period, msg_type: int, question_no: int, test_level: int) -> None:
@@ -361,13 +413,15 @@ def check_common(period, msg_type: int, question_no: int, test_level: int) -> No
     """
     gate = LEVEL_GATE.get(msg_type)
     if gate is not None and test_level < gate:
-        raise Refused(msg_type, f"試験レベル {test_level} < {gate}")
+        raise Refused(msg_type, "試験レベル不足", f"{test_level} < {gate}")
     if period is None or period.phase != period.ASKING or period.question is None:
         raise Refused(msg_type, "制限時間外")
     # Lenient exactly as Lesson.take_answer is, and for the same unsettled
-    # reason: whether the client counts questions from one or from zero.
+    # reason: whether the client counts questions from one or from zero. A stale
+    # questionNo is the same thing as being late, so it draws the same sentence.
     if question_no not in (period.question_no, period.question_no - 1):
-        raise Refused(msg_type, f"questionNo {question_no} は今の問題ではない")
+        raise Refused(msg_type, "制限時間外",
+                      f"questionNo {question_no} は今の問題ではない")
     if period.reported is not None:
         raise Refused(msg_type, "解答済み")
 
