@@ -1784,12 +1784,60 @@ class MpsServer:
                 # retries until answered. Empty deck; see club.py for why that
                 # avoids guessing at the entry layout.
                 deck_id = club.parse_deck_query(params)
-                print(f"[{self.tag}] club deck {deck_id}: empty")
+                member = self.characters.club(session.chara_id)
+                use = member.use_type(deck_id) if member else club.USE_TYPE_UNSET
+                print(f"[{self.tag}] club deck {deck_id}: empty, useType={use:#04x}")
                 return self._answer(
                     session,
                     sequence,
                     club.MSG_SV_RESULT_CLUB_DECK_LIST,
-                    club.deck_reply(deck_id),
+                    club.deck_reply(deck_id, use),
+                )
+            if msg_type == club.MSG_CL_REQUEST_CLUB_DECK_UPDATE:
+                # 「更 新」. ⭐ This is the only place the client ever spells out
+                # a useType, which makes answering it the way to measure that
+                # byte — it comes back on the next 0x5B01 and the window draws
+                # whatever we were told.
+                parsed = club.parse_deck_update(params)
+                if parsed is None:
+                    print(f"[{self.tag}] club deck update: short body {params.hex()}")
+                    return self._answer(
+                        session,
+                        sequence,
+                        club.MSG_SV_NG_CLUB_DECK_UPDATE,
+                        struct.pack(">BH", club.NG_DECK_NOT_FOUND, 0),
+                    )
+                deck_id, count, use = parsed
+                if count:
+                    # Nothing here can own an item, so a non-empty deck means the
+                    # entry layout finally has a sample on the wire. Log it and
+                    # refuse rather than store bytes we cannot parse.
+                    print(
+                        f"[{self.tag}] club deck update {deck_id}: count={count} "
+                        f"UNEXPECTED, raw={params.hex()}"
+                    )
+                    return self._answer(
+                        session,
+                        sequence,
+                        club.MSG_SV_NG_CLUB_DECK_UPDATE,
+                        struct.pack(">BH", club.NG_DECK_KEYWORD_NOT_OWNED, 0),
+                    )
+                member = self.characters.club(session.chara_id)
+                if member is None:
+                    return self._answer(
+                        session,
+                        sequence,
+                        club.MSG_SV_NG_CLUB_DECK_UPDATE,
+                        struct.pack(">BH", club.NG_DECK_NOT_FOUND, 0),
+                    )
+                member.deck_use[deck_id] = use
+                self.characters.set_club(session.chara_id, member)
+                print(f"[{self.tag}] club deck update {deck_id}: useType={use:#04x}")
+                return self._answer(
+                    session,
+                    sequence,
+                    club.MSG_SV_OK_CLUB_DECK_UPDATE,
+                    struct.pack(">B", deck_id & 0xFF),
                 )
             if msg_type == club.MSG_CL_REQUEST_CLUB_ENTER:
                 # 「入部」 off a 顧問/キャプテン's right-click menu. The clubId is
