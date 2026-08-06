@@ -44,6 +44,7 @@ from datetime import timedelta
 from typing import NamedTuple
 
 import ability
+import club
 import curriculum
 import exam
 import facing
@@ -152,6 +153,7 @@ HELP = (
     "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
     "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
+    "/buka [<番号 1-8>|force <番号>|part|clear] クラブ入部・退部 (/club はクライアント側)",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words|lunch] <数> 0x6100 の実験用つまみ",
     "/skill [<拒否メッセージ> <reason>|clear] お助けスキル の reason を画面で確かめる",
@@ -309,6 +311,8 @@ class Reply(NamedTuple):
     scorecard_save: bool = False
     # Same, for the 能力パラメータ sheet; see /ab.
     ability_save: bool = False
+    # Same, for the クラブ membership; see /buka.
+    club_save: bool = False
 
 
 def respond(
@@ -321,6 +325,7 @@ def respond(
     sheet: "ability.AbilitySheet | None" = None,
     in_class: int = 0,
     exam_period: "exam.Period | None" = None,
+    member: "club.Membership | None" = None,
 ) -> Reply:
     """Answer one chat line.
 
@@ -333,6 +338,7 @@ def respond(
     throw the player off the server; see the guard in that branch.
     ``exam_period`` is the session's 試験期間, mutated in place by /exam — it is
     never saved, so unlike the three above it needs no write-back flag.
+    ``member`` is the クラブ membership, same arrangement as ``sheet``.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -572,6 +578,66 @@ def respond(
                 return Reply([f"課程は 1〜{curriculum.COURSES}"])
             card.record_exam(subject, course, numbers[3])
         return Reply(card.lines(), scorecard_save=True)
+
+    if word == "buka":
+        # クラブ, readable and pokeable. ⚠️ NOT named /club: the client's own
+        # command list reserves that word (CLIENT_RESERVED), so a /club typed in
+        # the chat box never reaches this server at all.
+        #
+        # This is the back door, not the front one. The real way in and out is
+        # 「入部／退部」 on a 顧問/キャプテン's right-click menu, which is what
+        # 0x5A00/0x5A03 answer; this exists so the state can be set without
+        # walking to an NPC first, and so the ten-day wait can be cleared —
+        # otherwise one 退部 locks that club for the rest of the week and no
+        # further test of 入部 can run.
+        #
+        # ⚠️ ``<番号>`` goes through the same refusal check the wire does, so
+        # this cannot put a club on a character that the protocol would not.
+        # ``force`` is the one that skips it, and it still refuses ids outside
+        # `club.bin`'s joinable eight — sending the client a key its own tables
+        # do not have is what crashed it three times before.
+        if member is None:
+            return Reply(["クラブが読めない (キャラ未選択?)"])
+        words = rest.split()
+        if not words:
+            return Reply([member.summary()])
+        verb = words[0].lower()
+        if verb in ("part", "退部"):
+            reason = member.part_refusal()
+            if reason is not None:
+                return Reply([f"退部できない (reason={reason})"])
+            left = member.part()
+            return Reply(
+                [f"{club.name(left)} を退部した ({club.REJOIN_DAYS}日間 再入部不可)"],
+                club_save=True,
+            )
+        if verb == "clear":
+            # Drops the leave stamps, not the membership: the wait is the only
+            # thing here that a test run cannot wait out.
+            member.left.clear()
+            return Reply(["退部履歴を消した", member.summary()], club_save=True)
+        forced = verb == "force"
+        if forced:
+            words = words[1:]
+        if not words or not words[0].lstrip("-").isdigit():
+            return Reply([
+                "/buka [<番号 1-8>|force <番号>|part|clear]",
+                " ".join(
+                    f"{index}:{name}"
+                    for index, name in enumerate(club.CLUB_NAMES)
+                    if club.playable(index)
+                ),
+            ])
+        club_id = int(words[0])
+        if not club.playable(club_id):
+            return Reply([f"入部できる部活は {club.FIRST_CLUB}-{club.LAST_CLUB}"])
+        if not forced:
+            refusal = member.enter_refusal(club_id)
+            if refusal is not None:
+                reason, remain = refusal
+                return Reply([f"入部できない (reason={reason} remain={remain})"])
+        member.enter(club_id)
+        return Reply([member.summary()], club_save=True)
 
     if word == "ab":
         # 能力パラメータ, readable and pokeable — the same arrangement as /card

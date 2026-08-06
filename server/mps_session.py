@@ -70,6 +70,7 @@ from characters import (
 )
 import ability
 import chat
+import club
 import curriculum
 import exam
 import facing
@@ -1688,7 +1689,10 @@ class MpsServer:
                     return self._answer(session, sequence, MSG_SV_ERROR_CHARA_INFO, bytes(1))
                 print(f"[{self.tag}] chara info for charaId={chara_id}")
                 return self._answer(
-                    session, sequence, MSG_SV_RESULT_CHARA_INFO, chara_info(info)
+                    session,
+                    sequence,
+                    MSG_SV_RESULT_CHARA_INFO,
+                    chara_info(info, in_club=self.characters.in_club(chara_id)),
                 )
             if msg_type == curriculum.MSG_CL_QUERY_CURRICULUM:
                 # 「生徒情報」→「時間割」. The request is empty and the answer is
@@ -1762,6 +1766,46 @@ class MpsServer:
                     ability.MSG_SV_RESULT_CHARA_MENU_ABILITY,
                     sheet.result_params(card.test_level() - 1),
                 )
+            if msg_type in (club.MSG_CL_QUERY_KEYWORD_LIST,
+                            club.MSG_CL_QUERY_CLUB_SKILL_LIST):
+                # The 部活デッキ window, opened from the toolbar. Two queries,
+                # each answered with a count and then the rows; both counts are
+                # zero here because nothing on this server grants a キーワード or
+                # a 部活奥義. See club.py for why zero is the original's answer.
+                pairs = (club.inventory_replies()
+                         if msg_type == club.MSG_CL_QUERY_KEYWORD_LIST
+                         else club.skill_replies())
+                out = b""
+                for reply_type, reply_params in pairs:
+                    out += self._answer(session, sequence, reply_type, reply_params)
+                return out
+            if msg_type == club.MSG_CL_QUERY_CLUB_DECK_LIST:
+                # The third of the 部活デッキ window's queries, and the one it
+                # retries until answered. Empty deck; see club.py for why that
+                # avoids guessing at the entry layout.
+                deck_id = club.parse_deck_query(params)
+                print(f"[{self.tag}] club deck {deck_id}: empty")
+                return self._answer(
+                    session,
+                    sequence,
+                    club.MSG_SV_RESULT_CLUB_DECK_LIST,
+                    club.deck_reply(deck_id),
+                )
+            if msg_type == club.MSG_CL_REQUEST_CLUB_ENTER:
+                # 「入部」 off a 顧問/キャプテン's right-click menu. The clubId is
+                # the NPC's own, read out of the client's common_npc.bin, so the
+                # only thing that can be wrong with it here is that this server
+                # let something write a placeholder key into a save file.
+                #
+                # ⚠️ The Ok carries nothing, so the client is not told what it
+                # is now in — it already knows. What has to be right is the next
+                # 0x6501 and the next character list, which is where inClub is
+                # actually drawn.
+                return self._club_enter(session, sequence, params)
+            if msg_type == club.MSG_CL_REQUEST_CLUB_PART:
+                # 「退部」, and the request is empty: a character is in at most
+                # one club, so there is nothing to name.
+                return self._club_part(session, sequence)
             if msg_type == lesson.MSG_CL_REQUEST_LESSON_READY:
                 # The client sends this by itself, as part of tearing the scene
                 # down after 0x6000 — there is no prompt and no button, so the
@@ -2120,6 +2164,70 @@ class MpsServer:
         print(f"[{self.tag}] no handler for tag 0x{tag:04x}")
         return None
 
+    def _club_enter(self, session: "_Session", sequence: int, params: bytes) -> bytes:
+        """0x5A00 -> 0x5A01 MsgSvOkClubEnter, or 0x5A02 with a reason.
+
+        Every refusal here is a sentence the client already has; see club.py for
+        which index selects which, and for why 6 is the only one that means
+        anything specific.
+        """
+        club_id = club.parse_enter(params)
+        state = self.characters.club(session.chara_id)
+        if club_id is None or state is None:
+            print(f"[{self.tag}] club enter: no charaId={session.chara_id} or short body")
+            return self._answer(
+                session,
+                sequence,
+                club.MSG_SV_NG_CLUB_ENTER,
+                club.ng_enter_params(club.NG_ENTER_FAILED),
+            )
+        refusal = state.enter_refusal(club_id)
+        if refusal is not None:
+            reason, remain = refusal
+            print(
+                f"[{self.tag}] club enter {club.name(club_id)} refused: "
+                f"reason={reason} remain={remain}"
+            )
+            return self._answer(
+                session,
+                sequence,
+                club.MSG_SV_NG_CLUB_ENTER,
+                club.ng_enter_params(reason, remain),
+            )
+        state.enter(club_id)
+        self.characters.set_club(session.chara_id, state)
+        print(f"[{self.tag}] club enter charaId={session.chara_id} -> {state.summary()}")
+        return self._answer(session, sequence, club.MSG_SV_OK_CLUB_ENTER, b"")
+
+    def _club_part(self, session: "_Session", sequence: int) -> bytes:
+        """0x5A03 -> 0x5A04 MsgSvOkClubPart, or 0x5A05 with a reason.
+
+        Leaving stamps the day so the ten-day wait can be measured; nothing else
+        on this server reads that stamp, which is the point of writing it now.
+        """
+        state = self.characters.club(session.chara_id)
+        if state is None:
+            print(f"[{self.tag}] club part: no charaId={session.chara_id}")
+            return self._answer(
+                session,
+                sequence,
+                club.MSG_SV_NG_CLUB_PART,
+                club.ng_part_params(club.NG_PART_FAILED),
+            )
+        reason = state.part_refusal()
+        if reason is not None:
+            print(f"[{self.tag}] club part refused: reason={reason}")
+            return self._answer(
+                session, sequence, club.MSG_SV_NG_CLUB_PART, club.ng_part_params(reason)
+            )
+        left = state.part()
+        self.characters.set_club(session.chara_id, state)
+        print(
+            f"[{self.tag}] club part charaId={session.chara_id} left {club.name(left)}, "
+            f"{club.REJOIN_DAYS}-day wait starts"
+        )
+        return self._answer(session, sequence, club.MSG_SV_OK_CLUB_PART, b"")
+
     def _apply_chat(self, session: "_Session", sequence: int, said: str) -> bytes:
         """Run one console line and pack whatever it asked for.
 
@@ -2131,9 +2239,10 @@ class MpsServer:
         love = self.characters.romance(session.chara_id)
         card = self.characters.scorecard(session.chara_id)
         sheet = self.characters.ability(session.chara_id)
+        member = self.characters.club(session.chara_id)
         answer = chat.respond(
             said, session.map_id, session.pos, love, card, session.lesson,
-            sheet, session.in_class, session.exam,
+            sheet, session.in_class, session.exam, member,
         )
         if answer.romance_save and love is not None:
             self.characters.set_romance(session.chara_id, love)
@@ -2141,6 +2250,8 @@ class MpsServer:
             self.characters.set_scorecard(session.chara_id, card)
         if answer.ability_save and sheet is not None:
             self.characters.set_ability(session.chara_id, sheet)
+        if answer.club_save and member is not None:
+            self.characters.set_club(session.chara_id, member)
         if answer.npc_event is not None:
             session.npc_event = answer.npc_event
         if answer.select is not None:

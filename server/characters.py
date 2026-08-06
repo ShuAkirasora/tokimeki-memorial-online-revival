@@ -30,6 +30,7 @@ import struct
 from pathlib import Path
 
 import ability
+import club
 import curriculum
 import facing
 import romance
@@ -458,6 +459,7 @@ def list_entry(
     map_id: int = SPAWN_MAP_ID,
     captured_npc_id: int = NO_CAPTURED_NPC,
     couple_flag: int = 0,
+    in_club: int = 0,
 ) -> bytes:
     """Build one 238-byte MsgSvResultCharacterListFromAccount entry.
 
@@ -466,7 +468,9 @@ def list_entry(
     screen confirms how the filled-in values read: ``period`` 1 prints as
     「1 期生」, ``inClass`` is zero-based (1 came out as 「B組」, so A組 is 0), and
     ``inClub`` 0 with an empty ``friendGroupName`` give 「クラブ 無所属 / グループ
-    無所属」.
+    無所属」 — which is what makes this entry the cheapest place to read a
+    joined club back off the screen: the same slot prints the club's name from
+    `club.bin` once ``in_club`` is not 0.
     """
     f = parse_create_info(info)
     out = bytearray()
@@ -482,7 +486,7 @@ def list_entry(
         out += struct.pack(">H", f[key])
     out += struct.pack(">H", 1)  # period
     out += b"\x00" * GROUP_NAME_LEN  # friendGroupName
-    out += struct.pack(">HH", 0, 0)  # inClass (0 = A組), inClub (0 = 無所属)
+    out += struct.pack(">HH", 0, in_club)  # inClass (0 = A組), inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
     out += struct.pack(">BB", couple_flag, 1)  # coupleFlag, newbieFlag
     out += struct.pack(">HHH", 0, 0, 0)  # title, classPost, clubPost
@@ -574,7 +578,7 @@ def add_entry(
 CHARA_INFO_SIZE = 139
 
 
-def chara_info(info: bytes) -> bytes:
+def chara_info(info: bytes, in_club: int = 0) -> bytes:
     """Build the 139-byte MsgSvResultCharaInfo (0x6501) parameter block.
 
     This is what the lobby asks for the moment a character appears in the scene:
@@ -597,7 +601,7 @@ def chara_info(info: bytes) -> bytes:
     for key in LOOKS + ACCESSORY:
         out += struct.pack(">H", f[key])
     out += struct.pack(">H", f["charaType"])
-    out += struct.pack(">HHH", 1, 0, 0)  # period (1 期生), inClass (A組), inClub (無所属)
+    out += struct.pack(">HHH", 1, 0, in_club)  # period (1 期生), inClass (A組), inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
     out += struct.pack(">BB", 0, 1)  # coupleFlag, newbieFlag
     out += struct.pack(">HHH", 0, 0, 0)  # title, classPost, clubPost
@@ -716,7 +720,11 @@ class CharacterStore:
             map_id, pos_x, pos_y = self.location(chara_id)
             parts.append(
                 list_entry(
-                    chara_id, bytes.fromhex(str(record["info"])), (pos_x, pos_y), map_id
+                    chara_id,
+                    bytes.fromhex(str(record["info"])),
+                    (pos_x, pos_y),
+                    map_id,
+                    in_club=self.in_club(chara_id),
                 )
             )
         if self.records and LIST_PROBES:
@@ -823,6 +831,33 @@ class CharacterStore:
             self._save()
             return True
         return False
+
+    def club(self, chara_id: int) -> "club.Membership | None":
+        """This character's クラブ state, defaults included, or None if unknown.
+
+        Same treatment as ``romance``, ``scorecard`` and ``ability``.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            saved = record.get("club")
+            return club.Membership(saved if isinstance(saved, dict) else None)
+        return None
+
+    def set_club(self, chara_id: int, state: "club.Membership") -> bool:
+        """Write one character's クラブ state back. False if it is not ours."""
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            record["club"] = state.to_json()
+            self._save()
+            return True
+        return False
+
+    def in_club(self, chara_id: int) -> int:
+        """The club id to put on the wire for this character, 0 if none."""
+        state = self.club(chara_id)
+        return state.in_club if state else club.NO_CLUB
 
     def full_name(self, chara_id: int) -> tuple[bytes, bytes] | None:
         """``(familyName, firstName)`` as the create block holds them, SJIS.
