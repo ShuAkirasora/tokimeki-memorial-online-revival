@@ -2399,9 +2399,13 @@ class MpsServer:
         ever resolves and they refuse with the reason `error_message.bin` 540 /
         550 / 560 describes — 「選択されたキャラクターの情報を取得できませんでした」.
         That is the original's own answer to naming a classmate who is not there,
-        not a stub. Filling the other eight seats is a separate question, and not
-        a small one: the original filled them with other players, so anyone this
-        server puts there is invented, along with how well they answer.
+        not a stub.
+
+        ✅ **Decided (2026-08-06): the other eight seats stay empty.** The
+        original filled them with other players, so anyone this server seats is
+        invented along with how well they answer, and staying identical to the
+        original is worth more than making three skills reachable. When the
+        server grows real accounts the seats fill themselves.
         """
         period = session.lesson
         sheet = self.characters.ability(session.chara_id)
@@ -2516,7 +2520,8 @@ class MpsServer:
         # The three that need a classmate. `targetId` cannot resolve in a
         # one-seat lesson, and that is the honest refusal — see _lesson_skill.
         raise lesson_skill.Refused(
-            msg_type, f"targetId {target_id:#x} を解決できない (座席は自分だけ)"
+            msg_type, "対象が解決できない",
+            f"targetId {target_id:#x}、座席は自分だけ",
         )
 
     @staticmethod

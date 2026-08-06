@@ -154,6 +154,7 @@ HELP = (
     "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words|lunch] <数> 0x6100 の実験用つまみ",
+    "/skill [<拒否メッセージ> <reason>|clear] お助けスキル の reason を画面で確かめる",
     "/bell [<科目番号>|ready|force|ng <値|off>|imp <値>] 予鈴/本鈴/入場拒否の実験",
     "/exam [on|off|ready|force|ans|sec <秒>|<科目番号>] 試験期間・鐘・正解・制限時間",
     "/quiz [sec <秒>|wait <秒>|ab [before|after] <値×6>|ab off] 出題の状態と正解 (採点の検証用)",
@@ -1032,6 +1033,37 @@ def respond(
                 or lesson.END_ABILITY_BEFORE is not None):
             out.append(f"⚠️ 結果発表に目盛り: before {lesson.END_ABILITY_BEFORE}"
                        f" → after {lesson.END_ABILITY_AFTER} (/quiz ab off で外す)")
+        return Reply(out)
+
+    if word == "skill":
+        # お助けスキル の refusal `reason` を画面で確かめるためのつまみ。
+        #
+        # 四つ（助けてコール・早弁・直感・カンニング）は `error_message.bin` の
+        # key2 をそのまま送っている。残る四つは key1 が message で決まらないので
+        # 0 のまま——**どちらも画面では未確認**で、確かめる唯一の方法が「送って
+        # みて出た文を読む」こと。lesson.NG_PROBE と同じ理屈。
+        #
+        #   /skill                       今の上書きと既定の対応表
+        #   /skill <0x611f> <n>          その拒否メッセージの reason を n に固定
+        #   /skill clear                 上書きを全部外す
+        import lesson_skill
+
+        argv = rest.split()
+        if argv and argv[0].lower() == "clear":
+            lesson_skill.REASON_PROBE.clear()
+        elif len(argv) >= 2:
+            try:
+                lesson_skill.REASON_PROBE[int(argv[0], 0)] = int(argv[1], 0)
+            except ValueError:
+                return Reply(["/skill <拒否メッセージ 0x611f 等> <reason>"])
+        out = []
+        for cast in sorted(lesson_skill.HANDLED):
+            refusal = lesson_skill.REFUSAL[cast]
+            table = lesson_skill.REASON.get(refusal, {})
+            override = lesson_skill.REASON_PROBE.get(refusal)
+            body = ", ".join(f"{why}={code}" for why, code in table.items()) or "既定 0"
+            mark = f" ⚠️ 上書き {override}" if override is not None else ""
+            out.append(f"{lesson_skill.NAMES[cast]} {refusal:#06x}: {body}{mark}")
         return Reply(out)
 
     if word == "lopt":
