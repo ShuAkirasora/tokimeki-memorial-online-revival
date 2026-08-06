@@ -74,6 +74,7 @@ import curriculum
 import exam
 import facing
 import lesson
+import lesson_skill
 import mapgraph
 import mps_cipher
 import quiz
@@ -1838,6 +1839,11 @@ class MpsServer:
                       f"choiceId={choice_id} "
                       f"({'○' if period.would_be_right() else '×'} once time is up)")
                 return b""
+            if msg_type in lesson_skill.HANDLED:
+                # お助けスキル. Eight skills, one entry point: what differs
+                # between them is which rules apply and what goes back, and both
+                # of those live in lesson_skill.
+                return self._lesson_skill(session, sequence, msg_type, params)
             if msg_type == MSG_CL_REQUEST_MINIMAP_START:
                 # The map button greys itself out and waits. Answering unblocks
                 # it; the dots that then appear are whatever the server pushes as
@@ -2296,6 +2302,7 @@ class MpsServer:
             seats,
             speech_end,
             start_words=None if start_words < 0 else start_words,
+            lunch_count=max(0, int(lesson.PROBE["lunch"])),
         )
         print(
             f"[{self.tag}] lesson start: {curriculum.SUBJECTS[subject]}, "
@@ -2376,6 +2383,146 @@ class MpsServer:
         return sheet is not None and sheet.condition in (
             stress.NEUROSIS, stress.DOCTOR_STOP
         )
+
+    def _lesson_skill(self, session: "_Session", seen: int,
+                      msg_type: int, params: bytes) -> bytes:
+        """お助けスキル, all eight of them. See server/lesson_skill.py.
+
+        Each one is: check the rules, apply the effect, answer the player, then
+        push the Notify the whole classroom is meant to see. In this server the
+        classroom is one seat, so the broadcast comes straight back — but it is
+        still sent, because it is what carries the ストレス figure the bar under
+        the character reads.
+
+        ⚠️ The three targeted skills (カンニング, そっと応援, ティーチング) are
+        wired but cannot succeed here: a lesson has one seat, so no `targetId`
+        ever resolves and they refuse with the reason `error_message.bin` 540 /
+        550 / 560 describes — 「選択されたキャラクターの情報を取得できませんでした」.
+        That is the original's own answer to naming a classmate who is not there,
+        not a stub. Filling the other eight seats is a separate question, and not
+        a small one: the original filled them with other players, so anyone this
+        server puts there is invented, along with how well they answer.
+        """
+        period = session.lesson
+        sheet = self.characters.ability(session.chara_id)
+        card = self.characters.scorecard(session.chara_id)
+        test_level = card.test_level() if card is not None else 1
+        question_no, target_id = lesson_skill.parse_request(msg_type, params)
+        name = lesson_skill.NAMES.get(msg_type, "?")
+
+        try:
+            lesson_skill.check_common(period, msg_type, question_no, test_level)
+            answer, notify = self._skill_effect(
+                session, period, sheet, msg_type, target_id
+            )
+        except lesson_skill.Refused as refusal:
+            print(f"[{self.tag}] skill {name} refused: {refusal.why} "
+                  f"(reason={refusal.reason})")
+            return self._answer(
+                session, seen, lesson_skill.REFUSAL[msg_type],
+                lesson_skill.error_params(refusal.reason),
+            )
+
+        out = b""
+        if answer is not None:
+            out += self._answer(session, seen, answer[0], answer[1])
+        if notify is not None:
+            out += self._answer(session, 0 if out else seen, notify[0], notify[1])
+        if sheet is not None:
+            self.characters.set_ability(session.chara_id, sheet)
+            out += self._push_vitals(session, sheet)
+        return out
+
+    def _skill_effect(self, session: "_Session", period, sheet,
+                      msg_type: int, target_id: int):
+        """What one skill does. Returns (answer, notify), either may be None.
+
+        `sheet` is mutated in place when a skill moves ストレス; the caller saves
+        it. Raises lesson_skill.Refused for the per-skill rules — the ones every
+        skill shares were already checked.
+        """
+        chara_id = session.chara_id
+        subject = period.subject
+        params_row = list(sheet.params) if sheet is not None else []
+
+        def charge(amount: int) -> int:
+            """Move ストレス by `amount` and return where it ended up."""
+            if sheet is None:
+                return 0
+            if amount >= 0:
+                stress.charge(sheet, amount)
+            else:
+                sheet.stress = max(0, sheet.stress + amount)
+                if sheet.stress == 0:
+                    sheet.condition = stress.HEALTHY
+            return sheet.stress
+
+        if msg_type == lesson_skill.MSG_CL_CAST_LESSON_HELP:
+            # 「周りの生徒に助けを求めます」. Nothing happens to the caller — the
+            # Notify carries `userId` and nothing else, so the original had no
+            # figure to report either. What it is *for* is the classmates, who
+            # may answer with そっと応援 or ティーチング; with one seat, nobody does.
+            return None, (lesson_skill.MSG_SV_NOTIFY_LESSON_HELP,
+                          lesson_skill.notify_help_params(chara_id))
+
+        if msg_type == lesson_skill.MSG_CL_CAST_LESSON_LUNCH:
+            if period.lunch <= 0:
+                raise lesson_skill.Refused(msg_type, "お弁当を所持していない")
+            if sheet is not None and sheet.stress <= 0:
+                raise lesson_skill.Refused(msg_type, "ストレスがたまっていない")
+            period.lunch -= 1
+            ok = self._rng().random() < lesson_skill.LUNCH_SUCCESS
+            level = charge(lesson_skill.STRESS_LUNCH if ok else 0)
+            return None, (lesson_skill.MSG_SV_NOTIFY_LESSON_LUNCH,
+                          lesson_skill.notify_lunch_params(chara_id, level, ok))
+
+        if msg_type in (lesson_skill.MSG_CL_REQUEST_LESSON_FEELING,
+                        lesson_skill.MSG_CL_REQUEST_LESSON_MEIKYOUSHISUI):
+            # 直感 and 明鏡止水 are the same skill at two strengths, and the wire
+            # says so: same body, same reply, same Notify without a successFlag.
+            feeling = msg_type == lesson_skill.MSG_CL_REQUEST_LESSON_FEELING
+            if len(lesson_skill.live_choices(period)) <= 1:
+                raise lesson_skill.Refused(msg_type, "選択肢が１つしかない")
+            band = (lesson_skill.FEELING_ACCURACY if feeling
+                    else lesson_skill.MEIKYOU_ACCURACY)
+            choice = lesson_skill.pick_answer(
+                period, lesson_skill.chance(band, params_row, subject), self._rng()
+            )
+            level = charge(lesson_skill.STRESS_FEELING if feeling
+                           else lesson_skill.STRESS_MEIKYOUSHISUI)
+            ok_type = (lesson_skill.MSG_SV_OK_LESSON_FEELING if feeling
+                       else lesson_skill.MSG_SV_OK_LESSON_MEIKYOUSHISUI)
+            notify_type = (lesson_skill.MSG_SV_NOTIFY_LESSON_FEELING if feeling
+                           else lesson_skill.MSG_SV_NOTIFY_LESSON_MEIKYOUSHISUI)
+            return ((ok_type, lesson_skill.ok_choice_params(choice)),
+                    (notify_type,
+                     lesson_skill.notify_stress_params(chara_id, level)))
+
+        if msg_type == lesson_skill.MSG_CL_REQUEST_LESSON_COOL:
+            if period.narrowed is not None:
+                raise lesson_skill.Refused(msg_type, "既に選択肢が絞られている")
+            ok = self._rng().random() < lesson_skill.chance(
+                lesson_skill.COOL_SUCCESS, params_row, subject
+            )
+            if ok:
+                period.narrowed = lesson_skill.narrow(period, self._rng())
+            level = charge(lesson_skill.STRESS_COOL)
+            kept = lesson_skill.live_choices(period)
+            return ((lesson_skill.MSG_SV_OK_LESSON_COOL,
+                     lesson_skill.ok_choice_list_params(kept)),
+                    (lesson_skill.MSG_SV_NOTIFY_LESSON_COOL,
+                     lesson_skill.notify_self_params(chara_id, level, ok)))
+
+        # The three that need a classmate. `targetId` cannot resolve in a
+        # one-seat lesson, and that is the honest refusal — see _lesson_skill.
+        raise lesson_skill.Refused(
+            msg_type, f"targetId {target_id:#x} を解決できない (座席は自分だけ)"
+        )
+
+    @staticmethod
+    def _rng():
+        import random
+        return random
 
     def _push_vitals(self, session: "_Session", sheet) -> bytes:
         """0x4811 / 0x4812, but only where the value has actually moved.

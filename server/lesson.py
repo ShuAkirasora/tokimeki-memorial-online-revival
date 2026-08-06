@@ -176,6 +176,12 @@ PROBE = {
     "words": -1,       # -1 = the subject's own 開始台詞
     "charaid": -1,     # -1 = the session's own; see the id namespace below
     "testlv": -1,      # -1 = the 通知表's own 試験レベル
+    # How many 「お弁当」 the player sits down with, and therefore whether 早弁 can
+    # be used at all. Zero is the honest default: `item.bin` 8 is a consumable and
+    # this server has no inventory to hold one, so 「消費アイテム「お弁当」を所持
+    # していないため」 (`error_message.bin` 531) is the true answer. The knob is
+    # what makes the skill reachable for a test without inventing a stock.
+    "lunch": 0,
 }
 
 # ── refusal knobs ───────────────────────────────────────────────────────────
@@ -818,6 +824,15 @@ class Lesson:
         self.reported: int | None = None
         self.asked = 0
         self.right = 0
+        # What 精神集中 or ティーチング has left on the table, or None for "all of
+        # them". Per question: 「既に選択肢が絞られていますので…効果がありません」
+        # (`error_message.bin` 546, 558) is a rule about *this* question, and the
+        # next one starts with a full list. See lesson_skill.
+        self.narrowed: "list[int] | None" = None
+        # 「お弁当」 in hand for 早弁, and spent as they are used. It is the same
+        # number 0x6100 went out with, so the buttons the client drew match what
+        # this will allow. Nothing outlives the period — there is no inventory.
+        self.lunch = max(0, int(PROBE["lunch"]))
 
     # ── the client's one contribution ───────────────────────────────────────
 
@@ -894,6 +909,7 @@ class Lesson:
             self.question = question
             self.question_no += 1
             self.reported = None
+            self.narrowed = None
             self.phase = self.ASKING
             self.due = now + timedelta(seconds=ANSWER_SECONDS)
             start_ms = client_now_ms
