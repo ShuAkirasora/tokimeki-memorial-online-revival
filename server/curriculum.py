@@ -281,16 +281,24 @@ SLOTS_PER_CYCLE = len(TIMETABLE[0])
 TIMETABLE_SLOT_ZERO = 0
 
 
-def clock(when: datetime | None = None) -> tuple[int, int, int, int]:
+def clock(when: datetime | None = None, *, exam_period: bool = False
+          ) -> tuple[int, int, int, int]:
     """``(timeTableType, dayOfTheWeek, hour, minuts)`` — the 0x430A body's fields.
 
     The host's wall clock, straight through. The original ran on Japan time and
     a single-player server has no reason to; what matters for fidelity is that
     the clock is real time and the server is the one that says so, both of which
     this keeps.
+
+    ``exam_period`` swaps the type for TIMETABLE_EXAM. `p06_01`: 「試験期間中は、
+    時間割が試験の時間割になります」. ⚠️ That the type is 1 remains an
+    assumption — there is no idlist table for it — and the grid the client then
+    draws is its own, from its own files, so what actually appears on the 時間割
+    tab during a period is a thing to look at rather than to predict.
     """
     now = when or datetime.now()
-    return (TIMETABLE_NORMAL, (now.weekday() + 1) % 7, now.hour, now.minute)
+    kind = TIMETABLE_EXAM if exam_period else TIMETABLE_NORMAL
+    return (kind, (now.weekday() + 1) % 7, now.hour, now.minute)
 
 
 def day_of_week(when: datetime | None = None) -> int:
@@ -351,9 +359,9 @@ def timetable_lines(day: int | None = None) -> list[str]:
     return out
 
 
-def result_curriculum(when: datetime | None = None) -> bytes:
+def result_curriculum(when: datetime | None = None, *, exam_period: bool = False) -> bytes:
     """MsgSvResultCurriculum. Four bytes; see the deserializer at 0x008CE3C0."""
-    return struct.pack(">bbBB", *clock(when))
+    return struct.pack(">bbBB", *clock(when, exam_period=exam_period))
 
 
 class ScoreCard:

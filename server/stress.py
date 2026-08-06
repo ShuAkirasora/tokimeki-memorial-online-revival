@@ -151,20 +151,30 @@ def healing(map_id: int) -> bool:
     return map_id in HEALING_MAPS
 
 
-def after_lesson(sheet) -> "tuple[int, int]":
-    """Charge one lesson's stress, and decide whether it broke the player.
+def charge(sheet, amount: int) -> "tuple[int, int]":
+    """Charge `amount` of stress, and decide whether it broke the player.
 
     Returns (stress_added, new_condition). Order matters and follows the
     manual's wording: 「ストレスが高い状態で授業や試験を受けると」 — the state
     that is judged is the one the player *sat down* in, so the reading is taken
-    before the lesson's own stress is added. Charging first would make the
+    before this activity's own stress is added. Charging first would make the
     lesson that takes you over the line the same one that punishes you for it.
+
+    ⭐ The amount is the caller's because 「授業や試験を」 is one sentence about
+    two activities: 授業 and 試験 both charge, by the same rule, and only the
+    quantity is theirs to name. Both quantities are invented — see the block
+    above and exam.STRESS_PER_EXAM.
     """
     was = sheet.stress
-    sheet.stress = min(FULL, was + STRESS_PER_LESSON)
+    sheet.stress = min(FULL, was + amount)
     if was >= NEUROSIS_AT and sheet.condition == HEALTHY:
         sheet.condition = NEUROSIS
     return sheet.stress - was, sheet.condition
+
+
+def after_lesson(sheet) -> "tuple[int, int]":
+    """One 授業's worth. See charge."""
+    return charge(sheet, STRESS_PER_LESSON)
 
 
 def recover(sheet, seconds: float, map_id: int) -> int:
