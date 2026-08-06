@@ -89,8 +89,9 @@ are inventions, and the comments say so where they appear.
   and 3.14. It must be built against real OpenSSL; see the macOS note below.
 - **`openssl` on PATH.** Used once, on the first run, to generate the certificate the
   authentication endpoint needs into `runtime/certs/`.
-- **Your own copy of the original client.** This repository does not distribute it and does
-  not point at where to find one.
+- **Your own copy of the original client.** This repository distributes no part of it. The
+  original disc has been publicly archived on the Internet Archive; whether you may obtain
+  and use a copy is a question of the law where you are, not one this project answers.
 
 The server runs on Windows, macOS or Linux. The game is a Windows program and also works
 under Wine.
