@@ -153,7 +153,7 @@ HELP = (
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
     "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
-    "/lopt [seats|speech|words] <数> 0x6100 の実験用つまみ",
+    "/lopt [seats|speech|words|lunch] <数> 0x6100 の実験用つまみ",
     "/bell [<科目番号>|ready|force|ng <値|off>|imp <値>] 予鈴/本鈴/入場拒否の実験",
     "/exam [on|off|ready|force|ans|sec <秒>|<科目番号>] 試験期間・鐘・正解・制限時間",
     "/quiz [sec <秒>|wait <秒>|ab [before|after] <値×6>|ab off] 出題の状態と正解 (採点の検証用)",
@@ -1044,6 +1044,9 @@ def respond(
         #   speech    speechEndTime's offset in ms. Ten minutes proved the crash
         #             is not the speech running out — it happened just the same.
         #   words     startWordsId, or -1 for the subject's own 開始台詞.
+        #   lunch     how many 「お弁当」 the player sits down with, which is the
+        #             only thing that lets 早弁 be used at all. Zero is honest —
+        #             there is no inventory — so this is a probe, not a stock.
         words_in = rest.split()
         if len(words_in) >= 2:
             key = words_in[0].lower()
