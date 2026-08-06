@@ -45,6 +45,7 @@ from typing import NamedTuple
 
 import ability
 import curriculum
+import exam
 import facing
 import lesson
 import mapgraph
@@ -154,6 +155,7 @@ HELP = (
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words] <数> 0x6100 の実験用つまみ",
     "/bell [<科目番号>|ready|force|ng <値|off>|imp <値>] 予鈴/本鈴/入場拒否の実験",
+    "/exam [on|off|ready|force|ans|sec <秒>|<科目番号>] 試験期間・鐘・正解・制限時間",
     "/quiz [sec <秒>|wait <秒>|ab [before|after] <値×6>|ab off] 出題の状態と正解 (採点の検証用)",
     "/npcx 補充をやめる (画面上の分は地図を跨ぐまで残る)",
     "/nev [<cat>:<id>] 会話イベントキー (既定 16:1)",
@@ -317,6 +319,7 @@ def respond(
     period: "lesson.Lesson | None" = None,
     sheet: "ability.AbilitySheet | None" = None,
     in_class: int = 0,
+    exam_period: "exam.Period | None" = None,
 ) -> Reply:
     """Answer one chat line.
 
@@ -327,6 +330,8 @@ def respond(
     パラメータ. ``period`` is the lesson in progress, read-only and only by
     /quiz. ``in_class`` is only there so /bell can tell whether ringing would
     throw the player off the server; see the guard in that branch.
+    ``exam_period`` is the session's 試験期間, mutated in place by /exam — it is
+    never saved, so unlike the three above it needs no write-back flag.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -792,6 +797,106 @@ def respond(
                 lesson.before_lesson_start_params(subject),
             )],
         )
+
+    if word == "exam":
+        # 試験期間 has no calendar behind it — see exam.Period — so this switch
+        # *is* the period, and the command is how the whole subsystem is
+        # reached. ⭐ The name was checked against CLIENT_RESERVED first, which
+        # is not idle: the two obvious alternatives, `test` and `study`, are
+        # both on that list and would have been eaten by the client's own chat
+        # bar without ever reaching the wire.
+        if exam_period is None:
+            return Reply(["試験は 登校 してから"])
+        words_in = rest.split()
+        argument = words_in[0].lower() if words_in else ""
+
+        if argument in ("on", "start", "開始"):
+            exam_period.open()
+            return Reply([
+                "試験期間を開始した。次の時限から 0x6600/0x6601 が鳴る",
+                f"時間割の科目をそのまま使う（全{curriculum.SLOTS_PER_CYCLE}科目、"
+                f"1科目1回）。制限時間 {exam.EXAM_MINUTES} 分",
+            ])
+        if argument in ("off", "end", "終了"):
+            exam_period.close()
+            return Reply(["試験期間を終了した。鐘は授業のものに戻る"])
+
+        # Ring out of turn, for the same reason /bell does: waiting fifteen
+        # minutes to find out whether the client reacts is not an experiment.
+        forced = argument in ("force", "!")
+        if forced or argument in ("ready", "本"):
+            room = lesson.classroom_of(in_class)
+            if not exam_period.on:
+                return Reply(["先に /exam on"])
+            if map_id != room and not forced:
+                # Identical to /bell's guard and for the identical reason: the
+                # client tears its scene down on 0x6601 and asks to come in by
+                # itself, so a refusal costs the connection.
+                return Reply([
+                    f"試験開始の鐘は鳴らさない: 今 map {map_id}、教室は map {room}",
+                    f"鳴らすと入場を断られ、クライアントが切断する。先に /go {room}",
+                    "実験でわざと鳴らすなら /exam force",
+                ])
+            subject = curriculum.current_subject()
+            return Reply(
+                [f"試験開始 (0x6601 NotifyExamReady) "
+                 f"{curriculum.SUBJECTS[subject]} を鳴らした"],
+                sends=[(exam.MSG_SV_NOTIFY_EXAM_READY, b"")],
+            )
+        if argument == "sec":
+            # ⚠️ Shortens the paper, not the manual's ten minutes — see
+            # exam.LIMIT_SECONDS. Without it the 0x6A03 path costs ten minutes
+            # of waiting to exercise once.
+            if len(words_in) > 1:
+                try:
+                    exam.LIMIT_SECONDS = max(1, int(words_in[1], 0))
+                except ValueError:
+                    return Reply(["/exam sec <秒>"])
+            return Reply([f"制限時間 {exam.LIMIT_SECONDS} 秒"
+                          f"（本来は {exam.EXAM_MINUTES} 分）"])
+
+        if argument in ("ans", "answers", "正解"):
+            # /quiz's counterpart, and it exists for /quiz's reason: the twenty
+            # questions are rendered from the client's own files and the key is
+            # only on this side, so without a bridge there is no way to tell a
+            # working マークシート from a server ticking its own answers.
+            paper = exam_period.paper
+            if paper is None:
+                return Reply(["試験中ではない"])
+            out = []
+            for index in range(0, len(paper.questions), 5):
+                run = []
+                for offset, question in enumerate(paper.questions[index:index + 5]):
+                    if question.quiz_type == quiz.TYPE_CHOICE:
+                        run.append(f"{index + offset + 1}:４択→0")
+                    else:
+                        run.append(f"{index + offset + 1}:○×→{1 if question.answer else 0}")
+                out.append(" ".join(run))
+            return Reply(out)
+
+        if argument:
+            try:
+                subject = int(argument, 0)
+            except ValueError:
+                return Reply(["/exam [on|off|ready|force|ans|sec <秒>|<科目番号>]"])
+            if not 0 <= subject <= 0xFFFF:
+                return Reply(["科目番号は 0〜65535 (u16)"])
+            name = (
+                curriculum.SUBJECTS[subject]
+                if subject < len(curriculum.SUBJECTS) else "?"
+            )
+            return Reply(
+                [f"予鈴 (0x6600 BeforeExamStart) subjectId={subject} {name} を鳴らした"],
+                sends=[(exam.MSG_SV_NOTIFY_BEFORE_EXAM_START,
+                        exam.before_start_params(subject))],
+            )
+
+        lines = [exam_period.summary()]
+        if exam_period.paper is not None:
+            paper = exam_period.paper
+            lines.append(f"試験中: {paper.summary()}、締切 {paper.due:%H:%M:%S}")
+        lines.append("/exam [on|off|ready|force|ans|sec <秒>|<科目番号>]")
+        return Reply(lines)
 
     if word == "quiz":
         # ⭐ Why this exists: the questions are in the client and the answer key

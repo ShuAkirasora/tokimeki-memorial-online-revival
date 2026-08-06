@@ -71,6 +71,7 @@ from characters import (
 import ability
 import chat
 import curriculum
+import exam
 import facing
 import lesson
 import mapgraph
@@ -111,6 +112,24 @@ MSG_SV_OK_LOGIN = 0x7001
 MSG_SV_NG_LOGIN = 0x7002
 MSG_CL_REQUEST_GAME_LOGIN = 0x0200
 MSG_SV_OK_GAME_LOGIN = 0x0201
+
+# Which school 0x6603 MsgSvOkExamReady says the exam is at.
+#
+# ⚠️⚠️ **Not zero, and this cost a client.** 0x0201 has answered zero since the
+# day it was first answered and nothing ever minded, so the exam's schoolId was
+# given the same value on the reasoning that one number should not be written
+# twice. It crashed the client: `school.bin` holds ten records keyed **1…10**,
+# there is no school 0, and 0x6603 is the first message this server has ever
+# sent whose schoolId the client actually looks something up with. The fault was
+# a strlen at 0x00402E12 — `std::string::assign(const char*)` — walking a
+# pointer whose value was **2**, which is what a missed record hands back.
+#
+# ⚠️ The client is never asked which school it is in and never volunteers it:
+# `MsgClRequestSchoolSelect`'s dump string names a schoolId field, but the
+# client serialises the message empty (observed: datalen 2, message id only),
+# and an account that already has characters skips the select screen entirely.
+# So this is a choice, constrained to 1…10 by the table.
+EXAM_SCHOOL_ID = 1
 
 # Queries whose answer is nothing but ``u16 count`` and that many fixed-size
 # entries, so an empty list is two zero bytes. Which ones those are is not a
@@ -642,6 +661,11 @@ class _Session:
         # for the same reason: ten questions half answered are not owed to
         # anybody, and the original ends a lesson you walk out of too.
         self.lesson: lesson.Lesson | None = None
+        # 試験期間, and the paper in progress inside it. Not saved either, and
+        # for a third reason on top of the two above: the period is this
+        # server's invention (there is no calendar in the client's data), so a
+        # period that outlived a restart would need an end date to invent too.
+        self.exam = exam.Period()
         # どの組に在籍しているか. Ａ組 until something sets it, which is also
         # what MsgSvResultScoreCard's inClass has been sending all along. It
         # decides the room a lesson happens in, via curriculum.CLASSROOM.
@@ -747,9 +771,18 @@ class _Session:
         hang. Hence a real deadline; see MpsServer.handle, which waits on the
         socket for exactly this long instead of the idle timeout.
         """
-        if self.lesson is None or self.lesson.finished():
+        due = None
+        if self.lesson is not None and not self.lesson.finished():
+            due = self.lesson.due
+        # An exam's ten minutes are the same kind of deadline for the same
+        # reason: the client draws the 制限時間 counting down and 0x6A03 has to
+        # arrive when it reaches zero, not on the next timesync.
+        paper = self.exam.paper
+        if paper is not None and not paper.called:
+            due = paper.due if due is None else min(due, paper.due)
+        if due is None:
             return None
-        return max(0.0, (self.lesson.due - datetime.now()).total_seconds())
+        return max(0.0, (due - datetime.now()).total_seconds())
 
     def markers(self) -> tuple[tuple[str, int, int], ...]:
         """The stand-ins for the current map, computed once per map change.
@@ -1386,7 +1419,9 @@ class MpsServer:
             if msg_type == MSG_CL_REQUEST_GAME_LOGIN:
                 # Input_MsgSvOkGameServerLogin::deserialize (0x8DB8E0) reads a
                 # single u16, which the client's own trace names schoolId.
-                return self._answer(session, sequence, MSG_SV_OK_GAME_LOGIN, struct.pack(">H", 0))
+                return self._answer(
+                    session, sequence, MSG_SV_OK_GAME_LOGIN, struct.pack(">H", 0)
+                )
             if msg_type == 0x0300:
                 return self._answer(session, sequence, 0x0301, school_list_params())
             if msg_type == MSG_CL_REQUEST_CHARACTER_CREATE:
@@ -1660,7 +1695,7 @@ class MpsServer:
                 # client's own class_schedule.bin, which is why nothing about
                 # the timetable crosses the wire. That makes the school clock
                 # server policy in full — see curriculum.clock().
-                body = curriculum.result_curriculum()
+                body = curriculum.result_curriculum(exam_period=session.exam.on)
                 type_id, day, hour, minute = struct.unpack(">bbBB", body)
                 subject = curriculum.SUBJECTS[curriculum.current_subject()]
                 print(
@@ -1763,6 +1798,24 @@ class MpsServer:
                 # time out, and it does not come back. The seat list is what it
                 # is waiting for, so it goes out in the same packet.
                 return reply + self._lesson_start(session, sequence, subject)
+            if msg_type == exam.MSG_CL_REQUEST_EXAM_READY:
+                # 0x6601's twin of the 授業 doorway, and the client sends it by
+                # itself for the same reason: the bell tore the scene down and
+                # nothing asked the player. Same admission rule, same cost for
+                # refusing — see Bell.poll — plus the one rule that is only an
+                # exam's, 「１科目につき１回しか受けられません」.
+                return self._exam_ready(session, sequence)
+            if msg_type == exam.MSG_CL_REQUEST_EXAM_START:
+                # The scene is built; the client is asking for the paper.
+                return self._exam_start(session, sequence)
+            if msg_type == exam.MSG_CL_NOTIFY_EXAM_ANSWER_STATE:
+                # The mark sheet, unprompted and unanswered. Kept so that a
+                # paper the ten-minute bell interrupts still has answers on it.
+                return self._exam_sheet(session, params, "answer state")
+            if msg_type == exam.MSG_CL_REQUEST_EXAM_PART:
+                # 退出. The same bytes, but this one commits: it is the only
+                # place an exam reaches the save file.
+                return self._exam_part(session, sequence, params)
             if msg_type == lesson.MSG_CL_CAST_LESSON_ANSWER:
                 # 「答えを選択し左クリックで解答します」. Two u8: which question it
                 # is answering and which choice was clicked. Deserializer
@@ -2074,7 +2127,7 @@ class MpsServer:
         sheet = self.characters.ability(session.chara_id)
         answer = chat.respond(
             said, session.map_id, session.pos, love, card, session.lesson,
-            sheet, session.in_class,
+            sheet, session.in_class, session.exam,
         )
         if answer.romance_save and love is not None:
             self.characters.set_romance(session.chara_id, love)
@@ -2142,7 +2195,8 @@ class MpsServer:
             # the door it is supposed to open never opens, because admit() has
             # no record of anyone having been invited — which is exactly what
             # refused the first attempt from inside the right classroom.
-            if msg_type == lesson.MSG_SV_NOTIFY_LESSON_READY:
+            if msg_type in (lesson.MSG_SV_NOTIFY_LESSON_READY,
+                            exam.MSG_SV_NOTIFY_EXAM_READY):
                 session.bell.rang(curriculum.current_subject())
             reply += self._answer(session, sequence, msg_type, msg_params)
         if answer.script is not None:
@@ -2180,6 +2234,7 @@ class MpsServer:
 
     def _lesson_start(self, session: "_Session", seen: int, subject: int) -> bytes:
         """MsgSvNotifyLessonStart with one seat in it: the player's own.
+
 
         One seat, and that is not a compromise: the list is who to draw around
         the player, not who is enrolled, and a lesson with a single student is a
@@ -2272,6 +2327,7 @@ class MpsServer:
         out = self._drain_console(session)
         out += self._drain_bells(session)
         out += self._drain_lesson(session)
+        out += self._drain_exam(session)
         out += self._drain_vitals(session)
         out += self._drain_pending_say(session)
         return out
@@ -2468,6 +2524,181 @@ class MpsServer:
         print(f"[{self.tag}] lesson end: 能力 {moved or 'unchanged'}")
         return list(sheet.params), before
 
+    # ------------------------------------------------------------------
+    # 試験
+    # ------------------------------------------------------------------
+
+    def _exam_ready(self, session: "_Session", seen: int) -> bytes:
+        """0x6602 → 0x6603 MsgSvOkExamReady, or 0x6604 and a lost connection.
+
+        The admission rule is 授業's, reused rather than restated: `p06_03` says
+        outright 「試験は、授業と同じように開始時間に教室に待機していることで参加
+        できます」, so lesson.Bell.admit already holds three of the four
+        conditions. The fourth is the exam's own — 「１科目につき１回しか受けら
+        れません」 — and it is checked here.
+
+        ⚠️ Refusing costs the connection exactly as 0x6003 does, which is why
+        _drain_bells checks the same conditions *before* ringing 0x6601.
+        """
+        refusal = session.bell.admit(
+            session.map_id, session.in_class, neurotic=self._neurotic(session),
+        )
+        subject = session.bell.rang_subject
+        if refusal is None and session.exam.taken(subject):
+            refusal = exam.REASON_ALREADY_SAT
+        card = self.characters.scorecard(session.chara_id)
+        course = exam.course_of(card) if card is not None else 0
+        if refusal is None and not exam.has_questions(subject, course):
+            refusal = exam.REASON_NO_QUESTIONS
+        if refusal is not None:
+            print(f"[{self.tag}] exam ready refused, reason={refusal}")
+            return self._answer(
+                session, seen, exam.MSG_SV_NG_EXAM_READY, exam.ng_params(refusal)
+            )
+        print(f"[{self.tag}] exam ready ok: {curriculum.SUBJECTS[subject]} "
+              f"段階{course + 1} (testLv={course}) in map {session.map_id}")
+        return self._answer(
+            session,
+            seen,
+            exam.MSG_SV_OK_EXAM_READY,
+            exam.ready_params(EXAM_SCHOOL_ID, subject, course),
+        )
+
+    def _exam_start(self, session: "_Session", seen: int) -> bytes:
+        """0x6A00 → 0x6A01 MsgSvOkExamStart: the whole paper, and its deadline.
+
+        All twenty questions go out at once, which is the shape of the thing:
+        a マークシート with page-turn buttons is not a quiz asked one question at
+        a time, and there is no per-question message in this block to ask them
+        with. The server keeps the same twenty in order so that the choiceId at
+        index *i* on the way back is an answer to question *i*.
+        """
+        subject = session.bell.subject if session.bell.subject >= 0 else \
+            session.bell.rang_subject
+        card = self.characters.scorecard(session.chara_id)
+        course = exam.course_of(card) if card is not None else 0
+        questions = exam.draw(subject, course)
+        if not questions:
+            print(f"[{self.tag}] exam start: no questions for "
+                  f"{curriculum.SUBJECTS[subject]} at level {course}")
+            return self._answer(
+                session, seen, exam.MSG_SV_NG_EXAM_START,
+                exam.ng_params(exam.REASON_NO_QUESTIONS),
+            )
+        paper = exam.Paper(subject, course, questions, datetime.now())
+        session.exam.paper = paper
+        # The client's own clock, as 0x6100's speechEndTime is: the deadline is
+        # a moment in the frame the timesync maintains, not a duration.
+        end_time = session.client_now() + exam.LIMIT_SECONDS * 1000
+        kinds = "".join("○" if q.quiz_type == quiz.TYPE_TRUEFALSE else "４"
+                        for q in questions)
+        print(f"[{self.tag}] exam start: {curriculum.SUBJECTS[subject]} "
+              f"段階{course + 1}, {len(questions)}問 [{kinds}], "
+              f"締切 {paper.due:%H:%M:%S} (endTime={end_time})")
+        return self._answer(
+            session, seen, exam.MSG_SV_OK_EXAM_START,
+            exam.start_params(end_time, questions),
+        )
+
+    def _exam_sheet(self, session: "_Session", params: bytes, why: str) -> bytes:
+        """Take in a mark sheet from 0x6A04 or 0x6A05. Answers nothing.
+
+        ⚠️ inClass is printed on every one of these on purpose: it is the only
+        way to find out what an unwritten クラス arrives as, which is the half of
+        `p06_03`'s zero rule this server cannot yet enforce. See exam.CLASS_BLANK.
+        """
+        paper = session.exam.paper
+        sheet = exam.parse_sheet(params)
+        if sheet is None:
+            print(f"[{self.tag}] exam {why}: unparsable, {len(params)} bytes "
+                  f"{params[:24].hex()}")
+            return b""
+        family = sheet["familyName"].split(b"\x00")[0]
+        first = sheet["firstName"].split(b"\x00")[0]
+        print(f"[{self.tag}] exam {why}: inClass={sheet['inClass']} "
+              f"氏名={family.decode('shift_jis', 'replace')}"
+              f"{first.decode('shift_jis', 'replace')!r} "
+              f"choiceId[{len(sheet['choiceId'])}]={sheet['choiceId']}")
+        if paper is not None:
+            paper.sheet = sheet
+        return b""
+
+    def _exam_part(self, session: "_Session", seen: int, params: bytes) -> bytes:
+        """0x6A05 退出 → mark the paper, file it, and 0x6A06 back.
+
+        This is the only place an exam touches the save file, and the one place
+        the 試験 half of カリキュラム meets the 授業 half: ScoreCard.record_exam
+        files the score, and ScoreCard.completed then has all three of
+        `p06_01`'s conditions to compare — score, 成績 and 出席回数 — where
+        before today it never had the first and no 課程 could ever be 修了.
+
+        ⚠️ Nothing is shown to the player here. 「自分の結果は、試験期間終了後に
+        通知表で確認することができます」, and the block has no result message to
+        show one with; the two numbers 0x6A06 does carry are ストレス and 体調.
+        """
+        out = self._exam_sheet(session, params, "part (退出)")
+        paper = session.exam.paper
+        if paper is None:
+            print(f"[{self.tag}] exam part: no paper in progress")
+            return out + self._answer(
+                session, seen, exam.MSG_SV_NG_EXAM_PART,
+                exam.ng_params(exam.REASON_ALREADY_STARTED),
+            )
+        session.exam.paper = None
+        session.exam.sat.add(paper.subject)
+        name = curriculum.SUBJECTS[paper.subject]
+        if paper.sheet is None:
+            marked, right = 0, 0
+            print(f"[{self.tag}] exam end: {name}, no sheet was ever sent — 0 点")
+        else:
+            marked, right = exam.score(paper.questions, paper.sheet)
+            card = self.characters.scorecard(session.chara_id)
+            if card is not None:
+                last, best = card.record_exam(paper.subject, paper.course, marked)
+                self.characters.set_scorecard(session.chara_id, card)
+                done = card.completed(paper.subject, paper.course)
+                print(f"[{self.tag}] exam end: {name} 段階{paper.course + 1} "
+                      f"{right}/{len(paper.questions)}問正解 → {marked} 点 "
+                      f"(前回 {last}, 最高 {best}, 修了 {'済' if done else 'まだ'}, "
+                      f"試験レベル {card.test_level()})")
+            else:
+                print(f"[{self.tag}] exam end: no charaId={session.chara_id}, "
+                      f"{marked} 点 filed nowhere")
+        # `p05_09` lists 試験 among the things that add ストレス, in the same
+        # sentence as 授業 and with no quantity for either.
+        sheet = self.characters.ability(session.chara_id)
+        stress_now, condition_now = 0, stress.HEALTHY
+        if sheet is not None:
+            added, condition_now = stress.charge(sheet, exam.STRESS_PER_EXAM)
+            stress_now = sheet.stress
+            self.characters.set_ability(session.chara_id, sheet)
+            print(f"[{self.tag}] exam end: ストレス +{added} -> {stress_now} "
+                  f"({stress.screen(stress_now)}/100), 体調 "
+                  f"{stress.name(condition_now)}")
+        out += self._answer(
+            session, seen, exam.MSG_SV_OK_EXAM_PART,
+            exam.part_params(stress_now, condition_now),
+        )
+        if sheet is not None:
+            out += self._push_vitals(session, sheet)
+        return out
+
+    def _drain_exam(self, session: "_Session") -> bytes:
+        """0x6A03 when the ten minutes are up. seen=0: it answers nothing.
+
+        Only the bell goes out. What the client does with it — hand the sheet in
+        with 0x6A04, ask to leave with 0x6A05, or both — is its business, and
+        whichever arrives is handled above. The paper stays open until one does,
+        so a client that says nothing loses nothing.
+        """
+        paper = session.exam.paper
+        if paper is None or paper.called or not paper.expired():
+            return b""
+        paper.called = True
+        print(f"[{self.tag}] exam: 制限時間 {exam.LIMIT_SECONDS} 秒 終了 "
+              f"({paper.summary()})")
+        return self._answer(session, 0, exam.MSG_SV_NOTIFY_EXAM_END, b"")
+
     def _drain_bells(self, session: "_Session") -> bytes:
         """Ring whatever the wall clock has made due.
 
@@ -2477,11 +2708,19 @@ class MpsServer:
         to one timesync late — acceptable against a 15-minute period and a
         5-minute warning, and the reason lesson.GRACE_SECONDS exists.
 
+        ⭐ 試験期間 changes which pair of messages the same two bells are, and
+        nothing else: `p06_03` says entry works 「授業と同じように」, the 0x66xx
+        block mirrors the 0x60xx one message for message, and the timetable that
+        decides the subject is the same timetable. So the schedule, the
+        admission rule and the skip logic are shared, and only the id sent
+        differs. See exam.Period for what is invented about the period itself.
+
         seen=0: these answer no message of the client's.
         """
         if session.chara_id == 0:
             return b""
         out = b""
+        sitting = session.exam.on
         # Whether this player could be let in if the 本鈴 rang this instant.
         # Bell.poll needs it up front, because ringing at someone who would be
         # refused logs them out — the client asks to come in on its own and
@@ -2492,21 +2731,30 @@ class MpsServer:
         )
         for kind, subject in session.bell.poll(admits=admits):
             name = curriculum.SUBJECTS[subject]
+            # 「１科目につき１回しか受けられません」 has to suppress the bell and
+            # not merely the entry, for the same reason every other condition
+            # does: a 本鈴 the client answers and is refused for is a logout.
+            if sitting and kind == "start" and session.exam.taken(subject):
+                print(f"[{self.tag}] 試験 {name}: not ringing, already sat this 期間")
+                continue
             if kind == "skip":
                 why = (
                     "player is ノイローゼ" if neurotic
                     else f"player is on map {session.map_id}, not classroom "
                          f"{lesson.classroom_of(session.in_class)}"
                 )
-                print(f"[{self.tag}] 本鈴 {name}: not ringing, {why}")
+                print(f"[{self.tag}] {'試験' if sitting else '本鈴'} {name}: "
+                      f"not ringing, {why}")
                 continue
             if kind == "pre":
-                print(f"[{self.tag}] 予鈴: 次は{name}")
+                print(f"[{self.tag}] 予鈴: 次は{name}{'の試験' if sitting else ''}")
                 out += self._answer(
                     session,
                     0,
-                    lesson.MSG_SV_NOTIFY_BEFORE_LESSON_START,
-                    lesson.before_lesson_start_params(subject),
+                    exam.MSG_SV_NOTIFY_BEFORE_EXAM_START if sitting
+                    else lesson.MSG_SV_NOTIFY_BEFORE_LESSON_START,
+                    exam.before_start_params(subject) if sitting
+                    else lesson.before_lesson_start_params(subject),
                 )
                 # Say it in the chat bar as well. The 予鈴 is a sound and an
                 # icon in the original and this server cannot make either yet,
@@ -2515,13 +2763,16 @@ class MpsServer:
                 out += self._say(
                     session,
                     0,
-                    f"予鈴。次は{name}、"
+                    f"予鈴。次は{name}{'の試験' if sitting else ''}、"
                     f"{lesson.classroom_of(session.in_class)}番の教室へ",
                 )
             else:
-                print(f"[{self.tag}] 本鈴: {name}")
+                print(f"[{self.tag}] {'試験開始' if sitting else '本鈴'}: {name}")
                 out += self._answer(
-                    session, 0, lesson.MSG_SV_NOTIFY_LESSON_READY, b""
+                    session, 0,
+                    exam.MSG_SV_NOTIFY_EXAM_READY if sitting
+                    else lesson.MSG_SV_NOTIFY_LESSON_READY,
+                    b"",
                 )
         return out
 
