@@ -612,10 +612,14 @@ def respond(
                 club_save=True,
             )
         if verb == "clear":
-            # Drops the leave stamps, not the membership: the wait is the only
-            # thing here that a test run cannot wait out.
+            # Drops the leave stamps and the per-deck uses, not the membership.
+            # Both are things a test run leaves behind and cannot wait out: the
+            # ten-day wait locks the club for a week, and a deck use set by a
+            # smoke run would otherwise still be there next round, reading like
+            # something the player chose.
             member.left.clear()
-            return Reply(["退部履歴を消した", member.summary()], club_save=True)
+            member.deck_use.clear()
+            return Reply(["退部履歴とデッキ用途を消した", member.summary()], club_save=True)
         forced = verb == "force"
         if forced:
             words = words[1:]
