@@ -161,30 +161,60 @@ MSG_SV_NOTIFY_CLUB_SKILL_LIST = 0x4308
 # 部活奥義 (`p07_02`), a character here owns none of either, so every deck is
 # empty — the same reasoning as the two lists above.
 #
-# ⚠️⚠️ ``useType`` 0 DOES NOT MEAN 「neither」, whatever it ought to mean.
-# The window draws the field as two independent checkboxes at its bottom right,
-# 「部活用」 and 「行事用」, and with 0 on all three decks **both come up
-# ticked** — measured on screen, not inferred. The manual says a deck can be
-# 「『練習用』もしくは『行事用』に設定しなかった」, so a neither-state exists;
-# 0 is not how it is spelled.
+# ⭐⭐ ``useType`` IS A BIT FIELD, and all four values have been read back off
+# the screen — the window draws it as two checkboxes at its bottom right:
 #
-# ⚠️ That also makes the current value self-contradictory: `error_message.bin`
-# 482 is 「部活用もしくは行事用の部活デッキが複数存在します」, and three decks
-# all claiming both uses is exactly what that refuses. Nothing has gone wrong
-# yet because nothing reads it back, but do not build on this byte.
+#     0x00  neither          デッキ3, both boxes empty
+#     0x01  部活用           デッキ2 after ticking only 部活用
+#     0x02  行事用           デッキ1 once the client moved 部活用 away
+#     0x03  both             the state all three start in
 #
-# ⭐ How to settle it, cheaply and without guessing: untick the boxes in the
-# window, press 「更 新」, and read the useType off the 0x5B03
-# MsgClRequestClubDeckUpdate the client then sends — it has the same shape as
-# 0x5B01, so the client will spell every combination for us. Do that before
-# writing any constant other than the one below.
+# ⭐ The client spells the byte itself in 0x5B03, which is the only place it
+# ever does; answering 0x5B03 is what makes the boxes settable at all, so this
+# could not be measured until MSG_SV_OK_CLUB_DECK_UPDATE existed.
+#
+# ⭐⭐ The client also enforces 「one deck per use」 on its own: ticking 部活用
+# on deck 1 made it send 0x01 for deck 1 **and 0x02 for deck 0**, taking the bit
+# off the deck that had it. That is `error_message.bin` 482
+# (「部活用もしくは行事用の部活デッキが複数存在します」) seen from the client
+# side, and it means a server that simply stores what it is told cannot violate
+# that rule — the client never asks it to.
+#
+# ⚠️ 0xFF is NOT a fourth state. Sending it draws both boxes ticked (the same
+# as 0x03) but the client normalises it away: with 0xFF on all three decks it
+# reported 0x03 / 0x00 / 0x00 back. Do not read the earlier 「0xFF is what the
+# client reports」 note as an encoding — that reading is superseded.
 MSG_CL_QUERY_CLUB_DECK_LIST = 0x5B00
 MSG_SV_RESULT_CLUB_DECK_LIST = 0x5B01
 MSG_SV_ERROR_CLUB_DECK_LIST = 0x5B02
 
-# What this server currently sends. Named for what it is — an unmeasured value
-# — rather than for a meaning it has been shown not to have.
-USE_TYPE_UNMEASURED = 0
+# 「更 新」 in the same window. Same body as 0x5B01, which is what makes it the
+# measuring instrument for useType: whatever the client believes a deck's use
+# to be, it spells it here in the byte we cannot otherwise read.
+#
+#     0x5B03 MsgClRequestClubDeckUpdate  deckId u8, clubDeck{…}, useType u8
+#       -> 0x5B04 MsgSvOkClubDeckUpdate  deckId u8
+#       -> 0x5B05 MsgSvNgClubDeckUpdate  reason u8, errorDeckItemNum[count]
+#
+# ⭐ FIRST MEASUREMENT (round 66): with both 「部活用」 and 「行事用」 shown
+# ticked, pressing 更新 sends useType = **0xFF** for all three decks. So 0xFF
+# is what the client reports for that state — and 0xFF as an unset sentinel is
+# the same convention the exam mark sheet uses for a blank answer.
+#
+# ⚠️ What is NOT yet separated: whether 0xFF means 「both」 or 「unset, so the
+# boxes default to drawn」. Telling those apart needs a deck whose boxes are
+# actually different from each other, which is why this reply exists — the
+# client would not let the boxes change while 更新 went unanswered.
+DECK_COUNT = 3
+MSG_CL_REQUEST_CLUB_DECK_UPDATE = 0x5B03
+MSG_SV_OK_CLUB_DECK_UPDATE = 0x5B04
+MSG_SV_NG_CLUB_DECK_UPDATE = 0x5B05
+
+# The two bits, and the state a deck starts in. RESTORED: every one of the four
+# combinations was read off the checkboxes, see the block above.
+USE_TYPE_NONE = 0x00
+USE_TYPE_PRACTICE = 0x01  # 部活用
+USE_TYPE_EVENT = 0x02  # 行事用
 
 # `club.bin` in key order. Index is the wire value of inClub.
 CLUB_NAMES = (
@@ -219,6 +249,25 @@ NG_ENTER_FAILED = 2
 NG_ENTER_REJOIN_WAIT = 6
 NG_PART_FAILED = 2
 NG_PART_IN_EVENT = 6
+
+# 0x5B05, twelve sentences — the whole of the deck-update rulebook, restored the
+# same way. Only the two this server can reach are named; the rest are listed
+# here so the next round does not have to look them up again.
+#
+#     0  この用途では登録できない部活奥義がある
+#     1  そのキーワードは既に登録されている
+#     2  その部活奥義は既に登録されている
+#     3  その部活奥義には性別制限がある
+#     4  「部活用」に所属クラブ以外の部活奥義は登録できない
+#     5  未使用: パラメータが不正
+#     6  そのキーワードを所持していない
+#     7  その部活奥義を所持していない
+#     8  部活用もしくは行事用の部活デッキが複数存在する
+#     9  部活デッキの登録内容を変更できなかった
+#    10  選択された部活デッキが見つからない
+#    11  未使用: 未定義のエラー
+NG_DECK_KEYWORD_NOT_OWNED = 6
+NG_DECK_NOT_FOUND = 10
 
 
 def name(club_id: int) -> str:
@@ -256,12 +305,27 @@ class Membership:
                     self.left[int(key)] = str(value)
                 except (TypeError, ValueError):
                     continue
+        # Per-deck useType, kept only so that what the player set comes back on
+        # the next 0x5B01. The decks themselves are still always empty.
+        decks = saved.get("deckUse")
+        self.deck_use: "dict[int, int]" = {}
+        if isinstance(decks, dict):
+            for key, value in decks.items():
+                try:
+                    self.deck_use[int(key)] = int(value) & 0xFF
+                except (TypeError, ValueError):
+                    continue
 
     def to_json(self) -> dict:
         return {
             "inClub": self.in_club,
             "left": {str(key): value for key, value in sorted(self.left.items())},
+            "deckUse": {str(key): value for key, value in sorted(self.deck_use.items())},
         }
+
+    def use_type(self, deck_id: int) -> int:
+        """What to report for this deck, defaulting to what the client sends."""
+        return self.deck_use.get(deck_id, USE_TYPE_NONE)
 
     def days_since_leaving(self, club_id: int, today: "date | None" = None) -> "int | None":
         """Days since this club was last left, or None if it never was."""
@@ -352,14 +416,29 @@ def skill_replies(owned: int = 0) -> "list[tuple[int, bytes]]":
             (MSG_SV_NOTIFY_CLUB_SKILL_LIST, struct.pack(">H", owned))]
 
 
-def deck_reply(deck_id: int) -> bytes:
+def deck_reply(deck_id: int, use_type: int = USE_TYPE_NONE) -> bytes:
     """0x5B01 for an empty deck: deckId u8, count u16 = 0, useType u8."""
-    return struct.pack(">BHB", deck_id & 0xFF, 0, USE_TYPE_UNMEASURED)
+    return struct.pack(">BHB", deck_id & 0xFF, 0, use_type & 0xFF)
 
 
 def parse_deck_query(params: bytes) -> int:
     """0x5B00's deckId. Absent body reads as deck 0, which is what it asks for."""
     return params[0] if params else 0
+
+
+def parse_deck_update(params: bytes) -> "tuple[int, int, int] | None":
+    """0x5B03 -> ``(deckId, itemCount, useType)``, or None if it is not our shape.
+
+    ⚠️ Only the empty-deck form is read: deckId u8 + count u16 + useType u8.
+    A non-zero count means the client put items in, and the entry layout is not
+    settled (see above) — say so rather than mis-parse it.
+    """
+    if len(params) < 4:
+        return None
+    deck_id, count = struct.unpack_from(">BH", params, 0)
+    if count:
+        return (deck_id, count, params[-1])
+    return (deck_id, 0, params[3])
 
 
 def parse_enter(params: bytes) -> "int | None":
