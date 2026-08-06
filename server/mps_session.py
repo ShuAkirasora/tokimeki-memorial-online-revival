@@ -2229,7 +2229,7 @@ class MpsServer:
     def _lesson_end(self, session: "_Session", period: "lesson.Lesson") -> bytes:
         """0x6102, the 結果発表, and the only place a lesson touches the save file.
 
-        Three things are filed, and the split between them is the point:
+        Four things are filed, and the split between them is the point:
 
         * 出席回数 — recovered. `p06_01` counts attendance towards 課程修了 and
           0x6102 carries the new total, so the client is told the number the
@@ -2238,9 +2238,17 @@ class MpsServer:
           (`p06_02`: 「科目の通算正解率」), and they are what the panel over the
           desk prints next period.
         * 成績 — the arithmetic is INVENTED; see ScoreCard.ESTIMATION_BANDS.
+        * 能力 — *which* abilities move is read off `lesson.bin`
+          (curriculum.SUBJECT_ABILITY); *how much* is INVENTED, see
+          lesson.ABILITY_STEP.
 
         Everything else in resultInfo is not modelled at all, which end_params
         spells out one field at a time.
+
+        ⚠️ The ruler set by `/quiz ab` wins over all of it. It has to: reading a
+        value off the 結果発表 means sending a value nothing else can perturb,
+        and a lesson that quietly added 64 to one of the six would be exactly the
+        perturbation. Whenever it is set, no ability is written to the save.
         """
         card = self.characters.scorecard(session.chara_id)
         attendance = 0
@@ -2256,14 +2264,46 @@ class MpsServer:
         else:
             print(f"[{self.tag}] lesson end: no charaId={session.chara_id}, "
                   f"nothing filed")
+        after, before = lesson.END_ABILITY_AFTER, lesson.END_ABILITY_BEFORE
+        if after is None and before is None:
+            after, before = self._file_ability(session, period)
         return self._answer(
             session,
             0,
             lesson.MSG_SV_NOTIFY_LESSON_END,
             lesson.end_params(period.end_words(), attendance,
-                              ability=lesson.END_ABILITY_AFTER,
-                              before_ability=lesson.END_ABILITY_BEFORE),
+                              ability=after, before_ability=before),
         )
+
+    def _file_ability(
+        self, session: "_Session", period: "lesson.Lesson"
+    ) -> "tuple[list[int] | None, list[int] | None]":
+        """Apply this lesson's 能力増減 to the save. Returns (after, before).
+
+        Both arrays go to 0x6102, and they are the same six values before and
+        after the step, so the client draws the bar climbing from one to the
+        other — that animation is the only place a player is told the lesson did
+        anything, since the キャラメニュー sheet just shows a total.
+
+        Clamped to a u16 at both ends: the field is unsigned on the wire, so a
+        run of bad lessons stops at zero rather than wrapping to レベル 256.
+        """
+        sheet = self.characters.ability(session.chara_id)
+        if sheet is None:
+            return None, None
+        before = list(sheet.params)
+        delta = lesson.ability_delta(period.subject, period.right, period.asked)
+        sheet.params = [
+            max(0, min(0xFFFF, value + step)) for value, step in zip(before, delta)
+        ]
+        self.characters.set_ability(session.chara_id, sheet)
+        moved = " ".join(
+            f"{name} {before[index]}→{sheet.params[index]}"
+            for index, name in enumerate(ability.ABILITIES)
+            if before[index] != sheet.params[index]
+        )
+        print(f"[{self.tag}] lesson end: 能力 {moved or 'unchanged'}")
+        return list(sheet.params), before
 
     def _drain_bells(self, session: "_Session") -> bytes:
         """Ring whatever the wall clock has made due.

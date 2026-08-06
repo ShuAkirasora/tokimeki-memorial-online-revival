@@ -71,6 +71,63 @@ SUBJECTS = ("国語", "数学", "理科", "社会", "外国語", "体育", "芸�
 # share them and why the named ones are the interesting ones.
 SUBJECT_TEACHER = (3, 4, 4, 0, 1, 2, 5, 6)
 
+# Which 能力 a subject moves, from `lesson.bin` `+0x24`/`+0x26` (and again at
+# `+0x2A`/`+0x2C`; the record carries the same three slots twice). Values are
+# `chara_ability_type.bin` keys: 0 文系 1 理系 2 芸術 3 雑学 4 運動 5 スタミナ.
+#
+#     国語 文系 文系   数学 理系 理系   理科 理系 雑学   社会 文系 雑学
+#     外国語 文系 芸術  体育 運動 スタミナ  芸術 芸術 芸術  家庭科 雑学 雑学
+#
+# The first slot is the manual's own: 「授業の科目に応じた能力（国語なら文系、
+# 数学なら理系など）」 (`p06_02`, three times over in the お助けスキル list).
+# Two of the eight are therefore read rather than fitted, and the other six fall
+# out with them — 体育 is the pair 運動/スタミナ, which is the only reading of
+# (4, 5) that means anything.
+#
+# ⚠️ Four subjects list the same ability twice. Whether that is "one ability,
+# spare slot repeated" or "two slots that happen to agree, so it moves twice as
+# far" is not decidable from the file; this server takes the second, which is
+# why ability_delta below simply walks both slots.
+# ⚠️ 外国語's second slot is 芸術, which reads oddly next to the other seven.
+# It is what the file says.
+SUBJECT_ABILITY = (
+    (0, 0),   # 国語    文系 文系
+    (1, 1),   # 数学    理系 理系
+    (1, 3),   # 理科    理系 雑学
+    (0, 3),   # 社会    文系 雑学
+    (0, 2),   # 外国語  文系 芸術
+    (4, 5),   # 体育    運動 スタミナ
+    (2, 2),   # 芸術    芸術 芸術
+    (3, 3),   # 家庭科  雑学 雑学
+)
+
+# The third slot of that same triple, `lesson.bin` `+0x28` (and `+0x2E`):
+# 0 0 0 0 0 1 2 2 over the eight subjects. **Not a third ability** — a
+# `chara_biorhythm_type.bin` key, 0 知性 / 1 身体 / 2 感情.
+#
+# Four things say so, and the first is the one that settles it:
+#
+#   1. `club.bin` carries the same enum with the same split over its sixteen
+#      clubs: 文芸部/科学部 0, the four sports clubs 1, 総合演劇部/家庭科部 2,
+#      番長 1, 無所属 -1 for "none". Read as an ability id that table would
+#      have to call 科学部 「文系」, which nothing would.
+#   2. Of all 104 idlist tables, `chara_biorhythm_type` is the only three-row
+#      table whose names fit the split, and they fit every one of those 24 rows.
+#   3. Read as an ability the value for 体育 is 理系, the single worst of the
+#      six available — while the other two slots of that same record are the
+#      obviously right 運動 and スタミナ.
+#   4. It is not derivable from either ability slot, so it is not redundancy:
+#      家庭科's abilities are 雑学 (which would give 知性) yet its value is 感情,
+#      and 外国語's second is 芸術 (which would give 感情) yet its value is 知性.
+#
+# ⚠️ Nothing here uses it: this server has no biorhythm, and the manual never
+# mentions one. It is recorded because the field is decoded, not because it is
+# wired to anything.
+# ⚠️ And it is still an inference from value patterns across two tables plus a
+# name that fits — no code was found reading it, on either side. The client
+# reads none of these fields at all; 能力増減 is the server's arithmetic.
+SUBJECT_BIORHYTHM = (0, 0, 0, 0, 0, 1, 2, 2)
+
 # 組 → その組の教室の map id, from `class.bin`'s u16[1]. All twenty-six agree
 # with `map.bin`'s own names (key 10 「Ｋ組」 → map 16 「一般教室校舎２ＦＫ組
 # 教室」), so this is a decode and not a correlation.
