@@ -2503,8 +2503,7 @@ class MpsServer:
                      lesson_skill.notify_stress_params(chara_id, level)))
 
         if msg_type == lesson_skill.MSG_CL_REQUEST_LESSON_COOL:
-            if period.narrowed is not None:
-                raise lesson_skill.Refused(msg_type, "既に選択肢が絞られている")
+            lesson_skill.check_not_narrowed(period, msg_type)
             ok = self._rng().random() < lesson_skill.chance(
                 lesson_skill.COOL_SUCCESS, params_row, subject
             )
