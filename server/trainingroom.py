@@ -69,14 +69,31 @@ and what the Join reply pointedly leaves out. NOT CONFIRMED ON SCREEN — if the
 board ever prints two numbers that look like ids rather than counts, this is
 the pair to suspect.
 
-A room of one
--------------
-Every Notify here goes back down the connection it came from, the same
-arrangement 0x4901 chat uses. That is not a simplification: this server has one
-player, so a room's whole membership is the one session, and reflecting is
-exactly right for it. ⚠️ It is also the ceiling — 自主トレ is 最大１０人対１０人
-and none of the multi-player half can be exercised until account isolation
-exists at all (the CharacterStore is one shared list; see the README).
+Who hears what (round 69)
+-------------------------
+Every Notify here goes to the whole room. Until accounts existed they all went
+back down the connection they came from, which was not wrong so much as
+untestable: a room could hold exactly one person, so reflecting *was* the whole
+broadcast. ⭐ The interesting part is that going from one recipient to many is
+not one rule but three, and only the first is the obvious one:
+
+* 0x580F chat, 0x5812 ready, 0x5817 team, 0x5819 start — same body to everyone
+  in the room, **the sender included**. These are casts: nothing appears in the
+  sender's own window either until the server says it back.
+* 0x580C join — a **different body per recipient**, because the recipient is
+  never in their own list (see Room.roster_params) and because the message adds
+  rows rather than replacing them. The joiner gets everyone already seated;
+  everyone already seated gets the joiner and nobody else.
+* 0x580D part — to the people still in the room, **and** to the one who left,
+  who is no longer in it and has to be reached by charaId.
+
+⚠️ The two 0x580C sends that used to follow a team select and a kick are gone.
+Both were empty with one player, so neither was ever measured; sending a real
+one would have re-added rows the recipients already had.
+
+⚠️ What this still cannot do: 自主トレ is 最大１０人対１０人 and the battle
+itself (0x5C**) is not implemented, so a full room can be assembled and told to
+start, and then nothing draws.
 
 RESTORED: the refusals
 ----------------------
@@ -435,6 +452,19 @@ class Room:
             + struct.pack(">B", self.limit & 0xFF)
         )
 
+    def roster_rows(self, members: "list[Member]") -> bytes:
+        """0x580C's body for exactly these rows, split across the two team lists.
+
+        Separate from roster_params because a join sends two different bodies:
+        the whole room to the joiner, and the joiner alone to everybody else.
+        See the ⚠️⚠️ below for why it cannot be the whole room both ways.
+        """
+        out = b""
+        for team in TEAMS:
+            rows = [m for m in members if m.team == team]
+            out += struct.pack(">H", len(rows)) + b"".join(m.entry() for m in rows)
+        return out
+
     def roster_params(self, without: "int | None" = None) -> bytes:
         """0x580C: both team rosters, each a u16 count then 27-byte rows.
 
@@ -455,12 +485,17 @@ class Room:
         part of the answer. ⭐ It is the mirror of a trap this project has fallen
         into three times in the other direction — a Notify that must reach the
         player themselves to take effect. Here the Notify must leave them out.
+
+        ⚠️⚠️ MERGED, NOT SWAPPED — the same measurement, read for what it means
+        once a room holds two people: this message ADDS rows. It is not a
+        refresh, so a member may never be sent a row they are already drawing.
+        That is why nothing outside a join sends one at all: a team move is
+        0x5817 and a departure is 0x580D, both of which name a charaId the
+        client already has.
         """
-        out = b""
-        for team in TEAMS:
-            rows = [m for m in self.team(team) if m.chara_id != without]
-            out += struct.pack(">H", len(rows)) + b"".join(m.entry() for m in rows)
-        return out
+        return self.roster_rows(
+            [m for m in self.members if m.chara_id != without]
+        )
 
     def summary(self) -> str:
         headline = self.headline.decode("cp932", "replace")
@@ -471,8 +506,9 @@ class Room:
 class Board:
     """Every 自主トレルーム currently up, keyed by its leader.
 
-    ⚠️ There is only ever one player here, so this holds at most one room. It is
-    a mapping rather than a single slot so that 0x5803 and 0x5806 can answer
+    ⚠️ Held per port, by the MpsServer that owns the sessions in it — the same
+    scope as the connections a Notify has to reach. It is a mapping rather than
+    a single slot so that 0x5803 and 0x5806 can answer
     「選択された自主トレルームの情報の取得に失敗しました」 honestly for a
     leaderId that is not a room, instead of handing back whatever exists.
     """

@@ -46,6 +46,7 @@ import struct
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from characters import (
     LOOKS,
@@ -683,6 +684,12 @@ class _Session:
         # which is worse than answering nothing. See MpsServer._chars.
         self.account_id = 0
         self.characters: CharacterStore | None = None
+        # This connection's socket, so that a message can be sent to a player
+        # who did not ask for anything. Everything else in this server answers
+        # the packet it is handling and hands the bytes back to the loop; a room
+        # with two people in it is the first thing that cannot -- see
+        # MpsServer._push. None until handle() has the writer.
+        self.writer: "asyncio.StreamWriter | None" = None
         self.chara_id = 0  # whoever MsgClRequestSchoolLogin named, 0 before 登校
         # 授業の鐘. Not saved with the character: a bell is a moment, and one
         # that rang while nobody was logged in is not owed to anyone afterwards.
@@ -879,6 +886,12 @@ class MpsServer:
         # while its leader is logged in, and 0x580D reason 2 (切断による) is the
         # protocol saying so.
         self.trainingrooms = trainingroom.Board()
+        # Every connection currently up on this port. Kept so that a Notify can
+        # find a player by charaId rather than only being able to answer the
+        # connection it is standing on -- which is all a one-player server ever
+        # needed. Per port on purpose: a room lives on the board of the port its
+        # messages arrive at, and the sessions in it are on that same port.
+        self.live: "list[_Session]" = []
         # Bytes to put before the tag on everything we send; see packet().
         self.header = b"\x00" * header_size
         runtime, self.packet_dir = ensure_runtime_dirs(root)
@@ -959,6 +972,37 @@ class MpsServer:
         return self._packet(
             session, TAG_MESSAGE, message_body(send_seq, msg_type, params, self.header)
         )
+
+    def _session_of(self, chara_id: int) -> "_Session | None":
+        """The live connection that 登校'd as this character, if it is still up.
+
+        A charaId can name somebody who is not connected -- rooms are held by
+        the board and a member's socket can go away -- so an absence here is
+        ordinary and every caller has to expect it.
+        """
+        for other in self.live:
+            if other.chara_id == chara_id:
+                return other
+        return None
+
+    def _push(self, session: "_Session", blob: bytes) -> None:
+        """Write bytes down a connection that did not ask for them.
+
+        ⚠️ No ``drain()``: every handler from _reply down is synchronous and
+        returns bytes for the packet loop to write, and making one of them a
+        coroutine to await backpressure would turn the whole chain async for the
+        sake of a Notify that is at most a few hundred bytes going to at most
+        MAX_MEMBERS recipients. ``write()`` buffers and the loop flushes it.
+
+        A closing socket is skipped rather than raising: the disconnect path
+        broadcasts a 0x580D through here, so the connection that just went away
+        can be the very thing being told about.
+        """
+        if not blob or session.writer is None or session.writer.is_closing():
+            return
+        write_packet_log(self.packet_dir, self.tag, "out", blob)
+        session.writer.write(blob)
+        print(f"[{self.tag}] -> {len(blob)}B (push): {blob.hex()}")
 
     # ------------------------------------------------------------------
     # The script subsystem (0x72xx). See server/script.py for the protocol and
@@ -1386,6 +1430,8 @@ class MpsServer:
         self.conn_seq += 1
         print(f"[{self.tag}] ACCEPT peer={peer} (conn #{self.conn_seq})")
         session = _Session()
+        session.writer = writer
+        self.live.append(session)
         # Start at the end of the console, not the beginning: the file is a log
         # of what has already been run, and replaying it on every reconnect
         # would fire the last script again at login.
@@ -1445,8 +1491,20 @@ class MpsServer:
             # and a leaver who stayed in one across a logout would meet
             # 「既に自主トレルームに入っているため、自主トレルームを作成でき
             # ません」 on every attempt for the rest of the process's life.
-            if session.chara_id and self.trainingrooms.room_of(session.chara_id):
+            #
+            # ⚠️ Order: leave self.live FIRST. _tr_part_notice looks the room's
+            # members up by charaId, and a session that is on its way out must
+            # not be handed its own farewell.
+            if session in self.live:
+                self.live.remove(session)
+            room = self.trainingrooms.room_of(session.chara_id) if session.chara_id else None
+            if room is not None:
+                leader_id = room.leader_id
                 self.trainingrooms.part(session.chara_id)
+                self._tr_part_notice(
+                    room, session.chara_id, leader_id,
+                    trainingroom.PART_REASON_DISCONNECTED,
+                )
                 print(f"[{self.tag}] trainingroom dropped on disconnect, "
                       f"now {self.trainingrooms.summary()}")
             writer.close()
@@ -1714,8 +1772,21 @@ class MpsServer:
                 # 「ゲームを中断（キャラクター選択画面に戻る）しても、退出する
                 # ことになります」 (p07_06), and clearing chara_id below would
                 # otherwise strand the room where nothing can reach it again.
-                if session.chara_id and self.trainingrooms.room_of(session.chara_id):
+                room = (
+                    self.trainingrooms.room_of(session.chara_id)
+                    if session.chara_id else None
+                )
+                if room is not None:
+                    leader_id = room.leader_id
                     self.trainingrooms.part(session.chara_id)
+                    # 「切断による」 for a 「中断」 as well: the other two reasons are
+                    # 0x5809 and 0x581C, and this is neither. Nothing goes to the
+                    # leaver — they are on their way to the character select and
+                    # part() has already taken them out of the member list.
+                    self._tr_part_notice(
+                        room, session.chara_id, leader_id,
+                        trainingroom.PART_REASON_DISCONNECTED,
+                    )
                     print(f"[{self.tag}] trainingroom dropped at logout, "
                           f"now {self.trainingrooms.summary()}")
                 session.chara_id = 0
@@ -2444,26 +2515,99 @@ class MpsServer:
         names = store.full_name(chara_id) if store else None
         return names if names else (b"\x00" * trainingroom.NAME_LEN,) * 2
 
-    def _tr_roster(self, session: "_Session", room: "trainingroom.Room") -> bytes:
-        """0x580C. seen=0 because it answers nothing — it follows a change.
+    def _tr_cast(
+        self,
+        session: "_Session",
+        seen: int,
+        msg_type: int,
+        params: "bytes | Callable[[int], bytes]",
+        members: "list[int]",
+    ) -> bytes:
+        """Send one Notify to every listed character; return the sender's copy.
 
-        ⚠️ The recipient is left out; see Room.roster_params for the two things
-        the room window did when they were not.
+        ⚠️ The sender's copy is RETURNED rather than pushed. The packet loop
+        writes what a handler returns, so pushing it here as well would put it
+        on the wire twice. A caller that does not want the sender to hear it
+        leaves them out of ``members`` and drops the b"" that comes back.
+
+        ``params`` may be a callable when the recipients are owed different
+        bodies — which 0x580C always is; see _tr_seat.
+
+        A member with no live connection on this port is skipped. That is
+        ordinary rather than an error: the board holds rooms, and a socket can
+        go away between the message arriving and this running.
         """
-        return self._answer(
+        body = params if callable(params) else (lambda _chara_id: params)
+        mine = b""
+        for chara_id in members:
+            if chara_id == session.chara_id:
+                mine = self._answer(session, seen, msg_type, body(chara_id))
+                continue
+            other = self._session_of(chara_id)
+            if other is None:
+                continue
+            self._push(other, self._answer(other, 0, msg_type, body(chara_id)))
+        return mine
+
+    def _tr_seat(
+        self, session: "_Session", room: "trainingroom.Room",
+        joiner: "trainingroom.Member",
+    ) -> bytes:
+        """0x580C for one join. Two different bodies go out, and they must.
+
+        The joiner is told about everyone already seated; everyone already
+        seated is told about the joiner, and about nobody else. ⚠️⚠️ Sending
+        the whole roster both ways is the tempting version and it is wrong:
+        0x580C merges rows in rather than replacing them (Room.roster_params),
+        so the seated members would re-add every row they are already drawing.
+
+        seen=0 because it answers nothing — it follows a change.
+        """
+        return self._tr_cast(
             session,
             0,
             trainingroom.MSG_SV_NOTIFY_JOIN,
-            room.roster_params(without=session.chara_id),
+            lambda chara_id: (
+                room.roster_params(without=chara_id)
+                if chara_id == joiner.chara_id
+                else room.roster_rows([joiner])
+            ),
+            [m.chara_id for m in room.members],
         )
+
+    def _tr_part_notice(
+        self, room: "trainingroom.Room", gone_id: int, leader_id: int, reason: int
+    ) -> None:
+        """0x580D to whoever is still in the room. Push-only, no sender copy.
+
+        Call it after Board.part, so ``room.members`` is already the list of
+        people who need telling and the leaver cannot be told twice.
+
+        ⚠️ ``leader_id`` is the room's leader BEFORE the part, because that is
+        the id every remaining client is naming this room by. When the leader is
+        the one who left, Board.part promotes somebody — and this family has no
+        message for that, so the remaining clients keep naming the room by an id
+        that no longer leads it. NOT MEASURED, and not inventable from what is
+        on hand: see the ⚠ log line in _trainingroom's part branch.
+        """
+        params = trainingroom.notify_part_params(gone_id, leader_id, reason)
+        for member in room.members:
+            other = self._session_of(member.chara_id)
+            if other is not None:
+                self._push(
+                    other,
+                    self._answer(other, 0, trainingroom.MSG_SV_NOTIFY_PART, params),
+                )
 
     def _trainingroom(
         self, session: "_Session", sequence: int, msg_type: int, params: bytes
     ) -> "bytes | None":
         """The whole 0x58xx family, dispatched off one branch.
 
-        Every Notify goes back down this same connection: a room here has one
-        member, so reflecting is the whole broadcast. See trainingroom.py.
+        Every Notify here goes to the whole room, which is what _tr_cast is for.
+        ⚠️ Until round 69 they were all reflected straight back to the sender —
+        correct only because a room could hold exactly one person, and quietly
+        wrong the moment two accounts could log in at once. See trainingroom.py.
         """
         board = self.trainingrooms
         chara_id = session.chara_id
@@ -2485,7 +2629,10 @@ class MpsServer:
             room = board.open(chara_id, headline, limit, family, first)
             print(f"[{self.tag}] trainingroom opened {room.summary()}")
             out = self._answer(session, sequence, trainingroom.MSG_SV_OK_ADD, b"")
-            return out + self._tr_roster(session, room)
+            # An empty 0x580C, and it stays: the leader is the only member, so
+            # the roster without them is 「nobody else is here」, which is both
+            # true and what the window drew when this was measured.
+            return out + self._tr_seat(session, room, room.members[0])
 
         if msg_type == trainingroom.MSG_CL_REQUEST_INFO:
             leader_id = trainingroom.parse_leader(params)
@@ -2515,12 +2662,14 @@ class MpsServer:
                 )
             room = board.rooms[leader_id]
             family, first = self._tr_names(chara_id)
-            room.add(chara_id, family, first)
+            joiner = room.add(chara_id, family, first)
             print(f"[{self.tag}] trainingroom joined {room.summary()}")
             out = self._answer(
                 session, sequence, trainingroom.MSG_SV_OK_JOIN, room.join_params()
             )
-            return out + self._tr_roster(session, room)
+            # ⚠️ Order: the Ok carries the headline and the cap, so it has to be
+            # the packet that opens the window before any row arrives for it.
+            return out + self._tr_seat(session, room, joiner)
 
         if msg_type == trainingroom.MSG_CL_REQUEST_PART:
             room = board.room_of(chara_id)
@@ -2533,11 +2682,16 @@ class MpsServer:
             leader_id = room.leader_id
             board.part(chara_id)
             print(f"[{self.tag}] trainingroom left, now {board.summary()}")
+            if room.members and chara_id == leader_id:
+                print(f"[{self.tag}] ⚠ leader left a room that still has "
+                      f"{len(room.members)} in it; promoted {room.leader_id:#x}, "
+                      f"and no message in this family says so")
             out = self._answer(session, sequence, trainingroom.MSG_SV_OK_PART, b"")
-            # ⚠️ The Notify goes out even though the leaver is the only member:
-            # it is what tells a client its own row is gone, and with one player
-            #「自分自身の要求による」 is the reason every time.
-            return out + self._answer(
+            # ⚠️ The Notify goes to the leaver too, even when the room is now
+            # empty: it is what tells a client its own row is gone. For them the
+            # reason is 「自分自身の要求による」 — and for the people left behind
+            # it is the same sentence about the same event, so one body serves.
+            out += self._answer(
                 session,
                 0,
                 trainingroom.MSG_SV_NOTIFY_PART,
@@ -2545,6 +2699,10 @@ class MpsServer:
                     chara_id, leader_id, trainingroom.PART_REASON_SELF
                 ),
             )
+            self._tr_part_notice(
+                room, chara_id, leader_id, trainingroom.PART_REASON_SELF
+            )
+            return out
 
         if msg_type == trainingroom.MSG_CL_CAST_CHAT:
             room = board.room_of(chara_id)
@@ -2558,11 +2716,15 @@ class MpsServer:
             said, _ = read
             family, first = self._tr_names(chara_id)
             print(f"[{self.tag}] trainingroom chat: {said.decode('cp932', 'replace')!r}")
-            return self._answer(
+            # The speaker is in the list on purpose. 0x580E is a cast: nothing
+            # appears in anyone's room window, the speaker's included, until the
+            # server says it back — the same arrangement 0x4901 chat uses.
+            return self._tr_cast(
                 session,
                 sequence,
                 trainingroom.MSG_SV_NOTIFY_CHAT,
                 trainingroom.notify_chat_params(chara_id, family, first, said),
+                [m.chara_id for m in room.members],
             )
 
         if msg_type == trainingroom.MSG_CL_CAST_READY:
@@ -2579,11 +2741,16 @@ class MpsServer:
             # 「準備ＯＫ」. See READY_ON in trainingroom.py.
             print(f"[{self.tag}] trainingroom ready={member.ready} "
                   f"(wire {params.hex() or '-'}) for {chara_id:#x}")
-            return self._answer(
+            # ⭐ The presser is still sent their own echo, which keeps round 67's
+            # open question answerable: whether the badge is drawn off our 0x5812
+            # or off the press itself is still not separated, and taking the echo
+            # away now would change two things at once.
+            return self._tr_cast(
                 session,
                 sequence,
                 trainingroom.MSG_SV_NOTIFY_READY,
                 trainingroom.notify_ready_params(chara_id, member.ready),
+                [m.chara_id for m in room.members],
             )
 
         if msg_type == trainingroom.MSG_CL_REQUEST_TEAM_SELECT:
@@ -2608,13 +2775,19 @@ class MpsServer:
                 )
             member.team = team
             out = self._answer(session, sequence, trainingroom.MSG_SV_OK_TEAM_SELECT, b"")
-            out += self._answer(
+            # ⚠️ No 0x580C follows any more. There used to be one and it was
+            # invisible rather than right: with one member the roster-without-me
+            # is empty, so it proved nothing, and sending a real one here would
+            # re-add rows every recipient already has (Room.roster_params).
+            # 0x5817 names a charaId and a team, which is a move instruction —
+            # if the row did not exist the client would have nothing to move.
+            return out + self._tr_cast(
                 session,
                 0,
                 trainingroom.MSG_SV_NOTIFY_TEAM,
                 trainingroom.notify_team_params(chara_id, team),
+                [m.chara_id for m in room.members],
             )
-            return out + self._tr_roster(session, room)
 
         if msg_type == trainingroom.MSG_CL_CAST_BATTLE_START:
             room = board.room_of(chara_id)
@@ -2635,8 +2808,12 @@ class MpsServer:
             # client is expected to answer this with 0x581B and then start
             # asking. That first unanswered id is the finding this branch is for.
             print(f"[{self.tag}] trainingroom battle start: {room.summary()}")
-            return self._answer(
-                session, sequence, trainingroom.MSG_SV_NOTIFY_BATTLE_START, b""
+            return self._tr_cast(
+                session,
+                sequence,
+                trainingroom.MSG_SV_NOTIFY_BATTLE_START,
+                b"",
+                [m.chara_id for m in room.members],
             )
 
         if msg_type == trainingroom.MSG_CL_NOTIFY_BATTLE_START:
@@ -2659,17 +2836,35 @@ class MpsServer:
                     trainingroom.ERROR_KICK_UNKICKABLE,
                     f"kick charaId={target!r}",
                 )
+            leader_id = room.leader_id
             board.part(target)
             print(f"[{self.tag}] trainingroom kicked {target:#x}, now {board.summary()}")
-            out = self._answer(
+            params = trainingroom.notify_part_params(
+                target, leader_id, trainingroom.PART_REASON_KICKED
+            )
+            # ⚠️ The kicked player is the one who most needs this and is the one
+            # part() just took off the member list, so they are pushed by name
+            # rather than reached through the room. 「リーダーに排除された」 is
+            # their notice; the same body tells everybody else the row is gone.
+            kicked = self._session_of(target)
+            if kicked is not None:
+                self._push(
+                    kicked,
+                    self._answer(
+                        kicked, 0, trainingroom.MSG_SV_NOTIFY_PART, params
+                    ),
+                )
+            # The leader is still seated, so their copy comes back through
+            # _tr_cast as the reply — going through _tr_part_notice as well
+            # would send it to them twice. No 0x580C: see the team-select
+            # branch for why a roster refresh is not how a row is taken away.
+            return self._tr_cast(
                 session,
                 sequence,
                 trainingroom.MSG_SV_NOTIFY_PART,
-                trainingroom.notify_part_params(
-                    target, room.leader_id, trainingroom.PART_REASON_KICKED
-                ),
+                params,
+                [m.chara_id for m in room.members],
             )
-            return out + self._tr_roster(session, room)
 
         print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
         return None
