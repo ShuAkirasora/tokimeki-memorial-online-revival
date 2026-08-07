@@ -82,6 +82,7 @@ import quiz
 import romance
 import script
 import stress
+import trainingroom
 from common import ServiceConfig, ensure_runtime_dirs, inet_u32, write_packet_log
 
 # All 675 ids, recovered from tmo.exe's parser tables and the category base each
@@ -841,6 +842,11 @@ class MpsServer:
         # creates a character on the school server and may ask any connection
         # for the list.
         self.characters = characters or CharacterStore(root / "runtime" / "characters.json")
+        # 自主トレルーム, held by the server rather than the session because a
+        # room outlives whoever asks about it. Not persisted: a 看板 is up only
+        # while its leader is logged in, and 0x580D reason 2 (切断による) is the
+        # protocol saying so.
+        self.trainingrooms = trainingroom.Board()
         # Bytes to put before the tag on everything we send; see packet().
         self.header = b"\x00" * header_size
         runtime, self.packet_dir = ensure_runtime_dirs(root)
@@ -1360,6 +1366,16 @@ class MpsServer:
                     await writer.drain()
                     print(f"[{self.tag}] -> {len(reply)}B: {reply.hex()}")
         finally:
+            # 0x580D reason 2 is 「切断による」, so a dropped connection taking
+            # its owner out of the 看板 is the protocol's own rule and not
+            # tidiness. ⚠️ It is also load-bearing here: rooms are not persisted,
+            # and a leaver who stayed in one across a logout would meet
+            # 「既に自主トレルームに入っているため、自主トレルームを作成でき
+            # ません」 on every attempt for the rest of the process's life.
+            if session.chara_id and self.trainingrooms.room_of(session.chara_id):
+                self.trainingrooms.part(session.chara_id)
+                print(f"[{self.tag}] trainingroom dropped on disconnect, "
+                      f"now {self.trainingrooms.summary()}")
             writer.close()
             try:
                 await writer.wait_closed()
@@ -1572,6 +1588,14 @@ class MpsServer:
                     f"last on map {session.map_id} "
                     f"({MAP_NAMES.get(session.map_id, '?')}) at {session.pos}"
                 )
+                # ⚠️ A 看板 has to come down here and not only on disconnect:
+                # 「ゲームを中断（キャラクター選択画面に戻る）しても、退出する
+                # ことになります」 (p07_06), and clearing chara_id below would
+                # otherwise strand the room where nothing can reach it again.
+                if session.chara_id and self.trainingrooms.room_of(session.chara_id):
+                    self.trainingrooms.part(session.chara_id)
+                    print(f"[{self.tag}] trainingroom dropped at logout, "
+                          f"now {self.trainingrooms.summary()}")
                 session.chara_id = 0
                 return self._answer(session, sequence, MSG_SV_OK_SCHOOL_LOGOUT, b"")
             if msg_type == MSG_CL_QUERY_POOL_MESSAGE:
@@ -1785,7 +1809,7 @@ class MpsServer:
                 # avoids guessing at the entry layout.
                 deck_id = club.parse_deck_query(params)
                 member = self.characters.club(session.chara_id)
-                use = member.use_type(deck_id) if member else club.USE_TYPE_UNSET
+                use = member.use_type(deck_id) if member else club.USE_TYPE_NONE
                 print(f"[{self.tag}] club deck {deck_id}: empty, useType={use:#04x}")
                 return self._answer(
                     session,
@@ -1854,6 +1878,11 @@ class MpsServer:
                 # 「退部」, and the request is empty: a character is in at most
                 # one club, so there is nothing to name.
                 return self._club_part(session, sequence)
+            if msg_type >> 8 == 0x58 and msg_type <= trainingroom.MSG_SV_ERROR_KICK:
+                # 自主トレ, the 看板 room. ⭐ This is クラブ対戦's only entry that
+                # is not a 顧問/キャプテン right-click, which is what makes it
+                # reachable at all here — see trainingroom.py.
+                return self._trainingroom(session, sequence, msg_type, params)
             if msg_type == lesson.MSG_CL_REQUEST_LESSON_READY:
                 # The client sends this by itself, as part of tearing the scene
                 # down after 0x6000 — there is no prompt and no button, so the
@@ -2275,6 +2304,246 @@ class MpsServer:
             f"{club.REJOIN_DAYS}-day wait starts"
         )
         return self._answer(session, sequence, club.MSG_SV_OK_CLUB_PART, b"")
+
+    # ------------------------------------------------------------------
+    # 自主トレ (0x5800-0x581D). See server/trainingroom.py for the layouts, the
+    # restored refusals, and why this is the club-battle door that opens.
+    # ------------------------------------------------------------------
+
+    def _tr_names(self, chara_id: int) -> tuple[bytes, bytes]:
+        """The two fixed-width name halves 0x580C and 0x580F carry."""
+        names = self.characters.full_name(chara_id)
+        return names if names else (b"\x00" * trainingroom.NAME_LEN,) * 2
+
+    def _tr_roster(self, session: "_Session", room: "trainingroom.Room") -> bytes:
+        """0x580C. seen=0 because it answers nothing — it follows a change.
+
+        ⚠️ The recipient is left out; see Room.roster_params for the two things
+        the room window did when they were not.
+        """
+        return self._answer(
+            session,
+            0,
+            trainingroom.MSG_SV_NOTIFY_JOIN,
+            room.roster_params(without=session.chara_id),
+        )
+
+    def _trainingroom(
+        self, session: "_Session", sequence: int, msg_type: int, params: bytes
+    ) -> "bytes | None":
+        """The whole 0x58xx family, dispatched off one branch.
+
+        Every Notify goes back down this same connection: a room here has one
+        member, so reflecting is the whole broadcast. See trainingroom.py.
+        """
+        board = self.trainingrooms
+        chara_id = session.chara_id
+
+        def ng(msg: int, reason: int, why: str) -> bytes:
+            print(f"[{self.tag}] trainingroom refused ({why}): reason={reason}")
+            return self._answer(session, sequence, msg, trainingroom.ng_params(reason))
+
+        if msg_type == trainingroom.MSG_CL_REQUEST_ADD:
+            # 「看板作成」. ⚠️ Some of this window's gating never reaches us —
+            # 「他の行動中は看板を作成できません」 is one of tmo.exe's own
+            # strings, so the client has already said no to some presses.
+            parsed = trainingroom.parse_add(params)
+            headline, limit = parsed if parsed else (None, 0)
+            reason = board.add_refusal(chara_id, headline, limit)
+            if reason is not None:
+                return ng(trainingroom.MSG_SV_NG_ADD, reason, f"add {params.hex()}")
+            family, first = self._tr_names(chara_id)
+            room = board.open(chara_id, headline, limit, family, first)
+            print(f"[{self.tag}] trainingroom opened {room.summary()}")
+            out = self._answer(session, sequence, trainingroom.MSG_SV_OK_ADD, b"")
+            return out + self._tr_roster(session, room)
+
+        if msg_type == trainingroom.MSG_CL_REQUEST_INFO:
+            leader_id = trainingroom.parse_leader(params)
+            room = board.rooms.get(leader_id) if leader_id is not None else None
+            if room is None:
+                return ng(
+                    trainingroom.MSG_SV_NG_INFO,
+                    trainingroom.NG_INFO_NOT_FOUND,
+                    f"info leaderId={leader_id}",
+                )
+            return self._answer(
+                session, sequence, trainingroom.MSG_SV_OK_INFO, room.info_params()
+            )
+
+        if msg_type == trainingroom.MSG_CL_REQUEST_JOIN:
+            leader_id = trainingroom.parse_leader(params)
+            if leader_id is None:
+                return ng(
+                    trainingroom.MSG_SV_NG_JOIN,
+                    trainingroom.NG_JOIN_NOT_FOUND,
+                    "join with no leaderId",
+                )
+            reason = board.join_refusal(chara_id, leader_id)
+            if reason is not None:
+                return ng(
+                    trainingroom.MSG_SV_NG_JOIN, reason, f"join leaderId={leader_id:#x}"
+                )
+            room = board.rooms[leader_id]
+            family, first = self._tr_names(chara_id)
+            room.add(chara_id, family, first)
+            print(f"[{self.tag}] trainingroom joined {room.summary()}")
+            out = self._answer(
+                session, sequence, trainingroom.MSG_SV_OK_JOIN, room.join_params()
+            )
+            return out + self._tr_roster(session, room)
+
+        if msg_type == trainingroom.MSG_CL_REQUEST_PART:
+            room = board.room_of(chara_id)
+            if room is None:
+                return ng(
+                    trainingroom.MSG_SV_NG_PART,
+                    trainingroom.NG_PART_NOT_IN_ROOM,
+                    "part while in no room",
+                )
+            leader_id = room.leader_id
+            board.part(chara_id)
+            print(f"[{self.tag}] trainingroom left, now {board.summary()}")
+            out = self._answer(session, sequence, trainingroom.MSG_SV_OK_PART, b"")
+            # ⚠️ The Notify goes out even though the leaver is the only member:
+            # it is what tells a client its own row is gone, and with one player
+            #「自分自身の要求による」 is the reason every time.
+            return out + self._answer(
+                session,
+                0,
+                trainingroom.MSG_SV_NOTIFY_PART,
+                trainingroom.notify_part_params(
+                    chara_id, leader_id, trainingroom.PART_REASON_SELF
+                ),
+            )
+
+        if msg_type == trainingroom.MSG_CL_CAST_CHAT:
+            room = board.room_of(chara_id)
+            read = trainingroom.parse_string(params)
+            if room is None or read is None:
+                return ng(
+                    trainingroom.MSG_SV_ERROR_CHAT,
+                    trainingroom.ERROR_CHAT_FAILED,
+                    "room chat outside a room",
+                )
+            said, _ = read
+            family, first = self._tr_names(chara_id)
+            print(f"[{self.tag}] trainingroom chat: {said.decode('cp932', 'replace')!r}")
+            return self._answer(
+                session,
+                sequence,
+                trainingroom.MSG_SV_NOTIFY_CHAT,
+                trainingroom.notify_chat_params(chara_id, family, first, said),
+            )
+
+        if msg_type == trainingroom.MSG_CL_CAST_READY:
+            room = board.room_of(chara_id)
+            member = room.find(chara_id) if room else None
+            if member is None:
+                return ng(
+                    trainingroom.MSG_SV_ERROR_READY,
+                    trainingroom.ERROR_READY_FAILED,
+                    "ready outside a room",
+                )
+            member.ready = trainingroom.parse_ready(params)
+            # Both numbers, because they disagree on purpose: the wire's 0 is
+            # 「準備ＯＫ」. See READY_ON in trainingroom.py.
+            print(f"[{self.tag}] trainingroom ready={member.ready} "
+                  f"(wire {params.hex() or '-'}) for {chara_id:#x}")
+            return self._answer(
+                session,
+                sequence,
+                trainingroom.MSG_SV_NOTIFY_READY,
+                trainingroom.notify_ready_params(chara_id, member.ready),
+            )
+
+        if msg_type == trainingroom.MSG_CL_REQUEST_TEAM_SELECT:
+            room = board.room_of(chara_id)
+            member = room.find(chara_id) if room else None
+            team = trainingroom.parse_team(params)
+            # ⭐ Logged raw and unconditionally: this byte is the only place the
+            # client says which two values a team is numbered with, and nothing
+            # else measures it. See TEAMS in trainingroom.py.
+            print(f"[{self.tag}] trainingroom team select: raw byte {team!r}")
+            if member is None:
+                return ng(
+                    trainingroom.MSG_SV_NG_TEAM_SELECT,
+                    trainingroom.NG_TEAM_FAILED,
+                    "team select outside a room",
+                )
+            if team not in trainingroom.TEAMS:
+                return ng(
+                    trainingroom.MSG_SV_NG_TEAM_SELECT,
+                    trainingroom.NG_TEAM_BAD_TEAM,
+                    f"team {team!r} is neither Ａ(0) nor Ｂ(1)",
+                )
+            member.team = team
+            out = self._answer(session, sequence, trainingroom.MSG_SV_OK_TEAM_SELECT, b"")
+            out += self._answer(
+                session,
+                0,
+                trainingroom.MSG_SV_NOTIFY_TEAM,
+                trainingroom.notify_team_params(chara_id, team),
+            )
+            return out + self._tr_roster(session, room)
+
+        if msg_type == trainingroom.MSG_CL_CAST_BATTLE_START:
+            room = board.room_of(chara_id)
+            if room is None or room.leader_id != chara_id:
+                return ng(
+                    trainingroom.MSG_SV_ERROR_BATTLE_START,
+                    trainingroom.ERROR_START_FAILED,
+                    "start without leading a room",
+                )
+            if not room.all_ready():
+                return ng(
+                    trainingroom.MSG_SV_ERROR_BATTLE_START,
+                    trainingroom.ERROR_START_NOT_ALL_READY,
+                    "start before everyone is ready",
+                )
+            # ⚠️ 0x5819 is empty, so this says only 「it begins」. What draws the
+            # battle is the 0x5C** family, and NONE of it is implemented — the
+            # client is expected to answer this with 0x581B and then start
+            # asking. That first unanswered id is the finding this branch is for.
+            print(f"[{self.tag}] trainingroom battle start: {room.summary()}")
+            return self._answer(
+                session, sequence, trainingroom.MSG_SV_NOTIFY_BATTLE_START, b""
+            )
+
+        if msg_type == trainingroom.MSG_CL_NOTIFY_BATTLE_START:
+            # Client -> server, no reply: it is telling us it has the scene up.
+            print(f"[{self.tag}] trainingroom battle scene is up on the client")
+            return None
+
+        if msg_type == trainingroom.MSG_CL_CAST_KICK:
+            room = board.room_of(chara_id)
+            target = trainingroom.parse_leader(params)
+            if room is None or room.leader_id != chara_id:
+                return ng(
+                    trainingroom.MSG_SV_ERROR_KICK,
+                    trainingroom.ERROR_KICK_NOT_LEADER,
+                    "kick without leading a room",
+                )
+            if target is None or target == chara_id or room.find(target) is None:
+                return ng(
+                    trainingroom.MSG_SV_ERROR_KICK,
+                    trainingroom.ERROR_KICK_UNKICKABLE,
+                    f"kick charaId={target!r}",
+                )
+            board.part(target)
+            print(f"[{self.tag}] trainingroom kicked {target:#x}, now {board.summary()}")
+            out = self._answer(
+                session,
+                sequence,
+                trainingroom.MSG_SV_NOTIFY_PART,
+                trainingroom.notify_part_params(
+                    target, room.leader_id, trainingroom.PART_REASON_KICKED
+                ),
+            )
+            return out + self._tr_roster(session, room)
+
+        print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
+        return None
 
     def _apply_chat(self, session: "_Session", sequence: int, said: str) -> bytes:
         """Run one console line and pack whatever it asked for.
