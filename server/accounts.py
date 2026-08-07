@@ -29,16 +29,20 @@ Answering with a full 64 bytes puts those 64 bytes verbatim at the head of 0x700
 which means an authenticated /login.php could mint a token here and have it
 arrive on the connection that needs it.
 
-Nothing does that yet: SESSION_ID is still sixteen bytes and so still inert, and
-the code below reads the registration code and nothing else. The KONAMI ID also
-reaches this machine in the clear -- every request to the auth service carries
-``konami_id=`` in its query string -- but on a different connection and under TLS.
+That is what now happens. /login.php checks the KONAMI ID against the directory
+in konami_id.py and answers with a 64-byte token; the token arrives here at the
+head of 0x7000; and check_login below asks whether the KONAMI ID it names is the
+one the registration code was 登録'd to. Which account a connection *is* still
+comes from the registration code alone -- the code is the name, as it always was
+-- and the KONAMI ID is a second question asked about the same login.
 
-⚠️ This is addressing, not authentication. Neither value is a secret, nothing
-signs them, and the client will send whatever is in the boxes. Two players keep
-their characters apart the way two save files do -- by being named differently --
-and that is all this is for. The server it belongs to runs on one machine for the
-people sitting at it; see the README on why it is not meant to face a network.
+⚠️ Addressing, with a check drawn on it. Nothing here is a secret that survives
+being on the same machine: the personal key crosses a query string, the token is
+handed out by a service that will hand one to anybody, and the client sends
+whatever is in the boxes. Two players keep their characters apart the way two
+save files do -- by being named differently -- and the KONAMI ID check exists
+because the original had a 登録 step and a sentence for failing it, not because
+it keeps anyone out. See the README on why this is not meant to face a network.
 
 Accounts own a slice of the charaId space rather than a counter, because the
 client has an opinion about which ids are ordinary characters (see
@@ -55,6 +59,7 @@ from pathlib import Path
 import secrets
 
 import codes
+import konami_id
 from characters import CharacterStore
 
 # The two fixed-length fields of MsgClRequestLoginServerLogin, in the order the
@@ -107,6 +112,19 @@ def registration_code(params: bytes) -> bytes:
     return params[-REGISTRATION_CODE_LEN:].rstrip(b"\x00")
 
 
+def session_id(params: bytes) -> bytes:
+    """The sessionId field out of the same message: the 64 bytes before the code.
+
+    Anchored at the end for the same reason the code is -- the two fields are
+    measured backwards from a message whose total length is the thing actually
+    known. All zeroes for a client that has not been through /login.php, and
+    konami_id.token_from_params is what turns this into a token or into "".
+    """
+    if len(params) < SESSION_ID_LEN + REGISTRATION_CODE_LEN:
+        return b""
+    return params[-(SESSION_ID_LEN + REGISTRATION_CODE_LEN) : -REGISTRATION_CODE_LEN]
+
+
 def label(code: bytes) -> str:
     """A registration code as it goes into the log: printable, or hex if not."""
     if not code:
@@ -143,6 +161,10 @@ class AccountStore:
         self._load()
         self._adopt_single_account_file(root / "runtime" / "characters.json")
         self.codes = codes.CodeTable(self.dir)
+        # The three tables in runtime/accounts are built here so that everything
+        # holding one holds the same one; run_all.py reaches the other two
+        # through this object rather than making its own.
+        self.konami_ids = konami_id.Directory(self.dir)
         self._seed_codes()
         if adopt_code is not None:
             self.adopt(adopt_code.encode("ascii", "replace"))
@@ -171,6 +193,38 @@ class AccountStore:
     def check(self, code: bytes) -> int | None:
         """The MsgSvNgLoginServerLogin reason for refusing this code, or None."""
         return self.codes.check(label(code))
+
+    def check_login(self, code: bytes, signed_in_as: str | None) -> int | None:
+        """The reason this signed-in player may not use this code, or None.
+
+        The second half of the login, and the half the 登録 form exists for:
+        check() asks whether the code is usable at all, this asks whether it is
+        this player's. ``signed_in_as`` is the KONAMI ID the session token names
+        -- None when nothing signed in on this connection, which is also what an
+        unverified personal key comes back as.
+
+        Two of the client's sentences are reachable from here:
+
+          4   ユーザ情報が正しくありません   this code belongs to somebody else
+          23  再登録が必要です               it belongs to an id that is gone
+
+        23 is worth having rather than folding into 4. Removing an entry from
+        konami_ids.json is the supported way to retire a KONAMI ID, and the
+        codes registered to it are then bound to nothing -- which is not the
+        player getting their password wrong, and 再登録が必要です tells them the
+        one thing that will actually fix it.
+
+        A code with no owner is allowed through whatever arrives. That is every
+        code from before this field existed, and refusing them would have made
+        the upgrade a lockout; codes.py has the longer form of the argument.
+        """
+        key = label(code)
+        owner = self.codes.owner(key)
+        if owner is None:
+            return None
+        if not self.konami_ids.exists(owner):
+            return codes.REASON_REREGISTER
+        return self.codes.check_owner(key, signed_in_as)
 
     # -- persistence ------------------------------------------------------
 

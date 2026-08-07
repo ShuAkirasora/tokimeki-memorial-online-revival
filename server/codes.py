@@ -38,6 +38,25 @@ and a string that is in no row at all is refused with 21, which is also what a
 player who mistypes their code gets. That is the right answer for a typo: the
 thing they typed is, in fact, not a code this server ever issued.
 
+  Who claimed it
+  --------------
+  An active code also records the KONAMI ID it was claimed by, because 登録 is a
+  binding between two things and a state flag is only one of them. registration_
+  site.py is the local stand-in for the page KONAMI put that step on, and what it
+  writes is this field.
+
+  The field is what makes two more of the client's sentences reachable:
+
+    4   ユーザ情報が正しくありません       signed in as somebody else, or not at all
+    23  再登録が必要です                   claimed by a KONAMI ID that no longer exists
+
+  ⚠️ It is allowed to be absent, and an absent one is not a refusal. Codes that
+  predate this field -- the ones seeded out of index.json, the fixed ones the
+  smoke tests use -- have no owner and are let in on the strength of the code
+  alone, which is exactly how this server behaved before there was a KONAMI ID
+  in it. Requiring an owner would have made the upgrade a lockout, and see
+  check_owner for what the field costs when it is there.
+
 ⚠️ No check digit, and that is a decision rather than an omission. An earlier
 draft of this file derived the last four characters from the first sixteen so a
 typo could be rejected without a table lookup -- which reproduces 21 correctly
@@ -62,8 +81,10 @@ import secrets
 # Only the ones this server can arrive at are named; the full thirty are in the
 # client's table.
 REASON_ACCOUNT_CREATE_FAILED = 3
+REASON_USER_INFO_WRONG = 4
 REASON_UNKNOWN = 21
 REASON_EXPIRED = 22
+REASON_REREGISTER = 23
 REASON_NOT_REGISTERED = 24
 REASON_SUSPENDED = 25
 
@@ -194,6 +215,32 @@ class CodeTable:
             return REASON_NOT_REGISTERED
         return None
 
+    def owner(self, key: str) -> str | None:
+        """The KONAMI ID this code was claimed by, or None if it has no owner."""
+        entry = self.table.get(key)
+        return (entry or {}).get("konami_id") or None
+
+    def check_owner(self, key: str, signed_in_as: str | None) -> int | None:
+        """The reason this signed-in player may not use this code, or None.
+
+        Asked after check() has allowed the code itself, and it is a separate
+        question: check() is about the code, this is about whether whoever is
+        holding it is who it was registered to.
+
+        ``signed_in_as`` is the KONAMI ID the session token names, and None
+        covers three arrivals that are one answer here: no token at all, a token
+        minted for a personal key that did not verify, and a token from an
+        earlier run of the server. They differ in the log line the caller
+        writes, not in what the player may do.
+
+        A code with no owner is allowed through whatever arrives, which is the
+        pre-KONAMI-ID behaviour and is documented at the top of this file.
+        """
+        registered_to = self.owner(key)
+        if registered_to is None or signed_in_as == registered_to:
+            return None
+        return REASON_USER_INFO_WRONG
+
     # -- changing it ------------------------------------------------------
 
     def issue(
@@ -212,9 +259,63 @@ class CodeTable:
             "issued": (today or date.today()).isoformat(),
             "expires": expires,
             "note": note,
+            "konami_id": None,
         }
         self.save()
         return key
+
+    def register(self, key: str, konami_id: str) -> int | None:
+        """Bind a code to a KONAMI ID: the 登録 step. None on success.
+
+        Returns the reason a player would have been refused with instead, so the
+        page that calls this can show the same sentence the login screen would
+        have -- a code that does not exist, has expired, or has been withdrawn
+        should say so here rather than at the login screen an hour later.
+
+        Only an unclaimed code can be claimed. A code that is already active is
+        refused with 21 as well: there is no way for the person at the form to
+        act on "this belongs to somebody", and a code they cannot use is, from
+        where they are standing, one that does not exist.
+
+        ⚠️ Not the same call as issue(state=STATE_ACTIVE). That one makes a code
+        and marks it claimed in one go, for the operator who is handing it
+        straight to somebody; this one is the player's half, and it is the only
+        path that writes konami_id.
+        """
+        self.reload()
+        entry = self.table.get(key)
+        if entry is None:
+            return REASON_UNKNOWN
+        if entry.get("state") == STATE_SUSPENDED:
+            return REASON_SUSPENDED
+        expires = entry.get("expires")
+        if expires and date.today() > date.fromisoformat(expires):
+            return REASON_EXPIRED
+        if entry.get("state") != STATE_ISSUED:
+            return REASON_UNKNOWN
+        entry["state"] = STATE_ACTIVE
+        entry["konami_id"] = konami_id
+        entry["registered"] = date.today().isoformat()
+        self.save()
+        return None
+
+    def unregister(self, key: str) -> bool:
+        """Undo 登録: back to unclaimed, with no owner. False if no such code.
+
+        The inverse of register() and not of issue() -- the code keeps its own
+        row, its expiry and its note, and only the claim goes. Somebody who has
+        to hand their code to somebody else needs this, and so does anybody
+        checking that the login screen still says 登録されていません.
+        """
+        self.reload()
+        entry = self.table.get(key)
+        if entry is None:
+            return False
+        entry["state"] = STATE_ISSUED
+        entry["konami_id"] = None
+        entry.pop("registered", None)
+        self.save()
+        return True
 
     def set_state(self, key: str, state: str) -> bool:
         """Move an existing code to a state. False when there is no such code."""
@@ -245,6 +346,10 @@ class CodeTable:
             "issued": date.today().isoformat(),
             "expires": None,
             "note": note,
+            # No owner, and that is the point: nothing on disk says which KONAMI
+            # ID a code from before this field belonged to, and inventing one
+            # would refuse the player it was invented for.
+            "konami_id": None,
         }
         self.save()
         return True

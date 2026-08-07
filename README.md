@@ -288,7 +288,36 @@ Other arguments: no address at all reports what your copy currently points at wi
 changing anything, `--revert` puts KONAMI's original address back, `-n` says what it would do
 and writes nothing, `--no-lookup` skips the hostname check.
 
-### 4. Start the game
+### 4. A registration code and a KONAMI ID
+
+The login screen asks for three things — a KONAMI ID, a personal key, and a twenty-character
+registration code in five groups — and this server means all three. **Anything typed there
+will not do:** a code it did not issue is refused with the client's own
+「入力されたレジストレーションコードは存在しません」, which is the right answer and an
+opaque one if you were not expecting it.
+
+Originally the code came printed in the box and the player bound it to their KONAMI ID on
+KONAMI's website. Both halves are here: `issue_code.py` is the printing, and a page on port
+12013 is the binding.
+
+```sh
+python3 issue_code.py --unregistered      # prints something like WJUH-RTDC-M39X-HCDN-U26X
+```
+
+Then open **http://127.0.0.1:12013/** in a browser on the machine running the *server*
+(or `http://<server>:12013/` from elsewhere) and do the two things on that page: make a
+KONAMI ID with a personal key, then enter that code to bind it. Type all three into the
+login screen and you are in.
+
+Plain HTTP, and it has to be: the certificate the game insists on is 1024-bit RSA signed
+with SHA-1, which no current browser will open.
+
+Handing a code straight to somebody at the same machine is `issue_code.py` with no flag —
+it comes out ready to use, but with no owner, and a code with no owner is one anybody can
+log in with. `issue_code.py --list` shows every code, its state, and who registered it;
+`--revoke` withdraws one without touching the characters saved under it.
+
+### 5. Start the game
 
 **The program to run is `BootFirst.exe`, not `tmo.exe`.** It starts `UpdateClient.exe`, which
 performs the update check, and that in turn starts the game.
@@ -302,7 +331,7 @@ decides it requires elevation — and `BootFirst.exe` starts it with `CreateProc
 cannot elevate. Beginning the chain already elevated is the whole of the fix. Under Wine this
 has not come up: the same chain starts as it is.
 
-### 5. Check that it worked
+### 6. Check that it worked
 
 Everything the client does arrives in `runtime/run_all.log` in order — `tail -f
 runtime/run_all.log`, or `Get-Content runtime\run_all.log -Wait -Tail 20` in PowerShell. Each
@@ -315,10 +344,10 @@ where to go back to:
 | `[updater] … sent UPDATE_DONE` | `tmoupd` resolves — step 2 |
 | `[llb35573] -> MsgSvResultLoginServer` | `tmollb` resolves — step 2 |
 | `[authhttp] ACCEPT port=443` | the four bytes are right — step 3 |
-| `[mpslogin25573] …` | login accepted |
+| `[mpslogin25573] … login: code …` | the code and the KONAMI ID were accepted |
 | `[mpsgame25574] …`, `[mpsschool25575] …` | the game and school servers; you are in |
 
-After that you are at the school-select screen. Steps 2 and 3 are done once and stay done —
+After that you are at the school-select screen. Steps 2, 3 and 4 are done once and stay done —
 unless you reinstall the game, which puts the original `tmo.exe` back, or the server machine's
 address changes.
 
@@ -375,6 +404,7 @@ encryption, which stays on from the first packet to the last.
 | 25575 | school |
 | 443, 50, 8011, 12011 | account auth stub, TLS |
 | 80, 12012 | account auth stub, plaintext |
+| 12013 | the registration page, for a browser |
 | 12010, 12020 | early stubs; the current login flow does not use them |
 
 The listeners are on `0.0.0.0`. Ports 25573, 25574, 25575 and 35573 have to be reachable from
@@ -456,6 +486,7 @@ the grade it awards is this server's own curve over the running score.
 |---|---|
 | `start_servers.py`, `stop_servers.py` | start and stop everything |
 | `set_auth_address.py` | the four-byte address change described above |
+| `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services themselves; `run_all.py` binds them all in one asyncio loop and `mps_session.py`, the packet layer, is the bulk of it |
 | `reference/` | the three tables above |
 | `runtime/` | created on the first run: the log, the certificate, and your characters |
@@ -466,6 +497,9 @@ the grade it awards is this server's own curve over the running score.
 
 | Symptom | Cause |
 |---|---|
+| 「レジストレーションコードは存在しません」 | the code was not issued here — `issue_code.py`, step 4 |
+| 「レジストレーションコードが登録されていません」 | the code exists but nobody has bound it on port 12013 |
+| 「ユーザ情報が正しくありません」 | that code is registered to a different KONAMI ID, or the personal key is wrong |
 | the game starts but the log stays completely empty | `BootFirst.exe` was not run as administrator |
 | `アップデートクライアントの起動に失敗しました` | the same thing, said by the client |
 | the log stops after `[updater]`, no `[llb35573]` | only one of the two hosts lines is there, or it is on the wrong machine |

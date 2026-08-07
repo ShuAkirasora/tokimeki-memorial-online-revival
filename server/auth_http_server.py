@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs
 
+import konami_id
 from common import ServiceConfig, ensure_runtime_dirs, write_packet_log
 
 
@@ -140,11 +141,19 @@ class AuthHttpServer:
         *,
         use_tls: bool = True,
         advertise_ip: str = "127.0.0.1",
+        directory: konami_id.Directory | None = None,
+        tokens: konami_id.TokenDesk | None = None,
     ) -> None:
         self.root = root
         self.config = config
         self.use_tls = use_tls
         self.advertise_ip = advertise_ip
+        # Six of these listen on six ports and the client picks one, so the desk
+        # has to be the same object across all of them or a token minted on the
+        # port the client used is unknown to the game connection. run_all.py
+        # passes one in; the defaults are for a lone instance under test.
+        self.directory = directory or konami_id.Directory(root / "runtime" / "accounts")
+        self.tokens = tokens or konami_id.TokenDesk()
         _, self.packet_dir = ensure_runtime_dirs(root)
         self.cert = root / "runtime" / "certs" / "auth.pem"
         if use_tls:
@@ -340,16 +349,50 @@ class AuthHttpServer:
     # CR/LF and drops any line containing "PRIVATE KEY".  So csk must come last,
     # it may contain real newlines, and a plain PEM is exactly the right shape --
     # the armour lines are stripped and the base64 in between is kept.
-    # ⚠️ Inert, and not by accident of taste: the client copies session_id into
-    # the field it later sends as MsgClRequestLoginServerLogin's sessionId only
-    # when the value is exactly 64 bytes long (0x8A9BF0: cmp dword [esp+0x30],
-    # 0x40). Anything else is skipped -- with the login still reported as a
-    # success -- so this sixteen-byte value has never once been written anywhere,
-    # and the 64 zero bytes seen at the head of 0x7000 are this line's doing and
-    # not the client's. Measured by sending 64 bytes instead: they arrive there
-    # verbatim. Widen this to 64 to make the field carry something, and see
-    # accounts.py for why nothing reads it yet.
-    SESSION_ID = "localsession0001"
+    # ⚠️ The length of session_id is load-bearing and fails silently when it is
+    # wrong. The client copies the value into the field it later sends as
+    # MsgClRequestLoginServerLogin's sessionId only when it is exactly 64 bytes
+    # (0x8A9BF0: cmp dword [esp+0x30], 0x40); anything else is skipped, with the
+    # login still reported as a success, leaving that field at its factory
+    # zeroes. This was a sixteen-byte constant for many rounds, which is why the
+    # 64 zeros at the head of 0x7000 looked like the client refusing to forward
+    # anything. It was us. konami_id.TOKEN_LEN is that 64, and _login below is
+    # what now fills it.
+
+    def _login(self, form: dict[str, list[str]]) -> str:
+        """Check the KONAMI ID, and answer with a token either way.
+
+        ⚠️ This never refuses, and that is measured rather than lenient. The
+        response_code field can carry a failure and the client does something
+        with it, but what it does is show 「初期化エラーが発生しました。errorcode
+        ff0c:018」 -- the same sentence it shows for a certificate it will not
+        accept and for a reply it cannot parse. 001 and 002 give it word for
+        word; the client does not pass the server's code through. So a player
+        with the wrong personal key would be told the game failed to start, and
+        would go looking at their firewall.
+
+        The client's actual vocabulary for a refused login is
+        MsgSvNgLoginServerLogin, on the other connection, and it has a sentence
+        for this one: reason 4, ユーザ情報が正しくありません. Getting there means
+        arriving at that connection with the failure in hand, which is what the
+        token is for -- so a login that did not verify still gets 000 and still
+        gets 64 bytes, and those 64 bytes name nobody.
+        """
+        konami = (form.get("konami_id") or [""])[0]
+        personal = (form.get("personal_key") or [""])[0]
+        if konami and self.directory.verify(konami, personal):
+            who = konami_id.normalise_id(konami)
+            print(f"[authhttp] login.php: {who} signed in")
+        else:
+            who = None
+            # Not an error line: an unknown KONAMI ID is the ordinary state of
+            # this server before anybody has used the 登録 form, and every code
+            # that predates that form logs in without one.
+            print(
+                f"[authhttp] login.php: {konami_id.normalise_id(konami) or '(no id)'}"
+                " did not verify; the token will name nobody"
+            )
+        return self.tokens.mint(who)
 
     def _reply_fields(self, form: dict[str, list[str]], **extra: str) -> bytes:
         fields = {
@@ -403,13 +446,44 @@ class AuthHttpServer:
             index = "2" if seq["getkey"] >= 2 else "1"
             return self._reply_fields(form, index=index, csk=self._csk_half(index))
         if path.endswith("login.php"):
-            return self._reply_fields(form, session_id=self.SESSION_ID)
+            return self._reply_fields(form, session_id=self._login(form))
         if path.endswith("logout.php"):
             return self._reply_fields(form)
         # CRL / unknown paths
         if "crl" in path.lower():
             return b""
         return self._reply_fields(form)
+
+    @staticmethod
+    def _redacted(raw: bytes) -> bytes:
+        """The request as it goes into the packet log, with the password starred.
+
+        ⚠️ The client puts personal_key in the query string in the clear, so
+        every login used to be written to runtime/packets as a file containing
+        somebody's password. TLS protects it on the wire and then it landed on
+        disk anyway, which is the sort of thing that is nobody's fault and
+        everybody's problem.
+
+        Starred rather than dropped, and starred one-for-one, so the log stays
+        faithful about the shape of the request: same fields in the same order,
+        same lengths, same total size. What the packet log is read for is what
+        the client sent, and that is all still here.
+        """
+        out = bytearray()
+        rest = raw
+        while True:
+            head, sep, tail = rest.partition(b"personal_key=")
+            out += head
+            if not sep:
+                return bytes(out)
+            out += sep
+            cut = len(tail)
+            for stop in (b"&", b" ", b"\r"):
+                found = tail.find(stop)
+                if found != -1:
+                    cut = min(cut, found)
+            out += b"*" * cut
+            rest = tail[cut:]
 
     def _parse(self, raw: bytes) -> tuple[str, dict[str, list[str]]]:
         path = "/"
@@ -458,7 +532,9 @@ class AuthHttpServer:
                     break
                 # Requests carry their fields in the query string; the client
                 # never sends a body, so headers are the whole request.
-                write_packet_log(self.packet_dir, "authhttp", "in", head)
+                write_packet_log(
+                    self.packet_dir, "authhttp", "in", self._redacted(head)
+                )
                 path, form = self._parse(head)
                 resp = self._http_response(self._build_body(path, form, seq))
                 write_packet_log(self.packet_dir, "authhttp", "out", resp)

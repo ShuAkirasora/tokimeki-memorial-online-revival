@@ -34,9 +34,11 @@ def _utf8_output() -> None:
 import accounts
 from auth_http_server import AuthHttpServer
 from common import ServiceConfig, parse_ipv4
+from konami_id import TokenDesk
 from llb_server import LlbServer
 from login_server import LoginServer
 from mps_session import GAME_PORT, SCHOOL_PORT, MpsServer
+from registration_site import RegistrationSite
 from updater_server import UpdaterServer
 from world_server import WorldServer
 
@@ -45,6 +47,12 @@ from world_server import WorldServer
 # client is then redirected to, which speaks the tagged MPS packet layer.
 LLB_QUERY_PORT = 35573
 MPS_LOGIN_PORT = 25573
+
+# The 登録 form, which is ours and not the client's -- nothing dials it, a person
+# opens it in a browser. Plain HTTP and out of the way of every port the client
+# knows about; see registration_site.py for why it cannot share the auth service's
+# TLS.
+REGISTRATION_PORT = 12013
 
 # Two different addresses, and they are not interchangeable.
 #
@@ -113,6 +121,9 @@ async def main(
     # account is minted on one port and redeemed on the next.
     accountstore = accounts.AccountStore(root, adopt_code=adopt_code)
     tickets = accounts.TicketDesk()
+    # Minted by whichever auth port the client dialled, redeemed on the login
+    # port: one desk, or the token does not survive the hop between them.
+    tokens = TokenDesk()
     print(f"[system] accounts: {accountstore.summary()}")
     mps_login = MpsServer(
         root,
@@ -120,6 +131,7 @@ async def main(
         "mpslogin",
         accountstore=accountstore,
         tickets=tickets,
+        tokens=tokens,
         advertise_ip=advertise_ip,
     )
     # The game connection skips 4 bytes before the tag on everything it reads;
@@ -131,6 +143,7 @@ async def main(
         header_size=4,
         accountstore=accountstore,
         tickets=tickets,
+        tokens=tokens,
         advertise_ip=advertise_ip,
     )
     # The school server the client hops to after picking a school. Assumed to
@@ -142,10 +155,15 @@ async def main(
         header_size=4,
         accountstore=accountstore,
         tickets=tickets,
+        tokens=tokens,
         advertise_ip=advertise_ip,
     )
     # Client https URL uses default 443; sctrl port string is 0050 (=50).
-    auth = {"advertise_ip": advertise_ip}
+    auth = {
+        "advertise_ip": advertise_ip,
+        "directory": accountstore.konami_ids,
+        "tokens": tokens,
+    }
     auth_443 = AuthHttpServer(root, ServiceConfig(host=BIND_HOST, port=443), use_tls=True, **auth)
     auth_50 = AuthHttpServer(root, ServiceConfig(host=BIND_HOST, port=50), use_tls=True, **auth)
     auth_8011 = AuthHttpServer(root, ServiceConfig(host=BIND_HOST, port=8011), use_tls=True, **auth)
@@ -157,6 +175,14 @@ async def main(
     )
     auth_80 = AuthHttpServer(root, ServiceConfig(host=BIND_HOST, port=80), use_tls=False, **auth)
 
+    registration = RegistrationSite(
+        root,
+        ServiceConfig(host=BIND_HOST, port=REGISTRATION_PORT),
+        directory=accountstore.konami_ids,
+        table=accountstore.codes,
+        advertise_ip=advertise_ip,
+    )
+
     servers = [
         await updater.run(),
         await login.run(),
@@ -164,6 +190,7 @@ async def main(
         await auth_8011.run(),
         await auth_12011.run(),
         await auth_plain.run(),
+        await registration.run(),
     ]
     servers.append(await llb.run())
     servers.append(await mps_login.run())
