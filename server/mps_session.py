@@ -250,6 +250,7 @@ MSG_CL_REQUEST_LOBBY_DATA_START = 0x4000
 MSG_SV_OK_LOBBY_DATA_START = 0x4001
 MSG_CL_QUERY_POOL_MESSAGE = 0xA100
 MSG_SV_NOTIFY_CHARACTER_ADD = 0x480F
+MSG_SV_NOTIFY_CHARACTER_DEL = 0x4810
 MSG_CL_QUERY_CHARA_INFO = 0x6500
 MSG_SV_RESULT_CHARA_INFO = 0x6501
 MSG_SV_ERROR_CHARA_INFO = 0x6502
@@ -287,6 +288,14 @@ ADD_BATCH = 16
 # sets can share a scene: reusing an id would tell the client to move a marker
 # rather than to add anything, and the ruler would come out with holes in it.
 DIRECTION_PROBE_ID_BASE = PROBE_ID_BASE + 100
+ACTION_PROBE_ID_BASE = PROBE_ID_BASE + 300  # /act, clear of the direction ruler
+# The tinychara ``action`` field is the icon over a character's head. Read off
+# the /act ruler in round 71 -- sixteen stand-ins, one per value, one screenshot:
+# 8 is a signboard on a post, 10 is a figure lifting weights, 13 a heart, 3 a
+# blackboard, and 0/4/12/15 draw nothing. Only the one this server needs is
+# named here; the rest are in PROTOCOL 2.xx with the screenshot.
+ACTION_NONE = 0
+ACTION_TRAINING_ROOM = 10
 
 # What the client sends while the player moves around, decoded rather than left
 # as a hex blob because these carry the only coordinates the client ever states
@@ -985,6 +994,146 @@ class MpsServer:
                 return other
         return None
 
+    # ------------------------------------------------------------------
+    # Presence: who else is standing on this map.
+    #
+    # Until round 71 the lobby only ever drew the player and the stand-ins, so
+    # two people logged in at once could not see each other at all. That is not
+    # a cosmetic gap: 自主トレ rooms are named by their leader's charaId and the
+    # manual's only way in is 「ルームを作成したキャラクター（の頭上のアイコン）
+    # を右クリック」, so a second player who cannot see the first has no way to
+    # ask to join. The room family (0x58xx) was finished in round 67 and has
+    # been waiting on this.
+    # ------------------------------------------------------------------
+
+    def _peers(self, session: "_Session") -> "list[_Session]":
+        """Other 登校'd connections standing on the same map as this one.
+
+        The map test is what keeps an indoor player out of an outdoor scene.
+        There is no radius: 屋外 is one map and the client draws whatever it is
+        handed, which is what the coordinate probes have been relying on since
+        round 30.
+        """
+        return [
+            other
+            for other in self.live
+            if other is not session
+            and other.chara_id
+            and other.map_id == session.map_id
+            and other.writer is not None
+            and not other.writer.is_closing()
+        ]
+
+    def _peer_chara(self, chara_id: int) -> "bytes | None":
+        """Somebody else's character record, looked up in *their* store.
+
+        Through accounts.owner_of rather than the live list, the same way
+        _tr_names does it: the id names its own account, so this answers for a
+        character whose owner has since logged out as well as for one standing
+        on the map right now.
+        """
+        store = self.accounts.owner_of(chara_id)
+        return store.find(chara_id) if store else None
+
+    def _presence_entry(self, other: "_Session") -> "bytes | None":
+        """One 0x480F entry for somebody else, drawn where they are standing.
+
+        Their record comes out of *their* CharacterStore, not the viewer's --
+        accounts have separate stores (round 68) and charaIds are namespaced per
+        account, so looking a peer up in the viewer's store would find nothing
+        or, worse, somebody else's character with the same id.
+        """
+        info = self._chars(other).find(other.chara_id)
+        if info is None:
+            return None
+        return add_entry(
+            other.chara_id,
+            info,
+            pos=other.pos,
+            map_id=other.map_id,
+            direction=other.direction,
+            action=self._presence_action(other),
+        )
+
+    def _presence_action(self, other: "_Session") -> int:
+        """The icon to draw over this character's head.
+
+        Leading a 自主トレ room is the only thing that puts one there so far,
+        and it has to: the manual's only way into somebody else\'s room is
+        「ルームを作成したキャラクターの頭上のアイコン」を右クリック, so with no
+        icon there is no way in. ⚠️ The 10 is measured (the ruler draws a figure
+        lifting weights) but the *pairing* -- that this is the icon the 自主トレ
+        board puts up rather than one of the other sixteen -- is settled by the
+        client offering 参加 when it is set, not by anything in the data.
+        """
+        room = self.trainingrooms.rooms.get(other.chara_id)
+        return ACTION_TRAINING_ROOM if room is not None else ACTION_NONE
+
+    def _presence_refresh(self, session: "_Session") -> None:
+        """Redraw this character on everybody else\'s screen.
+
+        Delete then add, because 0x480F is an *add*: round 67 measured what the
+        room roster does when the same row arrives twice (it counted the person
+        twice) and there is no reason to expect the scene to be kinder. The
+        client is told to drop somebody it can see and is immediately handed
+        them back, which is the same pair of messages a warp out and back in
+        would produce.
+        """
+        peers = self._peers(session)
+        if not peers:
+            return
+        self._presence_withdraw(session, peers)
+        self._presence_announce(session)
+
+    def _presence_announce(self, session: "_Session") -> None:
+        """Tell everybody else on the map that this character has appeared.
+
+        Push-only and no sender copy: the client puts itself into the scene, and
+        round 67 measured what a duplicate does -- the roster window counted the
+        same person twice. Same rule as 0x580C.
+        """
+        entry = self._presence_entry(session)
+        if entry is None:
+            return
+        body = struct.pack(">H", 1) + entry
+        for other in self._peers(session):
+            self._push(
+                other, self._answer(other, 0, MSG_SV_NOTIFY_CHARACTER_ADD, body)
+            )
+            print(
+                f"[{self.tag}] presence: told charaId={other.chara_id} about "
+                f"charaId={session.chara_id}"
+            )
+
+    def _presence_withdraw(self, session: "_Session", peers: "list[_Session]") -> None:
+        """0x4810 to everybody who was told about this character.
+
+        ``peers`` is passed in rather than recomputed because the caller is the
+        disconnect path, which has to take the session out of ``self.live``
+        before it starts telling people -- see the ordering note there.
+        0x4810 is counted, 4B per entry (``runtime/listshape_all.txt``).
+        """
+        body = struct.pack(">HI", 1, session.chara_id)
+        for other in peers:
+            self._push(
+                other, self._answer(other, 0, MSG_SV_NOTIFY_CHARACTER_DEL, body)
+            )
+            print(
+                f"[{self.tag}] presence: told charaId={other.chara_id} that "
+                f"charaId={session.chara_id} is gone"
+            )
+
+    def _presence_relay(self, session: "_Session", msg_type: int, params: bytes) -> None:
+        """Send a Notify this character just earned to everybody watching them.
+
+        The handlers build these for the actor and return them as the reply; the
+        same bytes go out to the peers unchanged, because every one of them
+        carries the charaId it is about. Without this a peer is drawn once at
+        the spot where they logged in and then never moves again.
+        """
+        for other in self._peers(session):
+            self._push(other, self._answer(other, 0, msg_type, params))
+
     def _push(self, session: "_Session", blob: bytes) -> None:
         """Write bytes down a connection that did not ask for them.
 
@@ -1495,8 +1644,14 @@ class MpsServer:
             # ⚠️ Order: leave self.live FIRST. _tr_part_notice looks the room's
             # members up by charaId, and a session that is on its way out must
             # not be handed its own farewell.
+            # Who was watching this character, worked out before the removal for
+            # the same reason: after it, _peers can no longer see the session at
+            # all, and the answer would be the wrong map's crowd.
+            watchers = self._peers(session) if session.chara_id else []
             if session in self.live:
                 self.live.remove(session)
+            if watchers:
+                self._presence_withdraw(session, watchers)
             room = self.trainingrooms.room_of(session.chara_id) if session.chara_id else None
             if room is not None:
                 leader_id = room.leader_id
@@ -1849,6 +2004,15 @@ class MpsServer:
                             map_id=session.map_id,
                         )
                     )
+                # And everybody else already standing here. This runs on every
+                # lobby load, not just the first, so a player who warps indoors
+                # and back arrives with the current scene rather than the one
+                # that was true at 登校.
+                peers = self._peers(session)
+                for other in peers:
+                    peer_entry = self._presence_entry(other)
+                    if peer_entry is not None:
+                        entries.append(peer_entry)
                 # Sent in batches rather than as one 72-entry message. The client
                 # copies a message's parameters into a buffer of a size it fixed
                 # in advance, and mpsClientMessage::input (0xA45CD0) does not drop
@@ -1877,11 +2041,16 @@ class MpsServer:
                 extra = f" plus {len(markers)} markers" if markers else ""
                 if session.npc_spawns:
                     extra += f" and {len(session.npc_spawns)} NPCs"
+                if peers:
+                    extra += f" and {len(peers)} other player(s)"
                 print(
                     f"[{self.tag}] lobby: adding charaId={session.chara_id}{extra} to map "
                     f"{session.map_id} ({MAP_NAMES.get(session.map_id, '?')}) at {session.pos}"
                     f", in {-(-len(entries) // ADD_BATCH)} batches"
                 )
+                # The other direction, once this scene is built: they can see the
+                # peers now, so the peers have to be told about them.
+                self._presence_announce(session)
                 return reply
             if msg_type == MSG_CL_QUERY_CHARA_INFO:
                 # 「サーバーからの返答待ちです」 in the lobby: the client asks this
@@ -1893,6 +2062,16 @@ class MpsServer:
                 # a slot listshape does not know about.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
                 info = self._chars(session).find(chara_id)
+                if info is None:
+                    # Somebody else's character. This is the first question the
+                    # client asks about a person it has been told to draw, and
+                    # answering Error is what 「選択されたキャラクターの情報が
+                    # 不正です。」 on the right-click is made of -- which in turn
+                    # is what stood between two players and a 自主トレ room.
+                    # ⚠️ The record has to come out of the owner's store: ids are
+                    # namespaced per account (2.xx, round 68), so this connection's
+                    # store either does not have it or has somebody else under it.
+                    info = self._peer_chara(chara_id)
                 if info is None and PROBE_ID_BASE <= chara_id < PROBE_ID_LIMIT:
                     # A stand-in — a doorway marker or a direction probe. None of
                     # them has a record of its own; hand back the player's, since
@@ -1909,7 +2088,14 @@ class MpsServer:
                     session,
                     sequence,
                     MSG_SV_RESULT_CHARA_INFO,
-                    chara_info(info, in_club=self._chars(session).in_club(chara_id)),
+                    # The club flag out of the owner's store too, for the same
+                    # reason the record is: asking this connection's store about
+                    # somebody else's id answers about nobody.
+                    chara_info(
+                        info,
+                        in_club=(self.accounts.owner_of(chara_id) or self._chars(session))
+                        .in_club(chara_id),
+                    ),
                 )
             if msg_type == curriculum.MSG_CL_QUERY_CURRICULUM:
                 # 「生徒情報」→「時間割」. The request is empty and the answer is
@@ -2216,11 +2402,12 @@ class MpsServer:
                     f"{'座る' if session.pose == stress.POSE_SITTING else '立つ'}"
                     f"({session.pose})"
                 )
+                pose_params = stress.pose_params(session.chara_id, session.pose)
+                self._presence_relay(
+                    session, stress.MSG_SV_NOTIFY_CHARA_POSE, pose_params
+                )
                 return self._answer(
-                    session,
-                    sequence,
-                    stress.MSG_SV_NOTIFY_CHARA_POSE,
-                    stress.pose_params(session.chara_id, session.pose),
+                    session, sequence, stress.MSG_SV_NOTIFY_CHARA_POSE, pose_params
                 )
             if msg_type in MOVEMENT_SHAPES:
                 # Ground truth for coordinates. Every one of these is the client
@@ -2279,11 +2466,10 @@ class MpsServer:
                         f"[{self.tag}] turn charaId={session.chara_id} -> "
                         f"{facing.name(session.direction)}({session.direction})"
                     )
+                    turn_params = struct.pack(">IB", session.chara_id, session.direction)
+                    self._presence_relay(session, MSG_SV_NOTIFY_CHARA_TURN, turn_params)
                     return self._answer(
-                        session,
-                        sequence,
-                        MSG_SV_NOTIFY_CHARA_TURN,
-                        struct.pack(">IB", session.chara_id, session.direction),
+                        session, sequence, MSG_SV_NOTIFY_CHARA_TURN, turn_params
                     )
                 if msg_type == 0x4809:
                     # The tripwire on the collision file. Walkability was worked
@@ -2383,19 +2569,38 @@ class MpsServer:
                         f"{steps} cells, facing {facing.name(session.direction)}"
                         f"({session.direction}), arrivalTime={arrival}"
                     )
-                    return self._answer(
-                        session,
-                        sequence,
-                        MSG_SV_NOTIFY_CHARA_MOVE,
-                        struct.pack(
+                    def move_params(when: int) -> bytes:
+                        return struct.pack(
                             ">IHHBBQ",
                             session.chara_id,
                             pos_x,
                             pos_y,
                             status,
                             session.direction,
-                            arrival,
-                        ),
+                            when,
+                        )
+
+                    # ⚠️ arrivalTime is on the *recipient's* clock, not the
+                    # walker's -- that is the whole reason tag 8 exists -- so the
+                    # relay recomputes it per peer instead of forwarding the
+                    # walker's number. Two clients that started minutes apart
+                    # have wildly different clocks, and handing one the other's
+                    # timestamp would put the arrival in its past or far future.
+                    # NOT MEASURED with two clients yet; if a relayed walk looks
+                    # like a teleport or a freeze on the watcher's screen, this
+                    # line is the first suspect.
+                    for other in self._peers(session):
+                        self._push(
+                            other,
+                            self._answer(
+                                other,
+                                0,
+                                MSG_SV_NOTIFY_CHARA_MOVE,
+                                move_params(other.client_now() + steps * MOVE_MS_PER_CELL),
+                            ),
+                        )
+                    return self._answer(
+                        session, sequence, MSG_SV_NOTIFY_CHARA_MOVE, move_params(arrival)
                     )
                 return None
             if msg_type == MSG_CL_CAST_NORMAL_CHAT:
@@ -2407,11 +2612,13 @@ class MpsServer:
                 info = self._chars(session).find(session.chara_id)
                 who = display_name(info) if info else "?"
                 print(f"[{self.tag}] chat {who}: {said!r}")
+                chat_params = chat.notify_params(session.chara_id, who, said)
+                # Everyone on the map hears it. 「通常会話」 is the map-wide
+                # channel -- ひそひそ話 (0x4A00) is the one that is not, and it
+                # is not answered here at all.
+                self._presence_relay(session, MSG_SV_NOTIFY_NORMAL_CHAT, chat_params)
                 reply = self._answer(
-                    session,
-                    sequence,
-                    MSG_SV_NOTIFY_NORMAL_CHAT,
-                    chat.notify_params(session.chara_id, who, said),
+                    session, sequence, MSG_SV_NOTIFY_NORMAL_CHAT, chat_params
                 )
                 return reply + self._apply_chat(session, sequence, said)
             if msg_type >> 8 == 0xE0 or msg_type in DRAMA_DOORS:
@@ -2628,6 +2835,8 @@ class MpsServer:
             family, first = self._tr_names(chara_id)
             room = board.open(chara_id, headline, limit, family, first)
             print(f"[{self.tag}] trainingroom opened {room.summary()}")
+            # The board over their head is how anybody else gets in.
+            self._presence_refresh(session)
             out = self._answer(session, sequence, trainingroom.MSG_SV_OK_ADD, b"")
             # An empty 0x580C, and it stays: the leader is the only member, so
             # the roster without them is 「nobody else is here」, which is both
@@ -2682,6 +2891,13 @@ class MpsServer:
             leader_id = room.leader_id
             board.part(chara_id)
             print(f"[{self.tag}] trainingroom left, now {board.summary()}")
+            # Take the board down again -- and put one up over whoever Board.part
+            # promoted, if it promoted anybody.
+            self._presence_refresh(session)
+            if room.members and chara_id == leader_id:
+                promoted = self._session_of(room.leader_id)
+                if promoted is not None:
+                    self._presence_refresh(promoted)
             if room.members and chara_id == leader_id:
                 print(f"[{self.tag}] ⚠ leader left a room that still has "
                       f"{len(room.members)} in it; promoted {room.leader_id:#x}, "
@@ -2908,6 +3124,34 @@ class MpsServer:
                 MSG_SV_NOTIFY_NORMAL_CHAT,
                 chat.notify_params(session.chara_id, chat.SERVER_NAME, line),
             )
+        if answer.action_probes and info is not None:
+            # The same trick as the direction ruler, one field over. Its ids sit
+            # in their own slice so a screen can hold both rulers at once.
+            act_entries = [
+                add_entry(
+                    ACTION_PROBE_ID_BASE + index,
+                    info,
+                    pos=(pos_x, pos_y),
+                    names=marker_names(label),
+                    map_id=session.map_id,
+                    action=value,
+                )
+                for index, (label, pos_x, pos_y, value) in enumerate(
+                    answer.action_probes
+                )
+            ]
+            print(
+                f"[{self.tag}] action ruler: {len(act_entries)} stand-ins "
+                f"on map {session.map_id} around {session.pos}"
+            )
+            for batch in range(0, len(act_entries), ADD_BATCH):
+                part = act_entries[batch : batch + ADD_BATCH]
+                reply += self._answer(
+                    session,
+                    sequence,
+                    MSG_SV_NOTIFY_CHARACTER_ADD,
+                    struct.pack(">H", len(part)) + b"".join(part),
+                )
         if answer.probes and info is not None:
             # A ruler for the direction field, drawn without a reload:
             # nothing says MsgSvNotifyCharacterAdd may only be sent

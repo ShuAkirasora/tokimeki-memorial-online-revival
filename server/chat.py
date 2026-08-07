@@ -148,6 +148,7 @@ HELP = (
     "/pos 現在地",
     "/maps <名前> 検索",
     "/dirs 方向の目盛りを置く",
+    "/act action の目盛りを置く (頭上アイコン探し)",
     "/npc <cat>:<id> <cat>:<id> NPC制御 (2つめが台本キー)",
     "/npca 登場済みの恋愛候補生を配置 / <始> <終> [分類] で生キー",
     "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
@@ -291,6 +292,9 @@ class Reply(NamedTuple):
     lines: list[str] = []
     warp: tuple[int, int, int, int] | None = None  # MsgSvNotifyGMWarp's shape
     probes: list[tuple[str, int, int, int]] = []
+    # Same shape, but the fourth number is the tinychara ``action`` field
+    # instead of ``direction``; see /act.
+    action_probes: list[tuple[str, int, int, int]] = []
     script: ScriptAction | None = None
     # A new capture_npc_event key for this session; see /nev.
     npc_event: tuple[int, int] | None = None
@@ -372,6 +376,19 @@ def respond(
         lines = [f"{map_id}:{name}" for map_id, name in hits[:12]]
         more = f" 他{len(hits) - 12}件" if len(hits) > 12 else ""
         return Reply([" ".join(lines) + more])
+
+    if word == "act":
+        # A ruler for the tinychara ``action`` field, laid out exactly like the
+        # direction one: one stand-in per value, each labelled with its number,
+        # so a single screenshot answers the whole field instead of one login
+        # per candidate. What is being looked for is the 看板 icon over a room
+        # leader's head; if none of these draws one, action is not where it
+        # lives and the search moves on.
+        probes = direction_probes(map_id, pos)
+        return Reply(
+            [f"action 0-{DIRECTION_PROBE_COUNT - 1} を並べた"],
+            action_probes=probes,
+        )
 
     if word == "dirs":
         probes = direction_probes(map_id, pos)
