@@ -196,15 +196,13 @@ MSG_SV_ERROR_CLUB_DECK_LIST = 0x5B02
 #       -> 0x5B04 MsgSvOkClubDeckUpdate  deckId u8
 #       -> 0x5B05 MsgSvNgClubDeckUpdate  reason u8, errorDeckItemNum[count]
 #
-# ⭐ FIRST MEASUREMENT (round 66): with both 「部活用」 and 「行事用」 shown
-# ticked, pressing 更新 sends useType = **0xFF** for all three decks. So 0xFF
-# is what the client reports for that state — and 0xFF as an unset sentinel is
-# the same convention the exam mark sheet uses for a blank answer.
+# ⚠️ One press of 更新 sends one of these PER DECK, three in all, not just for
+# the deck on screen.
 #
-# ⚠️ What is NOT yet separated: whether 0xFF means 「both」 or 「unset, so the
-# boxes default to drawn」. Telling those apart needs a deck whose boxes are
-# actually different from each other, which is why this reply exists — the
-# client would not let the boxes change while 更新 went unanswered.
+# The first reading taken here — that the 0xFF the client sent for all three
+# decks was an encoding for 「both boxes ticked」 — is SUPERSEDED. It was 0xFF
+# because the server had sent 0xFF, and the client normalises that away; see
+# the bit-field block above for what the byte actually holds.
 DECK_COUNT = 3
 MSG_CL_REQUEST_CLUB_DECK_UPDATE = 0x5B03
 MSG_SV_OK_CLUB_DECK_UPDATE = 0x5B04
