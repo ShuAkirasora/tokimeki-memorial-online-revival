@@ -14,13 +14,25 @@ characters from the first box and logging in again put eighteen 0x41 bytes and
 two NULs there. So the field is the typed text, left-packed, and nothing
 reformats it on the way out.
 
-The sibling field is not usable and that was measured too: sessionId is 64 zero
-bytes on every login regardless of what /login.php answers with, so the KONAMI ID
-the player types never arrives here. It does reach this machine -- every request
-to the auth service carries ``konami_id=`` in its query string -- but on a
-different connection and under TLS, so using it would mean correlating two
-connections by source address. The registration code arrives on the connection
-that needs it, already tied to the login it belongs to.
+The sibling field is empty here, but not for the reason this docstring gave for
+several rounds. It said sessionId was 64 zero bytes on every login no matter what
+/login.php answered, and concluded the client simply never forwards it. The
+observation was real; the explanation was wrong, and it was wrong in a way that
+made the KONAMI ID look unusable when it is not.
+
+The client copies session_id into the buffer that becomes this field only when
+the field is exactly 64 bytes long (auth_http_server's login parser, at the
+compare against 0x40). A session_id of any other length is skipped -- silently,
+and the login still succeeds -- leaving the buffer at its factory zeroes. This
+stub answers with a sixteen-byte SESSION_ID, so the buffer was never written.
+Answering with a full 64 bytes puts those 64 bytes verbatim at the head of 0x7000,
+which means an authenticated /login.php could mint a token here and have it
+arrive on the connection that needs it.
+
+Nothing does that yet: SESSION_ID is still sixteen bytes and so still inert, and
+the code below reads the registration code and nothing else. The KONAMI ID also
+reaches this machine in the clear -- every request to the auth service carries
+``konami_id=`` in its query string -- but on a different connection and under TLS.
 
 ⚠️ This is addressing, not authentication. Neither value is a secret, nothing
 signs them, and the client will send whatever is in the boxes. Two players keep
@@ -42,6 +54,7 @@ import json
 from pathlib import Path
 import secrets
 
+import codes
 from characters import CharacterStore
 
 # The two fixed-length fields of MsgClRequestLoginServerLogin, in the order the
@@ -117,6 +130,9 @@ class AccountStore:
     The index is the only shared file, and it only ever grows: an account id,
     once handed out, keeps its directory and its charaId slice for good, because
     characters saved under it name that slice in their own ids.
+
+    Whether a code is allowed to log in at all is a separate table and a separate
+    file; see codes.py for why the two are not one record.
     """
 
     def __init__(self, root: Path, adopt_code: str | None = None) -> None:
@@ -126,8 +142,35 @@ class AccountStore:
         self._stores: dict[int, CharacterStore] = {}
         self._load()
         self._adopt_single_account_file(root / "runtime" / "characters.json")
+        self.codes = codes.CodeTable(self.dir)
+        self._seed_codes()
         if adopt_code is not None:
             self.adopt(adopt_code.encode("ascii", "replace"))
+
+    def _seed_codes(self) -> None:
+        """Let every code that already names an account keep logging in.
+
+        The code table decides permission, and it did not exist until now, so on
+        the restart that introduces it every account on the machine would be
+        refused with reason 24 -- including the operator's own, and including the
+        fixed codes the smoke tests log in with. Seeding from the index turns
+        that into a no-op upgrade.
+
+        Runs every start rather than once, because the index is also editable by
+        hand and an account added there should not need a second step here.
+        """
+        added = [
+            key for key in self.index if self.codes.adopt(key, "adopted from index.json")
+        ]
+        if added:
+            print(
+                f"[codes] {len(added)} code(s) already in use are now active: "
+                + ", ".join(sorted(added))
+            )
+
+    def check(self, code: bytes) -> int | None:
+        """The MsgSvNgLoginServerLogin reason for refusing this code, or None."""
+        return self.codes.check(label(code))
 
     # -- persistence ------------------------------------------------------
 
@@ -229,6 +272,9 @@ class AccountStore:
             return False
         self.index[key] = FIRST_ACCOUNT_ID
         self._save()
+        # An adopted code has to be allowed in as well, or the account it was
+        # just pointed at refuses it on the next login.
+        self.codes.adopt(key, "adopted with --adopt-code")
         store = self.characters(FIRST_ACCOUNT_ID)
         print(
             f"[accounts] {key} adopted account {FIRST_ACCOUNT_ID}: {store.summary()}"
