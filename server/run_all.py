@@ -31,8 +31,8 @@ def _utf8_output() -> None:
         except (AttributeError, ValueError):
             pass  # already replaced with something that is not a text stream
 
+import accounts
 from auth_http_server import AuthHttpServer
-from characters import CharacterStore
 from common import ServiceConfig, parse_ipv4
 from llb_server import LlbServer
 from login_server import LoginServer
@@ -77,10 +77,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "deployment this is the address players reach this machine at."
         ),
     )
+    ap.add_argument(
+        "--adopt-code",
+        metavar="CODE",
+        help=(
+            "attach this レジストレーションコード to account 1, for a server "
+            "upgrading from before accounts existed. Use the code on the "
+            "client's login screen, with the groups run together and no dashes. "
+            "Ignored once account 1 has an owner, so leaving it on does nothing."
+        ),
+    )
     return ap.parse_args(argv)
 
 
-async def main(advertise_ip: str = DEFAULT_ADVERTISE_IP) -> None:
+async def main(
+    advertise_ip: str = DEFAULT_ADVERTISE_IP, adopt_code: str | None = None
+) -> None:
     root = Path(__file__).resolve().parents[1]
     print(f"[system] bind {BIND_HOST}, advertising {advertise_ip} to clients")
     updater = UpdaterServer(root, ServiceConfig(host=BIND_HOST, port=12000))
@@ -95,13 +107,19 @@ async def main(advertise_ip: str = DEFAULT_ADVERTISE_IP) -> None:
         login_port=MPS_LOGIN_PORT,
         resend_count=0,
     )
-    # One account, one set of characters, whichever port is asked for the list.
-    characters = CharacterStore(root / "runtime" / "characters.json")
+    # One set of accounts and one ticket desk across all three ports. Both have
+    # to be shared: a character created on the school connection has to show up
+    # in the list the game connection answers, and the authCode that names an
+    # account is minted on one port and redeemed on the next.
+    accountstore = accounts.AccountStore(root, adopt_code=adopt_code)
+    tickets = accounts.TicketDesk()
+    print(f"[system] accounts: {accountstore.summary()}")
     mps_login = MpsServer(
         root,
         ServiceConfig(host=BIND_HOST, port=MPS_LOGIN_PORT),
         "mpslogin",
-        characters=characters,
+        accountstore=accountstore,
+        tickets=tickets,
         advertise_ip=advertise_ip,
     )
     # The game connection skips 4 bytes before the tag on everything it reads;
@@ -111,7 +129,8 @@ async def main(advertise_ip: str = DEFAULT_ADVERTISE_IP) -> None:
         ServiceConfig(host=BIND_HOST, port=GAME_PORT),
         "mpsgame",
         header_size=4,
-        characters=characters,
+        accountstore=accountstore,
+        tickets=tickets,
         advertise_ip=advertise_ip,
     )
     # The school server the client hops to after picking a school. Assumed to
@@ -121,7 +140,8 @@ async def main(advertise_ip: str = DEFAULT_ADVERTISE_IP) -> None:
         ServiceConfig(host=BIND_HOST, port=SCHOOL_PORT),
         "mpsschool",
         header_size=4,
-        characters=characters,
+        accountstore=accountstore,
+        tickets=tickets,
         advertise_ip=advertise_ip,
     )
     # Client https URL uses default 443; sctrl port string is 0050 (=50).
@@ -186,4 +206,5 @@ async def main(advertise_ip: str = DEFAULT_ADVERTISE_IP) -> None:
 
 if __name__ == "__main__":
     _utf8_output()
-    asyncio.run(main(parse_args().advertise_ip))
+    _args = parse_args()
+    asyncio.run(main(_args.advertise_ip, _args.adopt_code))

@@ -622,8 +622,12 @@ class CharacterStore:
     entry is rebuilt from it on demand.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, chara_id_base: int = CHARA_ID_BASE) -> None:
         self.path = path
+        # Where this account's ids start. Accounts own a slice of the id space
+        # (accounts.ACCOUNT_SHIFT) so that a charaId names its own owner, and
+        # the default is account 1's slice because CHARA_ID_BASE is ``1 << 24``.
+        self.chara_id_base = chara_id_base
         self.records: list[dict[str, object]] = []
         if path.exists():
             try:
@@ -641,7 +645,7 @@ class CharacterStore:
 
     def add(self, info: bytes) -> int:
         chara_id = max(
-            (int(r["charaId"]) for r in self.records), default=CHARA_ID_BASE - 1
+            (int(r["charaId"]) for r in self.records), default=self.chara_id_base - 1
         ) + 1
         self.records.append({"charaId": chara_id, "info": info.hex()})
         self._save()
