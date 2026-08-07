@@ -69,6 +69,7 @@ from characters import (
     parse_create_info,
 )
 import ability
+import accounts
 import chat
 import club
 import curriculum
@@ -113,6 +114,9 @@ SERVER_KEY_LEN = 16
 MSG_CL_REQUEST_LOGIN = 0x7000
 MSG_SV_OK_LOGIN = 0x7001
 MSG_SV_NG_LOGIN = 0x7002
+# The relay ticket coming home: first message on the game connection, and on the
+# school connection after it. See accounts.TicketDesk.
+MSG_CL_NOTIFY_AUTH_CODE = 0x0020
 MSG_CL_REQUEST_GAME_LOGIN = 0x0200
 MSG_SV_OK_GAME_LOGIN = 0x0201
 
@@ -346,7 +350,11 @@ DRAMA_DOORS = {
 }
 
 NOTIFICATIONS = {
-    0x0020,  # MsgClNotifyAuthCode
+    # ⚠️ 0x0020 MsgClNotifyAuthCode is deliberately NOT here any more. It is
+    # still a notify and still gets no reply, but it is the only thing the game
+    # and school connections say about which account they are, so it has a
+    # handler of its own now. Putting it back would silently un-name every
+    # connection past the login port.
     0x0100,  # MsgClNotifyGameServerLogout
     0x7100,  # MsgClNotifyLoginServerLogout
     # MsgClNotifyPlayerActivity. Never seen until round 32: it starts the moment
@@ -413,18 +421,25 @@ SCHOOL_PORT = 25575
 # MsgClNotifyAuthCode and the accountId in MsgClRequestGameServerLogin's
 # `version[12+1]={%c}accountId=%d` tail. So they are ours to choose.
 #
-# That matters for the account isolation this server does not do. The client
-# never names the account it is asking about — MsgClQueryCharacterListFromAccount
-# goes out with no parameters at all — so a server that wanted to keep players
-# apart would have to bind connection to account itself, and these two are the
-# only tokens that arrive early enough to bind with: 0x0020 is the first message
-# on the game connection and 0x0200 is the second. Neither is a secret and
-# neither is validated, so this is addressing, not authentication.
-AUTH_CODE = 0x1234ABCD
-ACCOUNT_ID = 1
+# Which is what keeps players apart now: the client never names its account
+# after the login message — MsgClQueryCharacterListFromAccount goes out with no
+# parameters at all — so the game and school connections are told which account
+# they are by being handed an authCode and echoing it back. accounts.TicketDesk
+# mints them; 0x0020 is the first message on those connections and 0x0200 is the
+# second, so a connection knows itself before it can ask anything.
+#
+# These two are what an unnamed connection falls back to, and they are only
+# reachable when something asks a character question before saying who it is.
+FALLBACK_AUTH_CODE = 0x1234ABCD
+FALLBACK_ACCOUNT_ID = accounts.FIRST_ACCOUNT_ID
 
 
-def ok_login_params(host_be: int = 0x0100007F, port: int = GAME_PORT) -> bytes:
+def ok_login_params(
+    host_be: int = 0x0100007F,
+    port: int = GAME_PORT,
+    auth_code: int = FALLBACK_AUTH_CODE,
+    account_id: int = FALLBACK_ACCOUNT_ID,
+) -> bytes:
     """Build MsgSvOkLoginServerLogin's parameters.
 
     The client's own trace names every field::
@@ -435,12 +450,17 @@ def ok_login_params(host_be: int = 0x0100007F, port: int = GAME_PORT) -> bytes:
     so the layout is u16 paramSize, then the relay ticket (u32 ip, u16 port,
     u32 authCode), then u32 accountId and u8 accountType. The address is stored
     the way inet_addr() keeps it, so 127.0.0.1 is 0x0100007F. The client hands
-    authCode straight back to the game server as MsgClNotifyAuthCode.
+    authCode straight back to the game server as MsgClNotifyAuthCode, which is
+    how the connection it opens there gets an account.
     """
-    return struct.pack(">HIHIIB", 0, host_be, port, AUTH_CODE, ACCOUNT_ID, 0)
+    return struct.pack(">HIHIIB", 0, host_be, port, auth_code, account_id, 0)
 
 
-def ok_school_select_params(host_be: int = 0x0100007F, port: int = SCHOOL_PORT) -> bytes:
+def ok_school_select_params(
+    host_be: int = 0x0100007F,
+    port: int = SCHOOL_PORT,
+    auth_code: int = FALLBACK_AUTH_CODE,
+) -> bytes:
     """Build MsgSvOkSchoolSelect's parameters.
 
     Output_MsgSvOkSchoolSelect::serialize (0x8F7470) writes u32, u16, u32 —
@@ -448,7 +468,7 @@ def ok_school_select_params(host_be: int = 0x0100007F, port: int = SCHOOL_PORT) 
     screen it drives (「学校に接続しています」) wants exactly that: address, port
     and the authCode the client will echo back as MsgClNotifyAuthCode.
     """
-    return struct.pack(">IHI", host_be, port, AUTH_CODE)
+    return struct.pack(">IHI", host_be, port, auth_code)
 
 
 def timesync_reply(request: bytes, first: bool) -> bytes:
@@ -655,6 +675,14 @@ class _Session:
         self.in_cipher: mps_cipher.Blowfish | None = None
         self.out_cipher: mps_cipher.Blowfish | None = None
         self.syncs = 0
+        # Which account this connection is, and its characters. Both stay unset
+        # until the connection names itself -- with a registration code on the
+        # login port, or by echoing an authCode on the game and school ports.
+        # ⚠️ None is not "account 1": a store handed out before the connection
+        # said who it was would answer every question plausibly and wrongly,
+        # which is worse than answering nothing. See MpsServer._chars.
+        self.account_id = 0
+        self.characters: CharacterStore | None = None
         self.chara_id = 0  # whoever MsgClRequestSchoolLogin named, 0 before 登校
         # 授業の鐘. Not saved with the character: a bell is a moment, and one
         # that rang while nobody was logged in is not owed to anyone afterwards.
@@ -825,7 +853,8 @@ class MpsServer:
         config: ServiceConfig,
         name: str = "mps",
         header_size: int = 0,
-        characters: CharacterStore | None = None,
+        accountstore: "accounts.AccountStore | None" = None,
+        tickets: "accounts.TicketDesk | None" = None,
         advertise_ip: str = "127.0.0.1",
     ) -> None:
         self.root = root
@@ -838,10 +867,13 @@ class MpsServer:
         # the connection.
         self.advertise_ip = advertise_ip
         self.advertise_host_be = inet_u32(advertise_ip)
-        # Shared with the other ports when run_all.py passes one in: the client
-        # creates a character on the school server and may ask any connection
-        # for the list.
-        self.characters = characters or CharacterStore(root / "runtime" / "characters.json")
+        # Shared with the other ports when run_all.py passes them in, and they
+        # have to be: the client creates a character on the school server, may
+        # ask any connection for the list, and hops between the three ports
+        # carrying an authCode that only means something if all three read the
+        # same desk.
+        self.accounts = accountstore or accounts.AccountStore(root)
+        self.tickets = tickets or accounts.TicketDesk()
         # 自主トレルーム, held by the server rather than the session because a
         # room outlives whoever asks about it. Not persisted: a 看板 is up only
         # while its leader is logged in, and 0x580D reason 2 (切断による) is the
@@ -853,6 +885,47 @@ class MpsServer:
         # The out-of-band console; see _drain_console.
         self.console_path = runtime / "console.txt"
         self.tag = f"{name}{config.port}"
+
+    def _bind(self, session: "_Session", account_id: int, how: str) -> None:
+        """Say which account this connection is, once it has named itself."""
+        if session.account_id == account_id:
+            return
+        if session.account_id:
+            # Two different accounts on one connection is not something the
+            # client does, so it means a ticket was read wrong. Say so and take
+            # the newer one, because the alternative -- keeping the old store
+            # while the client believes it switched -- writes one player's
+            # progress into another player's file.
+            print(
+                f"[{self.tag}] ⚠ connection was account {session.account_id}, "
+                f"now says {account_id} ({how})"
+            )
+        session.account_id = account_id
+        session.characters = self.accounts.characters(account_id)
+        print(
+            f"[{self.tag}] connection is account {account_id} ({how}); "
+            f"characters: {session.characters.summary()}"
+        )
+
+    def _chars(self, session: "_Session") -> CharacterStore:
+        """This connection's characters, falling back loudly if it never said.
+
+        Every path that gets here is supposed to have gone through _bind first,
+        so reaching the fallback is a finding: it means a character question
+        arrived on a connection that sent neither a registration code nor an
+        authCode we issued. Answering out of account 1 keeps the single-player
+        case working the way it did before accounts existed, and the log line is
+        there so that a second player seeing someone else's characters has an
+        entry to find rather than a mystery.
+        """
+        if session.characters is None:
+            print(
+                f"[{self.tag}] ⚠ character question before this connection named "
+                f"an account; falling back to account {FALLBACK_ACCOUNT_ID}"
+            )
+            self._bind(session, FALLBACK_ACCOUNT_ID, "fallback")
+        assert session.characters is not None
+        return session.characters
 
     def _packet(self, session: "_Session", tag: int, body: bytes) -> bytes:
         header = b"" if tag in (TAG_KEX1, TAG_KEX2, TAG_KEX3) else self.header
@@ -1033,7 +1106,7 @@ class MpsServer:
         if found is None:
             return b""
         name, kind = found
-        love = self.characters.romance(session.chara_id)
+        love = self._chars(session).romance(session.chara_id)
         if love is None:
             return b""
         if kind == "main":
@@ -1043,7 +1116,7 @@ class MpsServer:
             note = "日常会話" + (" -> メインイベント!" if advanced else "")
         if not changed:
             return b""
-        self.characters.set_romance(session.chara_id, love)
+        self._chars(session).set_romance(session.chara_id, love)
         print(f"[{self.tag}] romance {name} {note}: {love.line(name)}")
         # Queued, not said: see _Session.pending_say. The save above is what
         # matters and it has already happened; this is only the receipt.
@@ -1424,19 +1497,61 @@ class MpsServer:
                 f"params={params.hex() or '-'}"
             )
             if msg_type == MSG_CL_REQUEST_LOGIN:
+                # The one message that names an account. See accounts.py for
+                # what registrationCode holds and how that was measured.
+                code = accounts.registration_code(params)
+                account_id = self.accounts.account_id(code)
+                self._bind(session, account_id, f"code {accounts.label(code)}")
+                auth_code = self.tickets.issue(account_id)
                 print(
                     f"[{self.tag}] next hop {self.advertise_ip}:{GAME_PORT}, "
-                    f"authCode={AUTH_CODE:#x}"
+                    f"authCode={auth_code:#x} for account {account_id}"
                 )
                 return self._answer(
                     session,
                     sequence,
                     MSG_SV_OK_LOGIN,
-                    ok_login_params(self.advertise_host_be),
+                    ok_login_params(
+                        self.advertise_host_be,
+                        auth_code=auth_code,
+                        account_id=account_id,
+                    ),
                 )
+            if msg_type == MSG_CL_NOTIFY_AUTH_CODE:
+                # The first message on the game and school connections, and the
+                # only thing either of them ever says about which account it is.
+                # It carries back the u32 handed out with the relay ticket, so
+                # the desk that minted it can say whose connection this is.
+                #
+                # Answering nothing is still right -- it is a notify -- but it
+                # is no longer ignored.
+                echoed = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+                account_id = self.tickets.redeem(echoed)
+                if account_id is None:
+                    print(
+                        f"[{self.tag}] ⚠ authCode {echoed:#x} was not issued here; "
+                        "this connection stays unnamed"
+                    )
+                else:
+                    self._bind(session, account_id, f"authCode {echoed:#x}")
+                return None
             if msg_type == MSG_CL_REQUEST_GAME_LOGIN:
                 # Input_MsgSvOkGameServerLogin::deserialize (0x8DB8E0) reads a
                 # single u16, which the client's own trace names schoolId.
+                #
+                # The tail of the request is the accountId this server sent at
+                # login, echoed back (`version[12+1]={%c}accountId=%d`). Nothing
+                # is decided on it -- 0x0020 arrived first and already named the
+                # connection -- but disagreeing with it means one of the two
+                # paths is wrong, and a second opinion is only useful if someone
+                # looks at it.
+                if len(params) >= 4:
+                    echoed = struct.unpack_from(">I", params, len(params) - 4)[0]
+                    if session.account_id and echoed != session.account_id:
+                        print(
+                            f"[{self.tag}] ⚠ accountId={echoed} in 0x0200 but the "
+                            f"authCode said account {session.account_id}"
+                        )
                 return self._answer(
                     session, sequence, MSG_SV_OK_GAME_LOGIN, struct.pack(">H", 0)
                 )
@@ -1448,17 +1563,17 @@ class MpsServer:
                 # what a fourth entry does to its list buffer. KONAMI's server
                 # would never have sent one, so refusing is what the client was
                 # built to meet.
-                if self.characters.full():
+                if self._chars(session).full():
                     print(
                         f"[{self.tag}] create refused: account already has "
-                        f"{MAX_CHARACTERS}; {self.characters.summary()}"
+                        f"{MAX_CHARACTERS}; {self._chars(session).summary()}"
                     )
                     return self._answer(
                         session, sequence, MSG_SV_NG_CHARACTER_CREATE, NG_REASON
                     )
                 # Output_MsgSvOkCharacterCreate::serialize (0x8DCD80) writes one
                 # u32 through the stream's write-u32 slot, and nothing else.
-                chara_id = self.characters.add(params)
+                chara_id = self._chars(session).add(params)
                 print(f"[{self.tag}] character #{chara_id}: {describe(params)}")
                 return self._answer(
                     session, sequence, MSG_SV_OK_CHARACTER_CREATE, struct.pack(">I", chara_id)
@@ -1472,8 +1587,8 @@ class MpsServer:
                 # with NG_REASON. Either way an unknown id gets an answer rather
                 # than silence, which would leave the dialog spinning forever.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
-                if self.characters.remove(chara_id):
-                    print(f"[{self.tag}] deleted charaId={chara_id}; left: {self.characters.summary()}")
+                if self._chars(session).remove(chara_id):
+                    print(f"[{self.tag}] deleted charaId={chara_id}; left: {self._chars(session).summary()}")
                     return self._answer(session, sequence, MSG_SV_OK_CHARACTER_DESTROY, b"")
                 print(f"[{self.tag}] destroy: no charaId={chara_id}, answering Ng")
                 return self._answer(session, sequence, MSG_SV_NG_CHARACTER_DESTROY, NG_REASON)
@@ -1511,7 +1626,7 @@ class MpsServer:
                 # stream's +0x1C slot — the same one-byte error code
                 # MsgSvErrorCharaInfo uses.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
-                if self.characters.find(chara_id) is None:
+                if self._chars(session).find(chara_id) is None:
                     print(f"[{self.tag}] reentrance: no charaId={chara_id}, answering Ng")
                     return self._answer(session, sequence, MSG_SV_NG_REENTRANCE, bytes(1))
                 print(f"[{self.tag}] reentrance for charaId={chara_id} (no romance state to clear)")
@@ -1520,22 +1635,29 @@ class MpsServer:
                 # 238 bytes per entry; see characters.py for where each field
                 # came from. An empty list here is what sent the client back to
                 # the school screen right after it made a character.
-                print(f"[{self.tag}] characters: {self.characters.summary()}")
+                print(f"[{self.tag}] characters: {self._chars(session).summary()}")
                 return self._answer(
-                    session, sequence, MSG_SV_RESULT_CHARACTER_LIST, self.characters.entries()
+                    session, sequence, MSG_SV_RESULT_CHARACTER_LIST, self._chars(session).entries()
                 )
             if msg_type == 0x0303:
                 # Reply ids run Request/Ok/Ng in threes (0x0200/01/02 did), so
                 # MsgClRequestSchoolSelect(0x0303) answers as 0x0304.
+                #
+                # A third connection is about to open, and it will know nothing
+                # about this one, so it gets its own ticket for the same account.
+                account_id = session.account_id or FALLBACK_ACCOUNT_ID
+                auth_code = self.tickets.issue(account_id)
                 print(
                     f"[{self.tag}] school hop {self.advertise_ip}:{SCHOOL_PORT}, "
-                    f"authCode={AUTH_CODE:#x}"
+                    f"authCode={auth_code:#x} for account {account_id}"
                 )
                 return self._answer(
                     session,
                     sequence,
                     0x0304,
-                    ok_school_select_params(self.advertise_host_be),
+                    ok_school_select_params(
+                        self.advertise_host_be, auth_code=auth_code
+                    ),
                 )
             if msg_type == MSG_CL_REQUEST_SCHOOL_LOGIN:
                 # 「登校処理を行っています」. The request carries the u32 charaId
@@ -1545,7 +1667,7 @@ class MpsServer:
                 # (0x8F75F0) prints the message name and no fields.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
                 session.chara_id = chara_id
-                session.map_id, *pos = self.characters.location(chara_id)
+                session.map_id, *pos = self._chars(session).location(chara_id)
                 session.pos = (pos[0], pos[1])
                 # Swallow the bells for the lesson already under way, so that
                 # 登校 at 14:53 does not ring the 14:45 本鈴 at someone who
@@ -1622,7 +1744,7 @@ class MpsServer:
                 # write is fine — the client's parser reads them off the stream in
                 # order, and every other reply already goes out as one blob.
                 reply = self._answer(session, sequence, MSG_SV_OK_LOBBY_DATA_START, b"")
-                info = self.characters.find(session.chara_id)
+                info = self._chars(session).find(session.chara_id)
                 if info is None:
                     print(f"[{self.tag}] lobby: no charaId={session.chara_id}, adding nobody")
                     return reply
@@ -1699,7 +1821,7 @@ class MpsServer:
                 # field through the stream vtable's +0x1C slot (0xA49960, one byte),
                 # a slot the shape reader does not know about.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
-                info = self.characters.find(chara_id)
+                info = self._chars(session).find(chara_id)
                 if info is None and PROBE_ID_BASE <= chara_id < PROBE_ID_LIMIT:
                     # A stand-in — a doorway marker or a direction probe. None of
                     # them has a record of its own; hand back the player's, since
@@ -1707,7 +1829,7 @@ class MpsServer:
                     # whole id range rather than the marker count because the
                     # ruler's ids sit past the markers', and a stand-in that gets
                     # an Error back is one the client draws nothing for.
-                    info = self.characters.find(session.chara_id)
+                    info = self._chars(session).find(session.chara_id)
                 if info is None:
                     print(f"[{self.tag}] chara info: no charaId={chara_id}, answering Error")
                     return self._answer(session, sequence, MSG_SV_ERROR_CHARA_INFO, bytes(1))
@@ -1716,7 +1838,7 @@ class MpsServer:
                     session,
                     sequence,
                     MSG_SV_RESULT_CHARA_INFO,
-                    chara_info(info, in_club=self.characters.in_club(chara_id)),
+                    chara_info(info, in_club=self._chars(session).in_club(chara_id)),
                 )
             if msg_type == curriculum.MSG_CL_QUERY_CURRICULUM:
                 # 「生徒情報」→「時間割」. The request is empty and the answer is
@@ -1745,8 +1867,8 @@ class MpsServer:
                 # from lesson.bin. Whether it really does is what opening this
                 # screen is meant to show.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
-                card = self.characters.scorecard(chara_id)
-                names = self.characters.full_name(chara_id)
+                card = self._chars(session).scorecard(chara_id)
+                names = self._chars(session).full_name(chara_id)
                 if card is None or names is None:
                     print(f"[{self.tag}] scorecard: no charaId={chara_id}, answering Error")
                     return self._answer(
@@ -1776,8 +1898,8 @@ class MpsServer:
                 # since been read back off the screen too: the same character
                 # now draws 「試験レベル１」.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
-                sheet = self.characters.ability(chara_id)
-                card = self.characters.scorecard(chara_id)
+                sheet = self._chars(session).ability(chara_id)
+                card = self._chars(session).scorecard(chara_id)
                 if sheet is None or card is None:
                     print(f"[{self.tag}] ability: no charaId={chara_id}, answering Error")
                     return self._answer(
@@ -1808,7 +1930,7 @@ class MpsServer:
                 # retries until answered. Empty deck; see club.py for why that
                 # avoids guessing at the entry layout.
                 deck_id = club.parse_deck_query(params)
-                member = self.characters.club(session.chara_id)
+                member = self._chars(session).club(session.chara_id)
                 use = member.use_type(deck_id) if member else club.USE_TYPE_NONE
                 print(f"[{self.tag}] club deck {deck_id}: empty, useType={use:#04x}")
                 return self._answer(
@@ -1846,7 +1968,7 @@ class MpsServer:
                         club.MSG_SV_NG_CLUB_DECK_UPDATE,
                         struct.pack(">BH", club.NG_DECK_KEYWORD_NOT_OWNED, 0),
                     )
-                member = self.characters.club(session.chara_id)
+                member = self._chars(session).club(session.chara_id)
                 if member is None:
                     return self._answer(
                         session,
@@ -1855,7 +1977,7 @@ class MpsServer:
                         struct.pack(">BH", club.NG_DECK_NOT_FOUND, 0),
                     )
                 member.deck_use[deck_id] = use
-                self.characters.set_club(session.chara_id, member)
+                self._chars(session).set_club(session.chara_id, member)
                 print(f"[{self.tag}] club deck update {deck_id}: useType={use:#04x}")
                 return self._answer(
                     session,
@@ -2125,7 +2247,7 @@ class MpsServer:
                     )
                     session.map_id, session.pos = values[0], (values[1], values[2])
                     session.direction = values[3]
-                if self.characters.set_position(
+                if self._chars(session).set_position(
                     session.chara_id, session.pos, session.map_id
                 ):
                     print(
@@ -2211,7 +2333,7 @@ class MpsServer:
                 # would. See chat.py for both messages' layouts and for why the
                 # server, not the client, has to keep the strings short.
                 said = chat.parse_cast(params)
-                info = self.characters.find(session.chara_id)
+                info = self._chars(session).find(session.chara_id)
                 who = display_name(info) if info else "?"
                 print(f"[{self.tag}] chat {who}: {said!r}")
                 reply = self._answer(
@@ -2249,7 +2371,7 @@ class MpsServer:
         anything specific.
         """
         club_id = club.parse_enter(params)
-        state = self.characters.club(session.chara_id)
+        state = self._chars(session).club(session.chara_id)
         if club_id is None or state is None:
             print(f"[{self.tag}] club enter: no charaId={session.chara_id} or short body")
             return self._answer(
@@ -2272,7 +2394,7 @@ class MpsServer:
                 club.ng_enter_params(reason, remain),
             )
         state.enter(club_id)
-        self.characters.set_club(session.chara_id, state)
+        self._chars(session).set_club(session.chara_id, state)
         print(f"[{self.tag}] club enter charaId={session.chara_id} -> {state.summary()}")
         return self._answer(session, sequence, club.MSG_SV_OK_CLUB_ENTER, b"")
 
@@ -2282,7 +2404,7 @@ class MpsServer:
         Leaving stamps the day so the ten-day wait can be measured; nothing else
         on this server reads that stamp, which is the point of writing it now.
         """
-        state = self.characters.club(session.chara_id)
+        state = self._chars(session).club(session.chara_id)
         if state is None:
             print(f"[{self.tag}] club part: no charaId={session.chara_id}")
             return self._answer(
@@ -2298,7 +2420,7 @@ class MpsServer:
                 session, sequence, club.MSG_SV_NG_CLUB_PART, club.ng_part_params(reason)
             )
         left = state.part()
-        self.characters.set_club(session.chara_id, state)
+        self._chars(session).set_club(session.chara_id, state)
         print(
             f"[{self.tag}] club part charaId={session.chara_id} left {club.name(left)}, "
             f"{club.REJOIN_DAYS}-day wait starts"
@@ -2311,8 +2433,15 @@ class MpsServer:
     # ------------------------------------------------------------------
 
     def _tr_names(self, chara_id: int) -> tuple[bytes, bytes]:
-        """The two fixed-width name halves 0x580C and 0x580F carry."""
-        names = self.characters.full_name(chara_id)
+        """The two fixed-width name halves 0x580C and 0x580F carry.
+
+        Asked about a charaId rather than a connection, and once a room can hold
+        two players that id will often belong to somebody else's account. The id
+        names its own account, so this does not have to search: see
+        accounts.owner_of.
+        """
+        store = self.accounts.owner_of(chara_id)
+        names = store.full_name(chara_id) if store else None
         return names if names else (b"\x00" * trainingroom.NAME_LEN,) * 2
 
     def _tr_roster(self, session: "_Session", room: "trainingroom.Room") -> bytes:
@@ -2552,23 +2681,23 @@ class MpsServer:
         same commands — see _drain_console for why that had to exist.
         """
         reply = b""
-        info = self.characters.find(session.chara_id)
-        love = self.characters.romance(session.chara_id)
-        card = self.characters.scorecard(session.chara_id)
-        sheet = self.characters.ability(session.chara_id)
-        member = self.characters.club(session.chara_id)
+        info = self._chars(session).find(session.chara_id)
+        love = self._chars(session).romance(session.chara_id)
+        card = self._chars(session).scorecard(session.chara_id)
+        sheet = self._chars(session).ability(session.chara_id)
+        member = self._chars(session).club(session.chara_id)
         answer = chat.respond(
             said, session.map_id, session.pos, love, card, session.lesson,
             sheet, session.in_class, session.exam, member,
         )
         if answer.romance_save and love is not None:
-            self.characters.set_romance(session.chara_id, love)
+            self._chars(session).set_romance(session.chara_id, love)
         if answer.scorecard_save and card is not None:
-            self.characters.set_scorecard(session.chara_id, card)
+            self._chars(session).set_scorecard(session.chara_id, card)
         if answer.ability_save and sheet is not None:
-            self.characters.set_ability(session.chara_id, sheet)
+            self._chars(session).set_ability(session.chara_id, sheet)
         if answer.club_save and member is not None:
-            self.characters.set_club(session.chara_id, member)
+            self._chars(session).set_club(session.chara_id, member)
         if answer.npc_event is not None:
             session.npc_event = answer.npc_event
         if answer.select is not None:
@@ -2648,7 +2777,7 @@ class MpsServer:
             # standing. Same reason as the move cast; see the pose branch there.
             session.pose = stress.POSE_STANDING
             session.sat_at = 0.0
-            self.characters.set_position(session.chara_id, session.pos, map_id)
+            self._chars(session).set_position(session.chara_id, session.pos, map_id)
             print(
                 f"[{self.tag}] chat warp charaId={session.chara_id} -> map "
                 f"{map_id} ({MAP_NAMES.get(map_id, '?')}) at {session.pos} "
@@ -2682,7 +2811,7 @@ class MpsServer:
         at 0x008E34F0 field by field and the counts are inside the client's own
         buffers, but nothing here has been drawn on a screen yet.
         """
-        info = self.characters.find(session.chara_id)
+        info = self._chars(session).find(session.chara_id)
         if info is None:
             print(f"[{self.tag}] lesson start: no charaId={session.chara_id}")
             return self._answer(
@@ -2692,7 +2821,7 @@ class MpsServer:
                 lesson.ng_params(lesson.REASON_NOT_IN_CLASSROOM),
             )
         fields = parse_create_info(info)
-        card = self.characters.scorecard(session.chara_id)
+        card = self._chars(session).scorecard(session.chara_id)
         probe_id = lesson.PROBE["charaid"]
         seat = lesson.seat_params(
             seat_id=0,
@@ -2779,7 +2908,7 @@ class MpsServer:
         """
         if session.chara_id == 0:
             return b""
-        sheet = self.characters.ability(session.chara_id)
+        sheet = self._chars(session).ability(session.chara_id)
         if sheet is None:
             return b""
         if session.pose == stress.POSE_SITTING and session.sat_at:
@@ -2793,7 +2922,7 @@ class MpsServer:
                     if stress.healing(session.map_id)
                     else stress.SIT_SECONDS_PER_POINT
                 )
-                self.characters.set_ability(session.chara_id, sheet)
+                self._chars(session).set_ability(session.chara_id, sheet)
                 print(
                     f"[{self.tag}] 休憩: ストレス -{removed} -> {sheet.stress} "
                     f"({stress.screen(sheet.stress)}/100), 体調 "
@@ -2807,7 +2936,7 @@ class MpsServer:
         ドクターストップ is 「ノイローゼと怪我が重なった状態」, so it bars 学業
         as well; 怪我 alone bars クラブ活動, which this server does not have.
         """
-        sheet = self.characters.ability(session.chara_id)
+        sheet = self._chars(session).ability(session.chara_id)
         return sheet is not None and sheet.condition in (
             stress.NEUROSIS, stress.DOCTOR_STOP
         )
@@ -2836,8 +2965,8 @@ class MpsServer:
         server grows real accounts the seats fill themselves.
         """
         period = session.lesson
-        sheet = self.characters.ability(session.chara_id)
-        card = self.characters.scorecard(session.chara_id)
+        sheet = self._chars(session).ability(session.chara_id)
+        card = self._chars(session).scorecard(session.chara_id)
         test_level = card.test_level() if card is not None else 1
         question_no, target_id = lesson_skill.parse_request(msg_type, params)
         name = lesson_skill.NAMES.get(msg_type, "?")
@@ -2861,7 +2990,7 @@ class MpsServer:
         if notify is not None:
             out += self._answer(session, 0 if out else seen, notify[0], notify[1])
         if sheet is not None:
-            self.characters.set_ability(session.chara_id, sheet)
+            self._chars(session).set_ability(session.chara_id, sheet)
             out += self._push_vitals(session, sheet)
         return out
 
@@ -3025,13 +3154,13 @@ class MpsServer:
         and a lesson that quietly added 64 to one of the six would be exactly the
         perturbation. Whenever it is set, no ability is written to the save.
         """
-        card = self.characters.scorecard(session.chara_id)
+        card = self._chars(session).scorecard(session.chara_id)
         attendance = 0
         if card is not None:
             attendance = card.attend(period.subject)
             card.answered(period.subject, period.asked, period.right)
             grade = card.regrade(period.subject)
-            self.characters.set_scorecard(session.chara_id, card)
+            self._chars(session).set_scorecard(session.chara_id, card)
             print(f"[{self.tag}] lesson end: {curriculum.SUBJECTS[period.subject]} "
                   f"{period.summary()}, 出席 {attendance} 回, "
                   f"通算 {card.rate(period.subject):.0%}, "
@@ -3047,14 +3176,14 @@ class MpsServer:
         measuring = not (after is None and before is None)
         if not measuring:
             after, before = self._file_ability(session, period)
-        sheet = self.characters.ability(session.chara_id)
+        sheet = self._chars(session).ability(session.chara_id)
         stress_now, condition_now = 0, stress.HEALTHY
         if sheet is not None and measuring:
             stress_now, condition_now = sheet.stress, sheet.condition
         elif sheet is not None:
             added, condition_now = stress.after_lesson(sheet)
             stress_now = sheet.stress
-            self.characters.set_ability(session.chara_id, sheet)
+            self._chars(session).set_ability(session.chara_id, sheet)
             print(f"[{self.tag}] lesson end: ストレス +{added} -> {stress_now} "
                   f"({stress.screen(stress_now)}/100), 体調 "
                   f"{stress.name(condition_now)}")
@@ -3086,7 +3215,7 @@ class MpsServer:
         Clamped to a u16 at both ends: the field is unsigned on the wire, so a
         run of bad lessons stops at zero rather than wrapping to レベル 256.
         """
-        sheet = self.characters.ability(session.chara_id)
+        sheet = self._chars(session).ability(session.chara_id)
         if sheet is None:
             return None, None
         before = list(sheet.params)
@@ -3094,7 +3223,7 @@ class MpsServer:
         sheet.params = [
             max(0, min(0xFFFF, value + step)) for value, step in zip(before, delta)
         ]
-        self.characters.set_ability(session.chara_id, sheet)
+        self._chars(session).set_ability(session.chara_id, sheet)
         moved = " ".join(
             f"{name} {before[index]}→{sheet.params[index]}"
             for index, name in enumerate(ability.ABILITIES)
@@ -3125,7 +3254,7 @@ class MpsServer:
         subject = session.bell.rang_subject
         if refusal is None and session.exam.taken(subject):
             refusal = exam.REASON_ALREADY_SAT
-        card = self.characters.scorecard(session.chara_id)
+        card = self._chars(session).scorecard(session.chara_id)
         course = exam.course_of(card) if card is not None else 0
         if refusal is None and not exam.has_questions(subject, course):
             refusal = exam.REASON_NO_QUESTIONS
@@ -3154,7 +3283,7 @@ class MpsServer:
         """
         subject = session.bell.subject if session.bell.subject >= 0 else \
             session.bell.rang_subject
-        card = self.characters.scorecard(session.chara_id)
+        card = self._chars(session).scorecard(session.chara_id)
         course = exam.course_of(card) if card is not None else 0
         questions = exam.draw(subject, course)
         if not questions:
@@ -3231,10 +3360,10 @@ class MpsServer:
             print(f"[{self.tag}] exam end: {name}, no sheet was ever sent — 0 点")
         else:
             marked, right = exam.score(paper.questions, paper.sheet)
-            card = self.characters.scorecard(session.chara_id)
+            card = self._chars(session).scorecard(session.chara_id)
             if card is not None:
                 last, best = card.record_exam(paper.subject, paper.course, marked)
-                self.characters.set_scorecard(session.chara_id, card)
+                self._chars(session).set_scorecard(session.chara_id, card)
                 done = card.completed(paper.subject, paper.course)
                 print(f"[{self.tag}] exam end: {name} 段階{paper.course + 1} "
                       f"{right}/{len(paper.questions)}問正解 → {marked} 点 "
@@ -3245,12 +3374,12 @@ class MpsServer:
                       f"{marked} 点 filed nowhere")
         # `p05_09` lists 試験 among the things that add ストレス, in the same
         # sentence as 授業 and with no quantity for either.
-        sheet = self.characters.ability(session.chara_id)
+        sheet = self._chars(session).ability(session.chara_id)
         stress_now, condition_now = 0, stress.HEALTHY
         if sheet is not None:
             added, condition_now = stress.charge(sheet, exam.STRESS_PER_EXAM)
             stress_now = sheet.stress
-            self.characters.set_ability(session.chara_id, sheet)
+            self._chars(session).set_ability(session.chara_id, sheet)
             print(f"[{self.tag}] exam end: ストレス +{added} -> {stress_now} "
                   f"({stress.screen(stress_now)}/100), 体調 "
                   f"{stress.name(condition_now)}")
