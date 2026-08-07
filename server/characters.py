@@ -519,6 +519,7 @@ def add_entry(
     names: tuple[bytes, bytes] | None = None,
     map_id: int = SPAWN_MAP_ID,
     direction: int = facing.DEFAULT,
+    action: int = 0,
 ) -> bytes:
     """Build one 74-byte MsgSvNotifyCharacterAdd (0x480F) entry.
 
@@ -567,7 +568,11 @@ def add_entry(
         out += struct.pack(">H", f[key])
     out += struct.pack(">HHH", map_id, *(pos or SPAWN_POS))  # posInfo
     out += struct.pack(">B", direction)
-    out += struct.pack(">H", 0)  # action
+    # ``action`` is the u16 nobody has read yet. It is the only field in the
+    # entry that could carry the icon 「ルームを作成したキャラクターの頭上の
+    # アイコン」 names, which is the manual's only way into somebody else's
+    # 自主トレ room -- so it gets a ruler of its own (chat.action_probes).
+    out += struct.pack(">H", action)
     out += struct.pack(">B", 0)  # pose
     out += struct.pack(">I", 0)  # friendGroupId
     if len(out) != TINY_ENTRY_SIZE:
