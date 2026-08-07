@@ -30,7 +30,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 LOG = ROOT / "runtime" / "run_all.log"
 PIDFILE = ROOT / "runtime" / "run_all.pid"
-PORTS = (12000, 12010, 12011, 12012, 12020, 8011, 443, 50, 80, 35573, 25573, 25574, 25575)
+PORTS = (12000, 12010, 12011, 12012, 12013, 12020, 8011, 443, 50, 80, 35573, 25573,
+         25574, 25575)
 
 WINDOWS = os.name == "nt"
 LINUX = sys.platform.startswith("linux")

@@ -23,12 +23,15 @@ the table this script writes exists -- whether they are let in at all.
   A code starts as `issued` -- generated and recorded, claimed by nobody, and
   refused at the login screen with 「レジストレーションコードが登録されていません」
   -- and becomes `active` when somebody claims it. That claim is the step KONAMI
-  put on their website.
+  put on their website, and this server has it too: the 登録 form on port 12013,
+  where a player enters their KONAMI ID and the code, and which is the only path
+  that records who a code belongs to.
 
-  Until this server has a page for it, --activate is that step, and the everyday
-  form of this command does both at once. Use --unregistered when you want the
-  two apart: to make a batch now and hand them out later, or to try the refusal
-  on a client.
+  So the everyday shape is `issue_code.py --unregistered`, hand the code over,
+  and let them register it. Issuing without that flag marks the code claimed
+  immediately and by nobody -- convenient when handing one straight to somebody
+  at the same machine, but it leaves no owner, and a code with no owner is one
+  anybody can log in with. --activate is the same shortcut applied later.
 
   Usage
   -----
@@ -36,10 +39,11 @@ the table this script writes exists -- whether they are let in at all.
       issue_code.py --note "for Kei"       ... with a reminder of who has it
       issue_code.py --count 10             ... ten of them
       issue_code.py --expires 2026-12-31   ... that stop working after a date
-      issue_code.py --unregistered         ... left unclaimed; --activate later
+      issue_code.py --unregistered         ... left for the player to 登録
 
       issue_code.py --list                 every code, with state and note
-      issue_code.py --activate CODE        claim an unregistered code
+      issue_code.py --activate CODE        claim a code without an owner
+      issue_code.py --unregister CODE      undo 登録; the code is unclaimed again
       issue_code.py --revoke CODE          stop it being used, keep the save
       issue_code.py --restore CODE         undo a revoke
 
@@ -74,6 +78,9 @@ STATE_LABEL = {
 def show(key: str, entry: dict) -> str:
     state = STATE_LABEL.get(entry.get("state", ""), entry.get("state", "?"))
     parts = [f"{codes.format_code(key)}  {state:<12}"]
+    owner = entry.get("konami_id")
+    if owner:
+        parts.append(f"-> {owner}")
     expires = entry.get("expires")
     if expires:
         parts.append(f"until {expires}")
@@ -94,10 +101,11 @@ def main() -> int:
     ap.add_argument(
         "--unregistered",
         action="store_true",
-        help="leave the code unclaimed, to be activated later",
+        help="leave the code for the player to 登録 on the form",
     )
     ap.add_argument("--list", action="store_true", help="show every code")
-    ap.add_argument("--activate", metavar="CODE", help="claim an unregistered code")
+    ap.add_argument("--activate", metavar="CODE", help="claim a code, with no owner")
+    ap.add_argument("--unregister", metavar="CODE", help="undo 登録 on a code")
     ap.add_argument("--revoke", metavar="CODE", help="stop a code being used")
     ap.add_argument("--restore", metavar="CODE", help="undo a revoke")
     args = ap.parse_args()
@@ -110,6 +118,14 @@ def main() -> int:
             return 0
         for key in sorted(table.table):
             print(show(key, table.table[key]))
+        return 0
+
+    if args.unregister:
+        key = codes.normalise(args.unregister)
+        if not table.unregister(key):
+            print(f"no such code: {codes.format_code(key)}", file=sys.stderr)
+            return 1
+        print(show(key, table.table[key]))
         return 0
 
     for flag, state in (

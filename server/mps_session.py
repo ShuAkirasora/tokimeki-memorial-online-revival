@@ -77,6 +77,7 @@ import codes
 import curriculum
 import exam
 import facing
+import konami_id
 import lesson
 import lesson_skill
 import mapgraph
@@ -887,6 +888,7 @@ class MpsServer:
         header_size: int = 0,
         accountstore: "accounts.AccountStore | None" = None,
         tickets: "accounts.TicketDesk | None" = None,
+        tokens: "konami_id.TokenDesk | None" = None,
         advertise_ip: str = "127.0.0.1",
     ) -> None:
         self.root = root
@@ -906,6 +908,10 @@ class MpsServer:
         # same desk.
         self.accounts = accountstore or accounts.AccountStore(root)
         self.tickets = tickets or accounts.TicketDesk()
+        # Minted by the auth service on the HTTPS connection and redeemed
+        # here, so this is the same object those servers hold or the token
+        # the client carries over means nothing.
+        self.tokens = tokens or konami_id.TokenDesk()
         # 自主トレルーム, held by the server rather than the session because a
         # room outlives whoever asks about it. Not persisted: a 看板 is up only
         # while its leader is logged in, and 0x580D reason 2 (切断による) is the
@@ -1729,7 +1735,22 @@ class MpsServer:
                 # The one message that names an account. See accounts.py for
                 # what registrationCode holds and how that was measured.
                 code = accounts.registration_code(params)
+                # Who signed in at the auth service, carried across on the other
+                # field of this same message. See konami_id.py for how it gets
+                # here; "" is a client that never went through /login.php, and a
+                # token naming nobody is one whose personal key did not verify.
+                token = konami_id.token_from_params(accounts.session_id(params))
+                signed_in_as = self.tokens.who(token)
+                if signed_in_as:
+                    who = f"signed in as {signed_in_as}"
+                elif self.tokens.knows(token):
+                    who = "signed in as nobody (personal key did not verify)"
+                else:
+                    who = "no session token"
+                print(f"[{self.tag}] login: code {accounts.label(code)}, {who}")
                 reason = self.accounts.check(code)
+                if reason is None:
+                    reason = self.accounts.check_login(code, signed_in_as)
                 if reason is None:
                     try:
                         account_id = self.accounts.account_id(code)
