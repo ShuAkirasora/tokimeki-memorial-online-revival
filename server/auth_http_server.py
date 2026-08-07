@@ -340,6 +340,15 @@ class AuthHttpServer:
     # CR/LF and drops any line containing "PRIVATE KEY".  So csk must come last,
     # it may contain real newlines, and a plain PEM is exactly the right shape --
     # the armour lines are stripped and the base64 in between is kept.
+    # ⚠️ Inert, and not by accident of taste: the client copies session_id into
+    # the field it later sends as MsgClRequestLoginServerLogin's sessionId only
+    # when the value is exactly 64 bytes long (0x8A9BF0: cmp dword [esp+0x30],
+    # 0x40). Anything else is skipped -- with the login still reported as a
+    # success -- so this sixteen-byte value has never once been written anywhere,
+    # and the 64 zero bytes seen at the head of 0x7000 are this line's doing and
+    # not the client's. Measured by sending 64 bytes instead: they arrive there
+    # verbatim. Widen this to 64 to make the field carry something, and see
+    # accounts.py for why nothing reads it yet.
     SESSION_ID = "localsession0001"
 
     def _reply_fields(self, form: dict[str, list[str]], **extra: str) -> bytes:

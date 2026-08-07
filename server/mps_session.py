@@ -73,6 +73,7 @@ import ability
 import accounts
 import chat
 import club
+import codes
 import curriculum
 import exam
 import facing
@@ -464,6 +465,21 @@ def ok_login_params(
     how the connection it opens there gets an account.
     """
     return struct.pack(">HIHIIB", 0, host_be, port, auth_code, account_id, 0)
+
+
+def ng_login_params(reason: int) -> bytes:
+    """Build MsgSvNgLoginServerLogin's parameters: the refusal, and why.
+
+    ⚠️ The reason is one byte but the message is three, and the two in front of
+    it are not optional. Input_MsgSvNgLoginServerLogin::deserialize (0x8F5780)
+    reads a u16 into the object at +4 and only then the reason byte at +6 --
+    paramSize is a field of the parameter block, the same leading zero that
+    ok_login_params packs. Sending the reason on its own puts it where paramSize
+    belongs and the client never builds the message at all: no error, no
+    disconnection, the login screen simply keeps saying 「接続処理を行っています」
+    until it is closed. Measured; it cost a round trip to find.
+    """
+    return struct.pack(">HB", 0, reason)
 
 
 def ok_school_select_params(
@@ -1713,7 +1729,25 @@ class MpsServer:
                 # The one message that names an account. See accounts.py for
                 # what registrationCode holds and how that was measured.
                 code = accounts.registration_code(params)
-                account_id = self.accounts.account_id(code)
+                reason = self.accounts.check(code)
+                if reason is None:
+                    try:
+                        account_id = self.accounts.account_id(code)
+                    except RuntimeError as exc:
+                        # Out of account ids. The client has a sentence for
+                        # exactly this and it is better than a dropped
+                        # connection, which is what an uncaught error here used
+                        # to give.
+                        print(f"[{self.tag}] {exc}")
+                        reason = codes.REASON_ACCOUNT_CREATE_FAILED
+                if reason is not None:
+                    print(
+                        f"[{self.tag}] refusing code {accounts.label(code)}: "
+                        f"reason {reason}"
+                    )
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_LOGIN, ng_login_params(reason)
+                    )
                 self._bind(session, account_id, f"code {accounts.label(code)}")
                 auth_code = self.tickets.issue(account_id)
                 print(
