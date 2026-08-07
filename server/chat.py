@@ -155,6 +155,8 @@ HELP = (
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
     "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
     "/buka [<番号 1-8>|force <番号>|part|clear] クラブ入部・退部 (/club はクライアント側)",
+    "/kw [n <数>|add <id> [習熟度] [素]|del <id>|clear|blocks|deck <0-2> <id>…|use <0-2> <値>]"
+    " キーワード所持と部活デッキの中身",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words|lunch] <数> 0x6100 の実験用つまみ",
     "/skill [<拒否メッセージ> <reason>|clear] お助けスキル の reason を画面で確かめる",
@@ -629,14 +631,16 @@ def respond(
                 club_save=True,
             )
         if verb == "clear":
-            # Drops the leave stamps and the per-deck uses, not the membership.
-            # Both are things a test run leaves behind and cannot wait out: the
-            # ten-day wait locks the club for a week, and a deck use set by a
-            # smoke run would otherwise still be there next round, reading like
+            # Drops the leave stamps and everything about the three decks, not
+            # the membership and not the キーワード (/kw clear does those). All
+            # of it is what a test run leaves behind and cannot wait out: the
+            # ten-day wait locks the club for a week, and a deck a smoke run
+            # built would otherwise still be there next round, reading like
             # something the player chose.
             member.left.clear()
             member.deck_use.clear()
-            return Reply(["退部履歴とデッキ用途を消した", member.summary()], club_save=True)
+            member.deck_items.clear()
+            return Reply(["退部履歴とデッキを消した", member.summary()], club_save=True)
         forced = verb == "force"
         if forced:
             words = words[1:]
@@ -659,6 +663,89 @@ def respond(
                 return Reply([f"入部できない (reason={reason} remain={remain})"])
         member.enter(club_id)
         return Reply([member.summary()], club_save=True)
+
+    if word in ("kw", "keyword"):
+        # キーワード ownership — the left half of the 部活デッキ window, and the
+        # thing this server had no way to fill. ⚠️ THE GRANT IS INVENTED: the
+        # original earns a キーワード by using one in クラブ活動 until 習熟度
+        # fills, and there is no クラブ活動 here. The ids, the wire layout and
+        # the field meanings are restored; see club.py.
+        #
+        # ``n`` is the one to reach for first: it hands over the first N legal
+        # ids, which is the cheapest way to get a non-empty window on screen.
+        # ``add`` takes 習熟度 and クラブの素 so both can be read off the client:
+        # 習熟度 is drawn as a gauge whose full-scale value nothing states, and
+        # クラブの素 is only a guess at what clubSource holds. Sixteen keywords
+        # carrying sixteen different values is the ruler trick the ruler rule describes.
+        if member is None:
+            return Reply(["クラブが読めない (キャラ未選択?)"])
+        words = rest.split()
+        verb = words[0].lower() if words else ""
+        if verb == "blocks":
+            return Reply(
+                [f"keyword.bin {club.KEYWORD_COUNT} 個 / {len(club.KEYWORD_BLOCKS)} ブロック"]
+                + [f"  {first}-{last}" for first, last in club.KEYWORD_BLOCKS]
+            )
+        if verb == "clear":
+            member.keywords.clear()
+            return Reply(["キーワードを全部消した", member.summary()], club_save=True)
+        if verb == "n" and len(words) > 1 and words[1].lstrip("-").isdigit():
+            wanted = int(words[1])
+            if not 0 <= wanted <= club.KEYWORD_COUNT:
+                return Reply([f"0-{club.KEYWORD_COUNT} の範囲で"])
+            member.keywords.clear()
+            for keyword_id in club.keyword_ids()[:wanted]:
+                member.grant_keyword(keyword_id)
+            return Reply([member.summary()], club_save=True)
+        if verb == "deck" and len(words) > 1 and words[1].lstrip("-").isdigit():
+            # Put owned キーワード into a deck without touching the client. The
+            # window can do this too (select, ▷, 更 新), but its ＯＫ button
+            # hangs on 通信中, so building the deck here is the way to get a
+            # configured character in front of the screens that read one.
+            # ⚠️ deckId is 0-based: デッキ１ on screen is 0 on the wire.
+            deck_id = int(words[1])
+            if not 0 <= deck_id < club.DECK_COUNT:
+                return Reply([f"デッキは 0-{club.DECK_COUNT - 1} (画面の デッキ１ は 0)"])
+            wanted = [int(w) for w in words[2:] if w.lstrip("-").isdigit()]
+            if len(wanted) > club.DECK_CAPACITY:
+                return Reply([f"1 デッキ {club.DECK_CAPACITY} 枚まで"])
+            items = []
+            for keyword_id in wanted:
+                entry = member.keyword_deck_item(keyword_id)
+                if entry is None:
+                    return Reply([f"{keyword_id} を持っていない (/kw add {keyword_id})"])
+                items.append(entry)
+            member.set_deck(deck_id, items)
+            return Reply([member.summary()], club_save=True)
+        if verb == "use" and len(words) > 2 and all(w.lstrip("-").isdigit() for w in words[1:3]):
+            # ⚠️ The client enforces 「one deck per use」 itself (club.py), so
+            # this can build a state it never would. That is the point: it is how
+            # 「部活用 が無い」 and 「自主トレ用しか無い」 get told apart.
+            deck_id, use_type = int(words[1]), int(words[2])
+            if not 0 <= deck_id < club.DECK_COUNT:
+                return Reply([f"デッキは 0-{club.DECK_COUNT - 1}"])
+            member.deck_use[deck_id] = use_type & 0xFF
+            return Reply([member.summary()], club_save=True)
+        if verb in ("add", "del") and len(words) > 1 and words[1].lstrip("-").isdigit():
+            keyword_id = int(words[1])
+            if verb == "del":
+                if not member.revoke_keyword(keyword_id):
+                    return Reply([f"{keyword_id} は持っていない"])
+                return Reply([member.summary()], club_save=True)
+            numbers = [int(w) for w in words[2:4] if w.lstrip("-").isdigit()]
+            use_count = numbers[0] if numbers else 0
+            club_source = numbers[1] if len(numbers) > 1 else 0
+            if not member.grant_keyword(keyword_id, use_count, club_source):
+                return Reply([f"{keyword_id} は keyword.bin に無い (/kw blocks)"])
+            return Reply([member.summary()], club_save=True)
+        if not words:
+            owned = " ".join(
+                f"{keyword_id}({use_count},{source})"
+                for keyword_id, use_count, source in member.keywords
+            )
+            return Reply([member.summary()] + ([owned] if owned else []))
+        return Reply(["/kw [n <数>|add <id> [習熟度] [素]|del <id>|clear|blocks",
+                      "     |deck <デッキ 0-2> <id>…|use <デッキ> <useType>]"])
 
     if word == "ab":
         # 能力パラメータ, readable and pokeable — the same arrangement as /card

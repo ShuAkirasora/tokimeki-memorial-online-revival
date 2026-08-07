@@ -97,6 +97,93 @@ The day counter
 The wait is measured in real calendar days, matching `romance.py`'s ``lastTalk``
 — this server's clock is the host's wall clock and there is no separate in-game
 calendar to count against.
+
+キーワード, and what a 部活デッキ is made of
+--------------------------------------------
+A デッキ is a command list built out of キーワード and 部活奥義 (`p07_02`), and
+until now this server owned neither, so every list and every deck went out
+empty. The empty answer was right — a student who has just enrolled owns
+nothing — but it also meant the client could never enable 「ＯＫ」 on the deck
+window, which is the current suspect for why pressing 開始 in a 自主トレルーム
+produces no battle. So キーワード are now grantable, and a deck can hold things.
+
+⭐ THE ENTRY LAYOUT IS NOW SETTLED, out of the client's own reader rather than
+by guessing. 0x5B01 and 0x5B03 share one deserializer (0x8D9430) and it reads:
+
+    deckId  u8
+    count   u16
+    count × { kind u8, six bytes copied verbatim }
+    useType u8
+
+⚠️ This SUPERSEDES the earlier 「1+2+1+6+1, item layout unknown」 note. That
+reading came from a linear walk that counted the loop body once and reported the
+total as if the message were flat; the six bytes are not a field of the message,
+they are the payload of one entry. Seven bytes per entry, and the six are
+copied by the bulk reader (0xA49610) rather than parsed, which is what a union
+looks like from the outside: whichever half of the window an item came from, its
+own six bytes travel unexamined.
+
+⭐⭐ The union is now MEASURED for the キーワード half: with four keywords
+registered into デッキ３ the client sent kind = 0 and the same
+(keywordId, useCount, clubSource) triple the 0x4305 row carries — ⚠️ but
+LITTLE-ENDIAN, the only place in this protocol where anything is. The six bytes
+are the client's in-memory struct, handed to the bulk copier rather than parsed
+field by field, and the client is x86. See DECK_ITEM_KEYWORD.
+
+That is also why this server stores the six bytes VERBATIM and echoes them back
+instead of re-packing them: round-tripping bytes it has not parsed cannot send
+the client a key its tables lack — the shape of all three crashes so far —
+because every byte came from the client. The endianness being wrong in the log
+for one round is exactly the kind of mistake that policy absorbs.
+
+`keyword.bin`: 261 rows, and the ids are NOT 0-260
+--------------------------------------------------
+They arrive in six contiguous blocks on a stride of 150:
+
+    0-39   150-183   300-345   450-502   600-645   750-791
+
+Six blocks, and `drama_event_genre.bin` has exactly six rows (非部活系,
+校舎外非部活系, 屋外運動部系, 屋内運動部・総演部系, 文化部系, 校外系), so the
+stride is one block per genre with room to grow into. ⚠️ Anything outside the
+blocks is not a key the client can look up; grants go through ``keyword_exists``
+for the same reason ``inClub`` is range-checked.
+
+⭐ Independent confirmation that these ids are what a deck holds:
+`npc_clubdeck.bin` (200 rows, 「野球部初級攻撃系デッキ」 and friends) ends in a
+58-byte tail that reads as 25 × u16 with 0xFFFF for an empty slot, and across
+all 200 rows every one of the 2418 non-0xFFFF values in those 25 slots is a
+legal keyword id — 25/25 slots at 100%. The four u16 after them are something
+else (about half land outside the id set), and 25 is a deck's capacity as the
+original filled it. NOT USED by anything here yet; it is the sample to check a
+real deck against the day 練習 is implemented.
+
+    0x4303 -> 0x4304 nNum u32
+           -> 0x4305 list[count] × { keywordId u16, useCount u16,
+                                     clubSource u16 }        6B, all three u16
+                                                             read through +0x28
+
+⭐ ``useCount`` is 習熟度 and the manual says how it moves: 「クラブ活動で
+キーワードを使用するとアップする」, and it is drawn as a gauge rather than a
+number, which is why the field is a count rather than a level. ⚠️ ITS FULL-SCALE
+VALUE IS NOT MEASURED — nothing says what fills the gauge, so /kw takes it as an
+argument instead of the server picking.
+
+⚠️ ``clubSource`` is NOT a restriction. `p07_02` is explicit that キーワード do
+not depend on a club (「キーワードはクラブに依存しないため、どちらの用途でも
+全てのキーワードを登録することができます」), so it cannot be a filter on where
+a keyword may be registered. The likeliest reading is 「取得できるクラブの素」 —
+the synthesis item that keyword can yield, which the window hides behind ？？？
+until it has been obtained once, and which therefore has to be per-character.
+⚠️ THAT IS A GUESS. It goes out as 0 unless /kw is told otherwise.
+
+INVENTED: that a character can own a キーワード at all
+------------------------------------------------------
+The ids, the wire layout and the field meanings above are restored. What is
+invented is the grant: in the original a キーワード arrives by using one in
+クラブ活動 until 習熟度 fills, and there is no クラブ活動 here to use one in. So
+/kw is a knob in the same family as /ab and /card — it puts the character into a
+state the original would have reached by playing, so that the screens which read
+that state can be checked. Nothing on the wire is invented by it.
 """
 from __future__ import annotations
 
@@ -128,12 +215,16 @@ MSG_SV_NG_CLUB_PART = 0x5A05
 # categoryId u16 + id u16 + completeness u8 is exactly five, and `clubskill.bin`
 # keys really are the pair (「1:0」重いコンダラ).
 #
-# ⚠️ BOTH LISTS ARE EMPTY, and that is a restored answer rather than a stub.
-# キーワード are earned by using them in クラブ活動 and 部活奥義 by 奥義合成 at
-# a 顧問; this server has neither, so a character owns none of either. `p07_02`
-# is explicit that a デッキ is built out of these two lists, so an empty pair is
-# what the original sent a student who had just enrolled. Same shape as 早弁's
-# 「お弁当がない」: the refusal is the original's, not a gap in ours.
+# ⚠️ THE 部活奥義 LIST IS STILL ALWAYS EMPTY, and that is a restored answer
+# rather than a stub: 奥義 are obtained by 奥義合成 at a 顧問 out of synthesis
+# items, and neither exists here. Same shape as 早弁's 「お弁当がない」 — the
+# refusal is the original's, not a gap in ours.
+#
+# The キーワード list is no longer always empty. It was, for the same reason,
+# until it turned out to be the likely reason the deck window's ＯＫ never
+# enables and so the likely reason 開始 in a 自主トレルーム does nothing; /kw
+# grants them now. See the module docstring for what is restored (the ids, the
+# layout, the field meanings) and what is invented (the grant).
 MSG_CL_QUERY_KEYWORD_LIST = 0x4303
 MSG_SV_RESULT_KEYWORD_LIST = 0x4304
 MSG_SV_NOTIFY_KEYWORD_LIST = 0x4305
@@ -150,16 +241,11 @@ MSG_SV_NOTIFY_CLUB_SKILL_LIST = 0x4308
 #            deckId u8, clubDeck{item[count]={kind, …}}, useType u8
 #       -> 0x5B02 MsgSvErrorClubDeckList  reason u8
 #
-# ⚠️ THE ITEM LAYOUT IS NOT SETTLED. the shape reader reports 1+2+1+6+1 for the whole
-# message and the dump names only `kind` inside the entry, so the six bytes
-# after it are unaccounted for — and the shape reader has mis-split a fixed inner loop
-# twice before (the 試験 family). Sending an EMPTY deck sidesteps it entirely:
-# with count = 0 the loop body is never on the wire, so the reply is
-# deckId u8 + count u16 + useType u8 and nothing is being guessed.
-#
-# That is also the honest content. A deck is built out of キーワード and
-# 部活奥義 (`p07_02`), a character here owns none of either, so every deck is
-# empty — the same reasoning as the two lists above.
+# ⭐ THE ITEM LAYOUT IS SETTLED: ``kind u8`` then six bytes copied verbatim,
+# seven per entry, read out of the shared deserializer at 0x8D9430. The earlier
+# 「1+2+1+6+1, unknown」 note is SUPERSEDED — see the module docstring. This
+# server stores the six bytes as they arrived and echoes them back rather than
+# interpreting them, so nothing here can hand the client a key it lacks.
 #
 # ⭐⭐ ``useType`` IS A BIT FIELD, and all four values have been read back off
 # the screen — the window draws it as two checkboxes at its bottom right:
@@ -238,6 +324,45 @@ NO_CLUB = 0
 FIRST_CLUB = 1
 LAST_CLUB = 8  # 家庭科部; 9 and up are placeholders, see the module docstring
 
+# `keyword.bin`'s 261 keys, as the six blocks they actually come in. See the
+# module docstring: the stride is 150 and there is one block per
+# `drama_event_genre`, so the gaps are room the original left rather than a
+# reading error. Inclusive on both ends.
+KEYWORD_BLOCKS = (
+    (0, 39),      # 非部活系
+    (150, 183),   # 校舎外非部活系
+    (300, 345),   # 屋外運動部系
+    (450, 502),   # 屋内運動部・総演部系
+    (600, 645),   # 文化部系
+    (750, 791),   # 校外系
+)
+KEYWORD_COUNT = sum(last - first + 1 for first, last in KEYWORD_BLOCKS)  # 261
+
+# One entry of a デッキ on the wire: ``kind`` and then six bytes this server
+# stores without interpreting.
+#
+# ⭐⭐ kind = 0 IS キーワード, MEASURED: with ids 0/1/2/3 all at useCount 32
+# registered into デッキ３, the client sent kind=0 four times with payloads
+# 000020000000 / 010020000000 / 020020000000 / 030020000000.
+#
+# ⚠️⚠️ AND THOSE ARE LITTLE-ENDIAN — the only little-endian field group in this
+# whole protocol. `0000`/`0100`/`0200`/`0300` are ids 0-3 and `2000` is 32, both
+# byte-swapped relative to every other message. The reason is that the six bytes
+# are never parsed as message fields: the deserialiser hands them to the bulk
+# copier (0xA49610) and the client is x86, so what travels is its in-memory
+# struct. That also settles the union — the struct is the same
+# (keywordId, useCount, clubSource) triple the 0x4305 row carries, which the
+# client read big-endian off the wire and now writes back host-order.
+#
+# ⚠️ kind = 1 for 部活奥義 is still A GUESS. Nothing here can own one, so no
+# 0x5B03 has ever carried one.
+DECK_ITEM_BYTES = 6
+DECK_ITEM_KEYWORD = 0
+DECK_ITEM_CLUB_SKILL = 1
+# 25 slots is what `npc_clubdeck.bin` uses; see the module docstring. ⚠️ Used
+# only to refuse an absurd count, not as a rule the client is known to obey.
+DECK_CAPACITY = 25
+
 # error_message.bin 462: the sentence counts 日.
 REJOIN_DAYS = 10
 
@@ -273,6 +398,16 @@ def name(club_id: int) -> str:
     if 0 <= club_id < len(CLUB_NAMES):
         return CLUB_NAMES[club_id]
     return f"?{club_id}"
+
+
+def keyword_exists(keyword_id: int) -> bool:
+    """Is this a key `keyword.bin` actually has? See KEYWORD_BLOCKS."""
+    return any(first <= keyword_id <= last for first, last in KEYWORD_BLOCKS)
+
+
+def keyword_ids() -> "list[int]":
+    """Every legal キーワード id, in order."""
+    return [i for first, last in KEYWORD_BLOCKS for i in range(first, last + 1)]
 
 
 def playable(club_id: int) -> bool:
@@ -313,13 +448,117 @@ class Membership:
                     self.deck_use[int(key)] = int(value) & 0xFF
                 except (TypeError, ValueError):
                     continue
+        # Owned キーワード, in the order 0x4305 will send them: one
+        # [keywordId, useCount, clubSource] triple per row. A key the client's
+        # own table does not have is dropped rather than sent on, the same
+        # treatment inClub gets and for the same reason.
+        self.keywords: "list[list[int]]" = []
+        for row in saved.get("keywords") or ():
+            try:
+                keyword_id, use_count, club_source = (int(x) for x in row)
+            except (TypeError, ValueError):
+                continue
+            if not keyword_exists(keyword_id):
+                print(f"[club] keyword {keyword_id} is not in keyword.bin, dropping")
+                continue
+            if any(existing[0] == keyword_id for existing in self.keywords):
+                continue
+            self.keywords.append([keyword_id, use_count & 0xFFFF, club_source & 0xFFFF])
+        # Deck contents, as {deckId: [[kind, six-byte payload as hex], …]}. Hex
+        # rather than a parsed record on purpose: the payload is a union this
+        # server does not read, and storing it verbatim is what makes echoing it
+        # back safe. See the module docstring.
+        self.deck_items: "dict[int, list[list]]" = {}
+        stored = saved.get("deckItems")
+        if isinstance(stored, dict):
+            for key, rows in stored.items():
+                try:
+                    deck_id = int(key)
+                except (TypeError, ValueError):
+                    continue
+                items: "list[list]" = []
+                for row in rows or ():
+                    try:
+                        kind, payload = int(row[0]) & 0xFF, bytes.fromhex(str(row[1]))
+                    except (TypeError, ValueError, IndexError):
+                        continue
+                    if len(payload) == DECK_ITEM_BYTES:
+                        items.append([kind, payload.hex()])
+                if items:
+                    self.deck_items[deck_id] = items
 
     def to_json(self) -> dict:
         return {
             "inClub": self.in_club,
             "left": {str(key): value for key, value in sorted(self.left.items())},
             "deckUse": {str(key): value for key, value in sorted(self.deck_use.items())},
+            "keywords": [list(row) for row in self.keywords],
+            "deckItems": {
+                str(key): [list(row) for row in value]
+                for key, value in sorted(self.deck_items.items())
+            },
         }
+
+    # ------------------------------------------------------------ キーワード
+
+    def owns_keyword(self, keyword_id: int) -> bool:
+        return any(row[0] == keyword_id for row in self.keywords)
+
+    def grant_keyword(self, keyword_id: int, use_count: int = 0,
+                      club_source: int = 0) -> bool:
+        """Give this character a キーワード, or update the one it already has.
+
+        Returns False for a key `keyword.bin` does not have. INVENTED that this
+        happens at all — see the module docstring; the original fills 習熟度 by
+        playing クラブ活動, which does not exist here.
+        """
+        if not keyword_exists(keyword_id):
+            return False
+        row = [keyword_id, use_count & 0xFFFF, club_source & 0xFFFF]
+        for index, existing in enumerate(self.keywords):
+            if existing[0] == keyword_id:
+                self.keywords[index] = row
+                return True
+        self.keywords.append(row)
+        return True
+
+    def revoke_keyword(self, keyword_id: int) -> bool:
+        before = len(self.keywords)
+        self.keywords = [row for row in self.keywords if row[0] != keyword_id]
+        return len(self.keywords) != before
+
+    def keyword_rows(self) -> bytes:
+        """0x4305's body: count u16 then six bytes per row."""
+        out = struct.pack(">H", len(self.keywords))
+        for keyword_id, use_count, club_source in self.keywords:
+            out += struct.pack(">HHH", keyword_id, use_count, club_source)
+        return out
+
+    # ------------------------------------------------------------ 部活デッキ
+
+    def deck(self, deck_id: int) -> "list[list]":
+        return self.deck_items.get(deck_id, [])
+
+    def keyword_deck_item(self, keyword_id: int) -> "tuple[int, bytes] | None":
+        """Build the entry the client would have sent for an owned キーワード.
+
+        ⚠️ LITTLE-ENDIAN on purpose — see DECK_ITEM_KEYWORD. This is the one
+        place that composes a payload rather than echoing one, so it is also the
+        one place the endianness reading can be wrong in a way that shows up on
+        screen. Only an owned keyword can go in: a deck entry for something the
+        キーワード list did not mention is a key the client cannot look up.
+        """
+        for owned_id, use_count, club_source in self.keywords:
+            if owned_id == keyword_id:
+                return (DECK_ITEM_KEYWORD,
+                        struct.pack("<HHH", owned_id, use_count, club_source))
+        return None
+
+    def set_deck(self, deck_id: int, items: "list[tuple[int, bytes]]") -> None:
+        if items:
+            self.deck_items[deck_id] = [[kind, payload.hex()] for kind, payload in items]
+        else:
+            self.deck_items.pop(deck_id, None)
 
     def use_type(self, deck_id: int) -> int:
         """What to report for this deck, defaulting to what the client sends."""
@@ -384,7 +623,14 @@ class Membership:
         waits = " ".join(
             f"{name(club_id)}:{stamp}" for club_id, stamp in sorted(self.left.items())
         )
-        return f"クラブ {name(self.in_club)}" + (f" | 退部 {waits}" if waits else "")
+        decks = " ".join(
+            f"{deck_id}:{len(self.deck(deck_id))}枚/{self.use_type(deck_id):#04x}"
+            for deck_id in range(DECK_COUNT)
+        )
+        return (f"クラブ {name(self.in_club)}"
+                + (f" | 退部 {waits}" if waits else "")
+                + f" | キーワード {len(self.keywords)}"
+                + f" | デッキ {decks}")
 
 
 def ng_enter_params(reason: int, remain: int = 0) -> bytes:
@@ -397,15 +643,16 @@ def ng_part_params(reason: int) -> bytes:
     return struct.pack(">B", reason & 0xFF)
 
 
-def inventory_replies(owned: int = 0) -> "list[tuple[int, bytes]]":
-    """The two messages one 部活デッキ inventory query is answered with.
+def keyword_replies(member: "Membership | None") -> "list[tuple[int, bytes]]":
+    """The two messages the キーワード inventory query is answered with.
 
-    ``owned`` is the row count; there is no path to a non-zero one yet, and it
-    is a parameter so that the day there is, the Result and the Notify cannot
-    drift apart — they are the same number said twice.
+    The Result's count and the Notify's count are the same number said twice, so
+    both come off one list and cannot drift apart.
     """
+    rows = member.keyword_rows() if member is not None else struct.pack(">H", 0)
+    owned = struct.unpack_from(">H", rows, 0)[0]
     return [(MSG_SV_RESULT_KEYWORD_LIST, struct.pack(">I", owned)),
-            (MSG_SV_NOTIFY_KEYWORD_LIST, struct.pack(">H", owned))]
+            (MSG_SV_NOTIFY_KEYWORD_LIST, rows)]
 
 
 def skill_replies(owned: int = 0) -> "list[tuple[int, bytes]]":
@@ -414,9 +661,25 @@ def skill_replies(owned: int = 0) -> "list[tuple[int, bytes]]":
             (MSG_SV_NOTIFY_CLUB_SKILL_LIST, struct.pack(">H", owned))]
 
 
-def deck_reply(deck_id: int, use_type: int = USE_TYPE_NONE) -> bytes:
-    """0x5B01 for an empty deck: deckId u8, count u16 = 0, useType u8."""
-    return struct.pack(">BHB", deck_id & 0xFF, 0, use_type & 0xFF)
+def deck_reply(deck_id: int, use_type: int = USE_TYPE_NONE,
+               items: "list[list] | None" = None) -> bytes:
+    """0x5B01: deckId u8, count u16, count × (kind u8 + 6 bytes), useType u8.
+
+    ``items`` is what ``Membership.deck`` stores — (kind, payload-as-hex) pairs
+    that came off a 0x5B03 unchanged. Anything that is not six bytes long is
+    dropped rather than padded: a short payload would desynchronise the client's
+    reader for every entry after it.
+    """
+    body = b""
+    count = 0
+    for kind, payload_hex in items or ():
+        payload = bytes.fromhex(payload_hex)
+        if len(payload) != DECK_ITEM_BYTES:
+            continue
+        body += struct.pack(">B", kind & 0xFF) + payload
+        count += 1
+    return (struct.pack(">BH", deck_id & 0xFF, count) + body
+            + struct.pack(">B", use_type & 0xFF))
 
 
 def parse_deck_query(params: bytes) -> int:
@@ -424,19 +687,54 @@ def parse_deck_query(params: bytes) -> int:
     return params[0] if params else 0
 
 
-def parse_deck_update(params: bytes) -> "tuple[int, int, int] | None":
-    """0x5B03 -> ``(deckId, itemCount, useType)``, or None if it is not our shape.
+def parse_deck_update(params: bytes) -> "tuple[int, list[tuple[int, bytes]], int] | None":
+    """0x5B03 -> ``(deckId, items, useType)``, or None if the body does not fit.
 
-    ⚠️ Only the empty-deck form is read: deckId u8 + count u16 + useType u8.
-    A non-zero count means the client put items in, and the entry layout is not
-    settled (see above) — say so rather than mis-parse it.
+    ``items`` is (kind, six raw bytes) per entry, exactly as the client sent
+    them. The whole body has to add up — deckId u8 + count u16 + count × 7 +
+    useType u8 — and a length that does not is refused rather than truncated,
+    because a wrong count read as right would store garbage under a deck the
+    player is about to see.
     """
     if len(params) < 4:
         return None
     deck_id, count = struct.unpack_from(">BH", params, 0)
-    if count:
-        return (deck_id, count, params[-1])
-    return (deck_id, 0, params[3])
+    if count > DECK_CAPACITY:
+        return None
+    entry = 1 + DECK_ITEM_BYTES
+    if len(params) != 3 + count * entry + 1:
+        return None
+    items: "list[tuple[int, bytes]]" = []
+    for index in range(count):
+        at = 3 + index * entry
+        items.append((params[at], params[at + 1:at + entry]))
+    return (deck_id, items, params[-1])
+
+
+def describe_deck_item(kind: int, payload: bytes) -> str:
+    """One log line for an entry, decoded as well as raw.
+
+    ⚠️⚠️ LITTLE-ENDIAN, and that is measured rather than assumed — see
+    DECK_ITEM_KEYWORD. Everything else in this protocol is big-endian; these six
+    bytes are not, because they are never parsed as message fields. The payload
+    is stored and re-sent verbatim whatever this prints, so a wrong reading here
+    could not corrupt a deck — which is how the endianness got caught.
+    """
+    raw = f"kind={kind} payload={payload.hex()}"
+    if len(payload) != DECK_ITEM_BYTES:
+        return raw
+    if kind == DECK_ITEM_KEYWORD:
+        keyword_id, use_count, club_source = struct.unpack("<HHH", payload)
+        known = "" if keyword_exists(keyword_id) else " NOT IN keyword.bin"
+        return (f"{raw} (keyword id={keyword_id}{known} "
+                f"useCount={use_count} clubSource={club_source})")
+    if kind == DECK_ITEM_CLUB_SKILL:
+        # ⚠️ NOT MEASURED: nothing here can own a 部活奥義, so no 0x5B03 has ever
+        # carried one. The split follows the 0x4308 row (5B) plus one byte.
+        category, skill_id, completeness = struct.unpack("<HHB", payload[:5])
+        return (f"{raw} (clubSkill? {category}:{skill_id} "
+                f"completeness={completeness} tail={payload[5]:#04x})")
+    return raw
 
 
 def parse_enter(params: bytes) -> "int | None":

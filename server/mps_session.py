@@ -2172,29 +2172,36 @@ class MpsServer:
             if msg_type in (club.MSG_CL_QUERY_KEYWORD_LIST,
                             club.MSG_CL_QUERY_CLUB_SKILL_LIST):
                 # The 部活デッキ window, opened from the toolbar. Two queries,
-                # each answered with a count and then the rows; both counts are
-                # zero here because nothing on this server grants a キーワード or
-                # a 部活奥義. See club.py for why zero is the original's answer.
-                pairs = (club.inventory_replies()
-                         if msg_type == club.MSG_CL_QUERY_KEYWORD_LIST
-                         else club.skill_replies())
+                # each answered with a count and then the rows. The 部活奥義 half
+                # is still always empty — nothing here performs 奥義合成 — and
+                # club.py says why an empty list is the original's answer rather
+                # than a stub. The キーワード half is whatever /kw granted.
+                member = self._chars(session).club(session.chara_id)
+                if msg_type == club.MSG_CL_QUERY_KEYWORD_LIST:
+                    pairs = club.keyword_replies(member)
+                    owned = len(member.keywords) if member else 0
+                    print(f"[{self.tag}] club keyword list: {owned} owned")
+                else:
+                    pairs = club.skill_replies()
                 out = b""
                 for reply_type, reply_params in pairs:
                     out += self._answer(session, sequence, reply_type, reply_params)
                 return out
             if msg_type == club.MSG_CL_QUERY_CLUB_DECK_LIST:
                 # The third of the 部活デッキ window's queries, and the one it
-                # retries until answered. Empty deck; see club.py for why that
-                # avoids guessing at the entry layout.
+                # retries until answered. The entries go back out exactly as they
+                # came in on 0x5B03; see club.py.
                 deck_id = club.parse_deck_query(params)
                 member = self._chars(session).club(session.chara_id)
                 use = member.use_type(deck_id) if member else club.USE_TYPE_NONE
-                print(f"[{self.tag}] club deck {deck_id}: empty, useType={use:#04x}")
+                items = member.deck(deck_id) if member else []
+                print(f"[{self.tag}] club deck {deck_id}: {len(items)} items, "
+                      f"useType={use:#04x}")
                 return self._answer(
                     session,
                     sequence,
                     club.MSG_SV_RESULT_CLUB_DECK_LIST,
-                    club.deck_reply(deck_id, use),
+                    club.deck_reply(deck_id, use, items),
                 )
             if msg_type == club.MSG_CL_REQUEST_CLUB_DECK_UPDATE:
                 # 「更 新」. ⭐ This is the only place the client ever spells out
@@ -2203,28 +2210,18 @@ class MpsServer:
                 # whatever we were told.
                 parsed = club.parse_deck_update(params)
                 if parsed is None:
-                    print(f"[{self.tag}] club deck update: short body {params.hex()}")
+                    # Either too short or a count that does not match the body
+                    # length. ⚠️ Log the raw bytes: if the seven-byte entry ever
+                    # turns out to be wrong, this line is where it shows up.
+                    print(f"[{self.tag}] club deck update: body does not fit "
+                          f"deckId+count+7×count+useType, raw={params.hex()}")
                     return self._answer(
                         session,
                         sequence,
                         club.MSG_SV_NG_CLUB_DECK_UPDATE,
                         struct.pack(">BH", club.NG_DECK_NOT_FOUND, 0),
                     )
-                deck_id, count, use = parsed
-                if count:
-                    # Nothing here can own an item, so a non-empty deck means the
-                    # entry layout finally has a sample on the wire. Log it and
-                    # refuse rather than store bytes we cannot parse.
-                    print(
-                        f"[{self.tag}] club deck update {deck_id}: count={count} "
-                        f"UNEXPECTED, raw={params.hex()}"
-                    )
-                    return self._answer(
-                        session,
-                        sequence,
-                        club.MSG_SV_NG_CLUB_DECK_UPDATE,
-                        struct.pack(">BH", club.NG_DECK_KEYWORD_NOT_OWNED, 0),
-                    )
+                deck_id, items, use = parsed
                 member = self._chars(session).club(session.chara_id)
                 if member is None:
                     return self._answer(
@@ -2233,9 +2230,18 @@ class MpsServer:
                         club.MSG_SV_NG_CLUB_DECK_UPDATE,
                         struct.pack(">BH", club.NG_DECK_NOT_FOUND, 0),
                     )
+                # ⭐ Every entry gets logged as it arrived AND as the guessed
+                # reading of it, because 0x5B03 is the only place the client ever
+                # spells out a deck entry — this is the measurement, and it is
+                # still worth reading even though storing does not depend on it.
+                for kind, payload in items:
+                    print(f"[{self.tag}] club deck update {deck_id} item: "
+                          f"{club.describe_deck_item(kind, payload)}")
                 member.deck_use[deck_id] = use
+                member.set_deck(deck_id, items)
                 self._chars(session).set_club(session.chara_id, member)
-                print(f"[{self.tag}] club deck update {deck_id}: useType={use:#04x}")
+                print(f"[{self.tag}] club deck update {deck_id}: {len(items)} items, "
+                      f"useType={use:#04x}")
                 return self._answer(
                     session,
                     sequence,
