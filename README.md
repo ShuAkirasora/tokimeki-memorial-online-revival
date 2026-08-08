@@ -73,8 +73,9 @@ by, or connected to KONAMI in any way.
   dating-sim progression — did not survive alongside the client, and none of it is
   reimplemented here. What you get is a campus you can walk into and a set of levers, not a
   game you can play through.
-- **Not a public service.** There is no server to join, this repository will never run one,
-  and nothing here is or will be sold.
+- **Not a service.** This repository is the software, and nothing here is or will be sold.
+  It does not hand out a server to join: running one is something you do on your own
+  machine, which is what the whole of *Connecting a client* is about.
 - **Not a source of game files.** No client, no assets, no patched executable. You supply
   your own copy.
 
