@@ -318,6 +318,18 @@ code somebody issued by hand and gave you.
 python3 issue_code.py --unregistered      # prints something like WJUH-RTDC-M39X-HCDN-U26X
 ```
 
+Two limits sit on that page, and only one of them ever says so. Answers to an address that
+has asked a lot in the last hour, or been given a lot of codes today, start arriving a few
+seconds late and are otherwise unchanged — an address can be a whole building, so nothing
+here refuses on the strength of one. The exception is fifty self-issued codes in a day,
+which closes the self-serve form until tomorrow and tells you it has; `/register` and
+`issue_code.py` are unaffected, so a code issued by hand still works on the day it happens.
+Login answers slow down the same way after five wrong personal keys in a row for the same
+account, and the right key is never held back for a moment. Through a held login the client
+shows the same 「接続処理を行っています」 it shows through an ordinary one, so this reads as
+a slow network rather than as anything having gone wrong — see `server/throttle.py`, which
+also explains why none of this is a security boundary.
+
 Handing a code straight to somebody at the same machine is `issue_code.py` with no flag —
 it comes out ready to use, but with no owner, and a code with no owner is one anybody can
 log in with. `issue_code.py --list` shows every code, its state, and who registered it;

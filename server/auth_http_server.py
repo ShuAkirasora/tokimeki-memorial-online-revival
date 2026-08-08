@@ -11,6 +11,7 @@ from urllib.parse import parse_qs
 
 import konami_id
 from common import ServiceConfig, ensure_runtime_dirs, write_packet_log
+from throttle import Throttle
 
 
 def _windows_openssl() -> list[Path]:
@@ -143,6 +144,7 @@ class AuthHttpServer:
         advertise_ip: str = "127.0.0.1",
         directory: konami_id.Directory | None = None,
         tokens: konami_id.TokenDesk | None = None,
+        throttle: Throttle | None = None,
     ) -> None:
         self.root = root
         self.config = config
@@ -154,6 +156,10 @@ class AuthHttpServer:
         # passes one in; the defaults are for a lone instance under test.
         self.directory = directory or konami_id.Directory(root / "runtime" / "accounts")
         self.tokens = tokens or konami_id.TokenDesk()
+        # Shared for the same reason the desk is, and one more: a failure streak
+        # belongs to an account, and six of these answer on six ports. Counting
+        # per instance would mean six free runs of five instead of one.
+        self.throttle = throttle or Throttle()
         _, self.packet_dir = ensure_runtime_dirs(root)
         self.cert = root / "runtime" / "certs" / "auth.pem"
         if use_tls:
@@ -359,8 +365,15 @@ class AuthHttpServer:
     # anything. It was us. konami_id.TOKEN_LEN is that 64, and _login below is
     # what now fills it.
 
-    def _login(self, form: dict[str, list[str]]) -> str:
+    def _login(self, form: dict[str, list[str]]) -> tuple[str, float]:
         """Check the KONAMI ID, and answer with a token either way.
+
+        Returns the token and how long to hold it back. The delay is decided
+        after the check and lands only on an attempt that itself failed, so the
+        right personal key is never held for a moment however long the run of
+        wrong ones in front of it -- which is what makes this a delay and not a
+        lockout. throttle.py has the rest of the reasoning; the ceiling of it,
+        eight seconds, is under a measured limit of thirty.
 
         ⚠️ This never refuses, and that is measured rather than lenient. The
         response_code field can carry a failure and the client does something
@@ -380,19 +393,27 @@ class AuthHttpServer:
         """
         konami = (form.get("konami_id") or [""])[0]
         personal = (form.get("personal_key") or [""])[0]
+        hold = 0.0
         if konami and self.directory.verify(konami, personal):
             who = konami_id.normalise_id(konami)
+            self.throttle.login_ok(who)
             print(f"[authhttp] login.php: {who} signed in")
         else:
             who = None
+            named = konami_id.normalise_id(konami)
             # Not an error line: an unknown KONAMI ID is the ordinary state of
             # this server before anybody has used the 登録 form, and every code
             # that predates that form logs in without one.
             print(
-                f"[authhttp] login.php: {konami_id.normalise_id(konami) or '(no id)'}"
+                f"[authhttp] login.php: {named or '(no id)'}"
                 " did not verify; the token will name nobody"
             )
-        return self.tokens.mint(who)
+            # ⚠️ Only a name that exists is counted. The line above says why:
+            # most logins here name nobody and are perfectly correct, and
+            # counting them would slow the ordinary path down for using itself.
+            if named and self.directory.exists(named):
+                hold = self.throttle.login_failed(named)
+        return self.tokens.mint(who), hold
 
     def _reply_fields(self, form: dict[str, list[str]], **extra: str) -> bytes:
         fields = {
@@ -428,7 +449,14 @@ class AuthHttpServer:
             return "\n".join(body[cut:] + [lines[-1]]) + "\n"
         return "\n".join([lines[0]] + body[:cut]) + "\n"
 
-    def _build_body(self, path: str, form: dict[str, list[str]], seq: dict) -> bytes:
+    def _build_body(self, path: str, form: dict[str, list[str]], state: dict) -> bytes:
+        """The reply for one request. ``state`` is this connection's scratch.
+
+        The scratch is there because two of these requests are indistinguishable
+        and only their order tells them apart (see getkey below); the hold
+        login.php asks for rides along in it rather than in a second return
+        value, so that the five other paths stay as short as they are.
+        """
         if path.endswith("getkeylen.php"):
             # The client parses key_len and then throws it away (0x8A9720 keeps
             # it in a local and returns), so this number is informational only.
@@ -442,11 +470,12 @@ class AuthHttpServer:
             # one.  It tracks the halves itself (first reply -> ctx+0x7C, second
             # -> ctx+0x80, 0x8A9AD3), so the only thing that tells the two apart
             # is their order on the connection.  Count them.
-            seq["getkey"] = seq.get("getkey", 0) + 1
-            index = "2" if seq["getkey"] >= 2 else "1"
+            state["getkey"] = state.get("getkey", 0) + 1
+            index = "2" if state["getkey"] >= 2 else "1"
             return self._reply_fields(form, index=index, csk=self._csk_half(index))
         if path.endswith("login.php"):
-            return self._reply_fields(form, session_id=self._login(form))
+            token, state["hold"] = self._login(form)
+            return self._reply_fields(form, session_id=token)
         if path.endswith("logout.php"):
             return self._reply_fields(form)
         # CRL / unknown paths
@@ -519,7 +548,7 @@ class AuthHttpServer:
         # after the first reply makes step 2's SSL_write fail with no socket
         # traffic at all, which reads exactly like a rejected reply.  So serve
         # requests in a loop and let the client hang up.
-        seq: dict[str, int] = {}
+        state: dict[str, float] = {}
         try:
             while True:
                 try:
@@ -536,8 +565,21 @@ class AuthHttpServer:
                     self.packet_dir, "authhttp", "in", self._redacted(head)
                 )
                 path, form = self._parse(head)
-                resp = self._http_response(self._build_body(path, form, seq))
+                resp = self._http_response(self._build_body(path, form, state))
                 write_packet_log(self.packet_dir, "authhttp", "out", resp)
+                hold = state.pop("hold", 0.0)
+                if hold:
+                    # ⚠️ Held before the write, and never past the client's own
+                    # patience: it gives a reply thirty seconds and then drops
+                    # the connection with 「データの受信に失敗しました」, which
+                    # is a network error rather than a refused login and sends
+                    # the player to look at their firewall. throttle.DELAYS tops
+                    # out at eight for that reason.
+                    print(
+                        f"[authhttp] login.php: holding the reply {hold:.0f}s "
+                        f"for {peer}"
+                    )
+                    await asyncio.sleep(hold)
                 writer.write(resp)
                 await writer.drain()
                 print(

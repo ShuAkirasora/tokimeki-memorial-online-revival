@@ -124,6 +124,7 @@ from urllib.parse import parse_qs
 import codes
 import konami_id
 from common import ServiceConfig
+from throttle import FUSE_MESSAGE, Throttle
 
 # Where the client's login screen splits the twenty characters. Reproduced here
 # so that a code is typed the same way in both places -- and so that a player
@@ -370,12 +371,19 @@ class RegistrationSite:
         directory: konami_id.Directory,
         table: codes.CodeTable,
         advertise_ip: str = "127.0.0.1",
+        throttle: Throttle | None = None,
     ) -> None:
         self.root = root
         self.config = config
         self.directory = directory
         self.codes = table
         self.advertise_ip = advertise_ip
+        # Shared with the auth service when run_all.py builds it, so that the
+        # fuse and the login streaks are one set of books. The default is for a
+        # lone instance under test, and is pointed at the same file _note_signup
+        # writes -- a fuse reading a different count than the page increments
+        # would be worse than no fuse.
+        self.throttle = throttle or Throttle(table.dir / "registrations.json")
         # token -> (what the next GET should draw, when it stops working). In
         # memory and gone on restart, which is the right lifetime for something
         # whose loss costs a player one more trip through the form.
@@ -446,7 +454,7 @@ class RegistrationSite:
     # -- the self-serve path ------------------------------------------------
 
     def _signup(
-        self, form: dict[str, str]
+        self, form: dict[str, str], peer=None
     ) -> tuple[tuple[str, str], tuple[str, str] | None]:
         """Make an account and hand it a code.
 
@@ -465,7 +473,8 @@ class RegistrationSite:
         except konami_id.InvalidId as exc:
             return ("bad", html.escape(str(exc))), None
 
-        if self.directory.exists(wanted):
+        known = self.directory.exists(wanted)
+        if known:
             if not self.directory.verify(wanted, key):
                 # This does say the id is taken, and it is the one place on
                 # this page where being unhelpful was considered and rejected:
@@ -486,7 +495,28 @@ class RegistrationSite:
             # Known id, no code: the account half of an earlier attempt that
             # did not get to the code half, or one made at /konami-id. Fall
             # through and give it one.
-        else:
+
+        # ⚠️ The fuse belongs here and not at the top of this function, which is
+        # where it was first put. Everything below makes something -- a code, and
+        # for an unknown id an account to hang it on -- and that is the whole of
+        # what the fuse guards. Above it, the only path that answers is showing
+        # somebody the code they already have, which creates nothing and is the
+        # page's answer to a reload and to a lost code. Refusing that on a fused
+        # day would take the one recovery route away from the one person here who
+        # is certainly innocent, and would break this file's own promise that
+        # nothing on this page is unrecoverable.
+        #
+        # This is also the one place throttle.py says anything out loud; see
+        # fuse_blown() for why silence would be the wrong kindness. /register is
+        # untouched either way -- a code issued by hand was not made by this.
+        if self.throttle.fuse_blown():
+            print(
+                "[register] ⚠ self-serve is closed for today at "
+                f"{self.throttle.signups_today()} codes; /register still works"
+            )
+            return ("bad", FUSE_MESSAGE), None
+
+        if not known:
             try:
                 self.directory.create(wanted, key)
             except konami_id.InvalidId as exc:  # lost a race for the name
@@ -506,6 +536,10 @@ class RegistrationSite:
             self.codes.unregister(code)
             return ("bad", "Something went wrong issuing a code. Try again."), None
         today = self._note_signup()
+        # Next to the day's count on purpose: these are the same event counted
+        # twice, once for the fuse and once for this address's day, and the two
+        # drifting apart is how a fuse ends up guarding nothing.
+        self.throttle.registration_succeeded(peer)
         print(
             f"[register] self-serve {codes.format_code(code)} -> {wanted} "
             f"({today} today)"
@@ -588,6 +622,7 @@ class RegistrationSite:
         path: str,
         form: dict[str, str],
         query: dict[str, str] | None = None,
+        peer=None,
     ) -> bytes:
         query = query or {}
         if method != "POST":
@@ -627,7 +662,7 @@ class RegistrationSite:
         keep = {k: v for k, v in form.items() if "key" not in k and k != "confirm"}
 
         if path == "/signup":
-            message, made = self._signup(form)
+            message, made = self._signup(form, peer)
             if made is None:
                 return self._see_other("/signup", keep=keep, banner=message)
             owner, code = made
@@ -649,6 +684,8 @@ class RegistrationSite:
     async def handle(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
+        peer = writer.get_extra_info("peername")
+        wait = 0.0
         try:
             head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), timeout=30.0)
         except (asyncio.TimeoutError, asyncio.IncompleteReadError, ValueError):
@@ -671,10 +708,23 @@ class RegistrationSite:
                 k: v[0]
                 for k, v in parse_qs(body.decode("utf-8", "replace")).items()
             }
-            response = self._handle_request(method, path, form, query)
+            # Only POSTs are counted. This page answers a POST with a redirect,
+            # so every form sent arrives here as a POST and then again as a GET,
+            # and counting both would halve every number in throttle.py without
+            # anybody having done anything twice.
+            wait = self.throttle.registration_attempt(peer) if method == "POST" else 0.0
+            response = self._handle_request(method, path, form, query, peer)
         except Exception as exc:  # a malformed request is not a reason to die
             print(f"[register] bad request: {type(exc).__name__}: {exc}")
             response = self._respond(page(signup()), b"400 Bad Request")
+            # Whatever was counted before it went wrong still counts. ⚠️ A POST
+            # that dies before the line above is never counted at all, which is
+            # a hole and a small one: nothing was created and nothing was
+            # written, so the flood it leaves open costs a log line each.
+        if wait:
+            # The page is not told, and says nothing about it. See throttle.py.
+            print(f"[register] holding {peer} for {wait:.0f}s")
+            await asyncio.sleep(wait)
         writer.write(response)
         try:
             await writer.drain()
