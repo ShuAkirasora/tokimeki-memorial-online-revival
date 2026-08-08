@@ -215,6 +215,39 @@ file redirects, and one fixed numeric address, which is four bytes inside `tmo.e
 # 3. run BootFirst.exe (as administrator on Windows)
 ```
 
+### All three at once
+
+`play.py` does exactly those three and then starts the game. On Windows it is a double-click
+on **`Play.cmd`**, which is the same thing with the administrator prompt in front of it;
+elsewhere it is `python3 play.py`. It asks where the server is the first time and remembers
+the answer, so the second time is the double-click and nothing else.
+
+This folder has to be on the **machine the game is on**, which on a two-computer setup is not
+the one running the server. Copying the whole folder there is fine, and so is copying only
+`play.py`, `Play.cmd` and `set_auth_address.py`.
+
+```sh
+python3 play.py --server 192.168.1.5   # say it outright instead of being asked
+python3 play.py --dry-run              # what it would change, writing nothing
+python3 play.py --revert               # put the hosts file and the four bytes back
+python3 play.py --no-launch            # set everything up, start nothing
+```
+
+Nothing it does is one-way. The hosts file is copied before it is first written and a line
+of yours that points one of these two names elsewhere is commented out rather than deleted,
+with the whole original line kept after the marker; `--revert` puts it back and takes the
+four bytes back to what the disc shipped. It also knocks on the server's ports before
+starting the game, so a server that is not running says so instead of becoming a client that
+sits there.
+
+On Windows it needs administrator rights and says so — the game already required them, and
+the hosts file needs the same, so `Play.cmd` asks once and does both inside it. On macOS and
+Linux only the hosts file does, and only that one step goes through `sudo`; the game is not
+started as root. There, `--launch-with` names the command that runs Windows programs
+(`wine` by default).
+
+The rest of this section is the same three steps by hand, and why each of them is there.
+
 ### 1. Your server address
 
 `<server>` above is the address the *game* has to dial, and which one it is depends on where
@@ -503,11 +536,12 @@ the grade it awards is this server's own curve over the running score.
 | Path | |
 |---|---|
 | `start_servers.py`, `stop_servers.py` | start and stop everything |
+| `Play.cmd`, `play.py` | the client half in one run: hosts, the four bytes, and the game started. `Play.cmd` is the Windows double-click and asks for the rights the other one needs |
 | `set_auth_address.py` | the four-byte address change described above |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services themselves; `run_all.py` binds them all in one asyncio loop and `mps_session.py`, the packet layer, is the bulk of it |
 | `reference/` | the three tables above |
-| `runtime/` | created on the first run: the log, the certificate, and your characters |
+| `runtime/` | created on the first run: the log, the certificate, your characters, and the answers `play.py` remembers |
 | `screenshots/` | the four pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
 
@@ -519,6 +553,8 @@ the grade it awards is this server's own curve over the running score.
 | 「レジストレーションコードが登録されていません」 | the code exists but nobody has bound it on port 12013 |
 | 「ユーザ情報が正しくありません」 | that code is registered to a different KONAMI ID, or the personal key is wrong |
 | the game starts but the log stays completely empty | `BootFirst.exe` was not run as administrator |
+| `play.py` cannot find the game | give it `--game-dir`, or drag the folder into the window when it asks |
+| a name still leads somewhere else after `play.py` wrote the hosts file | something is answering ahead of it — a VPN, or a router handing out its own answers |
 | `アップデートクライアントの起動に失敗しました` | the same thing, said by the client |
 | the log stops after `[updater]`, no `[llb35573]` | only one of the two hosts lines is there, or it is on the wrong machine |
 | the log stops after `[llb35573]`, no `[authhttp]` | the four bytes were not written, or were written to a different copy of `tmo.exe`; if the log also says `[authhttp] skip :443`, that port was refused or taken |
