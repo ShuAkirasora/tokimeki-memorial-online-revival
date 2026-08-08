@@ -39,6 +39,7 @@ from llb_server import LlbServer
 from login_server import LoginServer
 from mps_session import GAME_PORT, SCHOOL_PORT, MpsServer
 from registration_site import RegistrationSite
+from throttle import Throttle
 from updater_server import UpdaterServer
 from world_server import WorldServer
 
@@ -124,6 +125,10 @@ async def main(
     # Minted by whichever auth port the client dialled, redeemed on the login
     # port: one desk, or the token does not survive the hop between them.
     tokens = TokenDesk()
+    # And one set of books for slowing things down: the registration form's
+    # addresses, the day's fuse, and login.php's failure streaks. Six auth ports
+    # answer the same client, so a streak counted per port would be six streaks.
+    limits = Throttle(accountstore.codes.dir / "registrations.json")
     print(f"[system] accounts: {accountstore.summary()}")
     mps_login = MpsServer(
         root,
@@ -163,6 +168,7 @@ async def main(
         "advertise_ip": advertise_ip,
         "directory": accountstore.konami_ids,
         "tokens": tokens,
+        "throttle": limits,
     }
     auth_443 = AuthHttpServer(root, ServiceConfig(host=BIND_HOST, port=443), use_tls=True, **auth)
     auth_50 = AuthHttpServer(root, ServiceConfig(host=BIND_HOST, port=50), use_tls=True, **auth)
@@ -181,6 +187,7 @@ async def main(
         directory=accountstore.konami_ids,
         table=accountstore.codes,
         advertise_ip=advertise_ip,
+        throttle=limits,
     )
 
     servers = [
