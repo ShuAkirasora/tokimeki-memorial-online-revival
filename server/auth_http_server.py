@@ -114,6 +114,9 @@ class _TlsAcceptor(asyncio.Protocol):
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
         transport.pause_reading()
+        if self._server.turn_away(transport.get_extra_info("peername")):
+            transport.close()
+            return
         # Kept on the instance because the loop holds only a weak reference to a
         # bare task, and this one must outlive the callback that made it.
         self._upgrade = asyncio.get_running_loop().create_task(
@@ -145,10 +148,18 @@ class AuthHttpServer:
         directory: konami_id.Directory | None = None,
         tokens: konami_id.TokenDesk | None = None,
         throttle: Throttle | None = None,
+        loopback_only: bool = False,
     ) -> None:
         self.root = root
         self.config = config
         self.use_tls = use_tls
+        # ⚠️ Set when the socket had to be opened wider than it was meant to be.
+        # macOS refuses 127.0.0.1:443 to an ordinary user and allows 0.0.0.0:443
+        # -- the opposite way round from every other system -- so run_all.py
+        # widens that one port rather than lose the endpoint the client dials,
+        # and sets this. The listener is then wide and the service is not: a
+        # connection from anywhere else is closed before it is read.
+        self.loopback_only = loopback_only
         self.advertise_ip = advertise_ip
         # Six of these listen on six ports and the client picks one, so the desk
         # has to be the same object across all of them or a token minted on the
@@ -534,8 +545,28 @@ class AuthHttpServer:
             print(f"[authhttp] parse error: {exc}")
         return path, form
 
+    def turn_away(self, peer) -> bool:
+        """Is this connection from somewhere this port was not opened for?
+
+        Only ever true on a socket that had to be widened -- see loopback_only.
+        Closed without a byte read and without an answer, which is what a closed
+        port would have looked like, because that is what this one is meant to be.
+        """
+        if not self.loopback_only:
+            return False
+        host = str(peer[0]) if isinstance(peer, tuple) and peer else ""
+        if host.startswith("::ffff:"):
+            host = host[len("::ffff:") :]
+        if host.startswith("127.") or host in ("::1", "localhost"):
+            return False
+        print(f"[authhttp] :{self.config.port} closing {host}: this port is loopback only")
+        return True
+
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
+        if self.turn_away(peer):
+            writer.close()
+            return
         # Reaching here at all means the handshake is done, so this says what was
         # agreed rather than what is about to be attempted.
         tls = writer.get_extra_info("ssl_object")
