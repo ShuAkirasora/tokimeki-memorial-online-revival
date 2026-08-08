@@ -296,21 +296,27 @@ will not do:** a code it did not issue is refused with the client's own
 「入力されたレジストレーションコードは存在しません」, which is the right answer and an
 opaque one if you were not expecting it.
 
+Open **http://127.0.0.1:12013/** in a browser on the machine running the *server* (or
+`http://<server>:12013/` from elsewhere), pick a KONAMI ID and a personal key, and the page
+hands back a code already bound to them. Type all three into the login screen and you are in.
+
+Coming back to that page with the same id and key shows the same code again rather than
+issuing a second one, so a lost code is not a lost account, and a reloaded page is not an
+error.
+
+Plain HTTP, and it has to be: the certificate the game insists on is 1024-bit RSA signed
+with SHA-1, which no current browser will open. So the personal key crosses that connection
+in the clear — nothing when the browser is on the server's own machine, a password in
+plaintext when it is not. **Pick one you do not use anywhere else.**
+
 Originally the code came printed in the box and the player bound it to their KONAMI ID on
-KONAMI's website. Both halves are here: `issue_code.py` is the printing, and a page on port
-12013 is the binding.
+KONAMI's website, and both halves are still here separately: `issue_code.py` is the
+printing, and **http://127.0.0.1:12013/register** is the binding. That is the way in for a
+code somebody issued by hand and gave you.
 
 ```sh
 python3 issue_code.py --unregistered      # prints something like WJUH-RTDC-M39X-HCDN-U26X
 ```
-
-Then open **http://127.0.0.1:12013/** in a browser on the machine running the *server*
-(or `http://<server>:12013/` from elsewhere) and do the two things on that page: make a
-KONAMI ID with a personal key, then enter that code to bind it. Type all three into the
-login screen and you are in.
-
-Plain HTTP, and it has to be: the certificate the game insists on is 1024-bit RSA signed
-with SHA-1, which no current browser will open.
 
 Handing a code straight to somebody at the same machine is `issue_code.py` with no flag —
 it comes out ready to use, but with no owner, and a code with no owner is one anybody can
