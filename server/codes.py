@@ -220,6 +220,19 @@ class CodeTable:
         entry = self.table.get(key)
         return (entry or {}).get("konami_id") or None
 
+    def codes_of(self, konami_id: str) -> list[str]:
+        """Every code claimed by this KONAMI ID, oldest claim first.
+
+        A scan rather than a second index. The table is keyed by code because
+        that is the question the login asks, and the question this answers is
+        asked once per player in their lifetime -- a reverse map would have to
+        be kept in step with a file that is meant to be edited by hand, which
+        costs more than the scan ever will.
+        """
+        self.reload()
+        mine = [k for k, e in self.table.items() if e.get("konami_id") == konami_id]
+        return sorted(mine, key=lambda k: (self.table[k].get("registered") or "", k))
+
     def check_owner(self, key: str, signed_in_as: str | None) -> int | None:
         """The reason this signed-in player may not use this code, or None.
 
