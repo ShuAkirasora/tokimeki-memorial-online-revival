@@ -39,11 +39,11 @@ the table this script writes exists -- whether they are let in at all.
       issue_code.py --note "for Kei"       ... with a reminder of who has it
       issue_code.py --count 10             ... ten of them
       issue_code.py --expires 2026-12-31   ... that stop working after a date
-      issue_code.py --unregistered         ... left for the player to 登録
+      issue_code.py --unregistered         ... left for the player to register
 
       issue_code.py --list                 every code, with state and note
       issue_code.py --activate CODE        claim a code without an owner
-      issue_code.py --unregister CODE      undo 登録; the code is unclaimed again
+      issue_code.py --unregister CODE      undo a registration; it is unclaimed again
       issue_code.py --revoke CODE          stop it being used, keep the save
       issue_code.py --restore CODE         undo a revoke
 
@@ -101,11 +101,11 @@ def main() -> int:
     ap.add_argument(
         "--unregistered",
         action="store_true",
-        help="leave the code for the player to 登録 on the form",
+        help="leave the code for the player to register on the form",
     )
     ap.add_argument("--list", action="store_true", help="show every code")
     ap.add_argument("--activate", metavar="CODE", help="claim a code, with no owner")
-    ap.add_argument("--unregister", metavar="CODE", help="undo 登録 on a code")
+    ap.add_argument("--unregister", metavar="CODE", help="undo a code's registration")
     ap.add_argument("--revoke", metavar="CODE", help="stop a code being used")
     ap.add_argument("--restore", metavar="CODE", help="undo a revoke")
     args = ap.parse_args()

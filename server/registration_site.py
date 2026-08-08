@@ -90,11 +90,24 @@ on why this is not meant to face a network.
   "登録 a registration code", a button reading 登録 -- until it was noticed that
   it matches nothing the player can see. The login screen has three fields and
   no such button, and the step it names happened on a website whose markup does
-  not survive. So the word stays in this file's prose and in its log lines,
-  where it names a historical step for whoever is reading the code, and it is
-  English wherever the page is speaking to a player. The one place a player is
-  shown 登録 is inside 「レジストレーションコードが登録されていません」, which is
-  quoted because it is what the client itself will say to them.
+  not survive.
+
+  So the line is where the words come out, not which file they are in:
+
+    anything a person meets while running this   English
+      the page, this server's own log lines,
+      issue_code.py's --help
+    prose only a reader of the source meets      登録, the name of the step
+      docstrings and comments, here and in
+      codes.py, konami_id.py, accounts.py
+    something the client said                    verbatim, always
+
+  ⚠️ That line was first drawn around the page alone, which put the log lines
+  and a CLI's help text on the wrong side of it: they are read by a person too,
+  and being read on a terminal rather than in a browser does not change who is
+  reading. The one 登録 anybody is shown at runtime is inside
+  「レジストレーションコードが登録されていません」, quoted because it is what the
+  client itself will say to them.
 """
 
 from __future__ import annotations
@@ -674,6 +687,7 @@ class RegistrationSite:
             self.handle, self.config.host, self.config.port
         )
         print(
-            f"[register] 登録 form on http://{self.advertise_ip}:{self.config.port}/"
+            f"[register] registration form on "
+            f"http://{self.advertise_ip}:{self.config.port}/"
         )
         return server
