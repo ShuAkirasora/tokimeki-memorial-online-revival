@@ -202,6 +202,12 @@ behind a router the address a client must dial is not one this machine can see o
 interface of its own. `TMO_ADVERTISE_IP` in the environment does the same thing, and the
 startup log says which is in use.
 
+It also decides what the server listens on, so that is not a second thing to get right:
+without it the listeners are on `127.0.0.1` and a game on another machine reaches nothing;
+with it they are on every interface. `--bind` overrides that when the derivation is wrong for
+you. [Ports](#ports) has the detail, including the two rows that stay on `127.0.0.1` either
+way.
+
 ## Connecting a client
 
 Three destinations inside the client have to end up here: two hostnames, which your `hosts`
@@ -446,22 +452,38 @@ encryption, which stays on from the first packet to the last.
 
 ## Ports
 
-| Port | Service |
-|---|---|
-| 12000 | update check the client performs at startup |
-| 35573 | login-server lookup — answers "which host do I log in to" |
-| 25573 | login |
-| 25574 | game |
-| 25575 | school |
-| 443, 50, 8011, 12011 | account auth stub, TLS |
-| 80, 12012 | account auth stub, plaintext |
-| 12013 | the registration page, for a browser |
-| 12010, 12020 | early stubs; the current login flow does not use them |
+| Port | Service | Reached by |
+|---|---|---|
+| 12000 | update check the client performs at startup | the game |
+| 35573 | login-server lookup — answers "which host do I log in to" | the game |
+| 25573 | login | the game |
+| 25574 | game | the game |
+| 25575 | school | the game |
+| 443 | account auth, TLS | the game |
+| 12013 | the registration page | a browser |
+| 50, 8011, 12011 | the same auth service on other ports, TLS | nothing, ever |
+| 80, 12012 | the same auth service, plaintext | nothing, ever |
+| 12010, 12020 | early stubs; the current login flow does not use them | nothing, ever |
 
-The listeners are on `0.0.0.0`. Ports 25573, 25574, 25575 and 35573 have to be reachable from
-the game's machine in addition to whichever authentication port it uses, so open those on any
-firewall in between. Ports below 1024 need privileges, except on Windows; either way it is not
-fatal — the server logs `[authhttp] skip :443 (...)` and carries on.
+**The last three rows have never had a connection**, across every log this project has kept,
+and the client's authentication URL has no port in it, so it uses 443 and only 443. They stay
+bound to `127.0.0.1` whatever `--bind` says: they exist for this project's own tests, and
+there is no configuration under which somebody else should reach them.
+
+The rest follow `--bind`, which is derived from `--advertise-ip` rather than being a second
+thing to remember. Advertising `127.0.0.1` tells every client to dial its own machine, so a
+socket open to the network under that setting serves nobody — the default therefore listens
+on `127.0.0.1` alone, and giving `--advertise-ip` opens the six above along with it. Then
+25573, 25574, 25575, 35573, 12000 and 443 have to be reachable from the game's machine, so
+open those on any firewall in between.
+
+Ports below 1024 need privileges on Linux, and none on Windows. **macOS is stranger than
+either**: an ordinary user may bind `0.0.0.0:443` but *not* `127.0.0.1:443` — the wildcard is
+the permitted one, which is the opposite of the intuition that a narrower bind asks for less.
+So on macOS the default configuration opens 443 wide because it has no choice, and closes any
+connection that is not from this machine without reading it; the log says so at startup. A
+port that cannot be bound at all is not fatal — `[authhttp] skip :443 (...)` and the server
+carries on.
 
 ## Commands
 
@@ -560,6 +582,7 @@ the grade it awards is this server's own curve over the running score.
 | the log stops after `[llb35573]`, no `[authhttp]` | the four bytes were not written, or were written to a different copy of `tmo.exe`; if the log also says `[authhttp] skip :443`, that port was refused or taken |
 | the log stops after `[authhttp]`, no `[mpslogin25573]` | the game could not reach port 25573 at the address the lookup gave it: a firewall in between, or the server was started without the right `--advertise-ip` |
 | every remote player is sent back to their own computer | the server was started without `--advertise-ip` |
+| a game on another machine reaches nothing at all, and the server's log is empty | the same cause: without `--advertise-ip` the listeners are on `127.0.0.1` only, which the startup log says |
 | `ssl.SSLError: ('No cipher can be selected.',)` | the LibreSSL-backed Python; see [macOS](#macos) |
 | `openssl is not on PATH` | nothing to generate the authentication certificate with |
 | `openssl did not produce the auth certificate` | it refused, and the retry did too — usually a crypto policy that forbids SHA-1; see [Linux](#linux) |
