@@ -44,12 +44,45 @@ save files do -- by being named differently -- and the KONAMI ID check exists
 because the original had a 登録 step and a sentence for failing it, not because
 it keeps anyone out. See the README on why this is not meant to face a network.
 
-Accounts own a slice of the charaId space rather than a counter, because the
-client has an opinion about which ids are ordinary characters (see
-characters.CHARA_ID_BASE: 0x01000000 and up, or the small 0x000Fxxxx window).
-Account n takes ``n << 24``, so the account that owns a character can be read
-straight off its id -- which is what lets one connection answer a question about
-another connection's character without searching every account first.
+Accounts own a slice of the charaId space rather than a counter. ⚠️ Only half of
+that sentence is measured, and this docstring used to run the two halves
+together. What the client is known to do is check a *range*: 0x000F0000 through
+0x000FFFFF, and 0x01000000 through 0xFFFFFFFE, are the ids it draws as ordinary
+characters, and anything else goes to another subsystem or crashes the screen
+that asks (see characters.CHARA_ID_BASE). That check sorts ids by kind. It
+carries no mask for reading an owner out of one, and the client never asks who
+owns a charaId -- it is told.
+
+Handing account n the slice ``n << 24`` is ours. It buys account_of() below: the
+account that owns a character is read straight off its id, which is what lets one
+connection answer a question about another connection's character without
+searching every account first.
+
+⚠️⚠️ And the original did not do it. That used to read "how the original did it
+is not known"; the client's own message table now says otherwise, in four places:
+
+* Its operator interface hands out accountId and charaId as two free variables.
+  MsgClSupervisorRequestCharacterCreate takes accountId, charaFrameId and charaId
+  together (4+1+4 bytes), while MsgClSupervisorRequestCharacterDestroy takes only
+  a charaId. Destroying needs one id, creating needs two -- which is what a
+  charaId that does not name its owner looks like. The other 29 messages in that
+  family address a character by charaId alone, so the server side has an index
+  from one to the other and does not compute it.
+* accountId is 4 bytes on the wire (MsgClRequestGameServerLogin), and the school
+  list counts accounts in a u16 per school -- the client's own name for the field
+  is accountCount. One school holds 65535 accounts; the slicing here caps the
+  whole server at 255.
+* A school is a property of the account, not of a character. schoolId arrives in
+  MsgSvOkGameServerLogin, before any charaId exists, and no character record has
+  one -- not the list entries, not the operator interface's full character dump.
+* Characters transfer between schools (five request/reply pairs for it), and the
+  whole flow addresses a character by charaFrameId, the 0-2 slot number. An id
+  with a school in its top bits would have to change under a transfer and take
+  every stored loverCharaId with it.
+
+So the shift is not merely unattested, it contradicts the protocol it is speaking.
+What the original used *instead* is still unknown -- the constraint was
+recoverable from the client, the allocation scheme was not.
 """
 
 from __future__ import annotations
@@ -73,20 +106,45 @@ from characters import CharacterStore
 SESSION_ID_LEN = 64
 REGISTRATION_CODE_LEN = 20
 
-# Account ids start at 1 and stop at 255, both ends set by the charaId space:
-# account 0 would put characters at 0x00000000, which the client resolves through
-# the NPC subsystem instead of drawing as a player, and 256 would run off the top
-# of the byte. Nothing is expected to come near the ceiling -- this is a server
-# for the room it is running in -- but a wrong answer here is a client crash in a
-# lesson rather than an error, so it is a check and not a comment.
+# Account ids start at 1 and stop at 255, and the two ends are not the same kind
+# of fact.
+#
+# The floor is the client's. Account 0 would put characters at 0x00000000, which
+# it resolves through the NPC subsystem instead of drawing as a player, and the
+# first screen to ask (授業) died reading through that resolution rather than
+# reporting anything -- so this end is a check and not a comment.
+#
+# ⚠️ The ceiling is ours, and it is two orders of magnitude below the original's.
+# 256 runs off the top of the byte that ACCOUNT_SHIFT leaves for an account
+# number, so it is a limit of the slicing below and not of the id space, which
+# the client leaves open to 0xFFFFFFFE and which carries accountId as a u32.
+# Nothing here is expected to come near 255 -- this is a server for the room it
+# is running in -- but see the docstring: the number is small because the scheme
+# is wrong, not because the protocol is.
 FIRST_ACCOUNT_ID = 1
 MAX_ACCOUNT_ID = 0xFF
 
+# ⚠️⚠️ Invented, and contradicted by the protocol -- see the module docstring.
+# The client checks which range a charaId is in and never reads an owner out of
+# one; the original's operator interface passes accountId and charaId as separate
+# fields. The shift buys account_of() at the price of 255 accounts holding three
+# characters each out of the sixteen million a slice gives them, which is the
+# bits split the wrong way round for what they are being asked to do.
+#
+# Still here because every charaId on disk was minted under it, and the fix is a
+# stored charaId -> accountId index rather than a different shift. Nothing about
+# the ids themselves has to change when that lands: they are all inside the range
+# the client accepts, and it is only this server that reads meaning into them.
 ACCOUNT_SHIFT = 24
 
 
 def account_of(chara_id: int) -> int:
-    """Which account owns this charaId, by the slice it falls in."""
+    """Which account owns this charaId, under our slicing (see ACCOUNT_SHIFT).
+
+    ⚠️ This is the invented half. The original addressed a character by charaId
+    alone and looked the owner up; nothing on the wire lets an owner be computed
+    from an id.
+    """
     return chara_id >> ACCOUNT_SHIFT
 
 

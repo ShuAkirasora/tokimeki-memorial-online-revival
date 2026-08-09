@@ -156,7 +156,7 @@ PROBE_POSITIONS: tuple[tuple[str, int, int], ...] = ()
 # two range checks (0x00404FDF and 0x00404FBB). It answers zero — "this is an
 # ordinary character" — only for
 #
-#     0x000F0000 … 0x000FFFFF     and     0x01000000 … 0xFFFFFFFD
+#     0x000F0000 … 0x000FFFFF     and     0x01000000 … 0xFFFFFFFE
 #
 # and for everything else it answers nonzero, meaning "resolve this through the
 # NPC subsystem". The lesson scene has no NPC subsystem, so a seatInfo carrying
@@ -635,8 +635,9 @@ class CharacterStore:
         # file. See MpsServer._chars for the one caller that makes one.
         self.path = path
         # Where this account's ids start. Accounts own a slice of the id space
-        # (accounts.ACCOUNT_SHIFT) so that a charaId names its own owner, and
-        # the default is account 1's slice because CHARA_ID_BASE is ``1 << 24``.
+        # (accounts.ACCOUNT_SHIFT -- ⚠️ our scheme, not something read off the
+        # client) so that a charaId names its own owner, and the default is
+        # account 1's slice because CHARA_ID_BASE is ``1 << 24``.
         self.chara_id_base = chara_id_base
         self.records: list[dict[str, object]] = []
         if path is not None and path.exists():
