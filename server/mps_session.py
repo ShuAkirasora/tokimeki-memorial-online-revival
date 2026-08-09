@@ -446,6 +446,19 @@ FALLBACK_AUTH_CODE = 0x1234ABCD
 FALLBACK_ACCOUNT_ID = accounts.FIRST_ACCOUNT_ID
 
 
+def _peer_host(peer) -> str | None:
+    """The host out of get_extra_info("peername"), stripped of the v6 prefix."""
+    host = str(peer[0]) if isinstance(peer, tuple) and peer else None
+    if host and host.startswith("::ffff:"):
+        host = host[len("::ffff:") :]
+    return host
+
+
+def _is_loopback(host: str | None) -> bool:
+    """Is this the machine the server is on? None (peer not recorded) is not."""
+    return bool(host) and (host.startswith("127.") or host in ("::1", "localhost"))
+
+
 def ok_login_params(
     host_be: int = 0x0100007F,
     port: int = GAME_PORT,
@@ -716,6 +729,10 @@ class _Session:
         # with two people in it is the first thing that cannot -- see
         # MpsServer._push. None until handle() has the writer.
         self.writer: "asyncio.StreamWriter | None" = None
+        # The host at the other end of this connection, so that the account-1
+        # fallback in _chars can tell a local client apart from a stranger. Set
+        # in handle(); None until then, which _chars reads as "not local".
+        self.peer_host: str | None = None
         self.chara_id = 0  # whoever MsgClRequestSchoolLogin named, 0 before 登校
         # 授業の鐘. Not saved with the character: a bell is a moment, and one
         # that rang while nobody was logged in is not owed to anyone afterwards.
@@ -951,24 +968,51 @@ class MpsServer:
             f"characters: {session.characters.summary()}"
         )
 
-    def _chars(self, session: "_Session") -> CharacterStore:
-        """This connection's characters, falling back loudly if it never said.
+    def _fallback_account(self, session: "_Session") -> int | None:
+        """The account an unnamed connection may fall back to, or None.
 
-        Every path that gets here is supposed to have gone through _bind first,
-        so reaching the fallback is a finding: it means a character question
-        arrived on a connection that sent neither a registration code nor an
-        authCode we issued. Answering out of account 1 keeps the single-player
-        case working the way it did before accounts existed, and the log line is
-        there so that a second player seeing someone else's characters has an
-        entry to find rather than a mystery.
+        ⚠️⚠️ One decision, two callers: the character store (_chars) and the
+        school-hop ticket (0x0303). Both used to fall back to account 1
+        unconditionally, and on a public instance account 1 is the first
+        registrant -- so a stranger who speaks the packet layer (its bootstrap
+        key is a plaintext string, so anyone can) and skips the authCode landed
+        on their save. Loopback keeps the single-player convenience; anyone else
+        gets None, and each caller has its own harmless answer to that.
+
+        In normal play neither caller reaches this: the client names its account
+        first, with a registration code on the login port or an echoed authCode
+        on the game and school ports.
+        """
+        if _is_loopback(session.peer_host):
+            return FALLBACK_ACCOUNT_ID
+        return None
+
+    def _chars(self, session: "_Session") -> CharacterStore:
+        """This connection's characters; a detached empty store if it never said.
+
+        See _fallback_account for the decision. A local connection falls back to
+        account 1; a stranger gets a detached, empty store -- an empty list sends
+        the client back to the school screen, and because the store is detached
+        its writes go nowhere, so a create on an unnamed connection cannot touch
+        a real account's file. Returning a store rather than None keeps every
+        caller's ``_chars(session).xxx`` working instead of guarding forty of
+        them.
         """
         if session.characters is None:
-            print(
-                f"[{self.tag}] ⚠ character question before this connection named "
-                f"an account; falling back to account {FALLBACK_ACCOUNT_ID}"
-            )
-            self._bind(session, FALLBACK_ACCOUNT_ID, "fallback")
-        assert session.characters is not None
+            account_id = self._fallback_account(session)
+            if account_id is not None:
+                print(
+                    f"[{self.tag}] ⚠ character question before this connection "
+                    f"named an account; local, so account {account_id}"
+                )
+                self._bind(session, account_id, "fallback")
+            else:
+                print(
+                    f"[{self.tag}] ⚠ character question before this connection "
+                    f"named an account, from {session.peer_host}; unnamed, "
+                    "answering out of a detached empty store"
+                )
+                session.characters = CharacterStore(None)
         return session.characters
 
     def _packet(self, session: "_Session", tag: int, body: bytes) -> bytes:
@@ -1602,6 +1646,7 @@ class MpsServer:
         print(f"[{self.tag}] ACCEPT peer={peer} (conn #{self.conn_seq})")
         session = _Session()
         session.writer = writer
+        session.peer_host = _peer_host(peer)
         self.live.append(session)
         # Start at the end of the console, not the beginning: the file is a log
         # of what has already been run, and replaying it on every reconnect
@@ -1913,7 +1958,20 @@ class MpsServer:
                 #
                 # A third connection is about to open, and it will know nothing
                 # about this one, so it gets its own ticket for the same account.
-                account_id = session.account_id or FALLBACK_ACCOUNT_ID
+                #
+                # ⚠️⚠️ Same fallback as _chars (see _fallback_account), and the
+                # same reason to gate it: an unnamed connection asking for the
+                # school hop must not be handed a ticket that names account 1,
+                # because the school connection would redeem it and land there.
+                # In normal play this is never reached unbound -- 0x0303 arrives
+                # on the game connection, which echoed its authCode first.
+                account_id = session.account_id or self._fallback_account(session)
+                if account_id is None:
+                    print(
+                        f"[{self.tag}] ⚠ school hop requested before naming an "
+                        f"account, from {session.peer_host}; refusing"
+                    )
+                    return None
                 auth_code = self.tickets.issue(account_id)
                 print(
                     f"[{self.tag}] school hop {self.advertise_ip}:{SCHOOL_PORT}, "
