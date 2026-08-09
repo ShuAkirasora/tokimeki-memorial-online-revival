@@ -33,7 +33,7 @@ def _utf8_output() -> None:
 
 import accounts
 from auth_http_server import AuthHttpServer
-from common import ServiceConfig, parse_ipv4
+from common import PACKET_LOG_ENV, ServiceConfig, packet_log_enabled, parse_ipv4
 from konami_id import TokenDesk
 from llb_server import LlbServer
 from login_server import LoginServer
@@ -112,6 +112,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     ap.add_argument(
+        "--packet-log",
+        action="store_true",
+        default=packet_log_enabled(),
+        help=(
+            "write one JSON hex-dump per packet to runtime/packets/, for tracing "
+            "the protocol. Off by default: it is a synchronous disk write on the "
+            "event loop and one inode per packet, so it is for debugging, not for "
+            "a server carrying players. Also settable with $TMO_PACKET_LOG."
+        ),
+    )
+    ap.add_argument(
+        "--registration-cert",
+        default=os.environ.get("TMO_REGISTRATION_CERT"),
+        metavar="PATH",
+        help=(
+            "serve the registration form (port 12013) over HTTPS with this "
+            "certificate, so a browser reaches it without a warning and the "
+            "personal key does not cross in the clear. A modern certificate for "
+            "the name players type, e.g. a Let's Encrypt fullchain.pem -- separate "
+            "from the RSA-1024 certificate the game client speaks to. Plain HTTP "
+            "when not given. Also settable with $TMO_REGISTRATION_CERT."
+        ),
+    )
+    ap.add_argument(
+        "--registration-key",
+        default=os.environ.get("TMO_REGISTRATION_KEY"),
+        metavar="PATH",
+        help=(
+            "private key for --registration-cert when it is a separate file, as "
+            "Let's Encrypt lays it out (privkey.pem). Omit if the key is in the "
+            "certificate file. Also settable with $TMO_REGISTRATION_KEY."
+        ),
+    )
+    ap.add_argument(
         "--adopt-code",
         metavar="CODE",
         help=(
@@ -128,6 +162,8 @@ async def main(
     advertise_ip: str = DEFAULT_ADVERTISE_IP,
     adopt_code: str | None = None,
     bind: str | None = None,
+    registration_cert: str | None = None,
+    registration_key: str | None = None,
 ) -> None:
     root = Path(__file__).resolve().parents[1]
     # ⭐ Two groups, and the split is the whole of what keeps this small. OPEN is
@@ -230,6 +266,8 @@ async def main(
         table=accountstore.codes,
         advertise_ip=advertise_ip,
         throttle=limits,
+        tls_cert=Path(registration_cert) if registration_cert else None,
+        tls_key=Path(registration_key) if registration_key else None,
     )
 
     servers = [
@@ -322,4 +360,16 @@ async def main(
 if __name__ == "__main__":
     _utf8_output()
     _args = parse_args()
-    asyncio.run(main(_args.advertise_ip, _args.adopt_code, _args.bind))
+    # write_packet_log reads this from the environment, so a --packet-log on the
+    # command line becomes the variable the rest of the process already watches.
+    if _args.packet_log:
+        os.environ[PACKET_LOG_ENV] = "1"
+    asyncio.run(
+        main(
+            _args.advertise_ip,
+            _args.adopt_code,
+            _args.bind,
+            _args.registration_cert,
+            _args.registration_key,
+        )
+    )

@@ -118,6 +118,7 @@ import html
 import json
 from pathlib import Path
 import secrets
+import ssl
 import time
 from urllib.parse import parse_qs
 
@@ -240,10 +241,23 @@ def code_shown(key: str) -> str:
     return '<div class="code">' + "".join(boxes) + "</div>"
 
 
-def signup(form: dict[str, str] | None = None) -> str:
-    """The whole of what a player without a code has to do."""
+def signup(form: dict[str, str] | None = None, *, secure: bool = False) -> str:
+    """The whole of what a player without a code has to do.
+
+    ``secure`` says whether this connection is under TLS, and only the key note
+    turns on it: without TLS the note warns that the key crosses in the clear,
+    with TLS it drops that -- claiming a page is unencrypted when it is not would
+    be its own untruth -- and keeps the reuse advice, which holds either way.
+    """
     form = form or {}
     got = lambda name: html.escape(form.get(name, ""))  # noqa: E731
+    key_note = (
+        "⚠ Pick a personal key you do not use anywhere else. It only unlocks a "
+        "character in this game."
+        if secure else
+        "⚠ This page is not encrypted, so pick something you do not use anywhere "
+        "else. It only unlocks a character in this game."
+    )
     return f"""
 <form method="post" action="/signup">
   <p class="note">These are the two things the client's login screen asks for at
@@ -257,8 +271,7 @@ def signup(form: dict[str, str] | None = None) -> str:
     <input type="password" name="personal_key"></label>
   <label>パーソナルキー（確認） <span class="en">again</span>
     <input type="password" name="confirm"></label>
-  <p class="note">⚠ This page is not encrypted, so pick something you do not use
-  anywhere else. It only unlocks a character in this game.</p>
+  <p class="note">{key_note}</p>
   <button type="submit">Create</button>
 </form>
 <p class="note">Given a registration code by somebody?
@@ -345,22 +358,30 @@ REASON_TEXT = {
 class RegistrationSite:
     """The 登録 form, on a port a browser can reach.
 
-    Plain HTTP on purpose, and the reason is a certificate rather than
-    indifference. The client's auth endpoints are TLS because the client insists
-    on it, and that certificate is 1024-bit RSA signed with SHA-1 -- which every
-    current browser refuses outright, so serving this page from the same context
-    would make it unreachable by the only thing that can render it. A second,
-    current certificate would have to be issued against a name, and this server
-    is reached by address.
+    Plain HTTP unless a certificate is handed to it, and the reason it cannot
+    simply borrow the one the client's auth endpoints use is a certificate rather
+    than indifference. Those are TLS because the client insists on it, and that
+    certificate is 1024-bit RSA signed with SHA-1 -- which every current browser
+    refuses outright, so serving this page from the same context would make it
+    unreachable by the only thing that can render it. A browser needs a modern
+    certificate of its own, and a modern certificate is issued against a name; on
+    a machine reached only by address there is no name to put in one, so this
+    page stays plain HTTP and says so.
 
-    So a personal key crosses this connection in the clear, and the page says so
-    rather than leaving it to be found out. What that is worth depends on where
-    the browser is: on the machine running the server it is nothing, and across
-    a network it is a password in plaintext. konami_id.py sets out what a
-    personal key is here -- a label with a lock drawn on it, weak because the
-    client's login screen imposes the shape -- which is why this is a sentence
-    on the form and not a refusal to serve the page, and why the sentence says
-    to pick something not used anywhere else.
+    ``tls_cert`` is that separate, modern certificate for a deployment that does
+    have a name -- a Let's Encrypt file for the host players type into the
+    browser, entirely apart from the RSA-1024 one the game speaks to. Given it,
+    the page is served over TLS and the key no longer crosses in the clear; the
+    form's own wording follows (see signup()).
+
+    Without it the default holds: a personal key crosses in the clear, and the
+    page says so rather than leaving it to be found out. What that is worth
+    depends on where the browser is: on the machine running the server it is
+    nothing, and across a network it is a password in plaintext. konami_id.py
+    sets out what a personal key is here -- a label with a lock drawn on it, weak
+    because the client's login screen imposes the shape -- which is why the plain
+    case is a sentence on the form and not a refusal to serve the page, and why
+    the sentence says to pick something not used anywhere else.
     """
 
     def __init__(
@@ -372,12 +393,26 @@ class RegistrationSite:
         table: codes.CodeTable,
         advertise_ip: str = "127.0.0.1",
         throttle: Throttle | None = None,
+        tls_cert: Path | None = None,
+        tls_key: Path | None = None,
     ) -> None:
         self.root = root
         self.config = config
         self.directory = directory
         self.codes = table
         self.advertise_ip = advertise_ip
+        # A modern certificate for the browser, or None for plain HTTP. tls_key
+        # is separate because that is how Let's Encrypt lays it out (fullchain +
+        # privkey); a single combined PEM is passed as tls_cert with tls_key left
+        # None. self._secure is what the form reads to word its key note.
+        self.ssl_ctx: ssl.SSLContext | None = None
+        if tls_cert is not None:
+            self.ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            self.ssl_ctx.load_cert_chain(
+                certfile=str(tls_cert),
+                keyfile=str(tls_key) if tls_key is not None else None,
+            )
+        self._secure = self.ssl_ctx is not None
         # Shared with the auth service when run_all.py builds it, so that the
         # fuse and the login streaks are one set of books. The default is for a
         # lone instance under test, and is pointed at the same file _note_signup
@@ -634,7 +669,9 @@ class RegistrationSite:
             if path == "/done":
                 shown = self._read(query.get("t", ""))
                 if shown is None:
-                    return self._respond(page(signup(), ("bad", EXPIRED_TICKET)))
+                    return self._respond(
+                        page(signup(secure=self._secure), ("bad", EXPIRED_TICKET))
+                    )
                 return self._respond(
                     page(ticket(shown["owner"], shown["code"]), shown["banner"])
                 )
@@ -644,7 +681,10 @@ class RegistrationSite:
                 # message about them that is more use than the form itself.
                 again = self._read(query.get("t", "")) or {}
                 return self._respond(
-                    page(signup(again.get("keep")), again.get("banner"))
+                    page(
+                        signup(again.get("keep"), secure=self._secure),
+                        again.get("banner"),
+                    )
                 )
             if path in ("/register", "/konami-id"):
                 again = self._read(query.get("t", "")) or {}
@@ -655,7 +695,7 @@ class RegistrationSite:
                         lede=LEDE_REGISTER,
                     )
                 )
-            return self._respond(page(signup()), b"404 Not Found")
+            return self._respond(page(signup(secure=self._secure)), b"404 Not Found")
 
         # The personal key is never echoed back into the page; every other field
         # is, so a rejected form can be corrected rather than retyped.
@@ -678,7 +718,7 @@ class RegistrationSite:
         elif path == "/register":
             message = self._register(form)
         else:
-            return self._respond(page(signup()), b"404 Not Found")
+            return self._respond(page(signup(secure=self._secure)), b"404 Not Found")
         return self._see_other("/register", keep=keep, banner=message)
 
     async def handle(
@@ -716,7 +756,7 @@ class RegistrationSite:
             response = self._handle_request(method, path, form, query, peer)
         except Exception as exc:  # a malformed request is not a reason to die
             print(f"[register] bad request: {type(exc).__name__}: {exc}")
-            response = self._respond(page(signup()), b"400 Bad Request")
+            response = self._respond(page(signup(secure=self._secure)), b"400 Bad Request")
             # Whatever was counted before it went wrong still counts. ⚠️ A POST
             # that dies before the line above is never counted at all, which is
             # a hole and a small one: nothing was created and nothing was
@@ -733,11 +773,18 @@ class RegistrationSite:
         writer.close()
 
     async def run(self) -> asyncio.AbstractServer:
+        # Handing the context to the listener suits this page, unlike the auth
+        # port next door: that one accepts plain and upgrades by hand so a failed
+        # handshake is still a log line (see auth_http_server), because the
+        # client's TLS was what was being debugged. Here the peer is a browser
+        # with a modern certificate; a correct handshake is the ordinary case and
+        # the race that form avoids does not arise.
         server = await asyncio.start_server(
-            self.handle, self.config.host, self.config.port
+            self.handle, self.config.host, self.config.port, ssl=self.ssl_ctx
         )
+        scheme = "https" if self.ssl_ctx is not None else "http"
         print(
             f"[register] registration form on "
-            f"http://{self.advertise_ip}:{self.config.port}/"
+            f"{scheme}://{self.advertise_ip}:{self.config.port}/"
         )
         return server

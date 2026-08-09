@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 import json
+import os
 
 
 def utc_now() -> str:
@@ -18,7 +19,31 @@ def ensure_runtime_dirs(root: Path) -> tuple[Path, Path]:
     return runtime, packet_dir
 
 
+PACKET_LOG_ENV = "TMO_PACKET_LOG"
+_PACKET_LOG_ON = {"1", "true", "yes", "on"}
+
+
+def packet_log_enabled() -> bool:
+    """Whether write_packet_log records anything. Off unless $TMO_PACKET_LOG is set.
+
+    The log is one JSON file per packet, written synchronously from the event
+    loop (see write_packet_log). That is the right price for taking a protocol
+    apart by hand and the wrong one for a server carrying players: each packet
+    stops the loop on a disk write, and one inode per packet runs a filesystem
+    out of inodes long before it runs out of space. So it is off unless turned
+    on deliberately -- with --packet-log on run_all.py, or this variable in the
+    environment -- for the length of a debugging session and no longer.
+
+    Read on each call rather than captured once, so a trace can be switched on
+    around a single exchange and off again without a restart; the read is a dict
+    lookup and costs nothing next to the write it guards.
+    """
+    return os.environ.get(PACKET_LOG_ENV, "").strip().lower() in _PACKET_LOG_ON
+
+
 def write_packet_log(packet_dir: Path, service: str, direction: str, data: bytes) -> None:
+    if not packet_log_enabled():
+        return
     ts = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     path = packet_dir / f"{ts}-{service}-{direction}.json"
     payload = {
