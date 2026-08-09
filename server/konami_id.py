@@ -62,12 +62,23 @@ TOKEN_LEN = 64
 # it, and matches the shape of a real KONAMI ID.
 ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
-# The personal key travels the same unescaped query string, so the same two
-# characters are out. The floor is a nod to the fact that this is a password
-# field on the client's login screen; the client itself accepts shorter.
+# The personal-key box on the client's login screen accepts only a-zA-Z0-9 --
+# its kind-1 input alphabet, the 62-byte table at 0xd7d418 (the KONAMI-ID box
+# beside it is kind 0, whose table also carries . _ -). A browser has no such
+# filter, so without this a player could pick a key holding a hyphen, a space,
+# or a symbol, register it here, and then never be able to type it in-game: the
+# client would send a different string and the login would fail with 0x7002
+# reason 4 for good. Restricting to the client's alphabet is not our taste, it
+# is the set of keys that can actually be entered -- and as a side effect it
+# keeps the value inside the unescaped query string the client sends it in
+# (`&` and `=` would end the field early).
+#
+# The length ceiling is still ours: getkeylen returns the length of the
+# client's crypto key, not a limit on this field, and the input box's own
+# maximum has not been read off the binary.
 KEY_MIN = 4
 KEY_MAX = 64
-KEY_FORBIDDEN = set("&=")
+KEY_PATTERN = re.compile(r"^[A-Za-z0-9]+$")
 
 ITERATIONS = 200_000
 
@@ -108,12 +119,11 @@ def check_personal_key(personal_key: str) -> str:
         raise InvalidId(f"a personal key needs at least {KEY_MIN} characters")
     if len(personal_key) > KEY_MAX:
         raise InvalidId(f"a personal key may be at most {KEY_MAX} characters")
-    if not personal_key.isascii() or not personal_key.isprintable():
-        raise InvalidId("a personal key must be printable ASCII")
-    if set(personal_key) & KEY_FORBIDDEN:
+    if not KEY_PATTERN.match(personal_key):
         raise InvalidId(
-            "a personal key may not contain & or = "
-            "(the client sends it in a query string with no escaping)"
+            "a personal key may hold only letters and digits (A-Z a-z 0-9) -- "
+            "the client's login screen accepts nothing else, so a key with any "
+            "other character could never be typed in"
         )
     return personal_key
 

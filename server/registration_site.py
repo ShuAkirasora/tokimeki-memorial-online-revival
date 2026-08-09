@@ -266,7 +266,7 @@ def signup(form: dict[str, str] | None = None, *, secure: bool = False) -> str:
   <label>KONAMI ID <span class="en">up to 64 of A-Z a-z 0-9 . _ -</span>
     <input type="text" name="konami_id" value="{got('konami_id')}"
            autocapitalize="none" spellcheck="false"></label>
-  <label>パーソナルキー <span class="en">personal key, at least
+  <label>パーソナルキー <span class="en">personal key, A-Z a-z 0-9, at least
     {konami_id.KEY_MIN} characters</span>
     <input type="password" name="personal_key"></label>
   <label>パーソナルキー（確認） <span class="en">again</span>
@@ -319,7 +319,7 @@ def forms(form: dict[str, str] | None = None) -> str:
   <label>KONAMI ID <span class="en">up to 64 of A-Z a-z 0-9 . _ -</span>
     <input type="text" name="konami_id" value="{got('konami_id')}"
            autocapitalize="none" spellcheck="false"></label>
-  <label>パーソナルキー <span class="en">personal key, at least
+  <label>パーソナルキー <span class="en">personal key, A-Z a-z 0-9, at least
     {konami_id.KEY_MIN} characters</span>
     <input type="password" name="personal_key"></label>
   <label>パーソナルキー（確認） <span class="en">again</span>
