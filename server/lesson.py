@@ -223,7 +223,7 @@ def refusal_reason(real: int) -> int:
 #
 #     0x00404FDF(id) -> 1  iff  0x10000  <= id <= 0x11FFFF
 #     0x00404FBB(id) -> 1  iff  0xF0000  <= id <= 0xFFFFF
-#                          or   0x1000000 <= id <= 0xFFFFFFFD
+#                          or   0x1000000 <= id <= 0xFFFFFFFE
 #
 # and the predicate built on them, 0x00404FF9, which is called from 38 places:
 #
