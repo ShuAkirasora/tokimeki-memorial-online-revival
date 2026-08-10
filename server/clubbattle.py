@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import struct
 
+import ability
 import characters
 import club
 
@@ -101,6 +102,18 @@ MSG_SV_NOTIFY_BATTLE_EFFECT = 0x5C11
 #: with no start is the shape of one missing half.
 MSG_SV_NOTIFY_BATTLE_DEMO_START = 0x5C12
 MSG_CL_NOTIFY_BATTLE_TURN_END = 0x5C16
+#: The three 「you got something」 messages, all of them Sv, all of them
+#: OPTIONAL: the manual grants them with 〜ことがあります (p07_03 「『奥義の書』
+#: や合成アイテムが手に入ることがあります」, p07_04 「合成アイテムが手に入るこ
+#: とがあります」). ⚠️ NOT SENT by this server, and that is a decision rather
+#: than a gap — what earns a keyword, an item or a 部活奥義 is not restored, so
+#: the honest count is none, and 「ことがあります」 says none is a legal round.
+MSG_SV_NOTIFY_BATTLE_GET_KEYWORD = 0x5C17
+MSG_SV_NOTIFY_BATTLE_GET_ITEM = 0x5C18
+MSG_SV_NOTIFY_BATTLE_GET_CLUB_SKILL = 0x5C19
+MSG_SV_NOTIFY_BATTLE_RESULT = 0x5C1A
+MSG_SV_NOTIFY_BATTLE_PART = 0x5C1B
+MSG_SV_NOTIFY_BATTLE_END = 0x5C1C
 
 #: The block a character record opens with, shared with the list entry (2.10)
 #: and the 0x6501 info record (2.35): names, sex, blood, birthday, looks,
@@ -134,6 +147,13 @@ DEFAULT_SPEED = 40
 #: The array is therefore indexed by clubstatus id, and entry 0 is 通常 —
 #: the not-afflicted row, which is why an untouched fighter sends all zeroes.
 NUM_OF_CLUB_STATUS = 8
+
+#: tmn::NUM_OF_CHARA_ABILITY, the length of both ability arrays in 0x5C1A.
+#: Taken from ability rather than restated: the same six are already on screen
+#: through 0x4310, and a second definition here would be the untested one. The
+#: reader agrees independently — both loops in 0x8F1BD0 count down from an
+#: immediate ``mov ebp, 6``.
+NUM_OF_CHARA_ABILITY = len(ability.ABILITIES)
 
 #: charaId u32 + vitality u16 + energy u8 + NUM_OF_CLUB_STATUS x u16. ⚠️ 23,
 #: not the 0x18 the client's struct advances by: that stride includes a pad
@@ -414,6 +434,174 @@ def action_end_params(chara_id: int) -> bytes:
     and changes nothing. The pair is the turn's structure, not its outcome.
     """
     return struct.pack(">I", chara_id)
+
+
+#: 0x5C1A's ``winTeam``, and the one field in this message whose ENCODING is
+#: invented while its VALUE is restored. Two separate questions, kept apart:
+#:
+#: 1. WHICH OUTCOME this server has to announce is settled by the manual, and
+#:    settled unusually cleanly. p07_04's 勝敗の判定方法 has three branches, and
+#:    the third one is a footnote that reads like it was written for exactly
+#:    this situation: 「※双方ともが相手に十分なダメージを与えていない場合は、
+#:    士気が低いとみなされ、両方が負けになります」. Nothing in this server
+#:    subtracts 体力 from anybody — 0x5C10/0x5C11 are unimplemented and no
+#:    damage rule is restored — so BOTH sides deal zero damage, and the first
+#:    two branches (相手を全員リタイヤ / 残り体力の合計が多く**かつ相手に十分な
+#:    ダメージ**) both require damage that was never dealt. ⭐⭐ So 「nobody
+#:    wins」 is the OUTCOME THE ORIGINAL RULE PRODUCES here, not a stand-in
+#:    picked because the winner is unknown. ⚠️ It stops being right the moment
+#:    damage exists; this constant is where that shows up.
+#:    ⚠️ p07_03 (ＮＰＣ戦) has no such third branch — its 「それ以外の場合は、
+#:    プレイヤーの負け」 makes a damage-less fight a plain player loss. Same
+#:    fight, two rule sheets: do not carry this constant over to 練習.
+#:
+#: 2. WHAT BYTE spells it is UNREAD. Teams are 0-based (0x5817, 0x5C06) and
+#:    there are two of them, so 0 and 1 are spoken for and 「neither」 needs a
+#:    third value; 2 is the next one and the field is read unsigned (+0x2c), so
+#:    255 would arrive as 255 rather than -1. ⭐ Cheap to measure and cheap to
+#:    correct: ``/cb result <n>`` sends one of these into a fight already on
+#:    screen. Until a screen has been read, this is a guess wearing a name.
+WIN_TEAM_NEITHER = 2
+
+#: 0x5C1C's ``reason``, RESTORED from ``error_message.bin`` 496-497 — the whole
+#: table for this message, two rows:
+#:
+#:     0  未使用：：：正常
+#:     1  サーバーとクライアントとの同期が取れません。
+#:
+#: ⭐ Same shape as 0x5C0C: row 0 is a developers' unfilled slot, which is this
+#: table's way of writing 「this code is the success one, say nothing」. So a
+#: fight that simply finished ends with 0, and 1 is a sentence this server has
+#: no way to mean — it would be claiming the client and the server disagree
+#: about the fight, which is not something the code can currently detect.
+END_NORMAL = 0
+END_OUT_OF_SYNC = 1
+
+#: 0x5C1B's ``reason``, from ``error_message.bin`` 494-495. ⚠️ NOT IMPLEMENTED,
+#: kept here because reading it settled what 0x5C1C is not: 0x5C1B is the
+#: one-person message (「通信が切断されたため、クラブ活動を強制終了しました」,
+#: charaId + reason), 0x5C1C the whole-fight one. A disconnect mid-battle
+#: currently drops the Battle server-side without telling the survivors, which
+#: is what this message is for.
+PART_DISCONNECTED = 0
+PART_OUT_OF_SYNC = 1
+
+
+def result_params(
+    win_team: int,
+    before_gauge: int,
+    after_gauge: int,
+    before_lv: int,
+    after_lv: int,
+    before_ability: "list[int]",
+    after_ability: "list[int]",
+    book_category: int = 0,
+    book_id: int = 0,
+    hurt: int = 0,
+    before_gousei_entry_max: int = 0,
+    after_gousei_entry_max: int = 0,
+) -> bytes:
+    """0x5C1A: 「5）勝敗が表示されます」, the screen a fight ends on.
+
+    Twelve arguments for twelve fields, in the client's own words. Reader at
+    0x8F1BD0, names from the dump at 0x8F1EE0, and the two agree read for read
+    — the deserializer makes exactly twelve calls and then ``ret 8``:
+
+        winTeam                       u8   [edi+0x04]  (+0x2c, unsigned)
+        endResult.beforeGauge         u8   [edi+0x06]
+        endResult.afterGauge          u8   [edi+0x07]
+        endResult.beforeLv            u8   [edi+0x08]
+        endResult.afterLv             u8   [edi+0x09]
+        endResult.beforeAblity        u16 x NUM_OF_CHARA_ABILITY  [edi+0x0a]
+        endResult.afterAblity         u16 x NUM_OF_CHARA_ABILITY  [edi+0x16]
+        endResult.book.categoryId     u16  [edi+0x22]
+        endResult.book.id             u16  [edi+0x24]
+        endResult.hurt                u8   [edi+0x26]
+        endResult.beforeGouseiEntryMax u8  [edi+0x27]
+        endResult.afterGouseiEntryMax  u8  [edi+0x28]
+
+    ⭐ The two ability loops are ``mov ebp, 6`` immediates in the instruction
+    stream, which is the same count ``chara_ability_type.bin`` has records and
+    the same six 0x4310 already draws (ability.ABILITIES). Two witnesses, so
+    the 6 is a decode rather than a length fitted to a buffer (lesson 12).
+
+    ⚠️⚠️ THIS MESSAGE IS PER-RECIPIENT. ``beforeAblity``/``afterAblity`` are one
+    character's six numbers and the fight holds several characters, so it
+    cannot be broadcast from one shared buffer — the same rule 0x5C06 is under
+    for its ``team`` byte. ``winTeam`` by contrast is an absolute team index:
+    0x5C06 already tells each client which side it is on, so the winner does
+    not need restating in the recipient's own coordinates.
+
+    ⚠️ EVERY before/after PAIR GOES OUT EQUAL from this server, and that is the
+    finding, not a placeholder. 「使用したキーワードの能力属性や、使用した部活
+    奥義のクラブ属性によって、能力パラメータが増加します」 (p07_03) names a
+    rule — which keyword raises which ability, by how much — that is not
+    restored anywhere. An 「after」 larger than its 「before」 would be this
+    server inventing a reward curve and then writing it into a save file.
+    ⭐ Sending them as a matched pair is also what makes them a RULER: the
+    caller can set them apart deliberately (``/cb result``) and read off which
+    half of each pair the screen actually draws.
+
+    ⚠️ ``book`` is 「奥義の書」 and 自主トレ never grants one — p07_04 drops it
+    from the reward sentence that p07_03 has it in. {0, 0} is 「no book」 on the
+    same argument as the unsent 0x5C17/0x5C18/0x5C19: a category and an id are
+    a key the client looks up, so any other value would be a made-up lookup.
+
+    ⚠️ ``hurt`` is 【怪我】, and it has a restored TRIGGER with no restored
+    THRESHOLD: 「ストレスが高い状態でクラブ活動に参加すると怪我をする場合があ
+    ります」 (both pages). 「高い」 is not a number and 「場合があります」 is not
+    a certainty, so 0 goes out until something says where the line is.
+    """
+    if len(before_ability) != NUM_OF_CHARA_ABILITY:
+        raise AssertionError(
+            f"beforeAblity is {len(before_ability)} long, reader wants "
+            f"{NUM_OF_CHARA_ABILITY}"
+        )
+    if len(after_ability) != NUM_OF_CHARA_ABILITY:
+        raise AssertionError(
+            f"afterAblity is {len(after_ability)} long, reader wants "
+            f"{NUM_OF_CHARA_ABILITY}"
+        )
+    out = bytearray(
+        struct.pack(
+            ">BBBBB",
+            win_team & 0xFF,
+            before_gauge & 0xFF,
+            after_gauge & 0xFF,
+            before_lv & 0xFF,
+            after_lv & 0xFF,
+        )
+    )
+    for row in (before_ability, after_ability):
+        for value in row:
+            out += struct.pack(">H", value & 0xFFFF)
+    out += struct.pack(">HH", book_category & 0xFFFF, book_id & 0xFFFF)
+    out += struct.pack(
+        ">BBB",
+        hurt & 0xFF,
+        before_gousei_entry_max & 0xFF,
+        after_gousei_entry_max & 0xFF,
+    )
+    return bytes(out)
+
+
+def end_params(reason: int = END_NORMAL) -> bytes:
+    """0x5C1C: the fight is over, one byte saying how.
+
+    Reader at 0x8D84A0 — a single call through ``[eax+0x1c]``, which is the
+    SIGNED 8-bit slot of the stream vtable rather than the unsigned one every
+    other reason byte in this family uses. ⚠️ Noted, not exploited: both
+    restored values are 0 and 1, where the two readings agree.
+    """
+    return struct.pack(">b", max(-128, min(127, reason)))
+
+
+def part_params(chara_id: int, reason: int = PART_DISCONNECTED) -> bytes:
+    """0x5C1B: this one character has dropped out of the fight.
+
+    ⚠️ Built but not yet wired to anything — see PART_DISCONNECTED.
+    """
+    return struct.pack(">IB", chara_id, reason & 0xFF)
 
 
 def training_battle_info_params(
