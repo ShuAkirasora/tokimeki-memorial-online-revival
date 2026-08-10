@@ -3073,14 +3073,13 @@ class MpsServer:
             if not battle.all_turn_done():
                 return None
             if battle.finished():
-                # ⚠️ 「1）〜3）を８ターンが終了するまで…繰り返します。5）勝敗が
-                # 表示されます」. The repeat is over and what comes next is
-                # 0x5C1A/0x5C1C, neither of which is written — so the fight
-                # stops here rather than starting a ninth turn the original
-                # could not have started. The screen keeps the last frame.
+                # 「1）〜3）を８ターンが終了するまで…繰り返します。5）勝敗が
+                # 表示されます」. The repeat is over, so the next thing the
+                # manual names is the result — and unlike the ninth 0x5C09 this
+                # would have had to be, that is a message the original sends.
                 print(f"[{self.tag}] battle reached the {clubbattle.TURN_LIMIT}-"
-                      f"turn limit; no 0x5C1A/0x5C1C implemented, it stops here")
-                return None
+                      f"turn limit, showing the result")
+                return self._battle_finish(session, battle)
             return self._battle_turn_start(session, battle)
 
         print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
@@ -3312,6 +3311,113 @@ class MpsServer:
             everyone,
         )
 
+    def _battle_sheet(
+        self, fighter: "clubbattle.Fighter"
+    ) -> "tuple[list[int], int, int]":
+        """One fighter's six 能力パラメータ plus their club's level and gauge.
+
+        ⚠️ Through accounts.owner_of for the same reason _battle_deck is: the
+        people in a fight come from several accounts and the handling session's
+        store holds only its own.
+
+        ⚠️ The level and gauge are the ones for THIS FIGHTER'S club — 部活レベル
+        is per club (u8[16] in the ability sheet, 2.30) and 自主トレ takes all
+        comers 「所属クラブに関係なく」 (p07_04), so there is no single club a
+        fight could be said to be in. A character with no club, or one this
+        server cannot find, comes back all zeroes.
+        """
+        store = self.accounts.owner_of(fighter.chara_id)
+        sheet = store.ability(fighter.chara_id) if store else None
+        if sheet is None:
+            return ([0] * clubbattle.NUM_OF_CHARA_ABILITY, 0, 0)
+        params = list(sheet.params[: clubbattle.NUM_OF_CHARA_ABILITY])
+        params += [0] * (clubbattle.NUM_OF_CHARA_ABILITY - len(params))
+        club_id = fighter.club_id
+        level = sheet.club_level[club_id] if 0 <= club_id < len(sheet.club_level) else 0
+        gauge = sheet.club_gauge[club_id] if 0 <= club_id < len(sheet.club_gauge) else 0
+        return (params, level, gauge)
+
+    def _battle_finish(
+        self, session: "_Session", battle: "clubbattle.Battle",
+        win_team: "int | None" = None, send_end: bool = True,
+    ) -> bytes:
+        """0x5C1A then 0x5C1C: 「5）勝敗が表示されます」 and the way out.
+
+        ⚠️ ``send_end=False`` is FOR THE PROBE ONLY (``/cb finish … noend``) and
+        exists because the one open question about this pair cannot be asked any
+        other way. Measured, round 89: the player's actual exit is pressing
+        ［終 了］ on the 結果画面, which makes the client send 0x4000 by itself —
+        so whether the 0x5C1C this also sends is part of a normal ending, or
+        only ever an abnormal one, is undecided. Answering it means sending
+        0x5C1A alone at the ONE moment the client is idle enough to draw it,
+        and that moment is this function; by the time a ``/cb result`` could be
+        typed the fight is closed and the probe has nothing to aim at.
+
+        ⭐⭐ THE WAY OUT IS THE POINT. Until this existed a fight that reached
+        turn 8 simply stopped on its last frame and the player never got back
+        to the campus — the only exit was killing the client. 0x5C1C is that
+        exit, and it is pure plumbing: one restored byte (END_NORMAL), no
+        arithmetic, nothing invented.
+
+        ⚠️ What is NOT sent here: 0x5C17 GetKeyword, 0x5C18 GetItem, 0x5C19
+        GetClubSkill. The manual grants all three with 〜ことがあります, so
+        sending none of them is a legal round rather than a hole, and each one
+        carries a lookup key (a keyword id, a categoryId/id pair) that this
+        server has no restored rule for choosing. See their constants.
+
+        ⚠️ The Battle is CLOSED before returning, so a stray 0x5C0A or 0x5C16
+        arriving after the result finds nothing — which is what those handlers
+        already print rather than crash on. The 自主トレルーム it came out of is
+        deliberately left standing: nothing read so far says a room dissolves
+        when its fight ends, and 0x5809/0x580A is how a member leaves one.
+
+        seen=0: a result follows the last 0x5C16, it does not answer it.
+        """
+        if win_team is None:
+            win_team = clubbattle.WIN_TEAM_NEITHER
+        everyone = [f.chara_id for f in battle.fighters]
+        sheets = {f.chara_id: self._battle_sheet(f) for f in battle.fighters}
+        for fighter in battle.fighters:
+            params, level, gauge = sheets[fighter.chara_id]
+            print(f"[{self.tag}] battle result: charaId={fighter.chara_id:#x} "
+                  f"team={fighter.team} club={fighter.club_id} "
+                  f"部活Lv={level}({gauge}) 能力={params}")
+        print(f"[{self.tag}] battle end: winTeam={win_team} "
+              f"after turn {battle.turn} ({battle.summary()})")
+
+        def body(chara_id: int) -> bytes:
+            params, level, gauge = sheets.get(
+                chara_id, ([0] * clubbattle.NUM_OF_CHARA_ABILITY, 0, 0)
+            )
+            # ⚠️ before == after, everywhere. See clubbattle.result_params: the
+            # rule that would move any of these is not restored, and a server
+            # that made one up would be writing an invented reward into a save.
+            return clubbattle.result_params(
+                win_team,
+                before_gauge=gauge, after_gauge=gauge,
+                before_lv=level, after_lv=level,
+                before_ability=params, after_ability=params,
+            )
+
+        out = self._tr_cast(
+            session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_RESULT, body, everyone
+        )
+        if send_end:
+            out += self._tr_cast(
+                session,
+                0,
+                clubbattle.MSG_SV_NOTIFY_BATTLE_END,
+                clubbattle.end_params(clubbattle.END_NORMAL),
+                everyone,
+            )
+        else:
+            print(f"[{self.tag}] battle end: 0x5C1C withheld (probe)")
+        for other in (self._session_of(c) for c in everyone):
+            if other is not None:
+                other.battle_due = 0.0
+        self.battles.close(session.chara_id)
+        return out
+
     def _battle_probe(
         self, session: "_Session", sequence: int, args: "list[str]"
     ) -> bytes:
@@ -3323,14 +3429,25 @@ class MpsServer:
         開始 — five minutes to test a three-line change. These send one message
         into the fight that is already up.
 
-        ``/cb``        what the server thinks the state is
-        ``/cb demo``   0x5C12 MsgSvNotifyClubBattleDemoStart, body-less
-        ``/cb order``  0x5C0D again, same order
-        ``/cb replay`` the whole action stream again
-        ``/cb next``   pretend everyone reported 0x5C16 and start the next turn
+        ``/cb``            what the server thinks the state is
+        ``/cb demo``       0x5C12 MsgSvNotifyClubBattleDemoStart, body-less
+        ``/cb order``      0x5C0D again, same order
+        ``/cb replay``     the whole action stream again
+        ``/cb next``       pretend everyone reported 0x5C16 and start the next turn
+        ``/cb result [n] [ruler]``  0x5C1A alone, winTeam=n, fight left standing
+        ``/cb end [n]``    0x5C1C alone, reason=n
+        ``/cb finish [n] [noend]``  result + end + close, what turn 8 does by
+                           itself; ``noend`` withholds the 0x5C1C
 
         ⭐ Every one of them is a message this server already knows how to
         build; nothing here invents a shape.
+
+        ⭐⭐ ``result`` is the ruler for a message whose twelve fields have never
+        been on a screen. It does NOT close the fight, so several winTeam values
+        can be tried into the same live battle — which is the only way to read
+        an encoding that the binary states nowhere (clubbattle.WIN_TEAM_NEITHER).
+        Its ``ruler`` form additionally pulls every before/after pair apart, so
+        whichever half the screen draws names itself.
         """
         battle = self.battles.battle_of(session.chara_id)
         if battle is None:
@@ -3362,7 +3479,74 @@ class MpsServer:
         if what == "next":
             for fighter in battle.fighters:
                 fighter.turn_done = True
+            # ⚠️ The limit is checked here as well as on the 0x5C16 path, and it
+            # has to be: this probe runs once per LOGGED-IN SESSION, so one
+            # ``/cb next`` line advances a two-player fight by two turns and can
+            # step straight over TURN_LIMIT. Measured — a fight nudged to turn 9
+            # drew 「残り　　ターン」 with the number simply blank, which is a
+            # frame the original could not produce. Past the limit this does
+            # what the real path does instead of inventing a ninth turn.
+            if battle.finished():
+                return self._battle_finish(session, battle)
             return self._battle_turn_start(session, battle)
+
+        def number(index: int, fallback: int) -> int:
+            try:
+                return int(args[index], 0)
+            except (IndexError, ValueError):
+                return fallback
+
+        if what == "result":
+            win_team = number(1, clubbattle.WIN_TEAM_NEITHER)
+            if "ruler" in args[2:]:
+                # ⭐ 8.8 fixed point (2.30): 値 >> 8 is the level shown minus
+                # one, so these draw レベル1〜6 for 「before」 and レベル11〜16
+                # for 「after」 — six rows that cannot be mistaken for the other
+                # six, and none of them near the u16 sign bit that switches the
+                # client to its other rule.
+                before = [index * 256 for index in range(6)]
+                after = [(index + 10) * 256 for index in range(6)]
+                bodies = clubbattle.result_params(
+                    win_team,
+                    before_gauge=10, after_gauge=90,
+                    before_lv=3, after_lv=7,
+                    before_ability=before, after_ability=after,
+                )
+                print(f"[{self.tag}] /cb result winTeam={win_team} ruler: "
+                      f"gauge 10/90 lv 3/7 ability {before}/{after}")
+                return self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_RESULT,
+                    bodies, everyone,
+                )
+            sheets = {f.chara_id: self._battle_sheet(f) for f in battle.fighters}
+
+            def body(chara_id: int) -> bytes:
+                params, level, gauge = sheets.get(
+                    chara_id, ([0] * clubbattle.NUM_OF_CHARA_ABILITY, 0, 0)
+                )
+                return clubbattle.result_params(
+                    win_team,
+                    before_gauge=gauge, after_gauge=gauge,
+                    before_lv=level, after_lv=level,
+                    before_ability=params, after_ability=params,
+                )
+
+            print(f"[{self.tag}] /cb result winTeam={win_team}, real values")
+            return self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_RESULT, body, everyone
+            )
+        if what == "end":
+            reason = number(1, clubbattle.END_NORMAL)
+            print(f"[{self.tag}] /cb end reason={reason}")
+            return self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_END,
+                clubbattle.end_params(reason), everyone,
+            )
+        if what == "finish":
+            return self._battle_finish(
+                session, battle, number(1, clubbattle.WIN_TEAM_NEITHER),
+                send_end="noend" not in args[1:],
+            )
         return self._say(session, sequence, f"/cb: unknown '{what}'")
 
     def _battle_turn_start(
