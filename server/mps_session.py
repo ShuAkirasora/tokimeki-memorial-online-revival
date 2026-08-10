@@ -3035,8 +3035,82 @@ class MpsServer:
                 out += self._battle_turn_start(session, battle)
             return out
 
+        if msg_type == clubbattle.MSG_CL_CAST_BATTLE_COMMAND:
+            return self._battle_command(session, battle, params)
+
         print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
         return None
+
+    def _battle_command(
+        self, session: "_Session", battle: "clubbattle.Battle | None",
+        params: bytes,
+    ) -> "bytes | None":
+        """0x5C0A 「I pick this card, at them」 -> 0x5C0C to the whole fight.
+
+        ⚠️ The card itself does not go out here. 0x5C0C has room for a charaId
+        and a reason and nothing else, so what the other player learns from
+        this exchange is only that a choice happened; the deckItem reaches
+        them in 0x5C0E, once the turn resolves. This server therefore has to
+        REMEMBER the choice, and remembering it is the reason 0x5C07's deckId
+        was worth storing — itemNum is an index into that deck and into no
+        other.
+
+        ⚠️⚠️ Nothing is validated beyond 「there is a fight and you are in
+        it」. The refusals this subsystem has are the two sentences in
+        error_message (see clubbattle.COMMAND_*), and neither of them is
+        「that card is not in your deck」 or 「that target is not here」 — so a
+        server that invented a refusal for those would be inventing policy,
+        not restoring it. A choice that does not resolve is a problem for the
+        code that resolves it, which does not exist yet.
+        """
+        chara_id = session.chara_id
+        parsed = clubbattle.parse_command(params)
+        if parsed is None:
+            print(f"[{self.tag}] battle command from charaId={chara_id:#x} "
+                  f"is {len(params)}B, too short to read: {params.hex()}")
+            return None
+        item_num, is_attck, target_id = parsed
+        fighter = battle.find(chara_id) if battle else None
+        if battle is None or fighter is None:
+            print(f"[{self.tag}] battle command from charaId={chara_id:#x} "
+                  f"(item {item_num}) with no battle to put it in")
+            return None
+        fighter.command = parsed
+        card = self._battle_card(session, fighter, item_num)
+        print(f"[{self.tag}] battle command: charaId={chara_id:#x} "
+              f"itemNum={item_num} isAttck={is_attck} target={target_id:#x} "
+              f"deck={fighter.deck_id} card={card} ({battle.summary()})")
+        return self._tr_cast(
+            session,
+            0,
+            clubbattle.MSG_SV_NOTIFY_BATTLE_COMMAND,
+            clubbattle.command_params(chara_id, clubbattle.COMMAND_OK),
+            [f.chara_id for f in battle.fighters],
+        )
+
+    def _battle_card(
+        self, session: "_Session", fighter: "clubbattle.Fighter", item_num: int
+    ) -> str:
+        """What ``itemNum`` names in this fighter's deck, for the log only.
+
+        ⚠️ Printed, not acted on, and deliberately printed BOTH ways: whether
+        itemNum is 0- or 1-based has never been on screen, and a log line that
+        shows the card at index n and the card at index n-1 lets the first
+        real command settle it against what the player says they clicked.
+        """
+        state = self._chars(session).club(fighter.chara_id)
+        if state is None:
+            return "no club state"
+        deck = state.deck(fighter.deck_id)
+
+        def at(index: int) -> str:
+            if not 0 <= index < len(deck):
+                return "-"
+            kind, payload = deck[index][0], bytes.fromhex(str(deck[index][1]))
+            return club.describe_deck_item(int(kind), payload)
+
+        return (f"deck{fighter.deck_id}[{item_num}]=({at(item_num)}) "
+                f"[{item_num - 1}]=({at(item_num - 1)}) of {len(deck)}")
 
     def _battle_turn_start(
         self, session: "_Session", battle: "clubbattle.Battle"
@@ -3052,7 +3126,7 @@ class MpsServer:
         seen=0: this follows the 0x5C08 that answered the last 0x5C07, it does
         not answer anything itself.
         """
-        battle.turn += 1
+        battle.begin_turn()
         rows = battle.turn_rows()
         print(f"[{self.tag}] battle turn start: turn={battle.turn} "
               f"({len(rows)} fighter(s))")
