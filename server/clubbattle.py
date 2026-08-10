@@ -99,6 +99,35 @@ DEFAULT_VITALITY = 100
 DEFAULT_ENERGY = 80
 DEFAULT_SPEED = 40
 
+#: How many per-character status counters 0x5C09 carries, and the number of
+#: rows in the client's own ``clubstatus`` table.
+#:
+#: ⭐⭐ Two independent witnesses, which is why this is not a guess:
+#:
+#: 1. The reader at 0x8F0B90 walks the array with an explicit counted loop —
+#:    ``mov ebp, 8`` / ``call [edx+0x28]`` (u16) / ``add edi, 2`` / ``dec ebp``
+#:    / ``jne``. The 8 is an immediate in the instruction stream. Its outer
+#:    loop then advances one entry with ``add ebx, 0x18``, and 4 + 2 + 1 +
+#:    (1 pad) + 8*2 is exactly 0x18, so the stride agrees with the count.
+#: 2. ``clubstatus`` in the client's own idlist data is an IdBn table whose
+#:    header count is 8 and whose file is 32 + 8*24 bytes: 通常, 眠り, しびれ,
+#:    沈黙, 混乱, 練習不能, 奥義無効, 奥義反射.
+#:
+#: The array is therefore indexed by clubstatus id, and entry 0 is 通常 —
+#: the not-afflicted row, which is why an untouched fighter sends all zeroes.
+NUM_OF_CLUB_STATUS = 8
+
+#: charaId u32 + vitality u16 + energy u8 + NUM_OF_CLUB_STATUS x u16. ⚠️ 23,
+#: not the 0x18 the client's struct advances by: that stride includes a pad
+#: byte after ``energy`` so the u16 array lands aligned. Padding is a fact
+#: about their memory, not about the wire, and the reader takes each field
+#: through its own width-checked accessor.
+TURN_START_ROW_SIZE = 23
+
+#: ⚠️ INVENTED. Nothing seen so far says how long a turn is allowed to take;
+#: this is a minute because a minute is a plausible minute.
+TURN_TIMEOUT_MS = 60_000
+
 
 def base_block(info: bytes) -> bytes:
     """The 71-byte ``base`` for one character, out of their create block.
@@ -164,6 +193,49 @@ def battle_ready_params(chara_id: int) -> bytes:
     return struct.pack(">I", chara_id)
 
 
+def turn_start_row(
+    chara_id: int,
+    vitality: int,
+    energy: int,
+    states: "list[int] | None" = None,
+) -> bytes:
+    """One ``turnStartCharaInfo``: who, their two bars, their eight counters.
+
+    ⚠️ No ``speed`` here, and no ``clubId`` — 0x5C06 carries those once, at the
+    top of the fight, and this message carries only what a turn can change.
+    That asymmetry is the reason this is worth sending: ``vitality`` and
+    ``energy`` appear in both messages, so giving them different values here
+    is the only reading anyone gets of which value the client treats as the
+    maximum and which as the current one.
+    """
+    counters = list(states or [])[:NUM_OF_CLUB_STATUS]
+    counters += [0] * (NUM_OF_CLUB_STATUS - len(counters))
+    out = struct.pack(">IHB", chara_id, vitality & 0xFFFF, energy & 0xFF)
+    out += struct.pack(f">{NUM_OF_CLUB_STATUS}H", *(c & 0xFFFF for c in counters))
+    if len(out) != TURN_START_ROW_SIZE:
+        raise AssertionError(f"row is {len(out)}B, reader wants {TURN_START_ROW_SIZE}")
+    return out
+
+
+def turn_start_params(turn: int, timeout_time: int, rows: "list[bytes]") -> bytes:
+    """0x5C09: the turn number, its deadline, and everybody's current numbers.
+
+    ``timeout_time`` is a moment on the CLIENT's own clock in milliseconds,
+    read through the stream's +0x10 slot as a signed 64-bit — the same slot,
+    width and frame as 0x480A's arrivalTime, 0x6100's speechEndTime and
+    0x6103's startTime/endTime. All four of those are already on screen and
+    correct, so the frame is not being guessed at; what has not been checked
+    is only whether this particular field is an absolute moment like those or
+    a duration, and a client that draws a countdown answers that on sight.
+
+    ⚠️ Unlike 0x5C06 this body is the same for every recipient: nothing in it
+    is written from the reader's point of view.
+    """
+    out = struct.pack(">Bq", turn & 0xFF, timeout_time)
+    out += struct.pack(">H", len(rows)) + b"".join(rows)
+    return out
+
+
 def training_battle_info_params(
     team: int, team1_rows: "list[bytes]", team2_rows: "list[bytes]"
 ) -> bytes:
@@ -176,3 +248,152 @@ def training_battle_info_params(
     for rows in (team1_rows, team2_rows):
         out += struct.pack(">H", len(rows)) + b"".join(rows)
     return out
+
+
+#: ⭐ The first turn is 1, and the screen agrees: sending turn=1 draws
+#: 「残り　7　ターン」, which is 8 - 1 against the eight-turn limit the club
+#: tables give. So this is a 1-based turn ORDINAL and the client subtracts it
+#: from the limit itself; it is not a countdown we are supposed to send.
+#: ⚠️ One data point. A second one is cheap and has not been taken: open a
+#: fight with this set to 3 and the counter should read 5.
+FIRST_TURN = 1
+
+
+class Fighter:
+    """One character in a battle, with the numbers the two messages carry.
+
+    ``max_vitality``/``max_energy`` are what 0x5C06 announced; ``vitality``/
+    ``energy`` are what 0x5C09 reports each turn. Both are kept because the
+    two messages carry the value at different rates, and a single field could
+    not express whichever one turns out to be the ceiling.
+
+    ⚠️⚠️ Which one that is remains UNREAD, and the round-84 experiment says it
+    is not readable from here. 0x5C09 was given vitality=5/energy=5 against
+    0x5C06's 100/80 while a fight was on screen: the Status panel bars and the
+    bar under the character's feet BOTH stayed full, on both clients. So the
+    bars are drawn from 0x5C06 and 0x5C09's copies of the numbers do not touch
+    them. That kills the plan in 2.41 — with only these two messages every bar
+    is 「current == maximum」 and no fill is distinguishable from any other, so
+    the 気力/素早さ pairing cannot be named here no matter what values go out.
+    ⭐ The next place it can be read is the 0x5C0A/0x5C0E コマンド exchange,
+    where spending 気力 should make a current value fall below its maximum for
+    the first time.
+    """
+
+    def __init__(self, chara_id: int, team: int, club_id: int, info: bytes) -> None:
+        self.chara_id = chara_id
+        self.team = team
+        self.club_id = club_id
+        self.info = info
+        self.max_vitality = DEFAULT_VITALITY
+        self.max_energy = DEFAULT_ENERGY
+        self.speed = DEFAULT_SPEED
+        # A fight opens at full. ⚠️ These were deliberately seeded LOW for one
+        # round to try to read the bars; see the class docstring for why that
+        # experiment is over and why leaving them low would be worse than
+        # useless — a permanently wounded fighter nobody wounded.
+        self.vitality = self.max_vitality
+        self.energy = self.max_energy
+        #: One counter per clubstatus row; all zero is 通常, nothing afflicting.
+        self.states = [0] * NUM_OF_CLUB_STATUS
+        #: Set by 0x5C07 — 「my battle scene is up」, not 「I am ready to play」.
+        self.ready = False
+        self.deck_id = 0
+
+    def info_row(self) -> bytes:
+        """This fighter's 83 bytes for 0x5C06."""
+        return member_row(
+            self.chara_id, self.info, self.club_id,
+            self.max_vitality, self.max_energy, self.speed,
+        )
+
+    def turn_row(self) -> bytes:
+        """This fighter's 23 bytes for 0x5C09."""
+        return turn_start_row(
+            self.chara_id, self.vitality, self.energy, self.states
+        )
+
+
+class Battle:
+    """One fight in progress, from 0x5C06 until whatever ends it.
+
+    ⚠️ Deliberately not the room it came out of. 自主トレ is the only door this
+    server can open onto the 0x5C** family today, but 練習 and フリー対戦 reach
+    the same messages, and a fight that held a trainingroom.Room would have to
+    be rewritten the day one of those opens.
+    """
+
+    def __init__(self, fighters: "list[Fighter]") -> None:
+        self.fighters = fighters
+        #: One short of the first turn: every 0x5C09 advances it first, so the
+        #: opening one goes out as FIRST_TURN and nothing has to special-case
+        #: 「is this the first」.
+        self.turn = FIRST_TURN - 1
+
+    def find(self, chara_id: int) -> "Fighter | None":
+        for fighter in self.fighters:
+            if fighter.chara_id == chara_id:
+                return fighter
+        return None
+
+    def side(self, team: int) -> "list[Fighter]":
+        return [f for f in self.fighters if f.team == team]
+
+    def all_ready(self) -> bool:
+        """Has every fighter reported its battle scene up?
+
+        ⚠️ Every fighter, including the leader — this is not the room's
+        ready flag, where the leader is excused because pressing 「開 始」 is
+        their version of it. 0x5C07 is a statement about a scene being drawn
+        and the leader's scene has to be drawn too.
+        """
+        return bool(self.fighters) and all(f.ready for f in self.fighters)
+
+    def turn_rows(self) -> "list[bytes]":
+        return [f.turn_row() for f in self.fighters]
+
+    def summary(self) -> str:
+        sides = "/".join(str(len(self.side(t))) for t in (0, 1))
+        ready = sum(1 for f in self.fighters if f.ready)
+        return f"turn {self.turn}, {sides}, {ready}/{len(self.fighters)} ready"
+
+
+class Board:
+    """Every battle currently up, found by any of its participants.
+
+    Held by the server rather than a session for the same reason the room
+    board is: a fight outlives any one message about it, and 0x5C09 has to
+    reach people on other connections.
+    """
+
+    def __init__(self) -> None:
+        self.battles: "list[Battle]" = []
+
+    def open(self, fighters: "list[Fighter]") -> Battle:
+        for fighter in fighters:
+            self.close(fighter.chara_id)
+        battle = Battle(fighters)
+        self.battles.append(battle)
+        return battle
+
+    def battle_of(self, chara_id: int) -> "Battle | None":
+        for battle in self.battles:
+            if battle.find(chara_id) is not None:
+                return battle
+        return None
+
+    def close(self, chara_id: int) -> "Battle | None":
+        """Drop whatever battle this character is in, and return it.
+
+        ⚠️ The whole battle goes, not just the one fighter. A two-player
+        自主トレ with one side gone is not a fight that can continue, and
+        leaving it on the board would let the next 0x5C07 from the survivor
+        find a battle nobody is going to answer.
+        """
+        battle = self.battle_of(chara_id)
+        if battle is not None:
+            self.battles.remove(battle)
+        return battle
+
+    def summary(self) -> str:
+        return f"{len(self.battles)} battle(s)"
