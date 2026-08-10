@@ -76,6 +76,7 @@ from __future__ import annotations
 import struct
 
 import characters
+import club
 
 MSG_CL_CAST_BATTLE_CHAT = 0x5C00
 MSG_SV_NOTIFY_NPC_BATTLE_INFO = 0x5C05
@@ -86,6 +87,19 @@ MSG_SV_NOTIFY_BATTLE_TURN_START = 0x5C09
 MSG_CL_CAST_BATTLE_COMMAND = 0x5C0A
 MSG_SV_ERROR_BATTLE_COMMAND = 0x5C0B
 MSG_SV_NOTIFY_BATTLE_COMMAND = 0x5C0C
+MSG_SV_NOTIFY_BATTLE_ACTION_ORDER = 0x5C0D
+MSG_SV_NOTIFY_BATTLE_ACTION_BEGIN = 0x5C0E
+MSG_SV_NOTIFY_BATTLE_ACTION_END = 0x5C0F
+MSG_SV_NOTIFY_BATTLE_REACTION = 0x5C10
+MSG_SV_NOTIFY_BATTLE_EFFECT = 0x5C11
+#: ⚠️ UNREAD, and the one message in this family whose place in the sequence is
+#: still a guess. It carries NOTHING (``listshape`` says empty), which leaves
+#: only its name to read: 「the demo starts」. The pairing that makes it worth
+#: trying is that its mirror already exists — 0x5C16 MsgClNotifyClubBattleTurnEnd
+#: is also empty, also carries only 「it happened」, and is the client telling
+#: the server it has FINISHED playing a turn. A start with no end and an end
+#: with no start is the shape of one missing half.
+MSG_SV_NOTIFY_BATTLE_DEMO_START = 0x5C12
 MSG_CL_NOTIFY_BATTLE_TURN_END = 0x5C16
 
 #: The block a character record opens with, shared with the list entry (2.10)
@@ -148,14 +162,24 @@ TURN_START_ROW_SIZE = 23
 #:    65_000, just under a u16 of milliseconds; a clean 65 counting down says
 #:    u16 of ms.
 #:
-#: ⚠️⚠️ This server does not implement the semantics in (1): nothing here
-#: watches the clock, so when a turn runs out the client closes its command
-#: window, waits for the server to move the round along, and waits forever.
-#: That is a missing 0x5C0D/0x5C0E/0x5C0F, NOT a wrong number here — do not
-#: try to fix it by widening this constant. Widening it past what the client
-#: can represent (tried: 600_000) only delays the same dead end and puts a
-#: value on the wire the original could never have sent.
+#: ⭐ The semantics in (1) ARE implemented as of round 88: a turn whose
+#: deadline passes resolves with whoever chose in time, and the ones who did
+#: not simply take no action. See MpsServer._drain_battle. ⚠️ The dead end that
+#: used to be blamed on this number was never about its width — it was the
+#: missing 0x5C0D/0x5C0E/0x5C0F, so do not reach for this constant when a
+#: battle stalls. Widening it past what the client can represent (tried:
+#: 600_000) puts a value on the wire the original could never have sent.
 TURN_TIMEOUT_MS = 60_000
+
+#: 「1）〜3）を８ターンが終了するまで、もしくはどちらかの体力が全員０になるまで
+#: 繰り返します」 (p07_03). RESTORED, and it agrees with what the screen drew
+#: when turn=1 went out: 「残り　7　ターン」 is 8 - 1.
+#:
+#: ⚠️ Nothing here implements what happens when the count runs out. The manual's
+#: next line is 「5）勝敗が表示されます」, which is 0x5C1A/0x5C1C, and neither is
+#: written. So this is used only to STOP starting turns — a ninth 0x5C09 would
+#: draw 「残り　-1　ターン」 and that is a number the original could not send.
+TURN_LIMIT = 8
 
 
 def base_block(info: bytes) -> bytes:
@@ -338,6 +362,60 @@ def command_params(chara_id: int, reason: int = COMMAND_OK) -> bytes:
     return struct.pack(">IB", chara_id, reason & 0xFF)
 
 
+def action_order_params(chara_ids: "list[int]") -> bytes:
+    """0x5C0D: ``order[u16] = {charaId u32}``, the turn's running order.
+
+    ⭐ The manual names the thing this feeds: 「味方の状態」…キャラクターの
+    **行動順**、残り体力、残り気力などが表示されます (p07_03). So the order is
+    the server's to state and the client draws it next to each ally.
+
+    ⚠️ THE LIST IS THE ONES WHO ACT, not everybody in the fight. That is a
+    choice, and the cheap alternative (everybody, with the non-actors at the
+    end) is not excluded by anything read so far. It is made this way because
+    the 0x5C0E stream that follows walks exactly this list, and an order naming
+    a character no ActionBegin ever mentions would be the server saying two
+    different things about the same turn.
+    """
+    out = struct.pack(">H", len(chara_ids))
+    return out + b"".join(struct.pack(">I", c) for c in chara_ids)
+
+
+def action_begin_params(
+    chara_id: int, kind: int, payload: bytes, target_id: int
+) -> bytes:
+    """0x5C0E: who acts, the card they play, and who it is aimed at.
+
+    ⭐⭐ ``deckItem`` is the SAME six bytes the client sent in 0x5B03 and that
+    the save file has been holding since round 79 — ``kind u8`` plus a block
+    the client bulk-copies rather than parses, so it goes back out verbatim.
+    ⚠️ Those six are little-endian (the only such field group in this protocol,
+    see club.DECK_ITEM_KEYWORD); re-encoding them here would byte-swap a struct
+    that was never meant to be read on this side.
+
+    ⚠️ This is why 0x5C07's deckId had to be stored. The wire never repeats
+    which of the three decks a fighter brought, so ``itemNum`` in 0x5C0A is
+    only resolvable against the deck named once at the top of the fight.
+    """
+    if len(payload) != club.DECK_ITEM_BYTES:
+        raise AssertionError(
+            f"deckItem payload is {len(payload)}B, reader wants "
+            f"{club.DECK_ITEM_BYTES}"
+        )
+    out = struct.pack(">IB", chara_id, kind & 0xFF) + payload
+    return out + struct.pack(">I", target_id)
+
+
+def action_end_params(chara_id: int) -> bytes:
+    """0x5C0F: that character is done acting, and nothing else.
+
+    ⚠️ It carries no result. Whatever the action DID — damage, a status, a
+    miss — is 0x5C10 Reaction and 0x5C11 Effect, and neither is implemented:
+    there is no restored formula for any of it, so this server plays the card
+    and changes nothing. The pair is the turn's structure, not its outcome.
+    """
+    return struct.pack(">I", chara_id)
+
+
 def training_battle_info_params(
     team: int, team1_rows: "list[bytes]", team2_rows: "list[bytes]"
 ) -> bytes:
@@ -443,6 +521,20 @@ class Battle:
         #: opening one goes out as FIRST_TURN and nothing has to special-case
         #: 「is this the first」.
         self.turn = FIRST_TURN - 1
+        #: Whether this turn's actions have already gone out. Set by the
+        #: 0x5C0D/0x5C0E/0x5C0F run, cleared by the next turn start.
+        #:
+        #: ⚠️ It exists because a turn resolves from two places — the last
+        #: 0x5C0A, and the deadline passing — and both can happen: a command
+        #: that arrives while the timeout drain is running would otherwise
+        #: play the round a second time.
+        self.resolved = False
+        #: When this turn's choices close, on the SERVER's monotonic clock.
+        #: ⚠️ Not the ``timeoutTime`` on the wire: that one is a moment on each
+        #: recipient's own clock (0x5C09 states it per session, the way 0x480A
+        #: does), and comparing our own elapsed time against a client's timebase
+        #: is the mistake 2.15 already cost a round.
+        self.deadline = 0.0
 
     def find(self, chara_id: int) -> "Fighter | None":
         for fighter in self.fighters:
@@ -466,9 +558,64 @@ class Battle:
     def begin_turn(self) -> int:
         """Advance to the next turn and clear everybody's choice. Returns it."""
         self.turn += 1
+        self.resolved = False
         for fighter in self.fighters:
             fighter.begin_turn()
         return self.turn
+
+    def finished(self) -> bool:
+        """Has the eight-turn limit been reached?
+
+        ⚠️ The manual's other ending — 「どちらかの体力が全員０になるまで」 — is
+        not testable here: nothing takes 体力 off anybody, because no damage
+        formula has been restored. So this asks the only half that can be
+        answered, and the fight that reaches it simply stops (see TURN_LIMIT).
+        """
+        return self.turn >= TURN_LIMIT
+
+    def all_chosen(self) -> bool:
+        """Has every fighter sent their 0x5C0A this turn?
+
+        ⚠️ 「全員のコマンド入力終了後、全員の行動が実行されます」 (p07_03) is
+        this condition exactly — and the manual's preceding line says the OTHER
+        way a turn can reach that point is the clock running out on somebody.
+        Both callers are in MpsServer; neither is in here, because a Battle has
+        no way to tell the time on a client's behalf.
+        """
+        return bool(self.fighters) and all(f.command is not None for f in self.fighters)
+
+    def all_turn_done(self) -> bool:
+        """Has every fighter reported 0x5C16 「my turn animation is over」?
+
+        ⭐ The same shape as all_ready: the next 0x5C09 waits for the LAST one,
+        because each client plays the action stream at its own pace and a turn
+        started on the first report would begin for somebody still watching the
+        previous one.
+        """
+        return bool(self.fighters) and all(f.turn_done for f in self.fighters)
+
+    def actors(self) -> "list[Fighter]":
+        """Who acts this turn, in the order they act.
+
+        ⚠️⚠️ THE ORDER IS INVENTED. What is restored is only that an order
+        exists and that the client draws it (p07_03 lists 行動順 among the
+        things 「味方の状態」 shows). Nothing read so far says what decides it.
+
+        ⭐ 素早さ is used because it is the only field in this family whose name
+        could mean 「acts sooner」 — 0x5C06 carries vitality/energy/speed per
+        fighter and this is the one that has no other job. Ties keep roster
+        order, so a fight where everybody has the same speed (which is every
+        fight today: DEFAULT_SPEED is a placeholder) is at least stable rather
+        than arbitrary.
+
+        ⚠️ Fighters who did not choose are left out — 「０になる前に入力を完了
+        できなかった場合、キャラクターは行動しません」.
+        """
+        chose = [f for f in self.fighters if f.command is not None]
+        order = sorted(
+            enumerate(chose), key=lambda pair: (-pair[1].speed, pair[0])
+        )
+        return [fighter for _index, fighter in order]
 
     def turn_rows(self) -> "list[bytes]":
         return [f.turn_row() for f in self.fighters]

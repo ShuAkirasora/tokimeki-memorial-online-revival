@@ -827,6 +827,12 @@ class _Session:
         # MpsServer._drain_console; the file is append-only from our side, so an
         # offset is all the bookkeeping it needs.
         self.console_at = 0
+        # When the クラブ対戦 turn this connection is in stops taking commands,
+        # by the monotonic clock; 0.0 when there is no turn open. It lives here
+        # rather than on the Battle because next_wake is what the socket waits
+        # on and next_wake is a session's own question. The Battle holds the
+        # same moment for the resolution itself — see clubbattle.Battle.
+        self.battle_due = 0.0
 
     def note_clock(self, t1: int) -> None:
         self.clock_t1 = t1
@@ -862,9 +868,20 @@ class _Session:
         paper = self.exam.paper
         if paper is not None and not paper.called:
             due = paper.due if due is None else min(due, paper.due)
-        if due is None:
-            return None
-        return max(0.0, (due - datetime.now()).total_seconds())
+        seconds = None if due is None else (due - datetime.now()).total_seconds()
+        # ⭐ A クラブ対戦 turn is the third of the same kind, and the manual is
+        # explicit about it (p07_03): 「０になる前に入力を完了できなかった場合、
+        # キャラクターは行動しません」 — the client draws 「あと N 秒」, closes
+        # its command window at zero and then waits for the server to move the
+        # round along. Being late here is not a late bell, it is a hung fight.
+        #
+        # ⚠️ Monotonic rather than a datetime, because that is the clock the
+        # deadline was set on; mixing the two would put the fight's timing at
+        # the mercy of the wall clock.
+        if self.battle_due:
+            left = max(0.0, self.battle_due - time.monotonic())
+            seconds = left if seconds is None else min(seconds, left)
+        return seconds
 
     def markers(self) -> tuple[tuple[str, int, int], ...]:
         """The stand-ins for the current map, computed once per map change.
@@ -3038,6 +3055,34 @@ class MpsServer:
         if msg_type == clubbattle.MSG_CL_CAST_BATTLE_COMMAND:
             return self._battle_command(session, battle, params)
 
+        if msg_type == clubbattle.MSG_CL_NOTIFY_BATTLE_TURN_END:
+            # ⭐ Empty body, and a Notify: 「I have finished playing this turn's
+            # actions」. It is the counterpart of 0x5C07 one level down — the
+            # client saying a piece of animation is over, not asking anything —
+            # so it gets no answer of its own and the next 0x5C09 is the reply
+            # the fight actually needs.
+            fighter = battle.find(chara_id) if battle else None
+            if battle is None or fighter is None:
+                print(f"[{self.tag}] battle turn end from charaId={chara_id:#x} "
+                      f"with no battle to end a turn of")
+                return None
+            fighter.turn_done = True
+            done = sum(1 for f in battle.fighters if f.turn_done)
+            print(f"[{self.tag}] battle turn end: charaId={chara_id:#x} "
+                  f"({done}/{len(battle.fighters)}, {battle.summary()})")
+            if not battle.all_turn_done():
+                return None
+            if battle.finished():
+                # ⚠️ 「1）〜3）を８ターンが終了するまで…繰り返します。5）勝敗が
+                # 表示されます」. The repeat is over and what comes next is
+                # 0x5C1A/0x5C1C, neither of which is written — so the fight
+                # stops here rather than starting a ninth turn the original
+                # could not have started. The screen keeps the last frame.
+                print(f"[{self.tag}] battle reached the {clubbattle.TURN_LIMIT}-"
+                      f"turn limit; no 0x5C1A/0x5C1C implemented, it stops here")
+                return None
+            return self._battle_turn_start(session, battle)
+
         print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
         return None
 
@@ -3075,33 +3120,73 @@ class MpsServer:
             print(f"[{self.tag}] battle command from charaId={chara_id:#x} "
                   f"(item {item_num}) with no battle to put it in")
             return None
+        everyone = [f.chara_id for f in battle.fighters]
+        if battle.resolved:
+            # ⭐ The one refusal this subsystem can make honestly, and the first
+            # time it has ever been sendable: reason 2 is 「コマンド選択がゲーム
+            # サーバ側の制限時間内に間に合いませんでした」, and a command that
+            # arrives after the turn has already been played is exactly that.
+            # ⚠️ Broadcast like the acceptance is, on the same argument (0x5C0C
+            # names a charaId, so it is not a private answer) — but note that
+            # nothing has been on screen to say whether the others are supposed
+            # to see somebody else's refusal.
+            print(f"[{self.tag}] battle command from charaId={chara_id:#x} "
+                  f"arrived after turn {battle.turn} was played: reason=2")
+            return self._tr_cast(
+                session,
+                0,
+                clubbattle.MSG_SV_NOTIFY_BATTLE_COMMAND,
+                clubbattle.command_params(chara_id, clubbattle.COMMAND_TOO_LATE),
+                everyone,
+            )
         fighter.command = parsed
-        card = self._battle_card(session, fighter, item_num)
+        card = self._battle_card(fighter, item_num)
         print(f"[{self.tag}] battle command: charaId={chara_id:#x} "
               f"itemNum={item_num} isAttck={is_attck} target={target_id:#x} "
               f"deck={fighter.deck_id} card={card} ({battle.summary()})")
-        return self._tr_cast(
+        out = self._tr_cast(
             session,
             0,
             clubbattle.MSG_SV_NOTIFY_BATTLE_COMMAND,
             clubbattle.command_params(chara_id, clubbattle.COMMAND_OK),
-            [f.chara_id for f in battle.fighters],
+            everyone,
         )
+        # 「3）全員のコマンド入力終了後、全員の行動が実行されます」. ⚠️ On the
+        # LAST command, not on each one — the same rule 0x5C09 is under one
+        # level up, and for the same reason: a round played on the first choice
+        # would act for somebody who is still looking at their cards.
+        if battle.all_chosen():
+            out += self._battle_resolve(session, battle)
+        return out
 
-    def _battle_card(
-        self, session: "_Session", fighter: "clubbattle.Fighter", item_num: int
-    ) -> str:
+    def _battle_deck(self, fighter: "clubbattle.Fighter") -> "list[list]":
+        """The 部活デッキ this fighter brought, out of *their own* store.
+
+        ⚠️ Through accounts.owner_of, not the handling session's store: a
+        battle holds people from several accounts (the same rule _peer_chara is
+        under), and reading the opponent's deck out of the chooser's save file
+        would find either nothing or the wrong character's cards.
+
+        ⚠️ Which deck is ``fighter.deck_id``, said once by 0x5C07 and never
+        repeated on the wire. There is nothing to fall back on if that was
+        missed, so an unknown character or an unset deck comes back empty and
+        the caller decides what an empty deck means.
+        """
+        store = self.accounts.owner_of(fighter.chara_id)
+        state = store.club(fighter.chara_id) if store else None
+        return state.deck(fighter.deck_id) if state else []
+
+    def _battle_card(self, fighter: "clubbattle.Fighter", item_num: int) -> str:
         """What ``itemNum`` names in this fighter's deck, for the log only.
 
-        ⚠️ Printed, not acted on, and deliberately printed BOTH ways: whether
-        itemNum is 0- or 1-based has never been on screen, and a log line that
-        shows the card at index n and the card at index n-1 lets the first
-        real command settle it against what the player says they clicked.
+        ⚠️ Printed, not acted on, and deliberately printed BOTH ways. Round 87
+        read 0-based off the first real command — the player clicked row 7 and
+        06 came up — but the two decks in that fight held keyword ids 0-7 in
+        order, so index and id had the same value and only 「is it the row he
+        clicked」 told them apart. Until a shuffled deck has been through here
+        the second reading stays in the log.
         """
-        state = self._chars(session).club(fighter.chara_id)
-        if state is None:
-            return "no club state"
-        deck = state.deck(fighter.deck_id)
+        deck = self._battle_deck(fighter)
 
         def at(index: int) -> str:
             if not 0 <= index < len(deck):
@@ -3111,6 +3196,174 @@ class MpsServer:
 
         return (f"deck{fighter.deck_id}[{item_num}]=({at(item_num)}) "
                 f"[{item_num - 1}]=({at(item_num - 1)}) of {len(deck)}")
+
+    def _battle_deck_item(
+        self, fighter: "clubbattle.Fighter"
+    ) -> "tuple[int, bytes] | None":
+        """The six bytes 0x5C0E has to carry for this fighter's choice.
+
+        ⚠️ Returns None rather than a stand-in when the index names nothing.
+        0x5C0E's deckItem is the client's own struct going back out verbatim,
+        so there is no such thing as a neutral value to put there — a made-up
+        card would be a key the client looks up and draws. A fighter whose card
+        cannot be resolved is dropped from the turn instead, which is the same
+        thing that happens to one who never chose.
+        """
+        if fighter.command is None:
+            return None
+        item_num = fighter.command[0]
+        deck = self._battle_deck(fighter)
+        if not 0 <= item_num < len(deck):
+            return None
+        kind, payload = int(deck[item_num][0]), bytes.fromhex(str(deck[item_num][1]))
+        if len(payload) != club.DECK_ITEM_BYTES:
+            return None
+        return (kind, payload)
+
+    def _battle_resolve(
+        self, session: "_Session", battle: "clubbattle.Battle"
+    ) -> bytes:
+        """Play the turn: 0x5C0D, then 0x5C0E/0x5C0F for each one who acts.
+
+        「3）全員のコマンド入力終了後、全員の行動が実行されます」 (p07_03).
+        Two things reach this — the last 0x5C0A, and the 制限時間 running out —
+        and Battle.resolved keeps them from both playing the same turn.
+
+        ⚠️⚠️ NOTHING HAPPENS to anybody as a result. 0x5C0E states the card and
+        the target, 0x5C0F says that character is done, and no 体力 moves: the
+        damage rules are not restored, and 0x5C10/0x5C11 (Reaction/Effect) are
+        not written. What this restores is the SHAPE of a turn, which is what
+        the client is stuck waiting for; the arithmetic inside it is a separate
+        piece of work and inventing it here would put numbers on the wire that
+        no reading supports.
+
+        ⚠️ The order goes out AFTER the cards have been looked up, so 0x5C0D
+        names exactly the characters the 0x5C0E stream is about to mention. The
+        other way round — announce, then discover a card is missing — would
+        leave the client waiting on an action that never begins.
+
+        seen=0 throughout: an action stream follows the last command, it does
+        not answer it (the 0x5C0C that does has already gone out).
+        """
+        battle.resolved = True
+        for other in (self._session_of(f.chara_id) for f in battle.fighters):
+            if other is not None:
+                other.battle_due = 0.0
+        plays: "list[tuple[clubbattle.Fighter, int, bytes]]" = []
+        for fighter in battle.actors():
+            card = self._battle_deck_item(fighter)
+            if card is None:
+                print(f"[{self.tag}] battle action: charaId={fighter.chara_id:#x} "
+                      f"chose {self._battle_card(fighter, fighter.command[0])} "
+                      f"— nothing to play, left out of the order")
+                continue
+            plays.append((fighter, card[0], card[1]))
+        everyone = [f.chara_id for f in battle.fighters]
+        order = [fighter.chara_id for fighter, _kind, _payload in plays]
+        who = ", ".join(f"0x{c:08x}" for c in order) if order else "nobody acts"
+        print(f"[{self.tag}] battle action order: turn={battle.turn}, {who}")
+        out = self._tr_cast(
+            session,
+            0,
+            clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
+            clubbattle.action_order_params(order),
+            everyone,
+        )
+        for fighter, kind, payload in plays:
+            assert fighter.command is not None
+            _item_num, is_attck, target_id = fighter.command
+            print(f"[{self.tag}] battle action: charaId={fighter.chara_id:#x} "
+                  f"{'攻撃' if is_attck else '防御'} target={target_id:#x} "
+                  f"{club.describe_deck_item(kind, payload)}")
+            out += self._tr_cast(
+                session,
+                0,
+                clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_BEGIN,
+                clubbattle.action_begin_params(
+                    fighter.chara_id, kind, payload, target_id
+                ),
+                everyone,
+            )
+            out += self._tr_cast(
+                session,
+                0,
+                clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_END,
+                clubbattle.action_end_params(fighter.chara_id),
+                everyone,
+            )
+        # ⭐⭐⭐ And this is what actually makes the turn run. MEASURED, round 88:
+        # a real client was given 0x5C0D and both 0x5C0E/0x5C0F pairs and sat
+        # perfectly still — the 「decided」 markers stayed over both heads, no
+        # 0x5C16 came back, and the fight was as stuck as it had been before any
+        # of the three existed. One body-less 0x5C12 later, on the same live
+        # battle, it reported 0x5C16 and drew 「残り　6　ターン」. Twice, on two
+        # different turns, one of them a turn that had timed out.
+        #
+        # ⚠️ It goes LAST because that is where it was measured, not because the
+        # order is known: the probe could only append to a turn already sent, so
+        # 「DemoStart first, then the script」 is untested and not excluded. What
+        # the test does settle is that the client holds the actions until told,
+        # rather than playing each as it arrives.
+        return out + self._tr_cast(
+            session,
+            0,
+            clubbattle.MSG_SV_NOTIFY_BATTLE_DEMO_START,
+            b"",
+            everyone,
+        )
+
+    def _battle_probe(
+        self, session: "_Session", sequence: int, args: "list[str]"
+    ) -> bytes:
+        """``/cb …``: poke a battle that is already on screen, without rebuilding it.
+
+        ⚠️⚠️ A PROBE, not gameplay. It exists because the 0x5C** sequence is
+        being read one message at a time off a live client, and every guess used
+        to cost a rebuilt fight: two logins, a room, a join, two 準備ＯＫ, a
+        開始 — five minutes to test a three-line change. These send one message
+        into the fight that is already up.
+
+        ``/cb``        what the server thinks the state is
+        ``/cb demo``   0x5C12 MsgSvNotifyClubBattleDemoStart, body-less
+        ``/cb order``  0x5C0D again, same order
+        ``/cb replay`` the whole action stream again
+        ``/cb next``   pretend everyone reported 0x5C16 and start the next turn
+
+        ⭐ Every one of them is a message this server already knows how to
+        build; nothing here invents a shape.
+        """
+        battle = self.battles.battle_of(session.chara_id)
+        if battle is None:
+            return self._say(session, sequence, "/cb: no battle")
+        what = args[0] if args else "state"
+        everyone = [f.chara_id for f in battle.fighters]
+        if what == "state":
+            for fighter in battle.fighters:
+                print(f"[{self.tag}] /cb 0x{fighter.chara_id:08x} team={fighter.team} "
+                      f"deck={fighter.deck_id} command={fighter.command} "
+                      f"turn_done={fighter.turn_done}")
+            return self._say(
+                session, sequence,
+                f"/cb {battle.summary()}, resolved={battle.resolved}",
+            )
+        if what == "demo":
+            return self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_DEMO_START, b"", everyone
+            )
+        if what == "order":
+            order = [f.chara_id for f in battle.actors()]
+            return self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
+                clubbattle.action_order_params(order), everyone,
+            )
+        if what == "replay":
+            battle.resolved = False
+            return self._battle_resolve(session, battle)
+        if what == "next":
+            for fighter in battle.fighters:
+                fighter.turn_done = True
+            return self._battle_turn_start(session, battle)
+        return self._say(session, sequence, f"/cb: unknown '{what}'")
 
     def _battle_turn_start(
         self, session: "_Session", battle: "clubbattle.Battle"
@@ -3128,6 +3381,16 @@ class MpsServer:
         """
         battle.begin_turn()
         rows = battle.turn_rows()
+        # ⭐ The same deadline the wire states, kept on OUR clock as well: the
+        # timeoutTime below is a moment on each client's timebase and cannot be
+        # compared against anything here. See _drain_battle for what runs when
+        # it passes, and _Session.battle_due for why every fighter's session
+        # gets a copy.
+        battle.deadline = time.monotonic() + clubbattle.TURN_TIMEOUT_MS / 1000
+        for fighter in battle.fighters:
+            other = self._session_of(fighter.chara_id)
+            if other is not None:
+                other.battle_due = battle.deadline
         print(f"[{self.tag}] battle turn start: turn={battle.turn} "
               f"({len(rows)} fighter(s))")
 
@@ -3456,6 +3719,8 @@ class MpsServer:
         Split out of the chat branch so that runtime/console.txt can reach the
         same commands — see _drain_console for why that had to exist.
         """
+        if said.split()[:1] == ["/cb"]:
+            return self._battle_probe(session, sequence, said.split()[1:])
         reply = b""
         info = self._chars(session).find(session.chara_id)
         love = self._chars(session).romance(session.chara_id)
@@ -3696,9 +3961,63 @@ class MpsServer:
         out += self._drain_bells(session)
         out += self._drain_lesson(session)
         out += self._drain_exam(session)
+        out += self._drain_battle(session)
         out += self._drain_vitals(session)
         out += self._drain_pending_say(session)
         return out
+
+    def _drain_battle(self, session: "_Session") -> bytes:
+        """Close a クラブ対戦 turn whose 制限時間 has run out.
+
+        ⭐ RESTORED semantics, from the only place they are written down
+        (p07_03): 「０になる前に入力を完了できなかった場合、キャラクターは行動
+        しません。3）全員のコマンド入力終了後、全員の行動が実行されます」. A
+        timeout does not end anything and does not refuse anything — it costs
+        one participant their move and the round runs.
+
+        ⚠️⚠️ Without this the fight hangs, and it hangs silently: the client
+        takes its own command window away at zero and then waits for a server
+        that is waiting for a command that can no longer be sent. Round 87 lost
+        a whole battle to exactly that and blamed TURN_TIMEOUT_MS, which was
+        never the thing at fault.
+
+        ⚠️ The turn is resolved by whichever fighter's session wakes first;
+        Battle.resolved is what stops the second one from playing it again.
+        """
+        if not session.battle_due or time.monotonic() < session.battle_due:
+            return b""
+        session.battle_due = 0.0
+        battle = self.battles.battle_of(session.chara_id)
+        if battle is None or battle.resolved:
+            return b""
+        missing = [f for f in battle.fighters if f.command is None]
+        print(f"[{self.tag}] battle turn {battle.turn} timed out with "
+              f"{len(missing)} of {len(battle.fighters)} still choosing: "
+              + ", ".join(f"0x{f.chara_id:08x}" for f in missing))
+        # ⭐⭐ Tell them so, and this is the one thing reason 2 can mean:
+        # 「コマンド選択がゲームサーバ側の制限時間内に間に合いませんでした」
+        # names the SERVER's time limit, so it is a sentence the server says on
+        # its own initiative — nothing the client sends could prompt it.
+        #
+        # ⚠️⚠️ It is also what a client that ran out of time appears to be
+        # waiting for. Round 88 sent the action stream to a client whose own
+        # countdown had expired and watched it sit still: the actions were on
+        # the wire, no 0x5C16 came back, and the opponent's 「decided」 marker
+        # stayed up. The client had closed its command window at zero and had
+        # not been told what became of the choice it never made.
+        everyone = [f.chara_id for f in battle.fighters]
+        out = b""
+        for fighter in missing:
+            out += self._tr_cast(
+                session,
+                0,
+                clubbattle.MSG_SV_NOTIFY_BATTLE_COMMAND,
+                clubbattle.command_params(
+                    fighter.chara_id, clubbattle.COMMAND_TOO_LATE
+                ),
+                everyone,
+            )
+        return out + self._battle_resolve(session, battle)
 
     def _drain_vitals(self, session: "_Session") -> bytes:
         """Let a sitting player recover, and tell the client what changed.
