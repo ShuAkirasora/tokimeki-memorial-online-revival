@@ -83,6 +83,10 @@ MSG_SV_NOTIFY_TRAINING_BATTLE_INFO = 0x5C06
 MSG_CL_NOTIFY_BATTLE_READY = 0x5C07
 MSG_SV_NOTIFY_BATTLE_READY = 0x5C08
 MSG_SV_NOTIFY_BATTLE_TURN_START = 0x5C09
+MSG_CL_CAST_BATTLE_COMMAND = 0x5C0A
+MSG_SV_ERROR_BATTLE_COMMAND = 0x5C0B
+MSG_SV_NOTIFY_BATTLE_COMMAND = 0x5C0C
+MSG_CL_NOTIFY_BATTLE_TURN_END = 0x5C16
 
 #: The block a character record opens with, shared with the list entry (2.10)
 #: and the 0x6501 info record (2.35): names, sex, blood, birthday, looks,
@@ -236,6 +240,79 @@ def turn_start_params(turn: int, timeout_time: int, rows: "list[bytes]") -> byte
     return out
 
 
+#: 0x5C0C's ``reason``, RESTORED from ``error_message.bin`` 487-489. The table
+#: names three and only three, and the first of them is one of the developers'
+#: own 「未使用：：：正常」 rows — a numbered slot with no sentence, which is
+#: how that table spells 「this code is the success one, draw nothing」 (0x5C1C
+#: reason 0 is the same). So a command that is simply accepted goes out as 0.
+#:
+#: ⚠️ The other two are the whole refusal policy this subsystem has:
+#:
+#:     1  選択できるコマンドがありません。
+#:     2  コマンド選択がゲームサーバ側の制限時間内に間に合いませんでした。
+#:
+#: ⭐ Reason 2 is the first thing anywhere to say what ``timeoutTime`` is FOR:
+#: the deadline is enforced by the server, and this is the sentence it says
+#: when it passes. That is a use for the field, not yet a reading of it — see
+#: the note on turn_start_params.
+#:
+#: ⚠️⚠️ Note what is NOT here: 「選択可能なコマンドがありません」, the sentence
+#: actually on screen right now, is not in this table at all. It is row 660 of
+#: the client's own ``msg_text`` (id 0x0295), between 「眠っている……」 and
+#: 「敵対象を選択してください」. Different wording, different table, different
+#: speaker: the client says it to itself, about a command list it built from
+#: data it already holds. No reason code will ever produce it and no server
+#: message clears it — only giving the client something to list will.
+COMMAND_OK = 0
+COMMAND_NONE_SELECTABLE = 1
+COMMAND_TOO_LATE = 2
+
+
+def parse_command(params: bytes) -> "tuple[int, int, int] | None":
+    """0x5C0A -> ``(itemNum, isAttck, targetId)``, or None if it is malformed.
+
+    ⚠️ ``itemNum`` indexes the player's own 部活デッキ and the wire never says
+    which deck that is — 0x5C07 said, once, at the top of the fight. So the
+    card a number names is only resolvable against the Fighter that sent it,
+    which is why this returns the raw triple and Battle.command does the
+    lookup.
+
+    ⚠️ Whether ``itemNum`` is 0- or 1-based is UNREAD. Nothing has been on
+    screen yet that would say, and the first real 0x5C0A answers it for free:
+    a deck whose entries are distinguishable will name its own indexing.
+
+    ⭐ ``isAttck`` is the client's own word (from the dump at 0x8EE3C0), and
+    the two sentences it must be choosing between are next to each other in
+    ``msg_text``: 「敵対象を選択してください」 and 「味方対象を選択してくださ
+    い」. So a card is aimed at one side or the other and this byte says which
+    — which also means ``targetId`` is a charaId in the fight, not a slot.
+    """
+    if len(params) < 6:
+        return None
+    item_num, is_attck = params[0], params[1]
+    target_id = struct.unpack_from(">I", params, 2)[0]
+    return (item_num, is_attck, target_id)
+
+
+def command_params(chara_id: int, reason: int = COMMAND_OK) -> bytes:
+    """0x5C0C: who chose, and how it went.
+
+    ⚠️ It carries a charaId, so it is not a private answer to the chooser —
+    the same argument 0x5C08 settled. A message told only to its sender does
+    not need to name them. And the pairing says the same thing twice: 0x5C0A
+    is a MsgCl**Cast**, and in this protocol Cast means 「repeat this to the
+    others」 — MsgClCastNormalChat -> MsgSvNotifyNormalChat is the same shape,
+    and so is 0x5C00 -> 0x5C01 inside this very family.
+
+    ⚠️ What the other side DOES with it is unread. It cannot be the card: the
+    body has no room for one, and 0x5C0E carries the deckItem later. The
+    guess with the least invention behind it is 「that player has chosen」,
+    the tick the room window draws next to a member who pressed 準備ＯＫ, but
+    that is a guess and nothing here depends on it.
+    """
+    return struct.pack(">IB", chara_id, reason & 0xFF)
+
+
 def training_battle_info_params(
     team: int, team1_rows: "list[bytes]", team2_rows: "list[bytes]"
 ) -> bytes:
@@ -299,6 +376,18 @@ class Fighter:
         #: Set by 0x5C07 — 「my battle scene is up」, not 「I am ready to play」.
         self.ready = False
         self.deck_id = 0
+        #: This turn's 0x5C0A as ``(itemNum, isAttck, targetId)``, or None
+        #: while the player is still choosing. Cleared by every turn start,
+        #: because a choice is a statement about one turn and letting last
+        #: turn's stand would act for a player who did nothing.
+        self.command: "tuple[int, int, int] | None" = None
+        #: Whether this player has said 「done choosing」 (0x5C16) this turn.
+        self.turn_done = False
+
+    def begin_turn(self) -> None:
+        """Forget last turn's choice. Called for everyone by every 0x5C09."""
+        self.command = None
+        self.turn_done = False
 
     def info_row(self) -> bytes:
         """This fighter's 83 bytes for 0x5C06."""
@@ -348,6 +437,13 @@ class Battle:
         and the leader's scene has to be drawn too.
         """
         return bool(self.fighters) and all(f.ready for f in self.fighters)
+
+    def begin_turn(self) -> int:
+        """Advance to the next turn and clear everybody's choice. Returns it."""
+        self.turn += 1
+        for fighter in self.fighters:
+            fighter.begin_turn()
+        return self.turn
 
     def turn_rows(self) -> "list[bytes]":
         return [f.turn_row() for f in self.fighters]
