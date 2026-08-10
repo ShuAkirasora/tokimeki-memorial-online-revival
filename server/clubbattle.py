@@ -128,28 +128,34 @@ NUM_OF_CLUB_STATUS = 8
 #: through its own width-checked accessor.
 TURN_START_ROW_SIZE = 23
 
-#: ⚠️ INVENTED. Nothing seen so far says how long a turn is allowed to take.
-#: What is NOT invented is that the client reads this field and acts on it.
-#: Two values have been watched on screen, and they behave differently:
+#: ⚠️ INVENTED as a number, but no longer a free choice. Three things bound it:
 #:
-#:   60_000  — a live "あと N 秒" counter above the battle, counting down
-#:             correctly (60 → 53 → 10), and on reaching zero the client
-#:             closed its own command window and sat waiting for the server.
-#:   600_000 — the counter no longer shows the real remainder: it sits in the
-#:             single digits and jumps around (8, 3, 5, 9) instead of falling.
-#:             But the command window stays open well past a minute.
+#: 1. The manual states the SEMANTICS (p07_03): 「０になる前に入力を完了できな
+#:    かった場合、キャラクターは行動しません」 — running out costs that
+#:    character their action, and the round then proceeds to 「全員の行動が実行
+#:    されます」 as usual. So on the original, a timeout does NOT end anything;
+#:    it drops one participant's move and the turn carries on.
+#: 2. The manual gives a figure everywhere it can — 「制限時間は１０分です」
+#:    (p06_03), 「制限時間は３分です」 (p08_03) — and pointedly gives none here.
+#:    That fits a value the server hands down per turn, which is what this is.
+#: 3. The client caps it. At 60_000 it draws a live "あと N 秒" counter and
+#:    counts down cleanly (60 → 53 → 10). At 600_000 the counter stops meaning
+#:    anything: it sits in the single digits and jumps around (8, 3, 5, 9).
+#:    Something far narrower than the i64 holds the remainder client-side, so
+#:    ⭐ whatever the original sent, it FIT — and a minute does.
+#:    ⚠️ The exact width is NOT established: 600_000 mod 65_536 ≈ 10s lands in
+#:    the observed range but does not explain the jumping. Cheap probe: send
+#:    65_000, just under a u16 of milliseconds; a clean 65 counting down says
+#:    u16 of ms.
 #:
-#: So something narrower than the i64 holds the remainder on the client side,
-#: and a value this large wraps inside it. ⚠️ The exact container is NOT
-#: established — 600_000 mod 65_536 ≈ 10s fits the observed range but not the
-#: jumping. A cheap next probe: 65_000, just under a u16 of milliseconds. If
-#: it draws 65 and falls cleanly, the container is a u16 of ms.
-#:
-#: This server implements no timeout of its own, so a turn that runs out is a
-#: turn that strands the match — which is why the larger value is in here: it
-#: keeps a turn open long enough to be played by hand. It is no more attested
-#: than the minute it replaces.
-TURN_TIMEOUT_MS = 600_000
+#: ⚠️⚠️ This server does not implement the semantics in (1): nothing here
+#: watches the clock, so when a turn runs out the client closes its command
+#: window, waits for the server to move the round along, and waits forever.
+#: That is a missing 0x5C0D/0x5C0E/0x5C0F, NOT a wrong number here — do not
+#: try to fix it by widening this constant. Widening it past what the client
+#: can represent (tried: 600_000) only delays the same dead end and puts a
+#: value on the wire the original could never have sent.
+TURN_TIMEOUT_MS = 60_000
 
 
 def base_block(info: bytes) -> bytes:
