@@ -935,6 +935,11 @@ class MpsServer:
         # while its leader is logged in, and 0x580D reason 2 (切断による) is the
         # protocol saying so.
         self.trainingrooms = trainingroom.Board()
+        # Fights in progress, opened by 0x5C06 and found by any participant.
+        # Separate from the room board because a battle is not a room: 練習 and
+        # フリー対戦 reach the same 0x5C** messages without one, and this server
+        # only lacks those doors because it cannot place their NPCs yet.
+        self.battles = clubbattle.Board()
         # Every connection currently up on this port. Kept so that a Notify can
         # find a player by charaId rather than only being able to answer the
         # connection it is standing on -- which is all a one-player server ever
@@ -1729,6 +1734,13 @@ class MpsServer:
                 )
                 print(f"[{self.tag}] trainingroom dropped on disconnect, "
                       f"now {self.trainingrooms.summary()}")
+            # ⚠️ The whole fight goes, not this one fighter. Nobody has been
+            # told (0x5C1B 「someone left」 is not implemented), so what this
+            # prevents is narrower: a survivor's next 0x5C07 finding a battle
+            # that can never reach all_ready and waiting forever for a 0x5C09.
+            if session.chara_id and self.battles.close(session.chara_id):
+                print(f"[{self.tag}] battle dropped on disconnect, "
+                      f"now {self.battles.summary()}")
             writer.close()
             try:
                 await writer.wait_closed()
@@ -2057,6 +2069,12 @@ class MpsServer:
                     )
                     print(f"[{self.tag}] trainingroom dropped at logout, "
                           f"now {self.trainingrooms.summary()}")
+                # Same reason as the disconnect path: 「中断」 takes the room
+                # down, and a battle that came out of that room cannot outlive
+                # it either.
+                if session.chara_id and self.battles.close(session.chara_id):
+                    print(f"[{self.tag}] battle dropped at logout, "
+                          f"now {self.battles.summary()}")
                 session.chara_id = 0
                 return self._answer(session, sequence, MSG_SV_OK_SCHOOL_LOGOUT, b"")
             if msg_type == MSG_CL_QUERY_POOL_MESSAGE:
@@ -2926,10 +2944,15 @@ class MpsServer:
 
         seen=0 because this answers nothing: 0x5818 was already answered by the
         0x5819 that goes out just before it.
+
+        ⭐ This is also where the battle starts existing as a thing the server
+        holds. Everything after it — the 0x5C07s coming back, the 0x5C09 that
+        answers the last of them — needs to know who is fighting after the
+        room has stopped being the subject, so the roster is built once here
+        and kept on self.battles rather than re-derived from the room.
         """
-        sides: "dict[int, list[bytes]]" = {}
+        fighters: "list[clubbattle.Fighter]" = []
         for team in trainingroom.TEAMS:
-            rows: "list[bytes]" = []
             for member in room.team(team):
                 info = self._peer_chara(member.chara_id)
                 if info is None:
@@ -2937,22 +2960,24 @@ class MpsServer:
                           f"charaId={member.chara_id:#x}, left out of the roster")
                     continue
                 store = self.accounts.owner_of(member.chara_id)
-                rows.append(
-                    clubbattle.member_row(
+                fighters.append(
+                    clubbattle.Fighter(
                         member.chara_id,
-                        info,
+                        team,
                         store.in_club(member.chara_id) if store else 0,
+                        info,
                     )
                 )
-            sides[team] = rows
 
+        battle = self.battles.open(fighters)
+        sides = {t: [f.info_row() for f in battle.side(t)] for t in trainingroom.TEAMS}
         counts = "/".join(str(len(sides[t])) for t in trainingroom.TEAMS)
-        print(f"[{self.tag}] battle info: Ａ/Ｂ={counts}")
+        print(f"[{self.tag}] battle info: Ａ/Ｂ={counts}, {self.battles.summary()}")
 
         def body(chara_id: int) -> bytes:
-            member = room.find(chara_id)
+            fighter = battle.find(chara_id)
             return clubbattle.training_battle_info_params(
-                member.team if member else trainingroom.TEAM_A,
+                fighter.team if fighter else trainingroom.TEAM_A,
                 sides[trainingroom.TEAM_A],
                 sides[trainingroom.TEAM_B],
             )
@@ -2970,13 +2995,14 @@ class MpsServer:
     ) -> "bytes | None":
         """The 0x5Cxx family: the battle itself, once 0x5C06 has drawn it.
 
-        ⚠️ The room still comes from ``self.trainingrooms``, because 自主トレ
-        is the only door this server can open onto this family — but nothing
-        here is a 0x58xx message, and a 練習 that ever became reachable would
-        arrive at these same branches with no room behind it.
+        ⚠️ The battle comes from ``self.battles``, not from the room it was
+        opened out of. 自主トレ is the only door this server can open onto this
+        family today, but 練習 and フリー対戦 arrive at these same branches, and
+        a handler that reached for a trainingroom.Room would be wrong the day
+        one of those opens.
         """
-        board = self.trainingrooms
         chara_id = session.chara_id
+        battle = self.battles.battle_of(chara_id)
 
         if msg_type == clubbattle.MSG_CL_NOTIFY_BATTLE_READY:
             # ⭐ Sent by the client unprompted once its battle scene is up —
@@ -2984,23 +3010,67 @@ class MpsServer:
             # next. It carries a deckId; the answer carries a charaId and no
             # deck at all.
             deck_id = clubbattle.parse_ready(params)
-            room = board.room_of(chara_id)
-            if room is None:
+            fighter = battle.find(chara_id) if battle else None
+            if battle is None or fighter is None:
                 print(f"[{self.tag}] battle ready from charaId={chara_id:#x} "
-                      f"(deck {deck_id}) with no room to tell")
+                      f"(deck {deck_id}) with no battle to tell")
                 return None
+            fighter.ready = True
+            fighter.deck_id = deck_id
             print(f"[{self.tag}] battle ready: charaId={chara_id:#x} "
-                  f"deck={deck_id}")
-            return self._tr_cast(
+                  f"deck={deck_id} ({battle.summary()})")
+            everyone = [f.chara_id for f in battle.fighters]
+            out = self._tr_cast(
                 session,
                 0,
                 clubbattle.MSG_SV_NOTIFY_BATTLE_READY,
                 clubbattle.battle_ready_params(chara_id),
-                [m.chara_id for m in room.members],
+                everyone,
             )
+            # ⚠️ The turn opens on the LAST 0x5C07, not on each one. Every
+            # client is drawing its own scene and they finish at their own
+            # pace, so a turn started on the first one would begin for a
+            # player whose battle is still being built.
+            if battle.all_ready():
+                out += self._battle_turn_start(session, battle)
+            return out
 
         print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
         return None
+
+    def _battle_turn_start(
+        self, session: "_Session", battle: "clubbattle.Battle"
+    ) -> bytes:
+        """0x5C09, once every fighter has said its scene is up.
+
+        ⚠️ ``timeoutTime`` is named on each RECIPIENT's own clock, so the
+        deadline is computed per session rather than once — the same rule
+        0x480A's arrivalTime is under (2.15: copying one client's moment to
+        another teleports them). The turn number and everybody's numbers are
+        identical for all of them; only the deadline is re-read.
+
+        seen=0: this follows the 0x5C08 that answered the last 0x5C07, it does
+        not answer anything itself.
+        """
+        battle.turn += 1
+        rows = battle.turn_rows()
+        print(f"[{self.tag}] battle turn start: turn={battle.turn} "
+              f"({len(rows)} fighter(s))")
+
+        def body(chara_id: int) -> bytes:
+            other = self._session_of(chara_id)
+            clock = (other or session).client_now()
+            return clubbattle.turn_start_params(
+                battle.turn, clock + clubbattle.TURN_TIMEOUT_MS, rows
+            )
+
+        return self._tr_cast(
+            session,
+            0,
+            clubbattle.MSG_SV_NOTIFY_BATTLE_TURN_START,
+            body,
+            [f.chara_id for f in battle.fighters],
+        )
 
     def _tr_part_notice(
         self, room: "trainingroom.Room", gone_id: int, leader_id: int, reason: int
