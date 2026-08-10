@@ -73,6 +73,7 @@ and that reading is free the first time a battle draws.
 """
 from __future__ import annotations
 
+import os
 import struct
 
 import ability
@@ -190,6 +191,34 @@ TURN_START_ROW_SIZE = 23
 #: battle stalls. Widening it past what the client can represent (tried:
 #: 600_000) puts a value on the wire the original could never have sent.
 TURN_TIMEOUT_MS = 60_000
+
+#: How long THIS SERVER waits before resolving a turn nobody finished, in
+#: seconds. Normally exactly the 60 above, and the two are the same number for
+#: a reason: the wire's timeoutTime and the server's own patience describing
+#: different deadlines is a bug, not a feature.
+#:
+#: ⭐ TMO_TURN_DEADLINE_S overrides ONLY this side. It exists for measuring with
+#: a real client, where the constraint is not the protocol but the person: the
+#: コマンド window gives 60 seconds, and one look-then-click round trip costs
+#: 15 (round 61). Pausing the VM freezes the client's own countdown — it draws
+#: the counter itself and closes the window when it hits zero — but the server
+#: keeps counting in real time and would resolve the turn out from under a
+#: paused client. This is the other half of that: pause the guest, and the
+#: server waits too.
+#:
+#: ⚠️⚠️ IT CHANGES NO BYTE ON THE WIRE. turn_start_params still sends
+#: TURN_TIMEOUT_MS, because 600_000 was measured to make the client's counter
+#: jump around (see above) — a value the original could not have sent. What
+#: this moves is only how long this server is willing to wait.
+#:
+#: ⚠️ Unset is the shipping behaviour, so nothing has to be remembered or put
+#: back: a measurement session that forgets to unset it leaves the default
+#: intact for the next one.
+#:
+#: ⚠️ Do not leave it set while testing the TIMEOUT semantics themselves
+#: (「制限時間以内に入力を完了できなかった場合、キャラクターは行動しません」),
+#: which is the one behaviour it hides.
+TURN_DEADLINE_S = float(os.environ.get("TMO_TURN_DEADLINE_S") or TURN_TIMEOUT_MS / 1000)
 
 #: 「1）〜3）を８ターンが終了するまで、もしくはどちらかの体力が全員０になるまで
 #: 繰り返します」 (p07_03). RESTORED, and it agrees with what the screen drew
@@ -429,11 +458,111 @@ def action_end_params(chara_id: int) -> bytes:
     """0x5C0F: that character is done acting, and nothing else.
 
     ⚠️ It carries no result. Whatever the action DID — damage, a status, a
-    miss — is 0x5C10 Reaction and 0x5C11 Effect, and neither is implemented:
-    there is no restored formula for any of it, so this server plays the card
-    and changes nothing. The pair is the turn's structure, not its outcome.
+    miss — is 0x5C10 Reaction and 0x5C11 Effect. Both can now be BUILT (see
+    below) but neither is wired into the turn: what an action does to anybody
+    has no restored formula, so this server plays the card and changes nothing.
+    The pair is the turn's structure, not its outcome.
     """
     return struct.pack(">I", chara_id)
+
+
+#: 0x5C10's ``reaction`` and 0x5C11's ``type``, in the client's own words.
+#:
+#: ⭐⭐ The wording for BOTH lives in one run of ``msg_text.bin``, 717-752 —
+#: which is a different table from the two whose subject matches (see the
+#: warning below), and the only one whose STRINGS are the ones a screen has
+#: actually shown:
+#:
+#:     717 防御（ガマン）     730 パラメータ増   738 ステータス眠り   745 眠り回復
+#:     718 攻撃（使った）     731 パラメータ減   739 ステータス痺れ   746 痺れ回復
+#:     719 回避（かわした）   732 体力           740 ステータス沈黙   747 沈黙回復
+#:     720 反撃（仕返し）     733 気力           741 ステータス混乱   748 混乱回復
+#:     721 反射（はじき返した）734 攻撃力        742 練習不能         749 行動不可
+#:     722 効果無効           735 守備力         743 練習不可         750 行動中止
+#:     723 ダメージ           736 防御力         744 効果反射         751 防御解除
+#:     724 「 %3d %%」        737 素早さ                              752 効果無効効果消去
+#:     725-729 蚊に刺されたような / 小さな / それなりの / 大きな / 痛烈な
+#:
+#: ⭐ 725-729 with 724 say something worth having on its own: ダメージ in this
+#: client is NARRATED IN BANDS, not printed as a number. So 「the client draws
+#: the number on the character」 — which is what round 89 expected of 0x5C11 —
+#: is not how at least part of this works. MEASURED: value=999 drew no digit.
+#:
+#: ⚠️⚠️ WHAT IS PINNED IS TWO CELLS, EACH BY ONE SAMPLE (round 90, real client):
+#: ``0x5C11 type=0`` drew 「…は眠ってしまった！」 and left a lasting zzz bubble;
+#: ``0x5C10 reaction=0`` drew 「すばやく身をかわした！」. That fixes what those
+#: two bytes DO, not where each list starts counting — whether ``type`` is
+#: indexed from 738 and ``reaction`` from 719 (rather than 717) is still one
+#: assumption each. ``/cb fxnext 1 1 0 1`` settles both in one shot.
+#:
+#: ⚠️⚠️ DO NOT go back to ``clubstatus.bin`` / ``keyword_defense_characteristic
+#: .bin`` for this. Their subjects match beautifully, the client really does use
+#: the latter (every card in the コマンド window prints a 守備特性 column), and
+#: 眠り/回避 sit at id 1 in both — so 「wire = table id − 1」 fits BOTH samples
+#: on BOTH messages and is still wrong. That near-miss is written up as lesson
+#: 31; the strings above are the evidence that outranks it.
+REACTION_NAMES = ("回避", "反撃", "反射", "効果無効", "ダメージ")
+
+
+def reaction_params(target_id: int, reaction: int) -> bytes:
+    """0x5C10: ``targetId u32, reaction u8`` — 「being hit」 as a visible act.
+
+    Reader at 0x9BB390: two calls and then ``ret 8`` — ``[edi+0x04]`` through
+    the stream vtable's ``+0x24`` (unsigned 32) and ``[edi+0x08]`` through
+    ``+0x2c`` (unsigned 8). listshape agrees at ``4+1``, and the dump names the
+    two ``targetId`` and ``reaction``.
+
+    ⚠️ It is ``targetId``, NOT ``charaId``. 0x5C0E/0x5C0F next door name theirs
+    ``charaId`` and mean the actor; this one and 0x5C11 mean the one acted
+    upon. Copying the neighbour's field name is how they would get swapped.
+    """
+    return struct.pack(">IB", target_id, reaction & 0xFF)
+
+
+def effect_params(
+    target_id: int, effect_type: int, value: int, value2: int
+) -> bytes:
+    """0x5C11: ``targetId u32, type u8, value s16, value2 s16``.
+
+    Reader at 0x8F1680: four calls then ``ret 8`` — ``[edi+0x04]`` via ``+0x24``
+    (unsigned 32), ``[edi+0x08]`` via ``+0x2c`` (unsigned 8), then ``[edi+0x0a]``
+    and ``[edi+0x0c]`` BOTH via ``+0x18``. ⚠️ ``+0x09`` is a hole in the struct,
+    not a field — the u8 is followed by u16 alignment, the same way 0x5C1A's
+    ``+0x05`` is skipped. On the wire the four are adjacent: 4+1+2+2 = 9 bytes.
+
+    ⚠️⚠️ ``value`` AND ``value2`` ARE SIGNED. The stream vtable at 0xC0B8B0 is
+    four signed readers (``+0x10 +0x14 +0x18 +0x1C``, 64/32/16/8) followed by
+    four unsigned (``+0x20 +0x24 +0x28 +0x2C``), so ``+0x18`` is signed 16 —
+    and this is the ONLY place in the 0x5C** family that uses it. 0x5C1A's
+    twelve reads are all ``+0x28``/``+0x2c``, both unsigned, including its six
+    ability u16s; the difference is deliberate rather than incidental. ⭐ It
+    also fits what the manual says this screen shows: 「自分の状態」…残り体力、
+    残り気力、攻撃力増減状態、防御力増減状態、ステータス異常状態 (p07_03) —
+    増減 needs a sign. So these are packed as ``>h`` and a caller may pass a
+    negative number.
+
+    ⭐⭐ ``type`` SELECTS A STATUS EFFECT, and it does more than animate one:
+    MEASURED with a real client (round 90), ``type=0`` drew 「…は眠ってしまった！」,
+    turned the character white and left a zzz bubble over their head THAT WAS
+    STILL THERE ON LATER TURNS. So this message SETS state the client then keeps
+    — it is not a one-off flourish. The vocabulary is REACTION_NAMES' table
+    above; ⚠️ which row ``type=0`` counts from is still one sample, and
+    ``value2`` (duration? second operand? table id?) is untouched.
+    ⚠️ ``value`` drew nothing at all for ``type=0`` — see the band-narration
+    note above before assuming any ``type`` prints its number.
+
+    ⚠️⚠️ MEASURING WHAT A FIELD MEANS IS NOT INVENTING A DAMAGE RULE. Nothing
+    here decides when an effect happens or how big it is; that rule has no
+    restored source at all, which is why neither this nor reaction_params is
+    called from the turn loop.
+    """
+    return struct.pack(
+        ">IBhh",
+        target_id,
+        effect_type & 0xFF,
+        max(-32768, min(32767, value)),
+        max(-32768, min(32767, value2)),
+    )
 
 
 #: 0x5C1A's ``winTeam``, and the one field in this message whose ENCODING is
@@ -717,6 +846,23 @@ class Battle:
         #: that arrives while the timeout drain is running would otherwise
         #: play the round a second time.
         self.resolved = False
+        #: ⚠️⚠️ A PROBE, not gameplay: ``(type, value, value2, reaction)`` to
+        #: splice into the NEXT turn's action stream as 0x5C11/0x5C10, or None.
+        #: Set by ``/cb fxnext``, cleared as soon as it fires.
+        #:
+        #: It exists because of a measured dead end (round 90). ``/cb fx``
+        #: replayed a whole stream with the effects inside it, into a turn that
+        #: had ALREADY resolved and played — and the client drew nothing at all:
+        #: not the effects, not even the actions it had just animated. So a
+        #: second stream inside one turn is simply ignored, and 「the screen drew
+        #: nothing」 said something about the replay rather than about 0x5C11.
+        #: The only way to ask what these two messages draw is to have them in
+        #: the turn the client is going to play anyway, which is what this is.
+        #:
+        #: ⚠️ It changes WHAT IS SENT during a normal resolve, which no other
+        #: probe here does — hence one-shot, and hence the log line in
+        #: _battle_resolve saying the turn was doctored.
+        self.fx_probe: "tuple[int, int, int, int] | None" = None
         #: When this turn's choices close, on the SERVER's monotonic clock.
         #: ⚠️ Not the ``timeoutTime`` on the wire: that one is a moment on each
         #: recipient's own clock (0x5C09 states it per session, the way 0x480A

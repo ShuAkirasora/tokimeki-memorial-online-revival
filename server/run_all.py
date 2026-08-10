@@ -32,6 +32,8 @@ def _utf8_output() -> None:
             pass  # already replaced with something that is not a text stream
 
 import accounts
+import clubbattle
+import mps_session
 from auth_http_server import AuthHttpServer
 from common import PACKET_LOG_ENV, ServiceConfig, packet_log_enabled, parse_ipv4
 from konami_id import TokenDesk
@@ -176,6 +178,22 @@ async def main(
     # to 443 and to nothing else in that family.
     open_host = bind or derive_bind(advertise_ip)
     print(f"[system] bind {open_host}, advertising {advertise_ip} to clients")
+    # ⚠️ Say so, loudly, when this run is NOT the shipping behaviour. Both of
+    # these exist for measuring with a paused guest (see their constants) and
+    # both are the kind of thing that is set once and then forgotten — at which
+    # point a later session debugs a timeout that was moved on purpose, or reads
+    # a fight that never timed out as evidence about the game. Printing them
+    # only when they differ keeps a normal start quiet and makes a doctored one
+    # impossible to miss. ⭐ It is also the only way to tell from the outside
+    # whether a restart actually picked the variables up.
+    for name, value, default in (
+        ("TMO_IDLE_S", mps_session.IDLE_TIMEOUT_S, 300.0),
+        ("TMO_TURN_DEADLINE_S", clubbattle.TURN_DEADLINE_S,
+         clubbattle.TURN_TIMEOUT_MS / 1000),
+    ):
+        if value != default:
+            print(f"[system] ⚠️ {name}={value:g} (stock is {default:g}) -- "
+                  f"measuring knob, NOT shipping behaviour")
     if open_host == LOOPBACK:
         print(
             "[system] loopback only -- a game on another machine reaches nothing."

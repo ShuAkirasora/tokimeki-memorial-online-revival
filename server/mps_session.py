@@ -41,6 +41,7 @@ when parsing.
 from __future__ import annotations
 
 import asyncio
+import os
 import secrets
 import struct
 import time
@@ -93,6 +94,24 @@ from common import ServiceConfig, ensure_runtime_dirs, inet_u32, write_packet_lo
 # All 675 ids, recovered from tmo.exe's parser tables and the category base each
 # message's own debug string prints. Regenerate with tools/msgids.py --python.
 from message_names import MESSAGE_NAMES
+
+#: How long a connection may say nothing before this server closes it.
+#:
+#: ⭐ TMO_IDLE_S overrides it, and the reason is the same one behind
+#: clubbattle.TURN_DEADLINE_S — ⚠️⚠️ MEASURED THE HARD WAY, round 90: pausing
+#: the Parallels guest to freeze the コマンド countdown killed the fight instead,
+#: with 「通信が断たれました」 on screen and 「battle dropped on disconnect」 in
+#: the log. The mechanism is not that a single pause ran long. It is that the
+#: client's 30-second timesync runs on the CLIENT's clock, which the pause stops,
+#: while this timeout runs on real time, which it does not: waking the guest for
+#: two seconds at a time never accumulates the 30 seconds of guest-time one
+#: heartbeat needs, so the socket goes quiet in real time no matter how short
+#: each individual pause was. Freezing the guest therefore requires stretching
+#: this too — the two knobs are one technique, not two.
+#:
+#: ⚠️ Unset is the shipping 300, so an interrupted measuring session leaves
+#: nothing behind. ⚠️ Do not leave it set while testing reconnect behaviour.
+IDLE_TIMEOUT_S = float(os.environ.get("TMO_IDLE_S") or 300.0)
 
 TAG_TIMESYNC = 0x08
 TAG_MESSAGE = 0x30
@@ -1687,7 +1706,8 @@ class MpsServer:
                 due = session.next_wake()
                 try:
                     chunk = await asyncio.wait_for(
-                        reader.read(65536), timeout=due if due is not None else 300.0
+                        reader.read(65536),
+                        timeout=due if due is not None else IDLE_TIMEOUT_S,
                     )
                 except asyncio.TimeoutError:
                     if due is None:
@@ -3283,6 +3303,28 @@ class MpsServer:
                 ),
                 everyone,
             )
+            # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb fxnext armed it. This is
+            # the one place a probe alters a real resolve, and it has to be:
+            # round 90 measured that a second action stream inside an
+            # already-played turn is ignored outright, so 0x5C10/0x5C11 can only
+            # be put in front of a client from inside the turn it is about to
+            # animate. See Battle.fx_probe.
+            if battle.fx_probe is not None:
+                fx_type, fx_value, fx_value2, fx_reaction = battle.fx_probe
+                print(f"[{self.tag}] ⚠️ battle action: DOCTORED by /cb fxnext — "
+                      f"0x5C10 reaction={fx_reaction}, 0x5C11 type={fx_type} "
+                      f"value={fx_value} value2={fx_value2} at target={target_id:#x}")
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_REACTION,
+                    clubbattle.reaction_params(target_id, fx_reaction), everyone,
+                )
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                    clubbattle.effect_params(
+                        target_id, fx_type, fx_value, fx_value2
+                    ),
+                    everyone,
+                )
             out += self._tr_cast(
                 session,
                 0,
@@ -3303,6 +3345,7 @@ class MpsServer:
         # 「DemoStart first, then the script」 is untested and not excluded. What
         # the test does settle is that the client holds the actions until told,
         # rather than playing each as it arrives.
+        battle.fx_probe = None  # one shot: the next turn is a normal one again
         return out + self._tr_cast(
             session,
             0,
@@ -3438,6 +3481,10 @@ class MpsServer:
         ``/cb end [n]``    0x5C1C alone, reason=n
         ``/cb finish [n] [noend]``  result + end + close, what turn 8 does by
                            itself; ``noend`` withholds the 0x5C1C
+        ``/cb react [n] [@i]``      0x5C10 Reaction, reaction=n
+        ``/cb effect [t] [v] [v2] [@i]``  0x5C11 Effect, type=t
+                           ⭐ ``@i`` aims at fighter i; the default is whoever
+                           the console line was drained for. v defaults to t.
 
         ⭐ Every one of them is a message this server already knows how to
         build; nothing here invents a shape.
@@ -3476,6 +3523,24 @@ class MpsServer:
         if what == "replay":
             battle.resolved = False
             return self._battle_resolve(session, battle)
+        if what == "fx":
+            return self._battle_replay_fx(session, battle, args[1:])
+        if what == "fxnext":
+            # ⚠️ Arms the NEXT resolve instead of replaying this one — see
+            # Battle.fx_probe for the measurement that made /cb fx useless.
+            def fxarg(position: int, fallback: int) -> int:
+                try:
+                    return int(args[1:][position], 0)
+                except (IndexError, ValueError):
+                    return fallback
+
+            fx_type = fxarg(0, 0)
+            battle.fx_probe = (fx_type, fxarg(1, fx_type), fxarg(2, 0), fxarg(3, 0))
+            print(f"[{self.tag}] /cb fxnext armed: {battle.fx_probe} "
+                  f"(fires on the next resolve, once)")
+            return self._say(
+                session, sequence, f"/cb fxnext armed {battle.fx_probe}"
+            )
         if what == "next":
             for fighter in battle.fighters:
                 fighter.turn_done = True
@@ -3547,7 +3612,149 @@ class MpsServer:
                 session, battle, number(1, clubbattle.WIN_TEAM_NEITHER),
                 send_end="noend" not in args[1:],
             )
+        if what in ("react", "effect"):
+            # ⭐ The target defaults to the SENDER, which turns this probe's one
+            # awkward property into the useful half of the experiment: a console
+            # line is drained once per logged-in session, so in a two-player
+            # fight one ``/cb effect`` goes out twice — once aimed at each
+            # fighter — and both clients see both. That is the comparison the
+            # measurement needs anyway (what does an effect ON ME look like
+            # versus one on the other guy), delivered without a second command.
+            # ⚠️ An explicit index makes it aim somewhere fixed instead, which
+            # is what to use once the two forms need telling apart.
+            target = session.chara_id
+            index = None
+            for token in args[1:]:
+                if token.startswith("@"):
+                    try:
+                        index = int(token[1:], 0)
+                    except ValueError:
+                        continue
+            if index is not None and 0 <= index < len(battle.fighters):
+                target = battle.fighters[index].chara_id
+            numbers = [a for a in args[1:] if not a.startswith("@")]
+
+            def arg(position: int, fallback: int) -> int:
+                try:
+                    return int(numbers[position], 0)
+                except (IndexError, ValueError):
+                    return fallback
+
+            if what == "react":
+                reaction = arg(0, 0)
+                name = (
+                    clubbattle.REACTION_NAMES[reaction]
+                    if 0 <= reaction < len(clubbattle.REACTION_NAMES)
+                    else "?"
+                )
+                print(f"[{self.tag}] /cb react target={target:#x} "
+                      f"reaction={reaction} (candidate name: {name})")
+                return self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_REACTION,
+                    clubbattle.reaction_params(target, reaction), everyone,
+                )
+            # ⭐⭐ value defaults to the type number rather than to something
+            # round, so a sweep labels itself: whatever the screen draws for
+            # ``type=5`` shows a 5, and a frame caught mid-sweep still says
+            # which code drew it. ⚠️ Without that, reading a sweep means
+            # trusting the order the messages were sent in, which is exactly
+            # the assumption a sweep is supposed to test.
+            effect_type = arg(0, 0)
+            value = arg(1, effect_type)
+            value2 = arg(2, 0)
+            print(f"[{self.tag}] /cb effect target={target:#x} "
+                  f"type={effect_type} value={value} value2={value2}")
+            return self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                clubbattle.effect_params(target, effect_type, value, value2),
+                everyone,
+            )
         return self._say(session, sequence, f"/cb: unknown '{what}'")
+
+    def _battle_replay_fx(
+        self, session: "_Session", battle: "clubbattle.Battle", args: "list[str]"
+    ) -> bytes:
+        """``/cb fx [type] [value] [value2] [reaction]``: a turn WITH 0x5C10/0x5C11 in it.
+
+        ⚠️⚠️ THIS IS WHY A LONE ``/cb effect`` IS NOT THE EXPERIMENT. Round 88
+        measured that the client HOLDS a turn's actions until 0x5C12 DemoStart
+        tells it to play them — 0x5C0D and both 0x5C0E/0x5C0F pairs drew nothing
+        at all until one body-less 0x5C12 arrived. So a 0x5C11 sent on its own,
+        outside a stream, is being sent into the same silence: 「the screen drew
+        nothing」 would then say nothing about the message, only about when it
+        was sent. This rebuilds the whole stream with the effects inside it and
+        ends with the DemoStart that makes it run.
+
+        ⚠️ WHERE IN THE STREAM THEY GO IS A GUESS, and the first one worth
+        trying: between 0x5C0E ActionBegin and 0x5C0F ActionEnd, because that
+        pair brackets one character's action and these two are what that action
+        DID (see action_end_params). Nothing read so far excludes them sitting
+        after 0x5C0F instead, or being a stream of their own. ⭐ A screen that
+        draws nothing here does NOT settle the meaning of ``type`` — it would
+        first have to be retried at the other position, and that ambiguity is
+        the price of not having found the client's handler.
+
+        ⚠️ Like ``/cb replay`` this reads the commands the fighters already
+        chose, so it only has something to replay between a turn resolving and
+        the next one starting.
+        """
+
+        def arg(position: int, fallback: int) -> int:
+            try:
+                return int(args[position], 0)
+            except (IndexError, ValueError):
+                return fallback
+
+        effect_type = arg(0, 0)
+        value = arg(1, effect_type)
+        value2 = arg(2, 0)
+        reaction = arg(3, 0)
+        everyone = [f.chara_id for f in battle.fighters]
+        plays = []
+        for fighter in battle.actors():
+            card = self._battle_deck_item(fighter)
+            if card is not None:
+                plays.append((fighter, card[0], card[1]))
+        if not plays:
+            return self._say(
+                session, 0, "/cb fx: nobody has a card chosen to replay"
+            )
+        print(f"[{self.tag}] /cb fx: type={effect_type} value={value} "
+              f"value2={value2} reaction={reaction}, {len(plays)} action(s)")
+        out = self._tr_cast(
+            session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
+            clubbattle.action_order_params([f.chara_id for f, _k, _p in plays]),
+            everyone,
+        )
+        for fighter, kind, payload in plays:
+            assert fighter.command is not None
+            _item_num, _is_attck, target_id = fighter.command
+            # ⭐ Aimed at the command's OWN target, so the effect lands on
+            # whoever the card was played at rather than on a fixed character.
+            # That is what makes 「did it draw on the right person」 answerable.
+            out += self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_BEGIN,
+                clubbattle.action_begin_params(
+                    fighter.chara_id, kind, payload, target_id
+                ),
+                everyone,
+            )
+            out += self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_REACTION,
+                clubbattle.reaction_params(target_id, reaction), everyone,
+            )
+            out += self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                clubbattle.effect_params(target_id, effect_type, value, value2),
+                everyone,
+            )
+            out += self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_END,
+                clubbattle.action_end_params(fighter.chara_id), everyone,
+            )
+        return out + self._tr_cast(
+            session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_DEMO_START, b"", everyone
+        )
 
     def _battle_turn_start(
         self, session: "_Session", battle: "clubbattle.Battle"
@@ -3570,7 +3777,10 @@ class MpsServer:
         # compared against anything here. See _drain_battle for what runs when
         # it passes, and _Session.battle_due for why every fighter's session
         # gets a copy.
-        battle.deadline = time.monotonic() + clubbattle.TURN_TIMEOUT_MS / 1000
+        # ⚠️ TURN_DEADLINE_S, not TURN_TIMEOUT_MS: normally the same 60 seconds,
+        # but a measuring session can stretch THIS side alone (see the constant).
+        # The timeoutTime below is unaffected and still says 60.
+        battle.deadline = time.monotonic() + clubbattle.TURN_DEADLINE_S
         for fighter in battle.fighters:
             other = self._session_of(fighter.chara_id)
             if other is not None:
