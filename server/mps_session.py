@@ -73,6 +73,7 @@ import ability
 import accounts
 import chat
 import club
+import clubbattle
 import codes
 import curriculum
 import exam
@@ -2380,6 +2381,12 @@ class MpsServer:
                 # is not a 顧問/キャプテン right-click, which is what makes it
                 # reachable at all here — see trainingroom.py.
                 return self._trainingroom(session, sequence, msg_type, params)
+            if msg_type >> 8 == 0x5C:
+                # クラブ対戦 itself. ⚠️ A SEPARATE FAMILY from the 0x58xx above
+                # even though 自主トレ is what reaches it here: 練習 and
+                # フリー対戦 arrive at the same messages through a door this
+                # server cannot open. See clubbattle.py.
+                return self._clubbattle(session, sequence, msg_type, params)
             if msg_type == lesson.MSG_CL_REQUEST_LESSON_READY:
                 # The client sends this by itself, as part of tearing the scene
                 # down after 0x6000 — there is no prompt and no button, so the
@@ -2900,6 +2907,101 @@ class MpsServer:
             [m.chara_id for m in room.members],
         )
 
+    def _battle_info(
+        self, session: "_Session", room: "trainingroom.Room"
+    ) -> bytes:
+        """0x5C06 for a room whose leader has just pressed 「開 始」.
+
+        ⚠️ A DIFFERENT BODY PER RECIPIENT, and only in its leading byte: the
+        two rosters are shared, ``team`` says which side *this* reader is on.
+        Building it per recipient is what _tr_cast's callable form is for.
+
+        Each row needs the character's create block, which is looked up in
+        *their own* store through accounts.owner_of — a room holds people from
+        several accounts, and a charaId does not name its owner.
+
+        ⚠️ A member whose record cannot be found is dropped from the roster
+        rather than faked. That makes the side short, which is visible, in
+        preference to drawing a character out of invented bytes, which is not.
+
+        seen=0 because this answers nothing: 0x5818 was already answered by the
+        0x5819 that goes out just before it.
+        """
+        sides: "dict[int, list[bytes]]" = {}
+        for team in trainingroom.TEAMS:
+            rows: "list[bytes]" = []
+            for member in room.team(team):
+                info = self._peer_chara(member.chara_id)
+                if info is None:
+                    print(f"[{self.tag}] battle info: no record for "
+                          f"charaId={member.chara_id:#x}, left out of the roster")
+                    continue
+                store = self.accounts.owner_of(member.chara_id)
+                rows.append(
+                    clubbattle.member_row(
+                        member.chara_id,
+                        info,
+                        store.in_club(member.chara_id) if store else 0,
+                    )
+                )
+            sides[team] = rows
+
+        counts = "/".join(str(len(sides[t])) for t in trainingroom.TEAMS)
+        print(f"[{self.tag}] battle info: Ａ/Ｂ={counts}")
+
+        def body(chara_id: int) -> bytes:
+            member = room.find(chara_id)
+            return clubbattle.training_battle_info_params(
+                member.team if member else trainingroom.TEAM_A,
+                sides[trainingroom.TEAM_A],
+                sides[trainingroom.TEAM_B],
+            )
+
+        return self._tr_cast(
+            session,
+            0,
+            clubbattle.MSG_SV_NOTIFY_TRAINING_BATTLE_INFO,
+            body,
+            [m.chara_id for m in room.members],
+        )
+
+    def _clubbattle(
+        self, session: "_Session", sequence: int, msg_type: int, params: bytes
+    ) -> "bytes | None":
+        """The 0x5Cxx family: the battle itself, once 0x5C06 has drawn it.
+
+        ⚠️ The room still comes from ``self.trainingrooms``, because 自主トレ
+        is the only door this server can open onto this family — but nothing
+        here is a 0x58xx message, and a 練習 that ever became reachable would
+        arrive at these same branches with no room behind it.
+        """
+        board = self.trainingrooms
+        chara_id = session.chara_id
+
+        if msg_type == clubbattle.MSG_CL_NOTIFY_BATTLE_READY:
+            # ⭐ Sent by the client unprompted once its battle scene is up —
+            # which is how this message named itself as the one to answer
+            # next. It carries a deckId; the answer carries a charaId and no
+            # deck at all.
+            deck_id = clubbattle.parse_ready(params)
+            room = board.room_of(chara_id)
+            if room is None:
+                print(f"[{self.tag}] battle ready from charaId={chara_id:#x} "
+                      f"(deck {deck_id}) with no room to tell")
+                return None
+            print(f"[{self.tag}] battle ready: charaId={chara_id:#x} "
+                  f"deck={deck_id}")
+            return self._tr_cast(
+                session,
+                0,
+                clubbattle.MSG_SV_NOTIFY_BATTLE_READY,
+                clubbattle.battle_ready_params(chara_id),
+                [m.chara_id for m in room.members],
+            )
+
+        print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
+        return None
+
     def _tr_part_notice(
         self, room: "trainingroom.Room", gone_id: int, leader_id: int, reason: int
     ) -> None:
@@ -3138,17 +3240,18 @@ class MpsServer:
                     "start before everyone is ready",
                 )
             # ⚠️ 0x5819 is empty, so this says only 「it begins」. What draws the
-            # battle is the 0x5C** family, and NONE of it is implemented — the
-            # client is expected to answer this with 0x581B and then start
-            # asking. That first unanswered id is the finding this branch is for.
+            # battle is the 0x5C** family, and it follows immediately below:
+            # the client does not act on this message, it waits for 0x5C06.
+            # See clubbattle for why that took five rounds to see.
             print(f"[{self.tag}] trainingroom battle start: {room.summary()}")
-            return self._tr_cast(
+            begun = self._tr_cast(
                 session,
                 sequence,
                 trainingroom.MSG_SV_NOTIFY_BATTLE_START,
                 b"",
                 [m.chara_id for m in room.members],
             )
+            return begun + self._battle_info(session, room)
 
         if msg_type == trainingroom.MSG_CL_NOTIFY_BATTLE_START:
             # Client -> server, no reply: it is telling us it has the scene up.
