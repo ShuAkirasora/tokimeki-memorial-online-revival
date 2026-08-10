@@ -44,22 +44,19 @@ save files do -- by being named differently -- and the KONAMI ID check exists
 because the original had a 登録 step and a sentence for failing it, not because
 it keeps anyone out. See the README on why this is not meant to face a network.
 
-Accounts own a slice of the charaId space rather than a counter. ⚠️ Only half of
-that sentence is measured, and this docstring used to run the two halves
-together. What the client is known to do is check a *range*: 0x000F0000 through
-0x000FFFFF, and 0x01000000 through 0xFFFFFFFE, are the ids it draws as ordinary
-characters, and anything else goes to another subsystem or crashes the screen
-that asks (see characters.CHARA_ID_BASE). That check sorts ids by kind. It
-carries no mask for reading an owner out of one, and the client never asks who
-owns a charaId -- it is told.
+A charaId does not name its owner, so the owner is looked up. The index lives in
+charaids.py and the file it keeps is runtime/accounts/charas.json.
 
-Handing account n the slice ``n << 24`` is ours. It buys account_of() below: the
-account that owns a character is read straight off its id, which is what lets one
-connection answer a question about another connection's character without
-searching every account first.
+⚠️ This used to work the other way: account n owned the charaId slice ``n << 24``
+and ``chara_id >> 24`` was the answer. What the client is known to do is check a
+*range*: 0x000F0000 through 0x000FFFFF, and 0x01000000 through 0xFFFFFFFE, are the
+ids it draws as ordinary characters, and anything else goes to another subsystem
+or crashes the screen that asks (see characters.CHARA_ID_BASE). That check sorts
+ids by kind. It carries no mask for reading an owner out of one, and the client
+never asks who owns a charaId -- it is told.
 
-⚠️⚠️ And the original did not do it. That used to read "how the original did it
-is not known"; the client's own message table now says otherwise, in four places:
+The slicing on top of that was ours, and the client's own message table
+contradicts it in four places:
 
 * Its operator interface hands out accountId and charaId as two free variables.
   MsgClSupervisorRequestCharacterCreate takes accountId, charaFrameId and charaId
@@ -80,9 +77,17 @@ is not known"; the client's own message table now says otherwise, in four places
   with a school in its top bits would have to change under a transfer and take
   every stored loverCharaId with it.
 
-So the shift is not merely unattested, it contradicts the protocol it is speaking.
-What the original used *instead* is still unknown -- the constraint was
-recoverable from the client, the allocation scheme was not.
+So the shift was not merely unattested, it contradicted the protocol it is
+speaking, and it is gone. What replaced it splits along the line that matters:
+*not encoding the owner* is a constraint recovered from the client, while *one
+counter walking up from CHARA_ID_BASE, never handing a number out twice* is a
+choice of ours -- the original's allocation scheme is not recoverable, because
+the client is told ids and never derives one. charaids.py keeps the two apart in
+writing as well.
+
+Nothing on disk was renumbered by the change. Every id minted under the shift is
+inside the range the client accepts, and only this server ever read meaning into
+them, so the migration is a new index file built by reading the saves.
 """
 
 from __future__ import annotations
@@ -91,6 +96,7 @@ import json
 from pathlib import Path
 import secrets
 
+import charaids
 import codes
 import konami_id
 from characters import CharacterStore
@@ -106,46 +112,26 @@ from characters import CharacterStore
 SESSION_ID_LEN = 64
 REGISTRATION_CODE_LEN = 20
 
-# Account ids start at 1 and stop at 255, and the two ends are not the same kind
-# of fact.
+# Account ids start at 1 and stop at 65535, and the two ends are not the same
+# kind of fact.
 #
-# The floor is the client's. Account 0 would put characters at 0x00000000, which
-# it resolves through the NPC subsystem instead of drawing as a player, and the
-# first screen to ask (授業) died reading through that resolution rather than
-# reporting anything -- so this end is a check and not a comment.
+# The floor is the client's. Account 0 used to put characters at 0x00000000,
+# which it resolves through the NPC subsystem instead of drawing as a player, and
+# the first screen to ask (授業) died reading through that resolution rather than
+# reporting anything. Ids no longer come from the account number, so that
+# particular crash is out of reach -- the floor stays anyway, because 0 is what
+# an unnamed connection's account_id reads as (see mps_session._chars) and a real
+# account must never collide with it.
 #
-# ⚠️ The ceiling is ours, and it is two orders of magnitude below the original's.
-# 256 runs off the top of the byte that ACCOUNT_SHIFT leaves for an account
-# number, so it is a limit of the slicing below and not of the id space, which
-# the client leaves open to 0xFFFFFFFE and which carries accountId as a u32.
-# Nothing here is expected to come near 255 -- this is a server for the room it
-# is running in -- but see the docstring: the number is small because the scheme
-# is wrong, not because the protocol is.
+# The ceiling was 0xFF while an account number had to fit in the top byte of a
+# charaId. That is gone, so it is set to what the protocol will carry instead:
+# MsgSvResultSchoolList reports each school's population in a u16 the client
+# calls accountCount, so 65535 is the largest number a school can honestly
+# report. accountId itself is a u32 on the wire (MsgClRequestGameServerLogin).
+# Nothing here is expected to come near either -- this is a server for the room
+# it is running in.
 FIRST_ACCOUNT_ID = 1
-MAX_ACCOUNT_ID = 0xFF
-
-# ⚠️⚠️ Invented, and contradicted by the protocol -- see the module docstring.
-# The client checks which range a charaId is in and never reads an owner out of
-# one; the original's operator interface passes accountId and charaId as separate
-# fields. The shift buys account_of() at the price of 255 accounts holding three
-# characters each out of the sixteen million a slice gives them, which is the
-# bits split the wrong way round for what they are being asked to do.
-#
-# Still here because every charaId on disk was minted under it, and the fix is a
-# stored charaId -> accountId index rather than a different shift. Nothing about
-# the ids themselves has to change when that lands: they are all inside the range
-# the client accepts, and it is only this server that reads meaning into them.
-ACCOUNT_SHIFT = 24
-
-
-def account_of(chara_id: int) -> int:
-    """Which account owns this charaId, under our slicing (see ACCOUNT_SHIFT).
-
-    ⚠️ This is the invented half. The original addressed a character by charaId
-    alone and looked the owner up; nothing on the wire lets an owner be computed
-    from an id.
-    """
-    return chara_id >> ACCOUNT_SHIFT
+MAX_ACCOUNT_ID = 0xFFFF
 
 
 def registration_code(params: bytes) -> bytes:
@@ -200,12 +186,13 @@ class AccountStore:
     On disk::
 
         runtime/accounts/index.json     registration code -> account id
+        runtime/accounts/charas.json    charaId -> account id
         runtime/accounts/1/characters.json
         runtime/accounts/2/characters.json
 
-    The index is the only shared file, and it only ever grows: an account id,
-    once handed out, keeps its directory and its charaId slice for good, because
-    characters saved under it name that slice in their own ids.
+    Both shared files only ever grow an account: an id, once handed out, keeps
+    its directory for good, because charas.json points characters at it by
+    number.
 
     Whether a code is allowed to log in at all is a separate table and a separate
     file; see codes.py for why the two are not one record.
@@ -218,6 +205,10 @@ class AccountStore:
         self._stores: dict[int, CharacterStore] = {}
         self._load()
         self._adopt_single_account_file(root / "runtime" / "characters.json")
+        # ⚠️ After the adopt, not before: that call moves the pre-account save
+        # into account 1's directory, and the backfill reads directories.
+        self.charas = charaids.CharaIndex(self.dir)
+        self.charas.backfill(self._saved_chara_ids())
         self.codes = codes.CodeTable(self.dir)
         # The three tables in runtime/accounts are built here so that everything
         # holding one holds the same one; run_all.py reaches the other two
@@ -319,10 +310,11 @@ class AccountStore:
         """Move the pre-account characters.json into account 1, once.
 
         Every character that existed before this file did was made by the only
-        account there was, and their ids already start at 0x01000000 -- which is
-        account 1's slice, since CHARA_ID_BASE and ``1 << 24`` are the same
-        number. So the move is a rename and not a rewrite, and it leaves the ids
-        the client has already seen alone.
+        account there was, so the move is a rename and not a rewrite, and it
+        leaves the ids the client has already seen alone. Ownership is not in
+        those ids and never has to be: charas.json is built from the directory
+        this puts them in, which is why the backfill runs after this call and not
+        before.
 
         ⚠️ It does not decide who owns them. This server never saw a registration
         code before now, so there is nothing on disk that says which one the
@@ -344,6 +336,34 @@ class AccountStore:
 
     def _path(self, account_id: int) -> Path:
         return self.dir / str(account_id) / "characters.json"
+
+    def _saved_chara_ids(self) -> dict[int, list[int]]:
+        """``{accountId: [charaId, ...]}`` straight off the save files.
+
+        Read for charas.json's backfill and for nothing else, so it goes to disk
+        rather than through characters(): building a CharacterStore per account
+        at startup would cache every account this machine has ever seen, and the
+        stores are meant to appear when somebody logs in.
+        """
+        found: dict[int, list[int]] = {}
+        if not self.dir.exists():
+            return found
+        for child in sorted(self.dir.iterdir()):
+            if not (child.is_dir() and child.name.isdigit()):
+                continue
+            path = child / "characters.json"
+            if not path.exists():
+                continue
+            try:
+                records = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                print(f"[accounts] ignoring unreadable {path}: {exc}")
+                continue
+            if isinstance(records, list):
+                found[int(child.name)] = [
+                    int(r["charaId"]) for r in records if isinstance(r, dict) and "charaId" in r
+                ]
+        return found
 
     def _reserved(self) -> set[int]:
         """Account ids that exist on disk, claimed or not.
@@ -422,7 +442,8 @@ class AccountStore:
         if store is None:
             store = CharacterStore(
                 self._path(account_id),
-                chara_id_base=account_id << ACCOUNT_SHIFT,
+                ids=self.charas,
+                account_id=account_id,
             )
             self._stores[account_id] = store
         return store
@@ -433,13 +454,19 @@ class AccountStore:
         return account_id, self.characters(account_id)
 
     def owner_of(self, chara_id: int) -> CharacterStore | None:
-        """The store holding this charaId, read off the id's own account slice.
+        """The store holding this charaId, looked up rather than computed.
 
-        None when the slice has never been handed out, which is what a charaId
-        from a probe or a stand-in looks like: those live outside every account.
+        None when no account claims the id, which is what a charaId from a probe,
+        a stand-in, or an unnamed connection's detached store looks like: none of
+        those were ever minted here.
+
+        ⚠️ This used to read the account out of the id's top byte. It cannot any
+        more, and that is the point of the change -- see the module docstring.
+        Every caller was already asking "whose is this", not "what is its slice",
+        so the callers did not move.
         """
-        account_id = account_of(chara_id)
-        if account_id not in self.index.values():
+        account_id = self.charas.owner(chara_id)
+        if account_id is None:
             return None
         return self.characters(account_id)
 
