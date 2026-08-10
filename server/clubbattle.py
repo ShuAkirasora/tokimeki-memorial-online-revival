@@ -128,9 +128,28 @@ NUM_OF_CLUB_STATUS = 8
 #: through its own width-checked accessor.
 TURN_START_ROW_SIZE = 23
 
-#: ⚠️ INVENTED. Nothing seen so far says how long a turn is allowed to take;
-#: this is a minute because a minute is a plausible minute.
-TURN_TIMEOUT_MS = 60_000
+#: ⚠️ INVENTED. Nothing seen so far says how long a turn is allowed to take.
+#: What is NOT invented is that the client reads this field and acts on it.
+#: Two values have been watched on screen, and they behave differently:
+#:
+#:   60_000  — a live "あと N 秒" counter above the battle, counting down
+#:             correctly (60 → 53 → 10), and on reaching zero the client
+#:             closed its own command window and sat waiting for the server.
+#:   600_000 — the counter no longer shows the real remainder: it sits in the
+#:             single digits and jumps around (8, 3, 5, 9) instead of falling.
+#:             But the command window stays open well past a minute.
+#:
+#: So something narrower than the i64 holds the remainder on the client side,
+#: and a value this large wraps inside it. ⚠️ The exact container is NOT
+#: established — 600_000 mod 65_536 ≈ 10s fits the observed range but not the
+#: jumping. A cheap next probe: 65_000, just under a u16 of milliseconds. If
+#: it draws 65 and falls cleanly, the container is a u16 of ms.
+#:
+#: This server implements no timeout of its own, so a turn that runs out is a
+#: turn that strands the match — which is why the larger value is in here: it
+#: keeps a turn open long enough to be played by hand. It is no more attested
+#: than the minute it replaces.
+TURN_TIMEOUT_MS = 600_000
 
 
 def base_block(info: bytes) -> bytes:
