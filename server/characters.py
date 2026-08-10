@@ -28,12 +28,18 @@ from __future__ import annotations
 import json
 import struct
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import ability
 import club
 import curriculum
 import facing
 import romance
+
+if TYPE_CHECKING:
+    # Only for the annotation on CharacterStore. charaids imports this module for
+    # CHARA_ID_BASE, so importing it back at runtime would be a cycle.
+    import charaids
 
 NAME_LEN = 11  # tmn::MAX_CHARA_* + 1, i.e. five double-byte characters
 GROUP_NAME_LEN = 21  # tmn::MAX_GROUP_NAME + 1, also tmn::MAX_CHARA_CATCHCOPY + 1
@@ -627,18 +633,25 @@ class CharacterStore:
     entry is rebuilt from it on demand.
     """
 
-    def __init__(self, path: Path | None, chara_id_base: int = CHARA_ID_BASE) -> None:
+    def __init__(
+        self,
+        path: Path | None,
+        ids: "charaids.CharaIndex | None" = None,
+        account_id: int = 0,
+    ) -> None:
         # ⚠️ path is None for a detached store: one that is never read from disk
         # and never written back. It exists so a connection that has not named an
         # account has somewhere harmless to read and write -- an empty list, and
         # writes that go nowhere -- instead of falling onto a real account's
         # file. See MpsServer._chars for the one caller that makes one.
         self.path = path
-        # Where this account's ids start. Accounts own a slice of the id space
-        # (accounts.ACCOUNT_SHIFT -- ⚠️ our scheme, not something read off the
-        # client) so that a charaId names its own owner, and the default is
-        # account 1's slice because CHARA_ID_BASE is ``1 << 24``.
-        self.chara_id_base = chara_id_base
+        # Who hands out charaIds, and who this store asks for. Both are None/0
+        # for a detached store, and that is the whole reason they are arguments
+        # rather than globals: a connection that has not named an account must
+        # not push the server-wide counter along or leave an ownerless row in
+        # the index. See add() for what it does instead.
+        self.ids = ids
+        self.account_id = account_id
         self.records: list[dict[str, object]] = []
         if path is not None and path.exists():
             try:
@@ -655,9 +668,17 @@ class CharacterStore:
         return len(self.records) >= MAX_CHARACTERS
 
     def add(self, info: bytes) -> int:
-        chara_id = max(
-            (int(r["charaId"]) for r in self.records), default=self.chara_id_base - 1
-        ) + 1
+        if self.ids is not None:
+            chara_id = self.ids.mint(self.account_id)
+        else:
+            # Detached: this store is not on disk and its id is not in the
+            # index, so the number only has to be one the client will draw and
+            # one this store has not used. It belongs to nobody, which is the
+            # honest answer for a connection that never said who it was --
+            # owner() will not find it, and nothing persists it.
+            chara_id = max(
+                (int(r["charaId"]) for r in self.records), default=CHARA_ID_BASE - 1
+            ) + 1
         self.records.append({"charaId": chara_id, "info": info.hex()})
         self._save()
         return chara_id
@@ -708,16 +729,20 @@ class CharacterStore:
     def remove(self, chara_id: int) -> bool:
         """Drop one character; False if this account never had that id.
 
-        Note that ids get recycled: ``add`` picks max+1 over what is left, so
-        deleting the highest one frees its id for the next character made. That
-        is fine while nothing outside this file remembers a charaId, but it is
-        the thing to fix first if character data ever gets stored per id.
+        The id does not come back. It used to: ``add`` picked max+1 over what was
+        left, so deleting the newest character handed its number to the next one
+        made. charaids.CharaIndex.release drops the ownership row and leaves the
+        counter where it is, because a charaId is written down outside the record
+        it names -- loverCharaId, friendGroupId, the address book -- and reusing
+        it points all of those at somebody else.
         """
         kept = [r for r in self.records if int(r["charaId"]) != chara_id]
         if len(kept) == len(self.records):
             return False
         self.records = kept
         self._save()
+        if self.ids is not None:
+            self.ids.release(chara_id)
         return True
 
     def entries(self) -> bytes:

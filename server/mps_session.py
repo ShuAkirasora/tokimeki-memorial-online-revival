@@ -1094,9 +1094,9 @@ class MpsServer:
         """Somebody else's character record, looked up in *their* store.
 
         Through accounts.owner_of rather than the live list, the same way
-        _tr_names does it: the id names its own account, so this answers for a
-        character whose owner has since logged out as well as for one standing
-        on the map right now.
+        _tr_names does it: the server holds an index from charaId to account, so
+        this answers for a character whose owner has since logged out as well as
+        for one standing on the map right now.
         """
         store = self.accounts.owner_of(chara_id)
         return store.find(chara_id) if store else None
@@ -1105,9 +1105,8 @@ class MpsServer:
         """One 0x480F entry for somebody else, drawn where they are standing.
 
         Their record comes out of *their* CharacterStore, not the viewer's --
-        accounts have separate stores (round 68) and charaIds are namespaced per
-        account, so looking a peer up in the viewer's store would find nothing
-        or, worse, somebody else's character with the same id.
+        accounts have separate stores (round 68), so looking a peer up in the
+        viewer's store would find nothing at all.
         """
         info = self._chars(other).find(other.chara_id)
         if info is None:
@@ -2181,9 +2180,9 @@ class MpsServer:
                     # answering Error is what 「選択されたキャラクターの情報が
                     # 不正です。」 on the right-click is made of -- which in turn
                     # is what stood between two players and a 自主トレ room.
-                    # ⚠️ The record has to come out of the owner's store: ids are
-                    # namespaced per account (2.xx, round 68), so this connection's
-                    # store either does not have it or has somebody else under it.
+                    # ⚠️ The record has to come out of the owner's store: every
+                    # account keeps its own (round 68), so this connection's store
+                    # simply does not have somebody else's character.
                     info = self._peer_chara(chara_id)
                 if info is None and PROBE_ID_BASE <= chara_id < PROBE_ID_LIMIT:
                     # A stand-in — a doorway marker or a direction probe. None of
@@ -2833,9 +2832,9 @@ class MpsServer:
         """The two fixed-width name halves 0x580C and 0x580F carry.
 
         Asked about a charaId rather than a connection, and once a room can hold
-        two players that id will often belong to somebody else's account. The id
-        names its own account, so this does not have to search: see
-        accounts.owner_of.
+        two players that id will often belong to somebody else's account. The
+        charaId index says whose, so this does not have to search every store:
+        see accounts.owner_of.
         """
         store = self.accounts.owner_of(chara_id)
         names = store.full_name(chara_id) if store else None
