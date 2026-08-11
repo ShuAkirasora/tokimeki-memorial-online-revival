@@ -606,12 +606,15 @@ WIN_TEAM_NEITHER = 2
 END_NORMAL = 0
 END_OUT_OF_SYNC = 1
 
-#: 0x5C1B's ``reason``, from ``error_message.bin`` 494-495. ⚠️ NOT IMPLEMENTED,
-#: kept here because reading it settled what 0x5C1C is not: 0x5C1B is the
-#: one-person message (「通信が切断されたため、クラブ活動を強制終了しました」,
-#: charaId + reason), 0x5C1C the whole-fight one. A disconnect mid-battle
-#: currently drops the Battle server-side without telling the survivors, which
-#: is what this message is for.
+#: 0x5C1B's ``reason``, RESTORED from ``error_message.bin`` 494-495. Reading it
+#: also settled what 0x5C1C is not: 0x5C1B is the one-person message
+#: (「通信が切断されたため、クラブ活動を強制終了しました」, charaId + reason),
+#: 0x5C1C the whole-fight one.
+#:
+#: ⭐ Reason 0 goes out whenever a fighter's connection or 登校 ends mid-fight.
+#: ⚠️ PART_OUT_OF_SYNC is not sent, on the same argument END_OUT_OF_SYNC is
+#: not: claiming client and server disagree is a diagnosis this code has no way
+#: to make.
 PART_DISCONNECTED = 0
 PART_OUT_OF_SYNC = 1
 
@@ -728,7 +731,12 @@ def end_params(reason: int = END_NORMAL) -> bytes:
 def part_params(chara_id: int, reason: int = PART_DISCONNECTED) -> bytes:
     """0x5C1B: this one character has dropped out of the fight.
 
-    ⚠️ Built but not yet wired to anything — see PART_DISCONNECTED.
+    ⚠️ It names WHO left and WHY, and says nothing about what becomes of the
+    fight — no winner, no scores, no 「it is over」 bit. That silence is the
+    message's own shape, not a gap in this encoder: 0x5C1A and 0x5C1C are the
+    two that speak for the whole fight, and this one is beside them rather than
+    instead of them. What the client does on its own after reading it is the
+    open question the server cannot answer by sending more fields.
     """
     return struct.pack(">IB", chara_id, reason & 0xFF)
 
