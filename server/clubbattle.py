@@ -739,9 +739,13 @@ def effect_params(
 #:    not the reader's own team draws the same 「まけ」, so 2, 3 and 255 are
 #:    indistinguishable on that screen. What changed is that the CONSEQUENCE
 #:    is now measured rather than assumed.
-#:    ⚠️ Read from an A-team (team 0) client only, so 「equals my team」 and
-#:    「equals 0」 are not yet told apart — that needs a second real client
-#:    sitting on team B.
+#:    ⭐⭐⭐ Round 101 put a second real client on team B and read both screens
+#:    at once, three fights: winTeam=0 drew かち on team 0 and まけ on team 1,
+#:    winTeam=1 drew exactly the reverse, winTeam=2 drew まけ on both. So the
+#:    field is an ABSOLUTE team index — one value, sent to everyone, and each
+#:    client compares it with its own team. 「equals 0」 is ruled out, and
+#:    「両方が負け」 is now measured on both sides rather than inferred from the
+#:    one screen a script opponent does not have.
 #:    ⚠️⚠️ A round-93 measurement said this field 「drives no pixel at all」.
 #:    It was a sampling artifact: that round burst 4 frames (~2 s) after
 #:    0x5C1A and the verdict starts at T+4 s. Do not shorten the capture.
