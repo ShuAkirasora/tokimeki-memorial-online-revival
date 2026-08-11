@@ -811,6 +811,27 @@ class Fighter:
         self.command: "tuple[int, int, int] | None" = None
         #: Whether this player has said 「done choosing」 (0x5C16) this turn.
         self.turn_done = False
+        #: Set when this fighter's connection went away mid-fight. They stay in
+        #: the roster — every message this family sends carries the same rows it
+        #: carried before, so nothing on the wire changes shape — but the fight
+        #: stops WAITING for them (Battle.active).
+        #:
+        #: ⚠️⚠️ RESTORED and INVENTED, kept apart. Restored: 0x5C1B says
+        #: somebody left, and 「０になる前に入力を完了できなかった場合、キャラ
+        #: クターは行動しません」 (p07_03) already covers a fighter who does not
+        #: act — a gone fighter is that case forever, which is why nothing here
+        #: needs a new rule for what happens on their turn. INVENTED: that the
+        #: fight carries on at all. Nothing read so far says whether the
+        #: original played on, voided the fight, or awarded it.
+        #:
+        #: ⭐ What picked this over the alternatives is which endings it can
+        #: reach: carrying on ends the fight through the ONE ending this server
+        #: has restored (turn 8 → 0x5C1A → 結果画面 → the player presses
+        #: ［終 了］). Closing the fight, which is what round 94 did, reaches no
+        #: ending at all and strands the client on the battle screen; sending
+        #: 0x5C1A right there would have to make up a winTeam at a moment
+        #: nothing says a fight ends.
+        self.gone = False
 
     def begin_turn(self) -> None:
         """Forget last turn's choice. Called for everyone by every 0x5C09."""
@@ -910,6 +931,20 @@ class Battle:
                 return fighter
         return None
 
+    def active(self) -> "list[Fighter]":
+        """Everyone still connected — who the fight is allowed to wait for.
+
+        ⚠️ Not the same list as ``fighters``, and the difference is deliberate:
+        the roster that goes out on the wire never shrinks (see Fighter.gone),
+        so the client keeps drawing the same battle it was drawing. Only the
+        three 「has everybody…」 questions below use this one.
+        """
+        return [f for f in self.fighters if not f.gone]
+
+    def abandoned(self) -> bool:
+        """Has everybody gone? Then there is nobody left to send anything to."""
+        return not self.active()
+
     def side(self, team: int) -> "list[Fighter]":
         return [f for f in self.fighters if f.team == team]
 
@@ -920,8 +955,13 @@ class Battle:
         ready flag, where the leader is excused because pressing 「開 始」 is
         their version of it. 0x5C07 is a statement about a scene being drawn
         and the leader's scene has to be drawn too.
+
+        ⚠️ Every fighter who is still there. A gone one can never report, and
+        waiting for a report that cannot come is the hang this is written
+        against; see Fighter.gone.
         """
-        return bool(self.fighters) and all(f.ready for f in self.fighters)
+        active = self.active()
+        return bool(active) and all(f.ready for f in active)
 
     def begin_turn(self) -> int:
         """Advance to the next turn and clear everybody's choice. Returns it."""
@@ -949,8 +989,12 @@ class Battle:
         way a turn can reach that point is the clock running out on somebody.
         Both callers are in MpsServer; neither is in here, because a Battle has
         no way to tell the time on a client's behalf.
+
+        ⚠️ Over the active roster: a gone fighter is exactly the 「did not
+        finish in time」 case the same paragraph describes, permanently.
         """
-        return bool(self.fighters) and all(f.command is not None for f in self.fighters)
+        active = self.active()
+        return bool(active) and all(f.command is not None for f in active)
 
     def all_turn_done(self) -> bool:
         """Has every fighter reported 0x5C16 「my turn animation is over」?
@@ -959,8 +1003,14 @@ class Battle:
         because each client plays the action stream at its own pace and a turn
         started on the first report would begin for somebody still watching the
         previous one.
+
+        ⚠️⚠️ This is the one the deadline does NOT cover: a turn whose choices
+        timed out still resolves, but a turn nobody reports finished simply
+        stops. So this is where a gone fighter used to freeze the fight for
+        good, and why active() and not fighters.
         """
-        return bool(self.fighters) and all(f.turn_done for f in self.fighters)
+        active = self.active()
+        return bool(active) and all(f.turn_done for f in active)
 
     def actors(self) -> "list[Fighter]":
         """Who acts this turn, in the order they act.
@@ -1021,13 +1071,34 @@ class Board:
     def close(self, chara_id: int) -> "Battle | None":
         """Drop whatever battle this character is in, and return it.
 
-        ⚠️ The whole battle goes, not just the one fighter. A two-player
-        自主トレ with one side gone is not a fight that can continue, and
-        leaving it on the board would let the next 0x5C07 from the survivor
-        find a battle nobody is going to answer.
+        ⚠️ The whole battle goes, not just the one fighter. Used where the
+        fight is genuinely over — the result has been sent, or nobody is left
+        to send anything to. A connection going away is NOT one of those; that
+        is what leave() is for.
         """
         battle = self.battle_of(chara_id)
         if battle is not None:
+            self.battles.remove(battle)
+        return battle
+
+    def leave(self, chara_id: int) -> "Battle | None":
+        """One fighter's connection went away. Return the fight, still open.
+
+        ⭐ The fight stays on the board with the leaver marked gone, because a
+        fight that is taken off the board can no longer reach any ending — and
+        the ending is the whole point (Fighter.gone). ``None`` comes back when
+        this character was not fighting, exactly as it does from close().
+
+        ⚠️ The battle IS removed when the last one goes: with nobody active
+        there is no connection to carry it forward and no screen waiting on it.
+        """
+        battle = self.battle_of(chara_id)
+        if battle is None:
+            return None
+        fighter = battle.find(chara_id)
+        if fighter is not None:
+            fighter.gone = True
+        if battle.abandoned():
             self.battles.remove(battle)
         return battle
 
