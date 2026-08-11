@@ -1759,23 +1759,22 @@ class MpsServer:
             watchers = self._peers(session) if session.chara_id else []
             if session in self.live:
                 self.live.remove(session)
-            # ⚠️ The whole fight goes, not this one fighter — Board.close says
-            # why. Dropping it also stops a survivor's next 0x5C07 from finding
-            # a battle that can never reach all_ready and waiting forever for a
-            # 0x5C09.
-            #
-            # ⭐ And now the survivors are TOLD, which is the half that was
-            # missing: a client whose opponent vanished mid-turn sat on
-            # 「残り　0　ターン」 waiting for a 0x5C1A that nothing was ever
-            # going to send, and the only way out was killing the client.
+            # ⚠️ This one fighter goes, the fight does NOT — Board.leave and
+            # Fighter.gone say why. Round 94 closed the whole fight here, and
+            # that is precisely what left the survivor stranded: a fight off the
+            # board can no longer reach any ending, so the client sat on the
+            # battle screen with 「残り　7　ターン」 and the only way out was
+            # killing it. Carrying on reaches the one ending this server has
+            # restored — turn 8, 0x5C1A, ［終 了］.
             #
             # ⚠️⚠️ Restored and invented, kept apart: that a disconnect owes the
             # others this message is RESTORED — error_message 494-495 gives
             # 0x5C1B reason 0 the sentence 「通信が切断されたため、クラブ活動を
             # 強制終了しました」, which is about this exact event. What the fight
             # does AFTERWARDS — carry on short-handed, be decided, be voided —
-            # is NOT restored anywhere, so this server only delivers the
-            # sentence and lets the client do whatever it does with it.
+            # is NOT restored anywhere. Of the three, carrying on is the only
+            # one that needs no new field on the wire and no new moment for a
+            # fight to end at: see Fighter.gone.
             #
             # ⚠️⚠️ ORDER: innermost context first — fight, then room, then
             # world. MEASURED, not tidiness (round 94): 0x5C1B draws a
@@ -1785,12 +1784,13 @@ class MpsServer:
             # at all on a real disconnect while the identical bytes from
             # ``/cb part`` — with neither of those ahead of it — drew the notice
             # every time. ⚠️ Which of the two silences it is NOT separated yet.
-            gone = self.battles.close(session.chara_id) if session.chara_id else None
+            gone = self.battles.leave(session.chara_id) if session.chara_id else None
             if gone is not None:
                 self._cb_part_notice(
                     gone, session.chara_id, clubbattle.PART_DISCONNECTED
                 )
-                print(f"[{self.tag}] battle dropped on disconnect, "
+                self._battle_carry_on(gone)
+                print(f"[{self.tag}] battle left on disconnect, "
                       f"now {self.battles.summary()}")
             if watchers:
                 self._presence_withdraw(session, watchers)
@@ -2111,23 +2111,25 @@ class MpsServer:
                     f"last on map {session.map_id} "
                     f"({MAP_NAMES.get(session.map_id, '?')}) at {session.pos}"
                 )
-                # Same reason as the disconnect path: 「中断」 takes the room
-                # down, and a battle that came out of that room cannot outlive
-                # it either. The survivors get the same 0x5C1B for the same
-                # reason the room's 0x580D says 「切断による」 here: 0x5C1B has
-                # exactly two reasons and the other one is 「サーバーとクライア
-                # ントとの同期が取れません」, which this is not.
+                # Same treatment as the disconnect path: 「中断」 takes this
+                # player out of the fight, and the fight carries on for whoever
+                # is left rather than being taken off the board (Fighter.gone).
+                # The survivors get the same 0x5C1B for the same reason the
+                # room's 0x580D says 「切断による」 here: 0x5C1B has exactly two
+                # reasons and the other one is 「サーバーとクライアントとの同期が
+                # 取れません」, which this is not.
                 #
                 # ⚠️ Fight before room, the same order the disconnect path uses
                 # and for the same measured reason — see the ORDER note there.
                 gone = (
-                    self.battles.close(session.chara_id) if session.chara_id else None
+                    self.battles.leave(session.chara_id) if session.chara_id else None
                 )
                 if gone is not None:
                     self._cb_part_notice(
                         gone, session.chara_id, clubbattle.PART_DISCONNECTED
                     )
-                    print(f"[{self.tag}] battle dropped at logout, "
+                    self._battle_carry_on(gone)
+                    print(f"[{self.tag}] battle left at logout, "
                           f"now {self.battles.summary()}")
                 # ⚠️ A 看板 has to come down here and not only on disconnect:
                 # 「ゲームを中断（キャラクター選択画面に戻る）しても、退出する
@@ -3931,16 +3933,18 @@ class MpsServer:
     ) -> None:
         """0x5C1B to whoever else was in the fight. Push-only, no sender copy.
 
-        The battle's own 0x580D twin: call it with the Battle that Board.close
-        just handed back, so the board is already consistent when the pushes go
-        out and a survivor's reply cannot find a fight that is on its way out.
+        The battle's own 0x580D twin: call it with the Battle that Board.leave
+        just handed back, so the leaver is already marked gone when the pushes
+        go out — and BEFORE _battle_carry_on, so the survivors learn who left
+        before they are handed the next turn.
 
-        ⚠️ ``battle.fighters`` still holds the leaver — a Battle is closed
-        whole rather than emptied — so they are skipped explicitly here rather
-        than by the roster having lost them, which is how _tr_part_notice does
-        it. On the disconnect path the socket is already gone and _push would
-        drop the write anyway; on the 「中断」 path it is NOT, and the leaver is
-        on their way to the character select with no fight to be told about.
+        ⚠️ ``battle.fighters`` still holds the leaver — the roster on the wire
+        never shrinks, see Fighter.gone — so they are skipped explicitly here
+        rather than by the roster having lost them, which is how
+        _tr_part_notice does it. On the disconnect path the socket is already
+        gone and _push would drop the write anyway; on the 「中断」 path it is
+        NOT, and the leaver is on their way to the character select with no
+        fight to be told about.
 
         ⚠️ One message per survivor and no sender copy, so unlike _tr_cast
         there is nothing to return: both callers are in teardown paths that
@@ -3958,6 +3962,56 @@ class MpsServer:
                         other, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_PART, params
                     ),
                 )
+
+    def _battle_carry_on(self, battle: "clubbattle.Battle") -> None:
+        """Restart a fight that was waiting on the fighter who just left.
+
+        Call it right after Board.leave, and after the 0x5C1B that says who
+        went: the survivors should hear what happened before they are handed
+        the next turn.
+
+        ⚠️⚠️ Only the two places a fight waits for a REPORT are unstuck here,
+        because those are the only two nothing else covers:
+
+        * the last 0x5C07 (all_ready) — the fight has not begun;
+        * the last 0x5C16 (all_turn_done) — a played turn cannot advance.
+
+        The third wait, for the last 0x5C0A, is already covered by the 制限時間:
+        _drain_battle fires on the survivor's own deadline, tells everybody the
+        missing choices were 「間に合いませんでした」 and plays the turn. Doing it
+        here as well would resolve the turn early and skip that 0x5C0C — the
+        one the client sits and waits for (round 88, see _drain_battle).
+
+        ⚠️ Everything is driven off a SURVIVOR's session, not the leaver's: the
+        leaver's socket is on its way out, and _tr_cast returns that session's
+        own copy for a caller to write. Nobody is going to write theirs.
+        """
+        if battle.abandoned() or not battle.all_ready():
+            return
+        driver = None
+        for fighter in battle.active():
+            driver = self._session_of(fighter.chara_id)
+            if driver is not None:
+                break
+        if driver is None:
+            return
+        if battle.turn < clubbattle.FIRST_TURN:
+            print(f"[{self.tag}] battle carries on: everyone left is ready, "
+                  f"starting the first turn")
+            out = self._battle_turn_start(driver, battle)
+        elif battle.resolved and battle.all_turn_done():
+            if battle.finished():
+                print(f"[{self.tag}] battle carries on: last turn was already "
+                      f"played, showing the result")
+                out = self._battle_finish(driver, battle)
+            else:
+                print(f"[{self.tag}] battle carries on: turn {battle.turn} was "
+                      f"already played, starting the next one")
+                out = self._battle_turn_start(driver, battle)
+        else:
+            # Mid-turn: the choices are still open and the deadline owns them.
+            return
+        self._push(driver, out)
 
     def _tr_part_notice(
         self, room: "trainingroom.Room", gone_id: int, leader_id: int, reason: int
