@@ -3654,6 +3654,12 @@ class MpsServer:
                            ⚠️ The 結果画面 ignores every 0x5C1A after the first,
                            so a winTeam question needs the FIRST one to carry
                            it — hence arming rather than re-sending.
+        ``/cb vit [v] [e] | off``   make every 0x5C09 from now on carry this
+                           vitality/energy for everybody instead of their own.
+                           With no argument, half of max vitality. ⭐ The one
+                           probe that separates 「0x5C09 repaints the bar」 from
+                           「the client resets it at turn start」 — the turn
+                           either opens short or it does not.
         ``/cb react [n] [@i]``      0x5C10 Reaction, reaction=n
         ``/cb effect [t] [v] [v2] [@i]``  0x5C11 Effect, type=t
                            ⭐ ``@i`` aims at fighter i; the default is whoever
@@ -3742,6 +3748,33 @@ class MpsServer:
             return self._say(
                 session, sequence, f"/cb fxnext armed {battle.fx_probe}"
             )
+        if what == "vit":
+            # ⚠️⚠️ Also arms rather than sends: the question is what a turn
+            # OPENS with, and the only 0x5C09 the client will act on is the one
+            # the normal path sends. See Battle.turn_start_hp.
+            #
+            # ⭐ Draining this line once per logged-in session is harmless, the
+            # way ``hold`` is: writing the same pair twice is the same pair.
+            if len(args) > 1 and args[1] in ("off", "none", "-"):
+                battle.turn_start_hp = None
+                shown = "off (each fighter's own numbers again)"
+            else:
+                def hparg(position: int, fallback: int) -> int:
+                    try:
+                        return int(args[position], 0)
+                    except (IndexError, ValueError):
+                        return fallback
+
+                first = battle.fighters[0]
+                pair = (
+                    hparg(1, first.max_vitality // 2),
+                    hparg(2, first.max_energy),
+                )
+                battle.turn_start_hp = pair
+                shown = f"vitality={pair[0]} energy={pair[1]} for everyone"
+            print(f"[{self.tag}] /cb vit: every 0x5C09 from now on carries "
+                  f"{shown}")
+            return self._say(session, sequence, f"/cb vit {shown}")
         if what == "hold":
             # ⚠️⚠️ This ARMS something; it sends nothing now. The whole point is
             # that the message has to go out on the normal path, at the one
