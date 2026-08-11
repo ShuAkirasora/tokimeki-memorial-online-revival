@@ -662,10 +662,32 @@ def effect_params(
     ⚠️ ``value`` drew nothing at all for ``type=0`` — see the band-narration
     note above before assuming any ``type`` prints its number.
 
+    ⭐⭐⭐ THE CLIENT KEEPS ITS OWN 体力 AND DECIDES ON ITS OWN WHO IS DOWN.
+    MEASURED round 99, three fights, pixels only:
+
+    * ``type=8`` with ``value`` EXACTLY equal to what the target has left
+      empties the bar (0 px) and the client prints a line NOBODY SENT IT —
+      「…はリタイヤした…」 — and greys the sprite. One past that (``value``
+      one over) is not a knockdown at all: the number wraps and the bar comes
+      back FULL. So a big number does not knock anybody out; the exact number
+      does.
+    * ``type=4`` sets that same 体力 to 0 WITHOUT REPAINTING the bar, which
+      makes it look inert until something else touches 体力. Effects still
+      land on a downed fighter (a ``type=18`` heal refills the bar) but the
+      sprite stays grey for the rest of the fight.
+    * ⚠️⚠️ NONE OF THIS COMES BACK. The turn the client went down it sent
+      exactly one 0x5C16 and nothing else, byte for byte like any other turn.
+      There is no upstream message that can carry 「I am out」, so
+      「相手を全員リタイヤ」 (see WIN_TEAM_NEITHER below) is decidable ONLY by
+      a server that subtracts 体力 itself. That is a constraint the wire
+      imposes, not a design preference.
+
     ⚠️⚠️ MEASURING WHAT A FIELD MEANS IS NOT INVENTING A DAMAGE RULE. Nothing
     here decides when an effect happens or how big it is; that rule has no
     restored source at all, which is why neither this nor reaction_params is
-    called from the turn loop.
+    called from the turn loop. ⭐ Round 99 sharpens what is missing rather
+    than filling it: 「how much comes off」 is still unrestored, but 「what a
+    knockdown looks like on screen」 no longer is.
     """
     return struct.pack(
         ">IBhh",
@@ -691,6 +713,9 @@ def effect_params(
 #:    wins」 is the OUTCOME THE ORIGINAL RULE PRODUCES here, not a stand-in
 #:    picked because the winner is unknown. ⚠️ It stops being right the moment
 #:    damage exists; this constant is where that shows up.
+#:    ⭐ Round 99 measured who would have to notice: a client retires itself
+#:    the moment its own 体力 hits zero and never says so upstream (see
+#:    effect_params), so the 全員リタイヤ branch is evaluable only here.
 #:    ⚠️ p07_03 (ＮＰＣ戦) has no such third branch — its 「それ以外の場合は、
 #:    プレイヤーの負け」 makes a damage-less fight a plain player loss. Same
 #:    fight, two rule sheets: do not carry this constant over to 練習.
