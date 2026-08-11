@@ -466,42 +466,110 @@ def action_end_params(chara_id: int) -> bytes:
     return struct.pack(">I", chara_id)
 
 
-#: 0x5C10's ``reaction`` and 0x5C11's ``type``, in the client's own words.
+#: 0x5C10's ``reaction``, in the client's own words.
 #:
-#: ⭐⭐ The wording for BOTH lives in one run of ``msg_text.bin``, 717-752 —
-#: which is a different table from the two whose subject matches (see the
-#: warning below), and the only one whose STRINGS are the ones a screen has
-#: actually shown:
+#: ⚠️⚠️ THIS BLOCK USED TO CARRY A READING THAT ROUND 91 OVERTURNED, and the
+#: correction runs the opposite way from what it warned about, so both halves
+#: are spelled out — the old sentence is still a sayable one.
 #:
-#:     717 防御（ガマン）     730 パラメータ増   738 ステータス眠り   745 眠り回復
-#:     718 攻撃（使った）     731 パラメータ減   739 ステータス痺れ   746 痺れ回復
-#:     719 回避（かわした）   732 体力           740 ステータス沈黙   747 沈黙回復
-#:     720 反撃（仕返し）     733 気力           741 ステータス混乱   748 混乱回復
-#:     721 反射（はじき返した）734 攻撃力        742 練習不能         749 行動不可
-#:     722 効果無効           735 守備力         743 練習不可         750 行動中止
-#:     723 ダメージ           736 防御力         744 効果反射         751 防御解除
-#:     724 「 %3d %%」        737 素早さ                              752 効果無効効果消去
-#:     725-729 蚊に刺されたような / 小さな / それなりの / 大きな / 痛烈な
+#: 1. ``reaction`` is ``keyword_defense_characteristic.bin``'s id − 1, NOT a
+#:    linear index into ``msg_text.bin`` 717-752. FOUR SAMPLES IN ONE FIGHT
+#:    (round 91, real client): 0 →「すばやく身をかわした！」, 1 →「【card】を
+#:    はじき返した」, 2 →「…の仕返し！」, 3 →「…には効果がないようだ」. The
+#:    msg_text run is 719 回避 / 720 反撃 / 721 反射, so reading it linearly
+#:    needs reaction=1 to draw 反撃 — the screen drew 反射, and 反撃 came at 2.
+#:    The defence table (無し / 回避 / 反射 / 反撃 / 奥義耐性) fits all four
+#:    with nothing swapped. ⚠️ The old text here said in so many words 「DO NOT
+#:    go back to keyword_defense_characteristic.bin」. an earlier lesson.
 #:
-#: ⭐ 725-729 with 724 say something worth having on its own: ダメージ in this
-#: client is NARRATED IN BANDS, not printed as a number. So 「the client draws
-#: the number on the character」 — which is what round 89 expected of 0x5C11 —
-#: is not how at least part of this works. MEASURED: value=999 drew no digit.
+#: 2. msg_text 717-752 is a list of NAMES, not of sentences — which is why it
+#:    could fit and still be wrong. What gives it away is its own neighbours:
+#:    714/715/716 are ``$w`` ``$s`` ``$d``, the placeholder tokens. ⭐ THE
+#:    SENTENCES ARE IN ``clubmsg_template.bin`` (30 rows, key + name + the
+#:    template), and every line this project has read off a screen is one of
+#:    them verbatim, ``$M$N`` and all. See EFFECT_TEMPLATES below.
 #:
-#: ⚠️⚠️ WHAT IS PINNED IS TWO CELLS, EACH BY ONE SAMPLE (round 90, real client):
-#: ``0x5C11 type=0`` drew 「…は眠ってしまった！」 and left a lasting zzz bubble;
-#: ``0x5C10 reaction=0`` drew 「すばやく身をかわした！」. That fixes what those
-#: two bytes DO, not where each list starts counting — whether ``type`` is
-#: indexed from 738 and ``reaction`` from 719 (rather than 717) is still one
-#: assumption each. ``/cb fxnext 1 1 0 1`` settles both in one shot.
+#: ⭐ What msg_text 724-729 and 732-737 are, then, is the pool that fills ``$s``:
+#: 「 %3d %%」 plus five damage bands (蚊に刺されたような / 小さな / それなりの /
+#: 大きな / 痛烈な) for the ダメージ template, and 体力 / 気力 / 攻撃力 / 守備力 /
+#: 防御力 / 素早さ for パラメータ増/減. ⭐ So ダメージ really is NARRATED IN
+#: BANDS rather than printed — MEASURED separately: value=999 drew no digit.
 #:
-#: ⚠️⚠️ DO NOT go back to ``clubstatus.bin`` / ``keyword_defense_characteristic
-#: .bin`` for this. Their subjects match beautifully, the client really does use
-#: the latter (every card in the コマンド window prints a 守備特性 column), and
-#: 眠り/回避 sit at id 1 in both — so 「wire = table id − 1」 fits BOTH samples
-#: on BOTH messages and is still wrong. That near-miss is written up as lesson
-#: 31; the strings above are the evidence that outranks it.
-REACTION_NAMES = ("回避", "反撃", "反射", "効果無効", "ダメージ")
+#: ⚠️ The wire values that mean anything are 0-3. The table's five rows start
+#: at 無し, which id − 1 sends off the bottom, so a 4 should draw nothing;
+#: untested.
+#: ⚠️⚠️ reaction 0 (回避) and 3 (奥義耐性) SWALLOW the 0x5C11 sent with them —
+#: both mean 「it did not land」. Probe ``type`` with reaction 1 or 2 only.
+REACTION_NAMES = ("回避", "反射", "反撃", "奥義耐性")
+
+
+# ⭐⭐ THE CLIENT NARRATES THIS FIGHT FROM ``clubmsg_template.bin``, a 30-row
+# IdBn table of TEMPLATES — 「<name> は <band> ダメージを受けた」, 「<name> の
+# <parameter> が <amount> 上がった！」 and so on, placeholders and all.
+#
+# ⚠️ THE TABLE ITSELF IS NOT REPRODUCED HERE. It is thirty lines of the game's
+# own writing, this server needs none of it to run, and 「game content stays
+# out of the public tree」 is the same rule that keeps the quiz bank and the
+# word lists out. What this file needs is the NUMBERS, and those are below.
+#
+# ⚠️⚠️ msg_text.bin 717-752 IS NOT THAT TABLE, which is what this comment used
+# to say it was. It is a list of NAMES for those rows, and its own neighbours
+# give it away: 714/715/716 are the placeholder tokens themselves. The runs at
+# 724-729 and 732-737 are likewise not effects but the POOL that fills a
+# template's 「which one」 slot — five damage bands for the damage line, and the
+# six parameter names (体力 / 気力 / 攻撃力 / 守備力 / 防御力 / 素早さ) for the
+# parameter lines. They matched beautifully and they were the wrong file.
+#
+# ⭐⭐ EIGHT LINES ALREADY READ OFF A SCREEN ARE IN HERE VERBATIM: rows 0, 2, 3,
+# 8, 10, 13, 19 and 20. That is what identifies the table; nothing here is a
+# guess about which file the client narrates from. ⭐ Row 20 came from a turn
+# with NO probe in it at all, which is the cleanest witness of the eight.
+#
+# ⚠️⚠️ ``type`` IS NOT AN INDEX INTO THIS TABLE. It is not this table's row
+# number, not its key, and — round 97 — not clubstatus's id either, which is
+# what 2.47 concluded and what every experiment for five rounds was designed
+# around. It is an enumeration of the client's own; the client picks the
+# template from it. MEASURED, real client, two fights:
+#
+#     type          what the screen drew                         round
+#     0 / 1 / 2     眠り / しびれ / 沈黙 set on the target        90 / 91
+#     5 / 7         nothing at all (two or three samples each)    91 / 92
+#     8 - 13        ⭐ ダメージ 「…は蚊に刺されたようなダメージを
+#                   受けた」, AND THE 体力 BAR GOES DOWN          97
+#     14            「…の攻撃力が ８６％ 下がった！」(sent 14)     97
+#     15            「…の防御力が ８５％ 下がった！」(sent 15)     97
+#     16            「…の素早さが ８４％ 下がった！」(sent 16)     97
+#     17 / 20 / 21  not seen in the same sweep ⚠️ (may draw
+#                   nothing, may have scrolled past — not a
+#                   conclusion). 17 is the likely 守備力: it is
+#                   the one parameter of the six never yet drawn
+#     18            「…の体力が １８ 上がった！」(sent 18)         97
+#     19            「…の気力が ７７ 上がった！」(sent 77)         97
+#     22 - 29       nothing, and no bar moved (all eight in one
+#                   stream; the settled log held the three lines
+#                   an undoctored turn has)                       97
+#
+# ⭐⭐⭐ ``value`` REACHES THE SCREEN, in two different currencies:
+#   * 体力 / 気力 (18/19) print it raw — send 77, read 77.
+#   * 攻撃力 / 防御力 / 素早さ (14/15/16) print ``100 - value`` with a ％ sign.
+#     ⭐ The reading that fits is 「value is what percent of base it becomes」
+#     (14 → 14% left → 「dropped 86%」), ⚠️ but that is ONE sample per type.
+# ⭐⭐ 上がった vs 下がった IS THE CLIENT'S OWN ARITHMETIC ON THE NUMBER, not a
+# property of the type: the same sweep drew 上がった for 18/19 and 下がった for
+# 14/15/16. ⚠️⚠️ Which is what finally gives ``value``'s SIGN something to do
+# (it is s16 — see effect_params) — ``type=18`` with a negative value should
+# read 「体力が３０下がった！」. NOT YET SENT: round 97 queued it and the fight
+# ended first.
+#
+# ⚠️⚠️ AND THE NUMBER DOES NOT SURVIVE THE TURN. In the same capture the bar
+# was short at the end of one turn and full again the instant the next turn's
+# action stream began — and this server sends ``fighter.vitality`` = the
+# maximum in every 0x5C09. So whatever the client subtracts here, the next
+# TurnStart appears to paint over. ⚠️ APPEARS TO: 「the client resets its own
+# bar at turn start」 fits the same frames, and telling those apart needs one
+# 0x5C09 carrying a vitality BELOW the maximum. Until then do not write down
+# that 0x5C09 drives the bar — and note that this is the second time the
+# round-84 note in Fighter has been contradicted by a frame.
 
 
 def reaction_params(target_id: int, reaction: int) -> bytes:
@@ -784,13 +852,26 @@ class Fighter:
     it can be read is the 0x5C0A/0x5C0E コマンド exchange」): 0x5C0E HAS NO ROOM
     FOR IT. Its shape is charaId + the six deckItem bytes + targetId, and
     0x5C0F carries nothing at all — see action_begin_params/action_end_params.
-    ⭐⭐ What is left is 0x5C10 Reaction and 0x5C11 Effect, which is where
-    action_end_params already says an action's outcome lives. Both can be built
-    and both have probes (/cb react, /cb effect, /cb fxnext), and 2.47 has only
-    ever aimed 0x5C11 at the 状態異常 family — never at a bar.
-    ⚠️ That question is a MEASUREMENT (which message moves a current value)
-    and must not be run together with the INVENTION next to it (how much a hit
-    takes off): no restored rule says the second one. the invention rule.
+
+    ✅✅ ROUND 97 ANSWERED IT, and the answer is 0x5C11 Effect alone: types
+    8-13 draw ダメージ and the 体力 bar really goes down (66 px of Status panel
+    to 49, then 20, then 13, and it turns orange on the way). 0x5C10 was the
+    other candidate and it did NOT pan out — it only narrates the reaction.
+    See the EFFECT template table above for the whole measured map.
+
+    ⚠️⚠️ SO THE ROUND-84 PARAGRAPH ABOVE IS NOW THE SUSPECT ONE. In round 97's
+    frames the bar was short at the end of a turn and full again as the next
+    turn's stream began, and this server sends the MAXIMUM in every 0x5C09 —
+    which is exactly what 「0x5C09 repaints the bar」 would look like. ⚠️ It is
+    also exactly what 「the client resets its own bar at turn start」 would look
+    like, so nothing is being rewritten here yet. ⭐ ONE PROBE SETTLES IT: send
+    a 0x5C09 whose vitality is BELOW max and see whether the bar opens the turn
+    short. Until then both paragraphs stand and this one says which is which.
+
+    ⚠️ All of that is MEASUREMENT (which message moves a current value). The
+    INVENTION next to it — how much a hit takes off, and whether this server
+    should remember it between turns — is a separate account with no restored
+    source, and round 97 deliberately left it untouched. the invention rule.
     """
 
     def __init__(self, chara_id: int, team: int, club_id: int, info: bytes) -> None:
@@ -899,7 +980,11 @@ class Battle:
         #: ⚠️ It changes WHAT IS SENT during a normal resolve, which no other
         #: probe here does — hence one-shot, and hence the log line in
         #: _battle_resolve saying the turn was doctored.
-        self.fx_probe: "tuple[int, int, int, int] | None" = None
+        #: ⭐ The first member is a TUPLE of types, one 0x5C11 each, so a whole
+        #: sweep fits in the single turn this probe gets, and a ``value`` of
+        #: None means 「each type sends its own number」 — the label that lets a
+        #: sweep be read off the log window.
+        self.fx_probe: "tuple[tuple[int, ...], int | None, int, int] | None" = None
         #: ⚠️⚠️ A PROBE, not gameplay: when set, the next finish sends its
         #: 0x5C1A and then STOPS — no 0x5C1C, and this Battle stays on the
         #: board. One-shot, cleared when it fires. Set by ``/cb hold``.
