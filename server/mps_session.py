@@ -3366,21 +3366,33 @@ class MpsServer:
             # be put in front of a client from inside the turn it is about to
             # animate. See Battle.fx_probe.
             if battle.fx_probe is not None:
-                fx_type, fx_value, fx_value2, fx_reaction = battle.fx_probe
+                fx_types, fx_value, fx_value2, fx_reaction = battle.fx_probe
                 print(f"[{self.tag}] ⚠️ battle action: DOCTORED by /cb fxnext — "
-                      f"0x5C10 reaction={fx_reaction}, 0x5C11 type={fx_type} "
-                      f"value={fx_value} value2={fx_value2} at target={target_id:#x}")
+                      f"0x5C10 reaction={fx_reaction}, 0x5C11 type="
+                      f"{','.join(str(t) for t in fx_types)} "
+                      f"value={'per type' if fx_value is None else fx_value} "
+                      f"value2={fx_value2} at target={target_id:#x}")
                 out += self._tr_cast(
                     session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_REACTION,
                     clubbattle.reaction_params(target_id, fx_reaction), everyone,
                 )
-                out += self._tr_cast(
-                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
-                    clubbattle.effect_params(
-                        target_id, fx_type, fx_value, fx_value2
-                    ),
-                    everyone,
-                )
+                # ⭐ One 0x5C11 per type, all in this one action's stream. A
+                # sweep costs a turn instead of a fight: a turn is 60 seconds
+                # and a fight is eight turns plus five minutes of clicking, so
+                # asking 「which row does each type draw」 one type at a time
+                # is what makes that question expensive rather than the answer.
+                # ⚠️ Reading a sweep means reading the log window in order, and
+                # a type that draws nothing leaves no gap — see the ambiguity
+                # note on EFFECT_TEMPLATE table in clubbattle.
+                for fx_type in fx_types:
+                    value = fx_type if fx_value is None else fx_value
+                    out += self._tr_cast(
+                        session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                        clubbattle.effect_params(
+                            target_id, fx_type, value, fx_value2
+                        ),
+                        everyone,
+                    )
             out += self._tr_cast(
                 session,
                 0,
@@ -3646,6 +3658,11 @@ class MpsServer:
         ``/cb effect [t] [v] [v2] [@i]``  0x5C11 Effect, type=t
                            ⭐ ``@i`` aims at fighter i; the default is whoever
                            the console line was drained for. v defaults to t.
+        ``/cb fx [t] [v] [v2] [r]``      replay THIS turn with the pair in it
+        ``/cb fxnext [t[,t…]] [v] [v2] [r]``  arm the NEXT turn with the pair
+                           in it, which is the one that works — see
+                           _battle_replay_fx. ⭐ ``t`` may be a comma list, and
+                           then one 0x5C11 per type goes into the same stream.
 
         ⭐ Every one of them is a message this server already knows how to
         build; nothing here invents a shape.
@@ -3695,8 +3712,31 @@ class MpsServer:
                 except (IndexError, ValueError):
                     return fallback
 
-            fx_type = fxarg(0, 0)
-            battle.fx_probe = (fx_type, fxarg(1, fx_type), fxarg(2, 0), fxarg(3, 0))
+            # ⭐ The first argument may be a comma-separated LIST of types, all
+            # spliced into the same action stream. ``3`` and ``3,4,5,6`` are
+            # both legal and a lone number behaves exactly as it always has.
+            try:
+                fx_types = tuple(int(t, 0) for t in args[1].split(",") if t)
+            except (IndexError, ValueError):
+                fx_types = (0,)
+            if not fx_types:
+                fx_types = (0,)
+            # ⭐⭐ WITH NO ``value`` GIVEN, EACH TYPE SENDS ITS OWN NUMBER AS THE
+            # VALUE, and that is what makes a sweep readable: 0x5C11's value is
+            # PRINTED (round 97 measured 「…の気力が７７上がった！」 for
+            # value=77), so 「気力が19上がった」 names the type that drew it
+            # without trusting the order the lines came out in. ⚠️ Pass a value
+            # explicitly and the whole sweep shares it, which reads back as one
+            # anonymous line per hit.
+            shared_value = None
+            if len(args) > 2:
+                try:
+                    shared_value = int(args[2], 0)
+                except ValueError:
+                    shared_value = None
+            battle.fx_probe = (
+                fx_types, shared_value, fxarg(2, 0), fxarg(3, 0)
+            )
             print(f"[{self.tag}] /cb fxnext armed: {battle.fx_probe} "
                   f"(fires on the next resolve, once)")
             return self._say(
