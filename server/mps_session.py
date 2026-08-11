@@ -3418,6 +3418,18 @@ class MpsServer:
         """
         if win_team is None:
             win_team = clubbattle.WIN_TEAM_NEITHER
+        close = True
+        if battle.hold_on_finish:
+            # ⭐ /cb hold, one-shot. The 0x5C1A still goes out on the normal
+            # path — the one instant the client is idle enough to draw the
+            # 結果画面 — and nothing else does, so a probe can keep talking to a
+            # fight that is still on the board. See Battle.hold_on_finish.
+            battle.hold_on_finish = False
+            send_end = False
+            close = False
+            if battle.hold_win_team is not None:
+                win_team = battle.hold_win_team
+                battle.hold_win_team = None
         everyone = [f.chara_id for f in battle.fighters]
         sheets = {f.chara_id: self._battle_sheet(f) for f in battle.fighters}
         for fighter in battle.fighters:
@@ -3455,10 +3467,17 @@ class MpsServer:
             )
         else:
             print(f"[{self.tag}] battle end: 0x5C1C withheld (probe)")
+        # ⚠️ The deadline is cleared either way. The fight is over as far as
+        # turns go, and a HELD one must not resolve another turn out from under
+        # the 結果画面 sixty seconds later.
         for other in (self._session_of(c) for c in everyone):
             if other is not None:
                 other.battle_due = 0.0
-        self.battles.close(session.chara_id)
+        if close:
+            self.battles.close(session.chara_id)
+        else:
+            print(f"[{self.tag}] battle HELD open (probe): fight still on the "
+                  f"board, /cb still has a target")
         return out
 
     def _battle_probe(
@@ -3481,6 +3500,11 @@ class MpsServer:
         ``/cb end [n]``    0x5C1C alone, reason=n
         ``/cb finish [n] [noend]``  result + end + close, what turn 8 does by
                            itself; ``noend`` withholds the 0x5C1C
+        ``/cb hold [n]``   arm the NEXT finish to send 0x5C1A alone, with
+                           winTeam=n if given, and leave the fight standing.
+                           ⚠️ The 結果画面 ignores every 0x5C1A after the first,
+                           so a winTeam question needs the FIRST one to carry
+                           it — hence arming rather than re-sending.
         ``/cb react [n] [@i]``      0x5C10 Reaction, reaction=n
         ``/cb effect [t] [v] [v2] [@i]``  0x5C11 Effect, type=t
                            ⭐ ``@i`` aims at fighter i; the default is whoever
@@ -3541,6 +3565,23 @@ class MpsServer:
             return self._say(
                 session, sequence, f"/cb fxnext armed {battle.fx_probe}"
             )
+        if what == "hold":
+            # ⚠️⚠️ This ARMS something; it sends nothing now. The whole point is
+            # that the message has to go out on the normal path, at the one
+            # moment the client will draw it. See Battle.hold_on_finish.
+            #
+            # ⭐ Unlike fxnext, running once per logged-in session is harmless
+            # here: setting a flag that is already set is the same flag.
+            battle.hold_on_finish = True
+            try:
+                battle.hold_win_team = int(args[1], 0)
+            except (IndexError, ValueError):
+                battle.hold_win_team = None
+            shown = ("as computed" if battle.hold_win_team is None
+                     else battle.hold_win_team)
+            print(f"[{self.tag}] /cb hold armed: the next finish sends 0x5C1A "
+                  f"alone (winTeam={shown}) and leaves the fight standing")
+            return self._say(session, sequence, "/cb hold armed")
         if what == "next":
             for fighter in battle.fighters:
                 fighter.turn_done = True

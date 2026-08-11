@@ -863,6 +863,32 @@ class Battle:
         #: probe here does — hence one-shot, and hence the log line in
         #: _battle_resolve saying the turn was doctored.
         self.fx_probe: "tuple[int, int, int, int] | None" = None
+        #: ⚠️⚠️ A PROBE, not gameplay: when set, the next finish sends its
+        #: 0x5C1A and then STOPS — no 0x5C1C, and this Battle stays on the
+        #: board. One-shot, cleared when it fires. Set by ``/cb hold``.
+        #:
+        #: It exists because three open questions about the ending all need the
+        #: same instant, and that instant is otherwise unreachable (round 89,
+        #: 2.44). The 結果画面 is drawn only when the client is idle: sending
+        #: 0x5C1A while the コマンド window is up draws nothing, the client
+        #: banks the message and cashes it at the next state boundary. The one
+        #: idle moment is right after the last turn's animation — and the normal
+        #: path closes the fight there, so a ``/cb result`` typed a second later
+        #: has nothing to aim at. Holding the fight open across that instant is
+        #: what makes winTeam re-sendable while the window is on screen.
+        #:
+        #: ⚠️ It withholds a message the normal path sends, so like fx_probe it
+        #: is one-shot and says so in the log when it fires.
+        self.hold_on_finish = False
+        #: ⚠️⚠️ A PROBE: winTeam for the next finish to send INSTEAD of the
+        #: computed one, or None. Set by ``/cb hold <n>``, cleared with it.
+        #:
+        #: It exists because winTeam turned out to be drawn BEFORE the 結果画面,
+        #: in the 「終 了」 flourish (round 93) — and the window ignores every
+        #: 0x5C1A after the first, so the value cannot be swapped while the
+        #: result is up. Asking what another winTeam draws means having the
+        #: FIRST result of a fight carry it, which is what this does.
+        self.hold_win_team: "int | None" = None
         #: When this turn's choices close, on the SERVER's monotonic clock.
         #: ⚠️ Not the ``timeoutTime`` on the wire: that one is a moment on each
         #: recipient's own clock (0x5C09 states it per session, the way 0x480A
