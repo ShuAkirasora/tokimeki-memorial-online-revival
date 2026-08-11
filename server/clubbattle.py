@@ -720,12 +720,31 @@ def effect_params(
 #:    プレイヤーの負け」 makes a damage-less fight a plain player loss. Same
 #:    fight, two rule sheets: do not carry this constant over to 練習.
 #:
-#: 2. WHAT BYTE spells it is UNREAD. Teams are 0-based (0x5817, 0x5C06) and
-#:    there are two of them, so 0 and 1 are spoken for and 「neither」 needs a
-#:    third value; 2 is the next one and the field is read unsigned (+0x2c), so
-#:    255 would arrive as 255 rather than -1. ⭐ Cheap to measure and cheap to
-#:    correct: ``/cb result <n>`` sends one of these into a fight already on
-#:    screen. Until a screen has been read, this is a guess wearing a name.
+#: 2. WHAT BYTE spells it is still UNREAD. Teams are 0-based (0x5817, 0x5C06)
+#:    and there are two of them, so 0 and 1 are spoken for and 「neither」 needs
+#:    a third value; 2 is the next one and the field is read unsigned (+0x2c),
+#:    so 255 would arrive as 255 rather than -1.
+#:
+#:    ⭐⭐⭐ WHAT IT DOES ON SCREEN IS NO LONGER A GUESS. Measured round 100,
+#:    four fights, one 0x5C1A each: the client plays TWO cutscenes back to
+#:    back — the fixed 「終 了」 caption, and then, four seconds later, a
+#:    verdict: 「かち」 if winTeam equals the reader's own team, 「まけ」 for
+#:    anything else. Knockdowns do not enter into it (a fight where nobody was
+#:    hit drew the same verdict as one where the reader had been emptied to 0
+#:    体力). ⭐ So THIS value makes every player read 「まけ」 — which is
+#:    exactly what p07_04's third branch prescribes when neither side dealt
+#:    damage: 「両方が負けになります」. The invented encoding lands on the
+#:    restored meaning.
+#:    ⚠️ It still does not prove 2 is the ORIGINAL byte: every value that is
+#:    not the reader's own team draws the same 「まけ」, so 2, 3 and 255 are
+#:    indistinguishable on that screen. What changed is that the CONSEQUENCE
+#:    is now measured rather than assumed.
+#:    ⚠️ Read from an A-team (team 0) client only, so 「equals my team」 and
+#:    「equals 0」 are not yet told apart — that needs a second real client
+#:    sitting on team B.
+#:    ⚠️⚠️ A round-93 measurement said this field 「drives no pixel at all」.
+#:    It was a sampling artifact: that round burst 4 frames (~2 s) after
+#:    0x5C1A and the verdict starts at T+4 s. Do not shorten the capture.
 WIN_TEAM_NEITHER = 2
 
 #: 0x5C1C's ``reason``, RESTORED from ``error_message.bin`` 496-497 — the whole
