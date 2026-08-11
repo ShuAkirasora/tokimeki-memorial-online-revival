@@ -533,16 +533,29 @@ REACTION_NAMES = ("回避", "反射", "反撃", "奥義耐性")
 #
 #     type          what the screen drew                         round
 #     0 / 1 / 2     眠り / しびれ / 沈黙 set on the target        90 / 91
-#     5 / 7         nothing at all (two or three samples each)    91 / 92
-#     8 - 13        ⭐ ダメージ 「…は蚊に刺されたようなダメージを
-#                   受けた」, AND THE 体力 BAR GOES DOWN          97
+#     3             ⭐ 混乱 「…は混乱した！」, and the FOURTH
+#                   status lamp lights (grey 213 → 255,225,107).
+#                   So 0-3 are the four clubstatus afflictions in
+#                   clubstatus order, and nothing else is         98
+#     4             ⭐⭐ 「…はリタイヤした…」 (練習不能): the
+#                   sprite greys out and the panel's 「練 習 中」
+#                   badge changes. ⚠️ It also REPLACES that
+#                   turn's 「…はボーっとしている」 line            98
+#     5 / 6 / 7     nothing at all. ⭐ 7 was sent at a target
+#                   ALREADY 混乱 — so these are not 「recovery
+#                   lines suppressed because there is nothing to
+#                   recover」, they simply draw nothing      91 / 92 / 98
+#     8 - 13        ⭐ ダメージ 「…は<band>ダメージを受けた」,
+#                   AND THE 体力 BAR GOES DOWN — see below for
+#                   how much and which band                  97 / 98
 #     14            「…の攻撃力が ８６％ 下がった！」(sent 14)     97
 #     15            「…の防御力が ８５％ 下がった！」(sent 15)     97
 #     16            「…の素早さが ８４％ 下がった！」(sent 16)     97
-#     17 / 20 / 21  not seen in the same sweep ⚠️ (may draw
-#                   nothing, may have scrolled past — not a
-#                   conclusion). 17 is the likely 守備力: it is
-#                   the one parameter of the six never yet drawn
+#     17 / 20 / 21  ⭐ nothing, and this is now a real negative:
+#                   17 alone in a turn of its own, 20 alone, and
+#                   21 in one stream with a type 3 CONTROL that
+#                   did draw. ⚠️ So 17 is NOT 守備力, which is
+#                   what the sweep's silence was read as          98
 #     18            「…の体力が １８ 上がった！」(sent 18)         97
 #     19            「…の気力が ７７ 上がった！」(sent 77)         97
 #     22 - 29       nothing, and no bar moved (all eight in one
@@ -554,22 +567,49 @@ REACTION_NAMES = ("回避", "反射", "反撃", "奥義耐性")
 #   * 攻撃力 / 防御力 / 素早さ (14/15/16) print ``100 - value`` with a ％ sign.
 #     ⭐ The reading that fits is 「value is what percent of base it becomes」
 #     (14 → 14% left → 「dropped 86%」), ⚠️ but that is ONE sample per type.
-# ⭐⭐ 上がった vs 下がった IS THE CLIENT'S OWN ARITHMETIC ON THE NUMBER, not a
-# property of the type: the same sweep drew 上がった for 18/19 and 下がった for
-# 14/15/16. ⚠️⚠️ Which is what finally gives ``value``'s SIGN something to do
-# (it is s16 — see effect_params) — ``type=18`` with a negative value should
-# read 「体力が３０下がった！」. NOT YET SENT: round 97 queued it and the fight
-# ended first.
+# ⚠️⚠️ 上がった vs 下がった IS NOT ARITHMETIC ON THE NUMBER — round 98 sent
+# ``type=18 value=-30`` and the screen drew 「…の体力が−３０上がった！」. The
+# minus sign is PRINTED, the verb does not flip, and 「the client decides the
+# verb from the sign」 (what round 97 wrote here) is dead. The verb comes with
+# the type; 14/15/16 say 下がった because that is their template.
 #
-# ⚠️⚠️ AND THE NUMBER DOES NOT SURVIVE THE TURN. In the same capture the bar
-# was short at the end of one turn and full again the instant the next turn's
-# action stream began — and this server sends ``fighter.vitality`` = the
-# maximum in every 0x5C09. So whatever the client subtracts here, the next
-# TurnStart appears to paint over. ⚠️ APPEARS TO: 「the client resets its own
-# bar at turn start」 fits the same frames, and telling those apart needs one
-# 0x5C09 carrying a vitality BELOW the maximum. Until then do not write down
-# that 0x5C09 drives the bar — and note that this is the second time the
-# round-84 note in Fighter has been contradicted by a frame.
+# ⭐⭐⭐ THE SIGN STILL HAS A JOB, and it is the value itself: that same −30
+# took the 体力 bar from 66 px to 45 px — 100 → 70 out of a 66 px full bar is
+# 46 px, and the sentence and the bar disagree about the WORDS while agreeing
+# exactly about the NUMBER. Two accounts, one message.
+#
+# ⭐⭐⭐ AND THE DAMAGE TYPES SUBTRACT EXACTLY WHAT THEY CARRY. Round 97 read
+# three mismatched samples off animating frames and warned not to derive a
+# formula from them; with the frames left to settle (six-plus captures, then
+# the last one used), two hits landed on the number:
+#     100 −30 (type 18) → 45 px      (predicted 46)
+#      70 −30 (type 8)  → 26 px      (predicted 26)
+#      40 −10 (type 13) → 20 px      (predicted 20)
+# So 「how much comes off」 needs no formula: it is ``value``.
+#
+# ⭐⭐ ``value2`` PICKS THE DAMAGE BAND — the 「which one」 slot of the damage
+# template, 0-4 in the order msg_text.bin 725-729 lists them. Measured with
+# ``value`` held at 5: value2=0 drew the weakest band, 2 the middle one, 4 the
+# strongest. ⚠️ THAT ANSWERS 「what chooses the band」, which round 97 could not
+# answer by varying ``value`` (8/10/50/300 all drew the weakest) — it is not a
+# function of the amount at all.
+#
+# ⚠️⚠️ WHAT THE CLIENT KEEPS, IT KEEPS: the bar stayed at 45 px for three
+# consecutive turns and the 混乱 lamp stayed lit across a turn boundary, while
+# every 0x5C09 in between carried the MAXIMUM vitality and an all-zero status
+# array. So the client holds its own battle state and neither repaints from
+# 0x5C09 nor resets at turn start. ⚠️ That retires round 97's 「the next
+# TurnStart paints over it」 — see Battle.turn_start_hp for the probe, and
+# below for what that frame was really showing.
+#
+# ⚠️⚠️ BELOW ZERO IS NOT ZERO. 95 damage against a bar that had about 85 left
+# did not empty it — the bar came back FULL. ⭐ Which is very probably what
+# round 97 photographed when it saw a short bar go full 「as the next turn
+# began」: its last probe was ``type=8 value=300`` into a bar that had 13 px
+# left, and it recorded that the same shot took nothing off. Nothing is known
+# about what the client does with the underflowed number, only that the bar
+# reads full afterwards. ⚠️ A server that wants somebody knocked out cannot
+# get there by sending a big enough number.
 
 
 def reaction_params(target_id: int, reaction: int) -> bytes:
@@ -614,8 +654,11 @@ def effect_params(
     turned the character white and left a zzz bubble over their head THAT WAS
     STILL THERE ON LATER TURNS. So this message SETS state the client then keeps
     — it is not a one-off flourish. The vocabulary is REACTION_NAMES' table
-    above; ⚠️ which row ``type=0`` counts from is still one sample, and
-    ``value2`` (duration? second operand? table id?) is untouched.
+    above. ⭐ Round 98 finished that row-counting question the cheap way: types
+    0-3 are 眠り/しびれ/沈黙/混乱, in clubstatus order, and type 3 lights the
+    fourth status lamp — so the four afflictions are 0-3 and nothing else is.
+    ⭐⭐ ``value2`` IS THE DAMAGE BAND for types 8-13 (0-4, weakest first) and
+    was measured at three points; it is untouched for every other type.
     ⚠️ ``value`` drew nothing at all for ``type=0`` — see the band-narration
     note above before assuming any ``type`` prints its number.
 
@@ -859,14 +902,16 @@ class Fighter:
     other candidate and it did NOT pan out — it only narrates the reaction.
     See the EFFECT template table above for the whole measured map.
 
-    ⚠️⚠️ SO THE ROUND-84 PARAGRAPH ABOVE IS NOW THE SUSPECT ONE. In round 97's
-    frames the bar was short at the end of a turn and full again as the next
-    turn's stream began, and this server sends the MAXIMUM in every 0x5C09 —
-    which is exactly what 「0x5C09 repaints the bar」 would look like. ⚠️ It is
-    also exactly what 「the client resets its own bar at turn start」 would look
-    like, so nothing is being rewritten here yet. ⭐ ONE PROBE SETTLES IT: send
-    a 0x5C09 whose vitality is BELOW max and see whether the bar opens the turn
-    short. Until then both paragraphs stand and this one says which is which.
+    ✅✅ ROUND 98 SETTLED THE ROUND-84 PARAGRAPH, and it survives: ``/cb vit``
+    put vitality=20/energy=30 into every 0x5C09 of a live fight against
+    0x5C06's 100/80 — the wire was checked, both rows carried 0014/1e — and
+    BOTH Status bars stayed 66 px, the full width. So 0x5C09's numbers really
+    do not touch the bars, now with a second and deliberate sample.
+    ⭐ And the mirror image of it: with the bars knocked down by 0x5C11 they
+    STAYED down for three turns while every 0x5C09 carried the maximum. The
+    client owns this state; this message is not how it is told about it.
+    ⚠️ Which leaves 0x5C09's vitality/energy with no reader found anywhere yet.
+    They are still sent because the original's message carries them.
 
     ⚠️ All of that is MEASUREMENT (which message moves a current value). The
     INVENTION next to it — how much a hit takes off, and whether this server
@@ -1011,6 +1056,29 @@ class Battle:
         #: result is up. Asking what another winTeam draws means having the
         #: FIRST result of a fight carry it, which is what this does.
         self.hold_win_team: "int | None" = None
+        #: ⚠️⚠️ A PROBE, not gameplay: ``(vitality, energy)`` for EVERY row of
+        #: EVERY 0x5C09 from now on, instead of each fighter's own numbers, or
+        #: None for the shipping behaviour. Set by ``/cb vit``.
+        #:
+        #: It exists to tell two readings of round 97's frames apart, and they
+        #: are the two paragraphs of Fighter's docstring. The bar was short at
+        #: the end of a doctored turn and full again as the next turn's stream
+        #: began, and this server sends the MAXIMUM in every 0x5C09 — so either
+        #: 0x5C09 repaints the bar, or the client resets its own at turn start.
+        #: One turn opening on a vitality BELOW the maximum separates them: a
+        #: short bar at turn start means 0x5C09 drives it, a full one means the
+        #: client does, and round 84's 「0x5C09's numbers do not touch the bars」
+        #: stands or falls on that single frame.
+        #:
+        #: ⚠️ Deliberately NOT one-shot and deliberately NOT an environment
+        #: knob. Not one-shot because the question is about the value a turn
+        #: OPENS with, so it has to still be there when the next turn starts;
+        #: not an environment knob because it must be switchable mid-fight —
+        #: the control and the probe belong in one fight, the way round 97's
+        #: undoctored turn had to sit next to its doctored one (lesson 33).
+        #: Living on the Battle is what makes it restore itself: no fight
+        #: outlives its board, so nothing has to remember to put it back.
+        self.turn_start_hp: "tuple[int, int] | None" = None
         #: When this turn's choices close, on the SERVER's monotonic clock.
         #: ⚠️ Not the ``timeoutTime`` on the wire: that one is a moment on each
         #: recipient's own clock (0x5C09 states it per session, the way 0x480A
@@ -1129,6 +1197,15 @@ class Battle:
         return [fighter for _index, fighter in order]
 
     def turn_rows(self) -> "list[bytes]":
+        # ⚠️ The probe substitutes the two numbers and NOTHING else: same rows,
+        # same order, same status counters, so the only thing that can differ
+        # on screen is what those two numbers draw. See turn_start_hp.
+        if self.turn_start_hp is not None:
+            vitality, energy = self.turn_start_hp
+            return [
+                turn_start_row(f.chara_id, vitality, energy, f.states)
+                for f in self.fighters
+            ]
         return [f.turn_row() for f in self.fighters]
 
     def summary(self) -> str:
