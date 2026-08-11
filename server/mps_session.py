@@ -1759,6 +1759,39 @@ class MpsServer:
             watchers = self._peers(session) if session.chara_id else []
             if session in self.live:
                 self.live.remove(session)
+            # ⚠️ The whole fight goes, not this one fighter — Board.close says
+            # why. Dropping it also stops a survivor's next 0x5C07 from finding
+            # a battle that can never reach all_ready and waiting forever for a
+            # 0x5C09.
+            #
+            # ⭐ And now the survivors are TOLD, which is the half that was
+            # missing: a client whose opponent vanished mid-turn sat on
+            # 「残り　0　ターン」 waiting for a 0x5C1A that nothing was ever
+            # going to send, and the only way out was killing the client.
+            #
+            # ⚠️⚠️ Restored and invented, kept apart: that a disconnect owes the
+            # others this message is RESTORED — error_message 494-495 gives
+            # 0x5C1B reason 0 the sentence 「通信が切断されたため、クラブ活動を
+            # 強制終了しました」, which is about this exact event. What the fight
+            # does AFTERWARDS — carry on short-handed, be decided, be voided —
+            # is NOT restored anywhere, so this server only delivers the
+            # sentence and lets the client do whatever it does with it.
+            #
+            # ⚠️⚠️ ORDER: innermost context first — fight, then room, then
+            # world. MEASURED, not tidiness (round 94): 0x5C1B draws a
+            # システムメッセージ naming the character who left, and the name has
+            # to come from somewhere. Sent AFTER the 0x4810 that deletes them
+            # and the 0x580D that unseats them, the same message drew nothing
+            # at all on a real disconnect while the identical bytes from
+            # ``/cb part`` — with neither of those ahead of it — drew the notice
+            # every time. ⚠️ Which of the two silences it is NOT separated yet.
+            gone = self.battles.close(session.chara_id) if session.chara_id else None
+            if gone is not None:
+                self._cb_part_notice(
+                    gone, session.chara_id, clubbattle.PART_DISCONNECTED
+                )
+                print(f"[{self.tag}] battle dropped on disconnect, "
+                      f"now {self.battles.summary()}")
             if watchers:
                 self._presence_withdraw(session, watchers)
             room = self.trainingrooms.room_of(session.chara_id) if session.chara_id else None
@@ -1771,13 +1804,6 @@ class MpsServer:
                 )
                 print(f"[{self.tag}] trainingroom dropped on disconnect, "
                       f"now {self.trainingrooms.summary()}")
-            # ⚠️ The whole fight goes, not this one fighter. Nobody has been
-            # told (0x5C1B 「someone left」 is not implemented), so what this
-            # prevents is narrower: a survivor's next 0x5C07 finding a battle
-            # that can never reach all_ready and waiting forever for a 0x5C09.
-            if session.chara_id and self.battles.close(session.chara_id):
-                print(f"[{self.tag}] battle dropped on disconnect, "
-                      f"now {self.battles.summary()}")
             writer.close()
             try:
                 await writer.wait_closed()
@@ -2085,6 +2111,24 @@ class MpsServer:
                     f"last on map {session.map_id} "
                     f"({MAP_NAMES.get(session.map_id, '?')}) at {session.pos}"
                 )
+                # Same reason as the disconnect path: 「中断」 takes the room
+                # down, and a battle that came out of that room cannot outlive
+                # it either. The survivors get the same 0x5C1B for the same
+                # reason the room's 0x580D says 「切断による」 here: 0x5C1B has
+                # exactly two reasons and the other one is 「サーバーとクライア
+                # ントとの同期が取れません」, which this is not.
+                #
+                # ⚠️ Fight before room, the same order the disconnect path uses
+                # and for the same measured reason — see the ORDER note there.
+                gone = (
+                    self.battles.close(session.chara_id) if session.chara_id else None
+                )
+                if gone is not None:
+                    self._cb_part_notice(
+                        gone, session.chara_id, clubbattle.PART_DISCONNECTED
+                    )
+                    print(f"[{self.tag}] battle dropped at logout, "
+                          f"now {self.battles.summary()}")
                 # ⚠️ A 看板 has to come down here and not only on disconnect:
                 # 「ゲームを中断（キャラクター選択画面に戻る）しても、退出する
                 # ことになります」 (p07_06), and clearing chara_id below would
@@ -2106,12 +2150,6 @@ class MpsServer:
                     )
                     print(f"[{self.tag}] trainingroom dropped at logout, "
                           f"now {self.trainingrooms.summary()}")
-                # Same reason as the disconnect path: 「中断」 takes the room
-                # down, and a battle that came out of that room cannot outlive
-                # it either.
-                if session.chara_id and self.battles.close(session.chara_id):
-                    print(f"[{self.tag}] battle dropped at logout, "
-                          f"now {self.battles.summary()}")
                 session.chara_id = 0
                 return self._answer(session, sequence, MSG_SV_OK_SCHOOL_LOGOUT, b"")
             if msg_type == MSG_CL_QUERY_POOL_MESSAGE:
@@ -3498,6 +3536,10 @@ class MpsServer:
         ``/cb next``       pretend everyone reported 0x5C16 and start the next turn
         ``/cb result [n] [ruler]``  0x5C1A alone, winTeam=n, fight left standing
         ``/cb end [n]``    0x5C1C alone, reason=n
+        ``/cb part [@i] [n]``  0x5C1B 「this one character dropped out」,
+                           charaId of fighter i, reason=n. The fight is LEFT
+                           STANDING — the disconnect path closes it, and this
+                           asks what the message alone does.
         ``/cb finish [n] [noend]``  result + end + close, what turn 8 does by
                            itself; ``noend`` withholds the 0x5C1C
         ``/cb hold [n]``   arm the NEXT finish to send 0x5C1A alone, with
@@ -3647,6 +3689,46 @@ class MpsServer:
             return self._tr_cast(
                 session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_END,
                 clubbattle.end_params(reason), everyone,
+            )
+        if what == "part":
+            # ⭐ The message the disconnect path now sends, without having to
+            # disconnect: five minutes of relogin per question is what made
+            # 0x5C1B unaskable in the first place.
+            #
+            # ⚠️⚠️ It deliberately does NOT close the fight, and that is the
+            # whole point of having it as well as the real path. 「a disconnect
+            # owes the others 0x5C1B」 is restored; 「and then the fight ends」
+            # is not, and the real path bundles the two so tightly that a
+            # client reacting to the close cannot be told from a client
+            # reacting to the message. Here nothing else changes.
+            #
+            # ⚠️ Once per LOGGED-IN SESSION, like every /cb line. On the default
+            # target that is one message naming each fighter, which is the
+            # 「about me」 versus 「about somebody else」 comparison /cb effect
+            # gets for free the same way; with an explicit @i both sessions send
+            # the SAME body, and the second is the re-send that asks whether
+            # this draws once and then stops listening, the way the 結果画面
+            # does with 0x5C1A.
+            target = session.chara_id
+            for token in args[1:]:
+                if not token.startswith("@"):
+                    continue
+                try:
+                    index = int(token[1:], 0)
+                except ValueError:
+                    continue
+                if 0 <= index < len(battle.fighters):
+                    target = battle.fighters[index].chara_id
+            plain = [a for a in args[1:] if not a.startswith("@")]
+            try:
+                reason = int(plain[0], 0)
+            except (IndexError, ValueError):
+                reason = clubbattle.PART_DISCONNECTED
+            print(f"[{self.tag}] /cb part charaId={target:#x} reason={reason} "
+                  f"(fight left standing: {battle.summary()})")
+            return self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_PART,
+                clubbattle.part_params(target, reason), everyone,
             )
         if what == "finish":
             return self._battle_finish(
@@ -3843,6 +3925,39 @@ class MpsServer:
             body,
             [f.chara_id for f in battle.fighters],
         )
+
+    def _cb_part_notice(
+        self, battle: "clubbattle.Battle", gone_id: int, reason: int
+    ) -> None:
+        """0x5C1B to whoever else was in the fight. Push-only, no sender copy.
+
+        The battle's own 0x580D twin: call it with the Battle that Board.close
+        just handed back, so the board is already consistent when the pushes go
+        out and a survivor's reply cannot find a fight that is on its way out.
+
+        ⚠️ ``battle.fighters`` still holds the leaver — a Battle is closed
+        whole rather than emptied — so they are skipped explicitly here rather
+        than by the roster having lost them, which is how _tr_part_notice does
+        it. On the disconnect path the socket is already gone and _push would
+        drop the write anyway; on the 「中断」 path it is NOT, and the leaver is
+        on their way to the character select with no fight to be told about.
+
+        ⚠️ One message per survivor and no sender copy, so unlike _tr_cast
+        there is nothing to return: both callers are in teardown paths that
+        have no reply of their own to append it to.
+        """
+        params = clubbattle.part_params(gone_id, reason)
+        for fighter in battle.fighters:
+            if fighter.chara_id == gone_id:
+                continue
+            other = self._session_of(fighter.chara_id)
+            if other is not None:
+                self._push(
+                    other,
+                    self._answer(
+                        other, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_PART, params
+                    ),
+                )
 
     def _tr_part_notice(
         self, room: "trainingroom.Room", gone_id: int, leader_id: int, reason: int
