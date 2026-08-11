@@ -780,9 +780,17 @@ class Fighter:
     them. That kills the plan in 2.41 — with only these two messages every bar
     is 「current == maximum」 and no fill is distinguishable from any other, so
     the 気力/素早さ pairing cannot be named here no matter what values go out.
-    ⭐ The next place it can be read is the 0x5C0A/0x5C0E コマンド exchange,
-    where spending 気力 should make a current value fall below its maximum for
-    the first time.
+    ⚠️⚠️ Round 96 corrects the pointer that used to sit here (「the next place
+    it can be read is the 0x5C0A/0x5C0E コマンド exchange」): 0x5C0E HAS NO ROOM
+    FOR IT. Its shape is charaId + the six deckItem bytes + targetId, and
+    0x5C0F carries nothing at all — see action_begin_params/action_end_params.
+    ⭐⭐ What is left is 0x5C10 Reaction and 0x5C11 Effect, which is where
+    action_end_params already says an action's outcome lives. Both can be built
+    and both have probes (/cb react, /cb effect, /cb fxnext), and 2.47 has only
+    ever aimed 0x5C11 at the 状態異常 family — never at a bar.
+    ⚠️ That question is a MEASUREMENT (which message moves a current value)
+    and must not be run together with the INVENTION next to it (how much a hit
+    takes off): no restored rule says the second one. §3.8.
     """
 
     def __init__(self, chara_id: int, team: int, club_id: int, info: bytes) -> None:

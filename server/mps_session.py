@@ -1176,7 +1176,9 @@ class MpsServer:
         room = self.trainingrooms.rooms.get(other.chara_id)
         return ACTION_TRAINING_ROOM if room is not None else ACTION_NONE
 
-    def _presence_refresh(self, session: "_Session") -> None:
+    def _presence_refresh(
+        self, session: "_Session", skip: "set[int] | None" = None
+    ) -> None:
         """Redraw this character on everybody else\'s screen.
 
         Delete then add, because 0x480F is an *add*: round 67 measured what the
@@ -1185,14 +1187,28 @@ class MpsServer:
         client is told to drop somebody it can see and is immediately handed
         them back, which is the same pair of messages a warp out and back in
         would produce.
+
+        ⚠️⚠️ ``skip`` names charaIds this pair must NOT reach, and it exists
+        because one of them is fatal: a client sitting on the 結果画面 that is
+        handed 0x4810 + 0x480F closes the connection and draws
+        「通信が断たれました」 (measured round 96, three pairs, EOF right after).
+        The scene those messages edit is not up while a fight is on screen.
+        ⚠️ 0x4810 *alone* is survivable there — round 95 sent one down the
+        disconnect path and the fight played on to turn 8 — so it is this pair,
+        or the add half of it, and the two have not been separated.
         """
-        peers = self._peers(session)
+        peers = [
+            peer for peer in self._peers(session)
+            if skip is None or peer.chara_id not in skip
+        ]
         if not peers:
             return
         self._presence_withdraw(session, peers)
-        self._presence_announce(session)
+        self._presence_announce(session, peers)
 
-    def _presence_announce(self, session: "_Session") -> None:
+    def _presence_announce(
+        self, session: "_Session", peers: "list[_Session] | None" = None
+    ) -> None:
         """Tell everybody else on the map that this character has appeared.
 
         Push-only and no sender copy: the client puts itself into the scene, and
@@ -1203,7 +1219,7 @@ class MpsServer:
         if entry is None:
             return
         body = struct.pack(">H", 1) + entry
-        for other in self._peers(session):
+        for other in (self._peers(session) if peers is None else peers):
             self._push(
                 other, self._answer(other, 0, MSG_SV_NOTIFY_CHARACTER_ADD, body)
             )
@@ -3515,10 +3531,87 @@ class MpsServer:
                 other.battle_due = 0.0
         if close:
             self.battles.close(session.chara_id)
+            # ⚠️ Tied to `close`, not to `send_end`: a HELD fight is a probe
+            # standing still, and taking its room away would move a second
+            # thing while the probe is trying to measure the first.
+            self._battle_leave_rooms(everyone)
         else:
             print(f"[{self.tag}] battle HELD open (probe): fight still on the "
                   f"board, /cb still has a target")
         return out
+
+    def _battle_leave_rooms(self, everyone: "list[int]") -> None:
+        """Take the fighters out of the 自主トレルーム their fight came out of.
+
+        ⭐⭐ SILENT ON THE WIRE, AND THAT IS THE POINT: every client has already
+        left this room by itself, so there is nobody left to tell. Measured,
+        rounds 93 and 95 —
+
+        * the 自主トレルーム window is gone by the time the 結果画面 is up and
+          cannot be called back, not even by having somebody join the room
+          again (2.48 §5);
+        * pressing ［終 了］ sends 0x4000 / 0x6500 / 0xA100 and no 0x5809
+          Part, so the client never asks to be let out (2.50 §5);
+        * back on the campus the client offers 看板作成 and does send 0x5800,
+          which is not what a client that believed itself in a room would do.
+
+        The server was the only one still holding them, and it answered that
+        0x5800 with 0x5802 reason 3 「既に自主トレルームに入っているため、自主
+        トレルームを作成できません。」 — so a player who had practised once
+        could not put up a second 看板 without dropping the connection first.
+
+        ⚠️ INVENTED, and it cannot be otherwise (§3.8): nothing in the 0x58xx
+        family says 「the room let you go because the fight ended」. The three
+        restored PART_REASONs are 自分自身の要求 / リーダーに排除された /
+        切断による, this is none of them, and putting one of them on the wire
+        would be labelling the event wrong. ⭐ What is *not* a free choice is
+        that it happens at all: the client leaves without telling anybody, so a
+        server that did not do this by itself would ship the refusal above.
+
+        ⚠️ This is NOT 「the room dissolves when its fight ends」, which 2.44
+        declined to invent and still declines. Members are removed one at a
+        time through Board.part, so p07_06's promotion rule applies and a room
+        with somebody still in it stays up under a new leader. When the room's
+        roster *is* the fight's roster — the only case ever measured, because
+        the fight is built from the room — the last part empties the room and
+        Board.part drops it. Same outcome, different rule.
+        """
+        board = self.trainingrooms
+        emptied: "list[trainingroom.Room]" = []
+        for chara_id in everyone:
+            room = board.room_of(chara_id)
+            if room is None:
+                # Logged out mid-fight: the disconnect path parted them then,
+                # and 2.50 keeps them on the fight's roster anyway.
+                continue
+            was_leader = room.leader_id == chara_id
+            board.part(chara_id)
+            print(f"[{self.tag}] trainingroom left at battle end: "
+                  f"charaId={chara_id:#x}, now {board.summary()}")
+            # ⚠️ Only leadership moves a pixel: _presence_action puts the 看板
+            # over the leader and nobody else, so a plain member's refresh would
+            # be a 0x4810/0x480F pair that redraws the frame it replaced.
+            # ⚠️⚠️ And it must not reach the fighters — that pair is what
+            # 「通信が断たれました」 came out of; see _presence_refresh. They do
+            # not need it either: pressing ［終 了］ sends 0x4000, and that
+            # branch rebuilds the whole scene with a freshly computed action
+            # byte for every peer. ⚠️ What is left uncovered is a bystander who
+            # never fought and never reloads — they keep a 看板 over somebody
+            # who no longer leads a room until something else redraws them.
+            if was_leader:
+                for who in {chara_id, room.leader_id}:
+                    other = self._session_of(who)
+                    if other is not None:
+                        self._presence_refresh(other, skip=set(everyone))
+            if room.members:
+                if room not in emptied:
+                    emptied.append(room)
+            elif room in emptied:
+                emptied.remove(room)
+        for room in emptied:
+            print(f"[{self.tag}] ⚠ {len(room.members)} left in {room.summary()} "
+                  f"after its fight ended, and they were told nothing: no "
+                  f"0x580D reason means 「the fight is over」")
 
     def _battle_probe(
         self, session: "_Session", sequence: int, args: "list[str]"
