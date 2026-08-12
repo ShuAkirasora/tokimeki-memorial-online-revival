@@ -4698,6 +4698,72 @@ class MpsServer:
         print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
         return None
 
+    def _seq_probe(
+        self, session: "_Session", sequence: int, args: "list[str]"
+    ) -> bytes:
+        """``/seq [n] [ok]``: hand this connection a sequence number that went backwards.
+
+        ⚠️⚠️ A PROBE, and the one probe here whose PURPOSE is to kill the client.
+        It exists to test, with nothing else attached, the suspect that rounds
+        96/103/104 kept dragging along: not what a batch of messages said, and
+        not what order the *messages* were in, but whether the sequence number
+        in the packet header went DOWN.
+
+        _Session's own docstring already names the check on the other side:
+        decipher_message (0xA4C4D0) keeps the last sequence it accepted and
+        drops anything not strictly greater with 「bad sequence number」. What
+        was never measured is what a client DOES with that rejection — ignore
+        the message, or drop the connection.
+
+        ⭐⭐ WHY THIS SHAPE. A handler's reply is numbered when it is built and
+        written when it returns; _push writes immediately. So a handler that
+        pushes to its OWN caller after building its reply hands that connection
+        a high number first and a low one second. That is not a hypothetical:
+        it is exactly what _battle_finish(refresh_fighters=True) does, and the
+        skip= in _battle_leave_rooms is what keeps the shipped path away from
+        it. Every measured death has it (round 96a: 1877 then 1866; round 103b:
+        1097 then 1088; round 104B: 1152 then 1143) and no survivor does.
+
+        Both forms send the same n+1 chat lines, to the same connection, in the
+        same order on the wire. The ONLY difference is which line got the lower
+        number, and that is the whole point: every earlier cut at this question
+        moved two things at once, so none of them could name one.
+
+        * ``/seq n``     — reply numbered FIRST, pushes numbered after it, reply
+                           written last. The client is handed n+1, …, then n.
+        * ``/seq n ok``  — pushes numbered first, reply numbered last. Same
+                           lines, same arrival order, numbers ascending. This is
+                           the control and it must survive.
+
+        ⭐ The pushed lines land in the chat bar before the verdict, so the
+        screen itself says the client was alive and parsing right up to the
+        stale one.
+        """
+        control = "ok" in args
+        try:
+            count = next(int(a) for a in args if a.lstrip("-").isdigit())
+        except (StopIteration, ValueError):
+            count = 2
+        count = max(0, min(count, 20))
+        note = "ascending (control)" if control else "STALE"
+
+        def pushed(i: int) -> bytes:
+            return self._say(session, 0, f"/seq: pushed line {i + 1} of {count}")
+
+        reply = b"" if control else self._say(
+            session, sequence, f"/seq: reply, numbered before {count} pushes"
+        )
+        for i in range(count):
+            self._push(session, pushed(i))
+        if control:
+            reply = self._say(
+                session, sequence, f"/seq: reply, numbered after {count} pushes"
+            )
+        print(f"[{self.tag}] /seq: {count} pushes then a reply, numbering is "
+              f"{note} — charaId={session.chara_id:#x}. If the connection drops "
+              f"here, 0xA4C4D0 rejected the reply with 「bad sequence number」")
+        return reply
+
     def _apply_chat(self, session: "_Session", sequence: int, said: str) -> bytes:
         """Run one console line and pack whatever it asked for.
 
@@ -4706,6 +4772,8 @@ class MpsServer:
         """
         if said.split()[:1] == ["/cb"]:
             return self._battle_probe(session, sequence, said.split()[1:])
+        if said.split()[:1] == ["/seq"]:
+            return self._seq_probe(session, sequence, said.split()[1:])
         reply = b""
         info = self._chars(session).find(session.chara_id)
         love = self._chars(session).romance(session.chara_id)
