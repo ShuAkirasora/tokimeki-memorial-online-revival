@@ -1159,10 +1159,23 @@ class Battle:
         #: to be arranged for: somebody else must still owe a 0x5C16 when the
         #: armed client sends its own.
         self.order_probe: "tuple[int, list[int]] | None" = None
-        #: ⚠️⚠️ A PROBE, not gameplay: ``(roster, demo)`` for one extra 0x5C0D
-        #: to append to the NEXT turn's action stream, behind the 0x5C12 that
-        #: closes it, or None. ``demo`` adds a second 0x5C12 behind that again.
-        #: Set by ``/cb ordertail``, cleared as it fires.
+        #: ⚠️⚠️ A PROBE, not gameplay: ``(roster, demo, demo_first)`` for one
+        #: extra 0x5C0D to append to the NEXT turn's action stream, behind the
+        #: 0x5C12 that closes it, or None. ``demo`` adds a second 0x5C12 behind
+        #: that again; ``demo_first`` puts one in FRONT of the appended 0x5C0D
+        #: instead. Set by ``/cb ordertail``, cleared as it fires.
+        #:
+        #: ⭐⭐ ``demo_first`` is the one knob that separates the two readings
+        #: 2.64 left facing each other. Appended behind a turn that is playing,
+        #: the second 0x5C0D numbers ITS names 3, 4 — it continues the count the
+        #: turn's own roster started. Sent as 0x5C12 then 0x5C0D onto a turn
+        #: already finished (2.62 step 5), the same widget renumbers from 1.
+        #: Two things differ between those, and neither has ever been moved on
+        #: its own: whether the turn is still playing, and whether a 0x5C12 sits
+        #: immediately in front of the 0x5C0D. This moves the second one alone
+        #: — same turn, same append, same roster, one extra 0x5C12 ahead of it.
+        #: 1, 2 means the demo in front is what resets the count; 3, 4 means it
+        #: is the turn being in flight, and the demo has nothing to do with it.
         #:
         #: It is order_probe's other half, and the pair exists because 2.63 has
         #: only a negative: after a client reports 0x5C16 this family cannot
@@ -1183,7 +1196,7 @@ class Battle:
         #: ⚠️ Like fx_probe it alters a real resolve, so it is one-shot and
         #: says so in the log when it fires. The roster is a permutation of
         #: this fight's own fighters; no byte of any message is invented.
-        self.tail_probe: "tuple[list[int], bool] | None" = None
+        self.tail_probe: "tuple[list[int], bool, bool] | None" = None
         #: When this turn's choices close, on the SERVER's monotonic clock.
         #: ⚠️ Not the ``timeoutTime`` on the wire: that one is a moment on each
         #: recipient's own clock (0x5C09 states it per session, the way 0x480A
