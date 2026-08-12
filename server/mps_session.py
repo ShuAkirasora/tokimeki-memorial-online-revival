@@ -3308,13 +3308,24 @@ class MpsServer:
         return (kind, payload)
 
     def _battle_resolve(
-        self, session: "_Session", battle: "clubbattle.Battle"
+        self, session: "_Session", battle: "clubbattle.Battle",
+        demo_first: bool = False, order_override: "list[int] | None" = None,
     ) -> bytes:
         """Play the turn: 0x5C0D, then 0x5C0E/0x5C0F for each one who acts.
 
         「3）全員のコマンド入力終了後、全員の行動が実行されます」 (p07_03).
         Two things reach this — the last 0x5C0A, and the 制限時間 running out —
         and Battle.resolved keeps them from both playing the same turn.
+
+        ⚠️⚠️ ``demo_first`` IS A PROBE, off on every live path. It moves the
+        0x5C12 from the end of the stream to the front — the one thing round 88
+        could not test, because a probe can only append to a turn that has
+        already gone out. It reorders messages this server builds anyway and
+        changes no byte of any of them. See /cb replay first in _battle_probe.
+
+        ⚠️ ``order_override`` is the same probe's other half: it names the
+        0x5C0D roster instead of reading it off the plays. Also off on every
+        live path, also a permutation of this fight's own fighters.
 
         ⚠️⚠️ NOTHING HAPPENS to anybody as a result. 0x5C0E states the card and
         the target, 0x5C0F says that character is done, and no 体力 moves: the
@@ -3346,10 +3357,33 @@ class MpsServer:
                 continue
             plays.append((fighter, card[0], card[1]))
         everyone = [f.chara_id for f in battle.fighters]
+
+        def demo_start() -> bytes:
+            return self._tr_cast(
+                session,
+                0,
+                clubbattle.MSG_SV_NOTIFY_BATTLE_DEMO_START,
+                b"",
+                everyone,
+            )
+
         order = [fighter.chara_id for fighter, _kind, _payload in plays]
+        if order_override is not None:
+            print(f"[{self.tag}] ⚠️ battle action: PROBE named roster — 0x5C0D "
+                  f"names {', '.join(f'0x{c:08x}' for c in order_override)} "
+                  f"instead of {', '.join(f'0x{c:08x}' for c in order) or 'nobody'}")
+            order = order_override
         who = ", ".join(f"0x{c:08x}" for c in order) if order else "nobody acts"
         print(f"[{self.tag}] battle action order: turn={battle.turn}, {who}")
-        out = self._tr_cast(
+        out = b""
+        if demo_first:
+            # ⚠️ Printed before anything goes out, because every reading of
+            # this turn depends on which arrangement it was: a screenshot of
+            # the circle cannot tell you which stream drew it.
+            print(f"[{self.tag}] ⚠️ battle action: PROBE /cb replay first — "
+                  f"0x5C12 goes out AHEAD of 0x5C0D/0x5C0E/0x5C0F, not after")
+            out = demo_start()
+        out += self._tr_cast(
             session,
             0,
             clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
@@ -3422,17 +3456,15 @@ class MpsServer:
         #
         # ⚠️ It goes LAST because that is where it was measured, not because the
         # order is known: the probe could only append to a turn already sent, so
-        # 「DemoStart first, then the script」 is untested and not excluded. What
-        # the test does settle is that the client holds the actions until told,
-        # rather than playing each as it arrives.
+        # 「DemoStart first, then the script」 was untested and not excluded.
+        # What the test does settle is that the client holds the actions until
+        # told, rather than playing each as it arrives.
+        # ⭐ ``demo_first`` is the probe that finally asks the other half. It
+        # never fires on a live path — only /cb replay first sets it.
         battle.fx_probe = None  # one shot: the next turn is a normal one again
-        return out + self._tr_cast(
-            session,
-            0,
-            clubbattle.MSG_SV_NOTIFY_BATTLE_DEMO_START,
-            b"",
-            everyone,
-        )
+        if demo_first:
+            return out
+        return out + demo_start()
 
     def _battle_sheet(
         self, fighter: "clubbattle.Fighter"
@@ -3710,7 +3742,17 @@ class MpsServer:
                            0x5C0D exists, so this asks whether the message
                            repaints it and whether the number is a position in
                            this list at all.
-        ``/cb replay``     the whole action stream again
+        ``/cb replay [first] [rev|all|@i …]``  the whole action stream again,
+                           with the same roster forms ``order`` takes. ⭐⭐ ``first``
+                           moves the 0x5C12 to the FRONT of it. Round 88 could
+                           only measure it at the end — a probe appends to a
+                           turn that already went out — so 「DemoStart, then the
+                           script」 stayed untested for eighteen rounds. On a
+                           turn that has not been played yet (``/cb next``, then
+                           this) it is a real first play, and the three things
+                           to read off it are: which roster the circle under a
+                           fighter's feet draws, whether the actions animate at
+                           all, and whether 0x5C16 still comes back.
         ``/cb next``       pretend everyone reported 0x5C16 and start the next turn
         ``/cb result [n] [ruler]``  0x5C1A alone, winTeam=n, fight left standing
         ``/cb end [n]``    0x5C1C alone, reason=n
@@ -3818,6 +3860,39 @@ class MpsServer:
                   f"charaId={session.chara_id:#x}")
         what = args[0] if args else "state"
         everyone = [f.chara_id for f in battle.fighters]
+
+        def named_order(tokens: "list[str]") -> "list[int] | None":
+            """``rev`` / ``all`` / ``@i @j …`` -> a roster, or None for the default.
+
+            ⚠️ Every form is a PERMUTATION OF THIS FIGHT'S REAL FIGHTERS. 0x5C0D
+            is a counted array of charaId and stays one; nothing here invents a
+            shape or a character. ⚠️ @i is read in the order it was typed rather
+            than sorted back into roster order, because which position a fighter
+            is named at is the whole question.
+            """
+            picked = []
+            for token in tokens:
+                if not token.startswith("@"):
+                    continue
+                try:
+                    index = int(token[1:], 0)
+                except ValueError:
+                    continue
+                if 0 <= index < len(battle.fighters):
+                    picked.append(battle.fighters[index].chara_id)
+            if picked:
+                chosen = picked
+            elif "all" in tokens:
+                # ⭐ Everyone, including whoever did not choose a card. actors()
+                # leaves them out, so on a zero-click probe fight the default
+                # form names one side only — which is a different question.
+                chosen = list(everyone)
+            elif "rev" in tokens:
+                chosen = [f.chara_id for f in battle.actors()]
+            else:
+                return None
+            return chosen[::-1] if "rev" in tokens else chosen
+
         if what == "state":
             for fighter in battle.fighters:
                 print(f"[{self.tag}] /cb 0x{fighter.chara_id:08x} team={fighter.team} "
@@ -3837,33 +3912,9 @@ class MpsServer:
             # a fight that only ever sends one order. Sending the same order
             # twice asks nothing; sending a different one asks whether the
             # client redraws from this message at all.
-            #
-            # ⚠️ Every form still names real fighters of this fight, in some
-            # permutation of a list this server builds anyway. No shape is
-            # invented — 0x5C0D is a counted array of charaId and stays one.
-            # ⚠️ @i is read in the order it was typed, not sorted into roster
-            # order: which position a fighter is named at IS the question.
-            picked = []
-            for token in args[1:]:
-                if not token.startswith("@"):
-                    continue
-                try:
-                    index = int(token[1:], 0)
-                except ValueError:
-                    continue
-                if 0 <= index < len(battle.fighters):
-                    picked.append(battle.fighters[index].chara_id)
-            if picked:
-                order = picked
-            elif "all" in args[1:]:
-                # ⭐ Everyone, including whoever did not choose a card. actors()
-                # leaves them out, so on a zero-click probe fight the default
-                # form names one side only — which is a different question.
-                order = list(everyone)
-            else:
+            order = named_order(args[1:])
+            if order is None:
                 order = [f.chara_id for f in battle.actors()]
-            if "rev" in args[1:]:
-                order = order[::-1]
             who = ", ".join(f"0x{c:08x}" for c in order) if order else "nobody"
             print(f"[{self.tag}] /cb order: {who}")
             return self._tr_cast(
@@ -3871,8 +3922,23 @@ class MpsServer:
                 clubbattle.action_order_params(order), everyone,
             )
         if what == "replay":
+            # ⭐⭐ ``first`` is the whole point of this branch now: it is the
+            # only way to put 0x5C12 in FRONT of the action stream, because the
+            # live path can only ever append. Nothing else about the turn
+            # changes — same cards, same targets.
+            # ⭐⭐ The 0x5C0D roster is a parameter here for the same reason it
+            # is on ``order``, and on a zero-click probe fight it has to be:
+            # only the fighters who chose a card get named, so a roster read off
+            # actors() can only ever ADD or REMOVE a name — and 「the circle went
+            # blank」 is an absence, which reads the same whether the client
+            # repainted from the new list or cleared the widget for its own
+            # reasons. Naming the roster turns the question into ①-vs-② on the
+            # same character, which an absence cannot fake.
             battle.resolved = False
-            return self._battle_resolve(session, battle)
+            return self._battle_resolve(
+                session, battle, demo_first="first" in args[1:],
+                order_override=named_order(args[1:]),
+            )
         if what == "fx":
             return self._battle_replay_fx(session, battle, args[1:])
         if what == "fxnext":
