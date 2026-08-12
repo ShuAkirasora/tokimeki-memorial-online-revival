@@ -1143,12 +1143,21 @@ class MpsServer:
         store = self.accounts.owner_of(chara_id)
         return store.find(chara_id) if store else None
 
-    def _presence_entry(self, other: "_Session") -> "bytes | None":
+    def _presence_entry(
+        self, other: "_Session", action: "int | None" = None
+    ) -> "bytes | None":
         """One 0x480F entry for somebody else, drawn where they are standing.
 
         Their record comes out of *their* CharacterStore, not the viewer's --
         accounts have separate stores (round 68), so looking a peer up in the
         viewer's store would find nothing at all.
+
+        ⚠️ ``action`` overrides the icon byte and is FOR THE PROBE ONLY
+        (``/cb presence … act=N``). It is not an invented value: the server puts
+        ACTION_TRAINING_ROOM on this field for every room leader already, and
+        the override only decouples 「which byte」 from 「who happens to lead a
+        room right now」, which is what makes that byte testable at all -- see
+        _battle_probe's presence branch.
         """
         info = self._chars(other).find(other.chara_id)
         if info is None:
@@ -1159,7 +1168,7 @@ class MpsServer:
             pos=other.pos,
             map_id=other.map_id,
             direction=other.direction,
-            action=self._presence_action(other),
+            action=self._presence_action(other) if action is None else action,
         )
 
     def _presence_action(self, other: "_Session") -> int:
@@ -1207,15 +1216,18 @@ class MpsServer:
         self._presence_announce(session, peers)
 
     def _presence_announce(
-        self, session: "_Session", peers: "list[_Session] | None" = None
+        self, session: "_Session", peers: "list[_Session] | None" = None,
+        action: "int | None" = None,
     ) -> None:
         """Tell everybody else on the map that this character has appeared.
 
         Push-only and no sender copy: the client puts itself into the scene, and
         round 67 measured what a duplicate does -- the roster window counted the
         same person twice. Same rule as 0x580C.
+
+        ⚠️ ``action`` is the probe-only icon override; see _presence_entry.
         """
-        entry = self._presence_entry(session)
+        entry = self._presence_entry(session, action)
         if entry is None:
             return
         body = struct.pack(">H", 1) + entry
@@ -3451,8 +3463,16 @@ class MpsServer:
     def _battle_finish(
         self, session: "_Session", battle: "clubbattle.Battle",
         win_team: "int | None" = None, send_end: bool = True,
+        refresh_fighters: bool = False,
     ) -> bytes:
         """0x5C1A then 0x5C1C: 「5）勝敗が表示されます」 and the way out.
+
+        ⚠️ ``refresh_fighters=True`` is ALSO FOR THE PROBE ONLY (``/cb finish …
+        refresh``) and is the one flag here that deliberately makes the server
+        worse: it puts round 96's presence flush back, unskipped, INSIDE this
+        handler turn. Round 102 established that the 0x4810/0x480F pair is
+        survivable when a probe pushes it a second later, so what is left to
+        test is the batch — see _battle_leave_rooms.
 
         ⚠️ ``send_end=False`` is FOR THE PROBE ONLY (``/cb finish … noend``) and
         exists because the one open question about this pair cannot be asked any
@@ -3546,13 +3566,15 @@ class MpsServer:
             # ⚠️ Tied to `close`, not to `send_end`: a HELD fight is a probe
             # standing still, and taking its room away would move a second
             # thing while the probe is trying to measure the first.
-            self._battle_leave_rooms(everyone)
+            self._battle_leave_rooms(everyone, refresh_fighters=refresh_fighters)
         else:
             print(f"[{self.tag}] battle HELD open (probe): fight still on the "
                   f"board, /cb still has a target")
         return out
 
-    def _battle_leave_rooms(self, everyone: "list[int]") -> None:
+    def _battle_leave_rooms(
+        self, everyone: "list[int]", refresh_fighters: bool = False
+    ) -> None:
         """Take the fighters out of the 自主トレルーム their fight came out of.
 
         ⭐⭐ SILENT ON THE WIRE, AND THAT IS THE POINT: every client has already
@@ -3587,8 +3609,45 @@ class MpsServer:
         roster *is* the fight's roster — the only case ever measured, because
         the fight is built from the room — the last part empties the room and
         Board.part drops it. Same outcome, different rule.
+
+        ⚠️⚠️ ``refresh_fighters=True`` DROPS THE skip= AND IS A PROBE ONLY
+        (``/cb finish … refresh``). It restores, in the same handler turn, the
+        flush that round 96 measured as fatal: the fighters are handed the
+        presence pairs the skip= now keeps away from them.
+        ⭐ Round 102 fired those same two messages from _battle_probe six times
+        onto a live 結果画面 and the client survived every one, so the pair by
+        itself is cleared and the remaining suspects are properties of the
+        BATCH. Three of them come back only here, together:
+
+        * ⭐⭐ ORDER. _push writes immediately, while this handler's own reply is
+          written after it returns — so a fighter whose connection was the one
+          drained receives the pairs BEFORE the 0x5C1A that follows them. Round
+          96's log has exactly that: three pairs, then a single 122-byte write
+          carrying timesync + 0x5C1A + 0x5C1C, then EOF. Every round 102 probe
+          instead landed on a 結果画面 that was already up.
+        * ⭐⭐ action=10. The promoted leader's add half carries it, and it is
+          the one field value that has never reached a screen — round 102's
+          subject was a plain member both times, so both adds read action=0.
+        * The fight is off the board and its room is being taken apart, rather
+          than held open with everything still standing.
+
+        ⭐⭐⭐ Round 103 ran it: the client died BOTH times, EOF plus the
+        「通信が断たれました」 dialog, and the second run's write was the same
+        122-byte timesync + 0x5C1A + 0x5C1C round 96 logged. Two pairs are
+        enough — round 96's third one was not the variable. Then the same fight
+        cleared two of the three suspects above with /cb presence: the whole
+        pair onto a live battle screen survives, action=10 survives (see
+        act=N), and so does both at once. What is left is the batch itself —
+        including the order, which round 103 could not separate from it.
+
+        ⚠️ Nothing about the normal path moves: the default is False and the
+        skip= stays exactly as 2.51 left it.
         """
         board = self.trainingrooms
+        skip: "set[int] | None" = None if refresh_fighters else set(everyone)
+        if refresh_fighters:
+            print(f"[{self.tag}] ⚠ PROBE: presence flush NOT skipped for the "
+                  f"fighters — round 96 replayed inside this handler turn")
         emptied: "list[trainingroom.Room]" = []
         for chara_id in everyone:
             room = board.room_of(chara_id)
@@ -3614,7 +3673,7 @@ class MpsServer:
                 for who in {chara_id, room.leader_id}:
                     other = self._session_of(who)
                     if other is not None:
-                        self._presence_refresh(other, skip=set(everyone))
+                        self._presence_refresh(other, skip=skip)
             if room.members:
                 if room not in emptied:
                     emptied.append(room)
@@ -3647,13 +3706,23 @@ class MpsServer:
                            charaId of fighter i, reason=n. The fight is LEFT
                            STANDING — the disconnect path closes it, and this
                            asks what the message alone does.
-        ``/cb presence [del|add|pair] [@i]``  the 0x4810 / 0x480F halves of a
-                           presence refresh, about fighter i, down THIS ONE
+        ``/cb presence [del|add|pair] [@i] [act=N]``  the 0x4810 / 0x480F halves
+                           of a presence refresh, about fighter i, down THIS ONE
                            connection. The one probe here that is not a 0x5C**.
                            ⭐ It answered the round 96 question: NEITHER half
                            kills a client on the 結果画面 — see below.
-        ``/cb finish [n] [noend]``  result + end + close, what turn 8 does by
-                           itself; ``noend`` withholds the 0x5C1C
+                           ⭐⭐ ``act=N`` forces the icon byte on the add half
+                           instead of reading it off room leadership, which is
+                           the only way to aim ACTION_TRAINING_ROOM at a screen
+                           without a second real client.
+        ``/cb finish [n] [noend] [refresh]``  result + end + close, what turn 8
+                           does by itself; ``noend`` withholds the 0x5C1C.
+                           ⚠️⚠️ ``refresh`` drops the skip= on the presence
+                           flush, putting round 96's whole batch back into this
+                           one handler turn — the pairs arrive BEFORE the
+                           0x5C1A and the promoted leader's add carries
+                           action=10, neither of which /cb presence can stage.
+                           See _battle_leave_rooms.
         ``/cb hold [n]``   arm the NEXT finish to send 0x5C1A alone, with
                            winTeam=n if given, and leave the fight standing.
                            ⚠️ The 結果画面 ignores every 0x5C1A after the first,
@@ -3931,9 +4000,25 @@ class MpsServer:
             # to either die or not, and a second message arriving in the same
             # breath would be one more suspect.
             mode = "pair"
+            act: "int | None" = None
             for token in args[1:]:
                 if token in ("del", "add", "pair"):
                     mode = token
+                elif token.startswith("act="):
+                    # ⭐⭐ The icon byte, decoupled from room leadership. Round
+                    # 103 reproduced round 96 and the batch that killed the
+                    # client contained exactly one add carrying
+                    # ACTION_TRAINING_ROOM, because the fight's room had just
+                    # promoted its second member. Staging that for real needs
+                    # the subject to lead a room AND the recipient to be
+                    # somebody else -- two real clients, since a scripted
+                    # sparring partner has no screen. This asks the same
+                    # question with one, and the answer was: the client
+                    # survives it. action=10 is not what kills anybody.
+                    try:
+                        act = int(token[4:], 0)
+                    except ValueError:
+                        act = None
             subject = None
             for token in args[1:]:
                 if not token.startswith("@"):
@@ -3965,19 +4050,23 @@ class MpsServer:
             # and only the first is the pair round 96 measured — _peers filters
             # on exactly this and the real refresh never reaches anyone else.
             # Print it now rather than reconstructing it from the logs later.
+            shown_act = ("as computed "
+                         f"({self._presence_action(about)})" if act is None
+                         else f"FORCED to {act}")
             print(f"[{self.tag}] /cb presence {mode}: charaId={subject:#x} "
-                  f"-> charaId={session.chara_id:#x} alone "
+                  f"-> charaId={session.chara_id:#x} alone, action {shown_act} "
                   f"(same map: {about.map_id == session.map_id}, "
                   f"fight left standing: {battle.summary()})")
             if mode in ("del", "pair"):
                 self._presence_withdraw(about, [session])
             if mode in ("add", "pair"):
-                self._presence_announce(about, [session])
+                self._presence_announce(about, [session], act)
             return b""
         if what == "finish":
             return self._battle_finish(
                 session, battle, number(1, clubbattle.WIN_TEAM_NEITHER),
                 send_end="noend" not in args[1:],
+                refresh_fighters="refresh" in args[1:],
             )
         if what in ("react", "effect"):
             # ⭐ The target defaults to the SENDER, which turns this probe's one
