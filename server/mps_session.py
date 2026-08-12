@@ -3647,6 +3647,11 @@ class MpsServer:
                            charaId of fighter i, reason=n. The fight is LEFT
                            STANDING — the disconnect path closes it, and this
                            asks what the message alone does.
+        ``/cb presence [del|add|pair] [@i]``  the 0x4810 / 0x480F halves of a
+                           presence refresh, about fighter i, down THIS ONE
+                           connection. The one probe here that is not a 0x5C**.
+                           ⭐ It answered the round 96 question: NEITHER half
+                           kills a client on the 結果画面 — see below.
         ``/cb finish [n] [noend]``  result + end + close, what turn 8 does by
                            itself; ``noend`` withholds the 0x5C1C
         ``/cb hold [n]``   arm the NEXT finish to send 0x5C1A alone, with
@@ -3898,6 +3903,77 @@ class MpsServer:
                 session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_PART,
                 clubbattle.part_params(target, reason), everyone,
             )
+        if what == "presence":
+            # ⭐⭐ The probe that pulled round 96's "fatal" pair apart. Back then
+            # a client sitting on the 結果画面 was handed 0x4810 + 0x480F, closed
+            # the connection and drew 「通信が断たれました」; removing that one
+            # refresh fixed it, so the pair got the blame. It could not be
+            # checked on the real path -- _presence_refresh is the only thing
+            # that sends either message at that moment and it always sends both.
+            #
+            # ⭐⭐⭐ Round 102 sent them from here instead and the blame did not
+            # survive: del alone, add alone, the pair, THREE pairs back to back,
+            # and the pair again after a 0x5C1C -- six deliveries onto a live
+            # 結果画面, no EOF, no dialog. Whatever killed that client is still
+            # in the rest of what _battle_finish wrote in the same turn.
+            # ⚠️ The skip= on _presence_refresh stays anyway: that refresh is
+            # not owed to anybody (the 0x4000 after ［終 了］ rebuilds the scene),
+            # so keeping it costs nothing and the real cause is still unknown.
+            #
+            # ⚠️⚠️ ONE RECIPIENT — the connection this console line was drained
+            # for, never the fight's roster. Every other line here casts to
+            # ``everyone`` because it asks what a message DRAWS; this one asks
+            # what a connection DOES with it, and a broadcast would take every
+            # client down at once, leaving nothing to compare against.
+            #
+            # ⚠️ And it answers nothing in the chat bar. The others do, which is
+            # harmless when the question is a picture; here the client is about
+            # to either die or not, and a second message arriving in the same
+            # breath would be one more suspect.
+            mode = "pair"
+            for token in args[1:]:
+                if token in ("del", "add", "pair"):
+                    mode = token
+            subject = None
+            for token in args[1:]:
+                if not token.startswith("@"):
+                    continue
+                try:
+                    index = int(token[1:], 0)
+                except ValueError:
+                    continue
+                if 0 <= index < len(battle.fighters):
+                    subject = battle.fighters[index].chara_id
+            if subject is None:
+                # ⭐ Default: the other fighter. A presence message is never
+                # about the viewer -- the client puts itself into the scene, see
+                # _presence_announce -- so aiming this at the recipient would
+                # ask nothing at all.
+                others = [
+                    f.chara_id for f in battle.fighters
+                    if f.chara_id != session.chara_id
+                ]
+                subject = others[0] if others else 0
+            about = self._session_of(subject)
+            if about is None:
+                return self._say(
+                    session, sequence,
+                    f"/cb presence: charaId {subject:#x} is not connected",
+                )
+            # ⚠️ Whether the two are on one map is the difference between 「told
+            # to edit somebody it can see」 and 「…somebody it never heard of」,
+            # and only the first is the pair round 96 measured — _peers filters
+            # on exactly this and the real refresh never reaches anyone else.
+            # Print it now rather than reconstructing it from the logs later.
+            print(f"[{self.tag}] /cb presence {mode}: charaId={subject:#x} "
+                  f"-> charaId={session.chara_id:#x} alone "
+                  f"(same map: {about.map_id == session.map_id}, "
+                  f"fight left standing: {battle.summary()})")
+            if mode in ("del", "pair"):
+                self._presence_withdraw(about, [session])
+            if mode in ("add", "pair"):
+                self._presence_announce(about, [session])
+            return b""
         if what == "finish":
             return self._battle_finish(
                 session, battle, number(1, clubbattle.WIN_TEAM_NEITHER),
