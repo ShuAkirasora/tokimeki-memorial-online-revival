@@ -1159,6 +1159,31 @@ class Battle:
         #: to be arranged for: somebody else must still owe a 0x5C16 when the
         #: armed client sends its own.
         self.order_probe: "tuple[int, list[int]] | None" = None
+        #: ⚠️⚠️ A PROBE, not gameplay: ``(roster, demo)`` for one extra 0x5C0D
+        #: to append to the NEXT turn's action stream, behind the 0x5C12 that
+        #: closes it, or None. ``demo`` adds a second 0x5C12 behind that again.
+        #: Set by ``/cb ordertail``, cleared as it fires.
+        #:
+        #: It is order_probe's other half, and the pair exists because 2.63 has
+        #: only a negative: after a client reports 0x5C16 this family cannot
+        #: repaint the circle under a fighter's feet. A negative alone does not
+        #: say whether the MOMENT is what refuses it or whether an appended
+        #: 0x5C0D never repaints anything, and no reading separates those two
+        #: without a positive sample from some other moment. This aims at the
+        #: earliest moment there is: the instant the turn's own stream ends,
+        #: while the window 0x5C12 opens (2.62) has just been opened by the
+        #: stream itself and the client has not yet played a frame.
+        #:
+        #: ⚠️ It rides out in the SAME batch as the turn, one packet behind the
+        #: closing 0x5C12, so what it measures is a position in a stream and
+        #: not a wall-clock instant — order_probe with ``by=`` is what reaches
+        #: a moment of its own, one round trip later, from inside the handler
+        #: round of ANOTHER fighter's 0x5C16 while this client animates.
+        #:
+        #: ⚠️ Like fx_probe it alters a real resolve, so it is one-shot and
+        #: says so in the log when it fires. The roster is a permutation of
+        #: this fight's own fighters; no byte of any message is invented.
+        self.tail_probe: "tuple[list[int], bool] | None" = None
         #: When this turn's choices close, on the SERVER's monotonic clock.
         #: ⚠️ Not the ``timeoutTime`` on the wire: that one is a moment on each
         #: recipient's own clock (0x5C09 states it per session, the way 0x480A

@@ -3490,9 +3490,34 @@ class MpsServer:
         # ⭐ ``demo_first`` is the probe that finally asks the other half. It
         # never fires on a live path — only /cb replay first sets it.
         battle.fx_probe = None  # one shot: the next turn is a normal one again
-        if demo_first:
-            return out
-        return out + demo_start()
+        if not demo_first:
+            out += demo_start()
+        # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb ordertail armed it — see
+        # Battle.tail_probe. It goes out one packet behind the 0x5C12 that ends
+        # the turn, which is the earliest a second 0x5C0D can be put anywhere:
+        # the window that 0x5C12 opens has just opened and the client has not
+        # played a frame of the animation yet.
+        #
+        # ⚠️ It is deliberately BEHIND the demo_start above rather than in
+        # place of it. The turn has to run — a stream the client never animates
+        # would answer a different question — so this adds to that stream, and
+        # the roster it names differs from the one the turn itself just sent so
+        # that a repaint is a value change rather than an absence (lesson 40).
+        tail = battle.tail_probe
+        if tail is not None:
+            battle.tail_probe = None
+            roster, demo = tail
+            who = ", ".join(f"0x{c:08x}" for c in roster) or "nobody"
+            print(f"[{self.tag}] ⚠️ /cb ordertail FIRES: 0x5C0D naming {who}"
+                  f"{' plus a second 0x5C12' if demo else ''}, appended behind "
+                  f"this turn's own 0x5C12")
+            out += self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
+                clubbattle.action_order_params(roster), everyone,
+            )
+            if demo:
+                out += demo_start()
+        return out
 
     def _battle_sheet(
         self, fighter: "clubbattle.Fighter"
@@ -3792,6 +3817,21 @@ class MpsServer:
                            the fight's last one — see Battle.order_probe — so
                            somebody else has to still owe one, which on a
                            partner fight means ``battlepartner.py --end-delay``.
+                           ⭐⭐ With ``by=i`` naming a SPARRING PARTNER it
+                           reaches the moment 2.63 could not: the partner's
+                           0x5C16 arrives about half a second into the real
+                           client's animation, so the 0x5C0D goes out while
+                           that client is still playing the turn and has not
+                           reported anything yet.
+        ``/cb ordertail [rev|all|@i …] [demo] | off``  ⭐⭐ arm one 0x5C0D to be
+                           APPENDED to this fight's next action stream, behind
+                           the 0x5C12 that closes it; ``demo`` puts a second
+                           0x5C12 behind that. ⚠️ Take ``by=i`` with it — the
+                           slot is one-shot and every connection drains the
+                           line, so an unlocked one doctors two turns. It is
+                           the positive control 2.63 lacks: the same widget,
+                           the same message, at the earliest moment there is
+                           instead of the latest. See Battle.tail_probe.
         ``/cb next``       pretend everyone reported 0x5C16 and start the next turn
         ``/cb result [n] [ruler]``  0x5C1A alone, winTeam=n, fight left standing
         ``/cb end [n]``    0x5C1C alone, reason=n
@@ -3991,6 +4031,44 @@ class MpsServer:
                   f"only if somebody else still owes one)")
             return self._say(
                 session, sequence, f"/cb ordernext armed {who}"
+            )
+        if what == "ordertail":
+            # ⚠️⚠️ Arms rather than sends, for a different reason than ordernext
+            # does: this instant is not one a console line is too slow for, it
+            # is one no console line can occupy at all. The turn's own stream is
+            # built and written inside a single handler round, so 「right behind
+            # it」 is a position in that stream rather than a time to type at.
+            #
+            # ⭐ It fires on the next resolve of THIS fight, whoever armed it:
+            # the batch belongs to the turn rather than to a connection, so the
+            # roster is the whole of what is being said here.
+            # ⚠️⚠️ Which is why this one wants ``by=i`` more than ordernext
+            # does. Every logged-in connection drains the console line for
+            # itself, and this slot is one-shot: fire it on the first drain and
+            # a later connection's drain re-arms it for the turn after — one
+            # typed line, two doctored turns, and the second one silently
+            # standing where the empty control was meant to be (4.17).
+            if "off" in args[1:]:
+                battle.tail_probe = None
+                print(f"[{self.tag}] /cb ordertail disarmed")
+                return self._say(session, sequence, "/cb ordertail off")
+            # ⚠️ ``@i`` for the same reason ordernext prefers it: this is armed
+            # while the choices are still open, and actors() at that moment is
+            # 「who has chosen so far」 rather than who will act. A roster read
+            # now and a roster the turn sends later would differ for a reason
+            # that has nothing to do with the question.
+            order = named_order(args[1:])
+            if order is None:
+                order = [f.chara_id for f in battle.actors()]
+            demo = "demo" in args[1:]
+            battle.tail_probe = (order, demo)
+            who = ", ".join(f"0x{c:08x}" for c in order) if order else "nobody"
+            print(f"[{self.tag}] /cb ordertail armed: {who}"
+                  f"{' plus a second 0x5C12' if demo else ''} (fires once, from "
+                  f"the end of this fight's next action stream)")
+            return self._say(
+                session, sequence,
+                f"/cb ordertail armed {who}{' demo' if demo else ''}"
             )
         if what == "replay":
             # ⭐⭐ ``first`` is the whole point of this branch now: it is the
