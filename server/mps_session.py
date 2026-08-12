@@ -3158,6 +3158,34 @@ class MpsServer:
             done = sum(1 for f in battle.fighters if f.turn_done)
             print(f"[{self.tag}] battle turn end: charaId={chara_id:#x} "
                   f"({done}/{len(battle.fighters)}, {battle.summary()})")
+            # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb ordernext armed it —
+            # see Battle.order_probe for what it is for. It goes out from this
+            # handler round, so the client receives it one round trip after it
+            # said 「my animation is over」, and nothing else is in the batch:
+            # the turn is not done, so the branch below would have written
+            # nothing at all.
+            probe = battle.order_probe
+            if probe is not None and probe[0] == chara_id:
+                if battle.all_turn_done():
+                    # ⚠️ Deliberately still armed. This 0x5C16 is the last one,
+                    # so answering it means a turn start (or a result) in the
+                    # same batch, and a batch with two candidates in it answers
+                    # nothing. Say so and wait for a turn the fight is arranged
+                    # for, rather than spending the shot on an unreadable one.
+                    print(f"[{self.tag}] ⚠️ /cb ordernext NOT fired: this 0x5C16 "
+                          f"is the last one, so the next turn would go out in "
+                          f"the same batch — still armed")
+                else:
+                    battle.order_probe = None
+                    who = ", ".join(f"0x{c:08x}" for c in probe[1]) or "nobody"
+                    print(f"[{self.tag}] ⚠️ /cb ordernext FIRES on "
+                          f"charaId={chara_id:#x}: 0x5C0D naming {who}, alone in "
+                          f"this batch")
+                    return self._tr_cast(
+                        session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
+                        clubbattle.action_order_params(probe[1]),
+                        [f.chara_id for f in battle.fighters],
+                    )
             if not battle.all_turn_done():
                 return None
             if battle.finished():
@@ -3753,6 +3781,17 @@ class MpsServer:
                            to read off it are: which roster the circle under a
                            fighter's feet draws, whether the actions animate at
                            all, and whether 0x5C16 still comes back.
+        ``/cb ordernext [rev|all|@i …] | off``  ⭐⭐ arm one 0x5C0D to go out
+                           from INSIDE the handler round that receives THIS
+                           connection's next 0x5C16, alone in its batch; ``off``
+                           disarms. The roster forms are ``order``'s. ⭐ It
+                           measured the far edge of the window 0x5C12 opens
+                           (2.63): the circle does NOT move — once a client has
+                           reported 0x5C16 for a turn, nothing in this family
+                           repaints that widget. ⚠️ It skips a 0x5C16 that is
+                           the fight's last one — see Battle.order_probe — so
+                           somebody else has to still owe one, which on a
+                           partner fight means ``the partner-fight driver --end-delay``.
         ``/cb next``       pretend everyone reported 0x5C16 and start the next turn
         ``/cb result [n] [ruler]``  0x5C1A alone, winTeam=n, fight left standing
         ``/cb end [n]``    0x5C1C alone, reason=n
@@ -3920,6 +3959,38 @@ class MpsServer:
             return self._tr_cast(
                 session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
                 clubbattle.action_order_params(order), everyone,
+            )
+        if what == "ordernext":
+            # ⚠️⚠️ Arms rather than sends, and arming IS the measurement: the
+            # instant being asked about is one round trip wide, and a console
+            # line cannot be aimed that finely — it is drained on a timesync,
+            # which is up to 30 seconds away. See Battle.order_probe.
+            #
+            if "off" in args[1:]:
+                # ⭐ A disarm, because this one does NOT spend itself on every
+                # 0x5C16 it sees: a shot that lands on the last one stays armed
+                # (see Battle.order_probe), so 「armed and no longer wanted」 is
+                # a state the fight can be left in. It is also the empty control
+                # this probe needs — the same 0x5C16, with nothing armed.
+                battle.order_probe = None
+                print(f"[{self.tag}] /cb ordernext disarmed")
+                return self._say(session, sequence, "/cb ordernext off")
+            # ⭐ Prefer the ``@i`` forms. The roster is resolved HERE, while the
+            # choices are usually still open, and ``rev``/the bare default read
+            # actors() — which is 「who has chosen a card so far」 and is still
+            # filling up. ``@i`` names fighters by seat, so it means the same
+            # thing whenever it is typed.
+            order = named_order(args[1:])
+            if order is None:
+                order = [f.chara_id for f in battle.actors()]
+            battle.order_probe = (session.chara_id, order)
+            who = ", ".join(f"0x{c:08x}" for c in order) if order else "nobody"
+            print(f"[{self.tag}] /cb ordernext armed on "
+                  f"charaId={session.chara_id:#x}: {who} (fires from inside the "
+                  f"handler round of that character's next 0x5C16, once, and "
+                  f"only if somebody else still owes one)")
+            return self._say(
+                session, sequence, f"/cb ordernext armed {who}"
             )
         if what == "replay":
             # ⭐⭐ ``first`` is the whole point of this branch now: it is the

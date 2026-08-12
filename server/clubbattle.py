@@ -1127,6 +1127,38 @@ class Battle:
         #: Living on the Battle is what makes it restore itself: no fight
         #: outlives its board, so nothing has to remember to put it back.
         self.turn_start_hp: "tuple[int, int] | None" = None
+        #: ⚠️⚠️ A PROBE, not gameplay: ``(chara_id, roster)`` for one extra
+        #: 0x5C0D to send from INSIDE the handler round that receives that
+        #: character's next 0x5C16, or None. Set by ``/cb ordernext``, cleared
+        #: as it fires.
+        #:
+        #: It exists because 2.62 measured one edge of the demo window and not
+        #: the other. 0x5C12 OPENS a window: a 0x5C0D that arrives while it is
+        #: open is painted on the spot, one that arrives while it is shut is
+        #: only stored. The far edge is one round trip wide, which is exactly
+        #: the interval no console line can aim at: /cb is drained on a
+        #: timesync, up to 30 seconds late. Arming the moment instead of typing
+        #: into it is the only way to put a message there.
+        #:
+        #: ⭐ What it measured (2.63, two fights, three firings): the circle
+        #: does NOT move. Nor does it move for a lone 0x5C12 sent seconds later,
+        #: nor for a 0x5C0D+0x5C12 pair in one batch — the shape that repaints
+        #: on the spot earlier in the turn. So once a client has reported
+        #: 0x5C16 for a turn, this family cannot change that widget at all;
+        #: only the next turn's own stream can.
+        #: ⚠️ It did NOT decide 「shuts on 0x5C16」 vs 「shuts when the animation
+        #: ends, 0x5C16 being its echo」, and no probe from this side can:
+        #: 0x5C16 IS the animation-end report, so every server-sent message
+        #: lands after both. That split needs the binary, not the wire.
+        #:
+        #: ⚠️ It fires ONLY on a 0x5C16 that does not also finish the turn. A
+        #: 0x5C16 from the last fighter carries the next 0x5C09 (or the result)
+        #: out in the same batch, and a turn start is itself a candidate for
+        #: repainting the widget — so that batch cannot answer this question
+        #: either way (an earlier lesson). Firing is therefore something the fight has
+        #: to be arranged for: somebody else must still owe a 0x5C16 when the
+        #: armed client sends its own.
+        self.order_probe: "tuple[int, list[int]] | None" = None
         #: When this turn's choices close, on the SERVER's monotonic clock.
         #: ⚠️ Not the ``timeoutTime`` on the wire: that one is a moment on each
         #: recipient's own clock (0x5C09 states it per session, the way 0x480A
