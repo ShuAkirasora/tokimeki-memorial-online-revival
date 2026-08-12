@@ -3695,6 +3695,9 @@ class MpsServer:
         開始 — five minutes to test a three-line change. These send one message
         into the fight that is already up.
 
+        ``/cb by=i …``     ⭐⭐ RUN THIS LINE ON ONE CONNECTION ONLY: fighter
+                           i's. Every other connection drains past it and does
+                           nothing. Legal in front of any subcommand below.
         ``/cb``            what the server thinks the state is
         ``/cb demo``       0x5C12 MsgSvNotifyClubBattleDemoStart, body-less
         ``/cb order``      0x5C0D again, same order
@@ -3753,10 +3756,57 @@ class MpsServer:
         an encoding that the binary states nowhere (clubbattle.WIN_TEAM_NEITHER).
         Its ``ruler`` form additionally pulls every before/after pair apart, so
         whichever half the screen draws names itself.
+
+        ⭐⭐⭐ ``by=i`` IS THE ONE PIECE OF MACHINERY HERE THAT IS NOT A MESSAGE.
+        A console line is drained by whichever connection speaks first, and WHO
+        DRAINED IT decides what the other client sees, in what order: _push
+        writes into a connection on the spot, while a handler's own reply waits
+        for it to return. So the same ``/cb finish refresh`` delivers the
+        presence pairs BEFORE the 0x5C1A when the real client runs it, and
+        AFTER when the sparring partner does. Round 103 wanted the second half
+        of that comparison and could not get it — a real client sends timesync
+        every 30 seconds against the partner's 60, so it wins the race twice
+        out of twice. ``by=i`` stops racing: the wrong connections skip the
+        line and leave it for the right one.
         """
         battle = self.battles.battle_of(session.chara_id)
         if battle is None:
             return self._say(session, sequence, "/cb: no battle")
+        # ⭐⭐ The lock, ahead of everything else so that a skipped line costs
+        # nothing and answers nothing — see the docstring. It is stripped from
+        # ``args`` here, so every branch below parses exactly what it always
+        # did.
+        #
+        # ⚠️ Skipping is safe because ``console_at`` is per-session: each
+        # connection reads the whole file for itself, so a line one of them
+        # steps over is still ahead of all the others. The one who is meant to
+        # run it will, on its next packet.
+        run_by = None
+        for token in args:
+            if token.startswith("by="):
+                try:
+                    run_by = int(token[3:], 0)
+                except ValueError:
+                    run_by = None
+        if run_by is not None:
+            args = [a for a in args if not a.startswith("by=")]
+            if not 0 <= run_by < len(battle.fighters):
+                print(f"[{self.tag}] /cb by={run_by}: no such fighter, "
+                      f"this fight has {len(battle.fighters)} "
+                      f"({battle.summary()}) — nobody runs this line")
+                return b""
+            wanted = battle.fighters[run_by].chara_id
+            if wanted != session.chara_id:
+                # ⚠️ Printed, not silent. Which connection ran it is the
+                # variable being controlled here, so the log has to show the
+                # lock working rather than leave it to be inferred from what
+                # came out the other end.
+                print(f"[{self.tag}] /cb by={run_by}: skipped on "
+                      f"charaId={session.chara_id:#x}, waiting for "
+                      f"charaId={wanted:#x}")
+                return b""
+            print(f"[{self.tag}] /cb by={run_by}: running on "
+                  f"charaId={session.chara_id:#x}")
         what = args[0] if args else "state"
         everyone = [f.chara_id for f in battle.fighters]
         if what == "state":
