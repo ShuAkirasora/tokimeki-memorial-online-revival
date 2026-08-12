@@ -3506,11 +3506,24 @@ class MpsServer:
         tail = battle.tail_probe
         if tail is not None:
             battle.tail_probe = None
-            roster, demo = tail
+            roster, demo, tail_demo_first = tail
             who = ", ".join(f"0x{c:08x}" for c in roster) or "nobody"
-            print(f"[{self.tag}] ⚠️ /cb ordertail FIRES: 0x5C0D naming {who}"
-                  f"{' plus a second 0x5C12' if demo else ''}, appended behind "
-                  f"this turn's own 0x5C12")
+            # ⚠️ Printed before the bytes go out and naming the arrangement,
+            # for the reason demo_first's own line above says: the screenshot
+            # afterwards shows a number, not which stream drew it. ⭐ And the
+            # two demo flags are the whole question here, so they are spelled
+            # out rather than summarised.
+            print(f"[{self.tag}] ⚠️ /cb ordertail FIRES: "
+                  f"{'0x5C12 then ' if tail_demo_first else ''}0x5C0D naming "
+                  f"{who}{' plus a second 0x5C12' if demo else ''}, appended "
+                  f"behind this turn's own 0x5C12")
+            if tail_demo_first:
+                # ⭐⭐ The one variable this branch exists to move: a 0x5C12
+                # right in front of the appended roster, which is the shape
+                # 2.62 step 5 had and the plain append does not. Everything
+                # else stays exactly as the plain append leaves it, so the two
+                # runs differ by this message and nothing else (an earlier lesson).
+                out += demo_start()
             out += self._tr_cast(
                 session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
                 clubbattle.action_order_params(roster), everyone,
@@ -3823,10 +3836,14 @@ class MpsServer:
                            client's animation, so the 0x5C0D goes out while
                            that client is still playing the turn and has not
                            reported anything yet.
-        ``/cb ordertail [rev|all|@i …] [demo] | off``  ⭐⭐ arm one 0x5C0D to be
-                           APPENDED to this fight's next action stream, behind
-                           the 0x5C12 that closes it; ``demo`` puts a second
-                           0x5C12 behind that. ⚠️ Take ``by=i`` with it — the
+        ``/cb ordertail [rev|all|@i …] [demo] [demofirst] | off``  ⭐⭐ arm one
+                           0x5C0D to be APPENDED to this fight's next action
+                           stream, behind the 0x5C12 that closes it; ``demo``
+                           puts a second 0x5C12 behind that, ``demofirst`` puts
+                           one in FRONT of the appended roster instead. ⭐⭐ That
+                           last one is the single knob between the two readings
+                           2.64 left standing — see Battle.tail_probe for what
+                           1, 2 and 3, 4 each mean. ⚠️ Take ``by=i`` with it — the
                            slot is one-shot and every connection drains the
                            line, so an unlocked one doctors two turns. It is
                            the positive control 2.63 lacks: the same widget,
@@ -4060,15 +4077,22 @@ class MpsServer:
             order = named_order(args[1:])
             if order is None:
                 order = [f.chara_id for f in battle.actors()]
+            # ⚠️ Exact tokens, so ``demofirst`` is not also a ``demo``: the two
+            # put a 0x5C12 on opposite sides of the appended 0x5C0D and the
+            # point of the pair is to have one without the other.
             demo = "demo" in args[1:]
-            battle.tail_probe = (order, demo)
+            tail_demo_first = "demofirst" in args[1:]
+            battle.tail_probe = (order, demo, tail_demo_first)
             who = ", ".join(f"0x{c:08x}" for c in order) if order else "nobody"
-            print(f"[{self.tag}] /cb ordertail armed: {who}"
-                  f"{' plus a second 0x5C12' if demo else ''} (fires once, from "
+            shape = (f"{'0x5C12 then ' if tail_demo_first else ''}{who}"
+                     f"{' plus a second 0x5C12' if demo else ''}")
+            print(f"[{self.tag}] /cb ordertail armed: {shape} (fires once, from "
                   f"the end of this fight's next action stream)")
             return self._say(
                 session, sequence,
-                f"/cb ordertail armed {who}{' demo' if demo else ''}"
+                f"/cb ordertail armed {who}"
+                f"{' demofirst' if tail_demo_first else ''}"
+                f"{' demo' if demo else ''}"
             )
         if what == "replay":
             # ⭐⭐ ``first`` is the whole point of this branch now: it is the
