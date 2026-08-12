@@ -3700,7 +3700,16 @@ class MpsServer:
                            nothing. Legal in front of any subcommand below.
         ``/cb``            what the server thinks the state is
         ``/cb demo``       0x5C12 MsgSvNotifyClubBattleDemoStart, body-less
-        ``/cb order``      0x5C0D again, same order
+        ``/cb order [rev] [all] [@i …]``  0x5C0D again. Bare, that is the same
+                           order this turn already sent, which asks nothing;
+                           ``rev`` turns it around, ``all`` names everyone
+                           rather than only those who chose a card, and ``@i``
+                           names exactly those fighters in exactly that order.
+                           ⭐ The point is the circle under a fighter's feet:
+                           it holds ① from the 開始 splash onward, before any
+                           0x5C0D exists, so this asks whether the message
+                           repaints it and whether the number is a position in
+                           this list at all.
         ``/cb replay``     the whole action stream again
         ``/cb next``       pretend everyone reported 0x5C16 and start the next turn
         ``/cb result [n] [ruler]``  0x5C1A alone, winTeam=n, fight left standing
@@ -3823,7 +3832,40 @@ class MpsServer:
                 session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_DEMO_START, b"", everyone
             )
         if what == "order":
-            order = [f.chara_id for f in battle.actors()]
+            # ⭐⭐ The list is a PARAMETER here, which is the whole point: what
+            # the circle under a fighter's feet is drawn from cannot be read off
+            # a fight that only ever sends one order. Sending the same order
+            # twice asks nothing; sending a different one asks whether the
+            # client redraws from this message at all.
+            #
+            # ⚠️ Every form still names real fighters of this fight, in some
+            # permutation of a list this server builds anyway. No shape is
+            # invented — 0x5C0D is a counted array of charaId and stays one.
+            # ⚠️ @i is read in the order it was typed, not sorted into roster
+            # order: which position a fighter is named at IS the question.
+            picked = []
+            for token in args[1:]:
+                if not token.startswith("@"):
+                    continue
+                try:
+                    index = int(token[1:], 0)
+                except ValueError:
+                    continue
+                if 0 <= index < len(battle.fighters):
+                    picked.append(battle.fighters[index].chara_id)
+            if picked:
+                order = picked
+            elif "all" in args[1:]:
+                # ⭐ Everyone, including whoever did not choose a card. actors()
+                # leaves them out, so on a zero-click probe fight the default
+                # form names one side only — which is a different question.
+                order = list(everyone)
+            else:
+                order = [f.chara_id for f in battle.actors()]
+            if "rev" in args[1:]:
+                order = order[::-1]
+            who = ", ".join(f"0x{c:08x}" for c in order) if order else "nobody"
+            print(f"[{self.tag}] /cb order: {who}")
             return self._tr_cast(
                 session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
                 clubbattle.action_order_params(order), everyone,
