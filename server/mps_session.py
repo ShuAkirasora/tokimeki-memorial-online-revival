@@ -4039,34 +4039,53 @@ class MpsServer:
             # 0x5C0D never having been counted: the only phase this message is
             # eaten in is also a phase where nothing paints, and a 0x5C0D whose
             # count can be trusted has to go into an OPEN window — with the
-            # whole turn boundary necessarily in between. Landing this probe is
-            # therefore necessary but not sufficient; the roster that gets
-            # counted has to sit inside a window this message itself opened.
+            # whole turn boundary necessarily in between.
+            # ⛔️⛔️ AND ROUND 116 CLOSED THE QUESTION OFF FROM THIS SIDE
+            # ENTIRELY, so this branch is no longer a step towards it. Getting
+            # 「0x5C09 plus the window reopening」 to happen AT ALL requires the
+            # client to have reported 0x5C16 first (see below) — and that report
+            # is the other candidate. Every timeline that makes one candidate
+            # occur puts the other one ahead of it, so no injection schedule can
+            # separate them; it is the client's turn state machine that forbids
+            # the position, not bad luck with timing. What round 116 did settle:
+            # a fake window timing out, and a 0x5C09 that got thrown away,
+            # BOTH clear nothing (a roster taken in through an open window with
+            # a live countdown still read ③④ afterwards). What still predicts
+            # the screen for a re-implementation is unchanged and enough: the
+            # count clears once per turn.
             #
             # ⛔️⛔️ WHAT DECIDES IT IS THE CLIENT'S PHASE, NOT ``turn``. Round
             # 113 read 「a repeated number is a no-op, a new number is eaten on
             # the spot」 off two sends whose turn numbers differed — but so did
             # their delivery phase, and round 115 separated the two:
             #
-            #   Sent while the コマンド window is OPEN: thrown away whole,
-            #     WHATEVER the number. Measured twice, including turn+1, the
-            #     very number a real turn boundary carries: the on-screen
-            #     countdown kept ticking down to the second (59 → 43 across the
-            #     16s that had elapsed) and 「残り N ターン」 never moved.
-            #   Sent in the DEAD ZONE (the client has already reported 0x5C16
-            #     for this turn, the next one has not started, no window up):
-            #     eaten. A fresh コマンド window comes up, 「残り」 is repainted
-            #     off THIS message's number (8 − number), and the window's own
-            #     deadline is the timeoutTime it carried (measured: closed at
-            #     T+59s, frame by frame, with no natural turn start anywhere in
-            #     the log to account for it).
-            #   Window closed but 0x5C16 not yet sent (the ~10s of animation):
-            #     NOT MEASURED. Do not assume either way.
+            # ⭐⭐⭐ AND THE PHASE THAT MATTERS IS ONE THE SCREEN DOES NOT SHOW:
+            # round 116 found two states that are pixel-for-pixel alike (arena
+            # visible, no window up) and answer this message oppositely. What
+            # separates them is whether the client has REPORTED 0x5C16 for the
+            # previous turn:
             #
-            # ⚠️⚠️ So sending this inside an open window asks nothing at all —
-            # it never reaches the handler. To make it land, deliver it in the
-            # dead zone, which a backstop partner's --end-delay can widen to
-            # however many seconds are needed.
+            #   Reported it (nothing of the last turn left to settle): EATEN.
+            #     A fresh コマンド window comes up, 「残り」 is repainted off THIS
+            #     message's number (8 − number), and the window's own deadline
+            #     is the timeoutTime it carried (measured: closed at T+59s,
+            #     frame by frame, with no natural turn start in the log to
+            #     account for it).
+            #   Has NOT reported it: thrown away whole, WHATEVER the number.
+            #     Two ways to be in this state, both measured: the コマンド
+            #     window is still open (including at turn+1, the very number a
+            #     real boundary carries -- the countdown kept ticking to the
+            #     second, 59 -> 43 over the 16s elapsed, and 「残り」 never
+            #     moved); or its countdown hit zero and nobody ever settled that
+            #     turn, so the client is still waiting on a resolution that is
+            #     not coming and considers itself mid-turn.
+            #   Mid-animation (window closed, 0x5C16 imminent): NOT MEASURED.
+            #
+            # ⚠️⚠️ So the client's own turn state is the gate, and it is only
+            # legible in THIS side's log (the 0x5C16 arrival) -- not on screen.
+            # To make this probe land, send it after that arrival; a backstop
+            # partner's --end-delay widens that stretch to however long is
+            # needed.
             # ⚠️ ``turn`` still matters for READING the send, just not for
             # whether it lands: pick a number the natural sequence will not
             # reach, so 「残り」 says which message painted it (round 113 passed
