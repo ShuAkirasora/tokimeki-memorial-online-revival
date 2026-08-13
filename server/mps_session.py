@@ -3294,23 +3294,29 @@ class MpsServer:
     def _battle_card(self, fighter: "clubbattle.Fighter", item_num: int) -> str:
         """What ``itemNum`` names in this fighter's deck, for the log only.
 
-        ⚠️ Printed, not acted on, and deliberately printed BOTH ways. Round 87
-        read 0-based off the first real command — the player clicked row 7 and
-        06 came up — but the two decks in that fight held keyword ids 0-7 in
-        order, so index and id had the same value and only 「is it the row he
-        clicked」 told them apart. Until a shuffled deck has been through here
-        the second reading stays in the log.
+        ⭐ SETTLED: itemNum is a 0-based index into the deck 0x5C07 named, in
+        the order this server handed that deck over in 0x5B01. It is not the
+        card's keyword id, and it is not 1-based.
+
+        Round 87 read 0-based off the first real command — the player clicked
+        row 7 and 06 came up — but both decks in that fight held keyword ids
+        0-7 in order, so index and id carried the same value and only 「is it
+        the row he clicked」 told them apart. Round 118 shuffled a deck into
+        reverse order so that no row's index equalled its card's id, and had a
+        real client play twice: row 7 (index 6, id 1) sent 06, row 4 (index 3,
+        id 4) sent 03. Index both times. The second reading the log used to
+        carry alongside this one has served its purpose and is gone.
+
+        ⚠️ Still printed, still not acted on: the reason to keep naming the
+        card is that a wrong deck or a stale save shows up here as a card
+        nobody clicked, which is cheaper to notice than to debug.
         """
         deck = self._battle_deck(fighter)
-
-        def at(index: int) -> str:
-            if not 0 <= index < len(deck):
-                return "-"
-            kind, payload = deck[index][0], bytes.fromhex(str(deck[index][1]))
-            return club.describe_deck_item(int(kind), payload)
-
-        return (f"deck{fighter.deck_id}[{item_num}]=({at(item_num)}) "
-                f"[{item_num - 1}]=({at(item_num - 1)}) of {len(deck)}")
+        if not 0 <= item_num < len(deck):
+            return f"deck{fighter.deck_id}[{item_num}]=(-) of {len(deck)}"
+        kind, payload = deck[item_num][0], bytes.fromhex(str(deck[item_num][1]))
+        named = club.describe_deck_item(int(kind), payload)
+        return f"deck{fighter.deck_id}[{item_num}]=({named}) of {len(deck)}"
 
     def _battle_deck_item(
         self, fighter: "clubbattle.Fighter"

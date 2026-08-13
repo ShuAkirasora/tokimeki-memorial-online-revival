@@ -200,11 +200,17 @@ TURN_TIMEOUT_MS = 60_000
 #: ⭐ TMO_TURN_DEADLINE_S overrides ONLY this side. It exists for measuring with
 #: a real client, where the constraint is not the protocol but the person: the
 #: コマンド window gives 60 seconds, and one look-then-click round trip costs
-#: 15 (round 61). Pausing the VM freezes the client's own countdown — it draws
-#: the counter itself and closes the window when it hits zero — but the server
-#: keeps counting in real time and would resolve the turn out from under a
-#: paused client. This is the other half of that: pause the client, and the
-#: server waits too.
+#: 15 (round 61), so a measurement that needs several of them needs the server
+#: to stop counting.
+#:
+#: ⚠️⚠️ It does NOT buy the client's own countdown any more time, and this
+#: comment used to claim it did — 「pausing the machine the client runs on freezes the counter
+#: the client draws」 was measured false in round 118. That machine's clock is
+#: resynchronised to real time when it resumes, so wall time spent paused is
+#: charged in full to a deadline the client computes locally: after a few
+#: minutes paused, a window two seconds old already read 「あと 3 秒」. Pause
+#: the client and this knob keeps the SERVER from resolving the turn; nothing
+#: keeps the CLIENT from closing the window.
 #:
 #: ⚠️⚠️ IT CHANGES NO BYTE ON THE WIRE. turn_start_params still sends
 #: TURN_TIMEOUT_MS, because 600_000 was measured to make the client's counter
