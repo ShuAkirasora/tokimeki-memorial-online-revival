@@ -4030,29 +4030,47 @@ class MpsServer:
             # feet clears once a turn」 without being able to name the message
             # that clears it — 0x5C09, the client's own 0x5C16 and the コマンド
             # window reopening all sit on one instant in a live fight, and
-            # round 112 could not pull the three apart. This separates the
-            # first from the other two: put it between two 0x5C0Ds and the
-            # second one's numbers either restart at ① or carry on climbing.
+            # round 112 could not pull the three apart. The idea was to
+            # separate the first from the other two: put it between two 0x5C0Ds
+            # and the second one's numbers either restart at ① or carry on
+            # climbing.
+            # ⚠️⚠️ Round 115 ran that and the read (①②) does NOT name a
+            # culprit, because it is equally well explained by the leading
+            # 0x5C0D never having been counted: the only phase this message is
+            # eaten in is also a phase where nothing paints, and a 0x5C0D whose
+            # count can be trusted has to go into an OPEN window — with the
+            # whole turn boundary necessarily in between. Landing this probe is
+            # therefore necessary but not sufficient; the roster that gets
+            # counted has to sit inside a window this message itself opened.
             #
-            # ⭐⭐⭐ ``turn`` IS THE VARIABLE, not a convenience — round 113
-            # measured the two cases apart and they are not the same message:
+            # ⛔️⛔️ WHAT DECIDES IT IS THE CLIENT'S PHASE, NOT ``turn``. Round
+            # 113 read 「a repeated number is a no-op, a new number is eaten on
+            # the spot」 off two sends whose turn numbers differed — but so did
+            # their delivery phase, and round 115 separated the two:
             #
-            #   REPEATED number (the default): the client throws it away whole.
-            #     It sends a fresh timeoutTime of 「now + 60s」 and the on-screen
-            #     countdown does not jump to ~60; the turn still ends on its
-            #     ORIGINAL deadline. Nothing repaints, nothing clears.
-            #   NEW number: eaten on the spot. The client opens a fresh コマンド
-            #     window whose deadline is the timeoutTime THIS message carried
-            #     (measured: the window came up reading 44s, 16s after the send,
-            #     where a natural turn would have read 60).
+            #   Sent while the コマンド window is OPEN: thrown away whole,
+            #     WHATEVER the number. Measured twice, including turn+1, the
+            #     very number a real turn boundary carries: the on-screen
+            #     countdown kept ticking down to the second (59 → 43 across the
+            #     16s that had elapsed) and 「残り N ターン」 never moved.
+            #   Sent in the DEAD ZONE (the client has already reported 0x5C16
+            #     for this turn, the next one has not started, no window up):
+            #     eaten. A fresh コマンド window comes up, 「残り」 is repainted
+            #     off THIS message's number (8 − number), and the window's own
+            #     deadline is the timeoutTime it carried (measured: closed at
+            #     T+59s, frame by frame, with no natural turn start anywhere in
+            #     the log to account for it).
+            #   Window closed but 0x5C16 not yet sent (the ~10s of animation):
+            #     NOT MEASURED. Do not assume either way.
             #
-            # ⚠️⚠️ So a repeated-number send answers nothing about clearing —
-            # it never reaches the handler. Only the new-number form asks the
-            # real question, and that is also the form a real turn boundary has.
-            # ⚠️ Do NOT pass turn+1: the client draws 「残り N ターン」 off this
-            # number, and turn+1 draws exactly what the next natural turn would,
-            # which throws away the one cheap sign that the send landed. Pick a
-            # number the natural sequence will not reach.
+            # ⚠️⚠️ So sending this inside an open window asks nothing at all —
+            # it never reaches the handler. To make it land, deliver it in the
+            # dead zone, which a backstop partner's --end-delay can widen to
+            # however many seconds are needed.
+            # ⚠️ ``turn`` still matters for READING the send, just not for
+            # whether it lands: pick a number the natural sequence will not
+            # reach, so 「残り」 says which message painted it (round 113 passed
+            # turn+1 and lost that sign — the countdown was what saved it).
             # ⚠️ It is a wire value ONLY: this side's counter does not move, so
             # the next natural 0x5C09 still says what it was always going to.
             try:
