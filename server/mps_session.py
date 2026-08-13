@@ -3798,6 +3798,16 @@ class MpsServer:
                            nothing. Legal in front of any subcommand below.
         ``/cb``            what the server thinks the state is
         ``/cb demo``       0x5C12 MsgSvNotifyClubBattleDemoStart, body-less
+        ``/cb sync [turn]``  0x5C09 MsgSvNotifyClubBattleTurnStart, bare, in the
+                           middle of a turn — this side's turn counter, choices
+                           and deadline all stay put. ⚠️⚠️ THE ONE PROBE HERE
+                           THAT IS A NEW SHAPE, so send it alone before putting
+                           it in a batch. ⚠️⚠️ ``turn`` decides whether the
+                           client listens AT ALL: repeating this turn's own
+                           number (the default) gets the message thrown away
+                           whole, a number it has not seen gets acted on. See
+                           the branch — the two were measured apart in round
+                           113 and only the second one asks anything.
         ``/cb order [rev] [all] [@i …]``  0x5C0D again. Bare, that is the same
                            order this turn already sent, which asks nothing;
                            ``rev`` turns it around, ``all`` names everyone
@@ -4001,6 +4011,73 @@ class MpsServer:
         if what == "demo":
             return self._tr_cast(
                 session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_DEMO_START, b"", everyone
+            )
+        if what == "sync":
+            # ⭐⭐⭐ A bare 0x5C09, mid-turn, that moves nothing on this side:
+            # the turn counter, everybody's choice and the deadline all stay
+            # where they were, so the only question it asks is what the WIRE
+            # message does to a client that is already inside a turn.
+            #
+            # ⚠️⚠️ THE ONE PROBE IN HERE THAT IS A NEW SHAPE. Every other
+            # branch replays a message at a moment the fight itself already
+            # puts it in; this one puts a turn-start where the live path never
+            # does. It may repaint the コマンド window, restart the countdown,
+            # or kill the client outright (``finish refresh`` is exactly that
+            # kind of splice). ⭐ Send it ALONE the first time and check the
+            # client is still answering before running it inside a batch.
+            #
+            # ⭐ Why it exists: 2.67 measured 「the number under a fighter's
+            # feet clears once a turn」 without being able to name the message
+            # that clears it — 0x5C09, the client's own 0x5C16 and the コマンド
+            # window reopening all sit on one instant in a live fight, and
+            # round 112 could not pull the three apart. This separates the
+            # first from the other two: put it between two 0x5C0Ds and the
+            # second one's numbers either restart at ① or carry on climbing.
+            #
+            # ⭐⭐⭐ ``turn`` IS THE VARIABLE, not a convenience — round 113
+            # measured the two cases apart and they are not the same message:
+            #
+            #   REPEATED number (the default): the client throws it away whole.
+            #     It sends a fresh timeoutTime of 「now + 60s」 and the on-screen
+            #     countdown does not jump to ~60; the turn still ends on its
+            #     ORIGINAL deadline. Nothing repaints, nothing clears.
+            #   NEW number: eaten on the spot. The client opens a fresh コマンド
+            #     window whose deadline is the timeoutTime THIS message carried
+            #     (measured: the window came up reading 44s, 16s after the send,
+            #     where a natural turn would have read 60).
+            #
+            # ⚠️⚠️ So a repeated-number send answers nothing about clearing —
+            # it never reaches the handler. Only the new-number form asks the
+            # real question, and that is also the form a real turn boundary has.
+            # ⚠️ Do NOT pass turn+1: the client draws 「残り N ターン」 off this
+            # number, and turn+1 draws exactly what the next natural turn would,
+            # which throws away the one cheap sign that the send landed. Pick a
+            # number the natural sequence will not reach.
+            # ⚠️ It is a wire value ONLY: this side's counter does not move, so
+            # the next natural 0x5C09 still says what it was always going to.
+            try:
+                sync_turn = int(args[1], 0)
+            except (IndexError, ValueError):
+                sync_turn = battle.turn
+            sync_rows = battle.turn_rows()
+            print(f"[{self.tag}] /cb sync: bare 0x5C09, turn={sync_turn} "
+                  f"({len(sync_rows)} fighter(s)); nothing on this side moved, "
+                  f"battle is still at {battle.summary()}")
+
+            def sync_body(chara_id: int) -> bytes:
+                # ⚠️ Per-recipient clock, the rule _battle_turn_start is under:
+                # timeoutTime names a moment on the RECIPIENT's timebase, and
+                # copying one client's moment onto another teleports them
+                # (2.15).
+                other = self._session_of(chara_id)
+                clock = (other or session).client_now()
+                return clubbattle.turn_start_params(
+                    sync_turn, clock + clubbattle.TURN_TIMEOUT_MS, sync_rows
+                )
+
+            return self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_TURN_START,
+                sync_body, everyone,
             )
         if what == "order":
             # ⭐⭐ The list is a PARAMETER here, which is the whole point: what
