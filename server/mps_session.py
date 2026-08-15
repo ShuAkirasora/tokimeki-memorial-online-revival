@@ -3900,6 +3900,16 @@ class MpsServer:
                            probe that separates 「0x5C09 repaints the bar」 from
                            「the client resets it at turn start」 — the turn
                            either opens short or it does not.
+        ``/cb timeout [ms] | off``  make every 0x5C09 from now on name a
+                           deadline this many ms ahead of the reader's own
+                           clock, instead of clubbattle.TURN_TIMEOUT_MS.
+                           ⭐ A fight has eight turns and each one carries a
+                           fresh deadline, so one fight asks eight numbers
+                           rather than one — which is how the cap on that field
+                           was settled (clubbattle.TURN_TIMEOUT_MS). ⚠️ It
+                           moves this server's own patience with it, so a turn
+                           still resolves when the countdown says it should —
+                           unless TMO_TURN_DEADLINE_S pinned that side.
         ``/cb react [n] [@i]``      0x5C10 Reaction, reaction=n
         ``/cb effect [t] [v] [v2] [@i]``  0x5C11 Effect, type=t
                            ⭐ ``@i`` aims at fighter i; the default is whoever
@@ -4115,7 +4125,7 @@ class MpsServer:
                 other = self._session_of(chara_id)
                 clock = (other or session).client_now()
                 return clubbattle.turn_start_params(
-                    sync_turn, clock + clubbattle.TURN_TIMEOUT_MS, sync_rows
+                    sync_turn, clock + battle.timeout_ms(), sync_rows
                 )
 
             return self._tr_cast(
@@ -4300,6 +4310,34 @@ class MpsServer:
             print(f"[{self.tag}] /cb vit: every 0x5C09 from now on carries "
                   f"{shown}")
             return self._say(session, sequence, f"/cb vit {shown}")
+        if what == "timeout":
+            # ⚠️⚠️ A WIRE VALUE, and the only knob in here that is one. Every
+            # other branch of this console sends a message; this one changes a
+            # number inside the message the fight itself will send next.
+            #
+            # ⭐ Why it is not one-shot and not an environment knob, the same
+            # two reasons turn_start_hp is neither: the question is about the
+            # value a TURN OPENS with, so it has to survive to the next turn;
+            # and the control and the probe belong in one fight, because
+            # standing up a fight is five minutes of clicking.
+            #
+            # ⭐ Draining it once per logged-in session is harmless: writing
+            # the same number twice is the same number.
+            if len(args) > 1 and args[1] in ("off", "none", "-"):
+                battle.turn_timeout_ms = None
+            else:
+                try:
+                    battle.turn_timeout_ms = int(args[1], 0)
+                except (IndexError, ValueError):
+                    battle.turn_timeout_ms = None
+            shown = (f"{battle.timeout_ms()} ms"
+                     if battle.turn_timeout_ms is not None
+                     else f"off (the stock {clubbattle.TURN_TIMEOUT_MS} ms)")
+            print(f"[{self.tag}] /cb timeout: every 0x5C09 from now on names a "
+                  f"deadline {shown} ahead of the reader's clock; this server "
+                  f"waits {battle.deadline_s():g}s. ⚠️ The turn already open "
+                  f"keeps the deadline it was started with.")
+            return self._say(session, sequence, f"/cb timeout {shown}")
         if what == "hold":
             # ⚠️⚠️ This ARMS something; it sends nothing now. The whole point is
             # that the message has to go out on the normal path, at the one
@@ -4684,10 +4722,10 @@ class MpsServer:
         # compared against anything here. See _drain_battle for what runs when
         # it passes, and _Session.battle_due for why every fighter's session
         # gets a copy.
-        # ⚠️ TURN_DEADLINE_S, not TURN_TIMEOUT_MS: normally the same 60 seconds,
-        # but a measuring session can stretch THIS side alone (see the constant).
-        # The timeoutTime below is unaffected and still says 60.
-        battle.deadline = time.monotonic() + clubbattle.TURN_DEADLINE_S
+        # ⚠️ deadline_s(), not TURN_TIMEOUT_MS: normally the same 60 seconds,
+        # but a measuring session can stretch THIS side alone (see the
+        # constant), and /cb timeout moves both together.
+        battle.deadline = time.monotonic() + battle.deadline_s()
         for fighter in battle.fighters:
             other = self._session_of(fighter.chara_id)
             if other is not None:
@@ -4699,7 +4737,7 @@ class MpsServer:
             other = self._session_of(chara_id)
             clock = (other or session).client_now()
             return clubbattle.turn_start_params(
-                battle.turn, clock + clubbattle.TURN_TIMEOUT_MS, rows
+                battle.turn, clock + battle.timeout_ms(), rows
             )
 
         return self._tr_cast(
