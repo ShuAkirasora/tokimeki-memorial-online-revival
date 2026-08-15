@@ -173,24 +173,44 @@ TURN_START_ROW_SIZE = 23
 #: 2. The manual gives a figure everywhere it can — 「制限時間は１０分です」
 #:    (p06_03), 「制限時間は３分です」 (p08_03) — and pointedly gives none here.
 #:    That fits a value the server hands down per turn, which is what this is.
-#: 3. The client caps it. At 60_000 it draws a live "あと N 秒" counter and
-#:    counts down cleanly (60 → 53 → 10). At 600_000 the counter stops meaning
-#:    anything: it sits in the single digits and jumps around (8, 3, 5, 9).
-#:    Something far narrower than the i64 holds the remainder client-side, so
-#:    ⭐ whatever the original sent, it FIT — and a minute does.
-#:    ⚠️ The exact width is NOT established: 600_000 mod 65_536 ≈ 10s lands in
-#:    the observed range but does not explain the jumping. Cheap probe: send
-#:    65_000, just under a u16 of milliseconds; a clean 65 counting down says
-#:    u16 of ms.
+#: 3. ⭐⭐⭐ The client's COUNTER caps it, and the cap is decimal: the
+#:    「あと NN 秒」 field is two digit cells wide, so a deadline 100 seconds or
+#:    more away cannot be drawn. ⚠️ What is narrow is the DISPLAY, not any
+#:    container: round 120 sent 65_000 / 70_000 / 99_000 / 300_000 into one
+#:    fight (one per turn) and sampled the counter at 1 Hz. The first three
+#:    count down cleanly from 64 / 69 / 98, one per second, to zero. 300_000
+#:    draws ONE digit — the ones place of the true remaining, tens cell blank —
+#:    and then ⭐ FIXES ITSELF the second the real remaining crosses 100 → 99,
+#:    frame 39 reading 0 and frame 40 reading 99. So the client's own arithmetic
+#:    is right at 300 seconds; only the widget cannot spell it.
+#:    ⇒ ⭐ whatever the original sent, it FIT, and it was under 100 seconds.
+#:    ⚠️ That also explains 600_000 (round 84: 「single digits, jumping around
+#:    — 8, 3, 5, 9」): the ones digit cycles 9→0 every ten seconds and the
+#:    sampling was minutes apart. The 600_000 mod 65_536 ≈ 10s coincidence was
+#:    a red herring, and so was 「u16 of milliseconds」 — 70_000 disproves it.
 #:
 #: ⭐ The semantics in (1) ARE implemented as of round 88: a turn whose
 #: deadline passes resolves with whoever chose in time, and the ones who did
 #: not simply take no action. See MpsServer._drain_battle. ⚠️ The dead end that
 #: used to be blamed on this number was never about its width — it was the
 #: missing 0x5C0D/0x5C0E/0x5C0F, so do not reach for this constant when a
-#: battle stalls. Widening it past what the client can represent (tried:
-#: 600_000) puts a value on the wire the original could never have sent.
-TURN_TIMEOUT_MS = 60_000
+#: battle stalls. ⚠️⚠️ SHIPPING VALUES MUST STAY UNDER 100_000: at or above it
+#: the player is shown a single meaningless digit for the whole turn.
+#:
+#: ⭐ TMO_TURN_TIMEOUT_MS is how (3) was measured without editing this line, so
+#: a measuring session leaves no trace to put back: unset is the shipping 60
+#: seconds. ⚠️ It moves a byte ON THE WIRE — the opposite of TMO_TURN_DEADLINE_S
+#: below, which moves only this server's patience. Use it to ask what the
+#: client's countdown does with a number, never to ship a different game.
+#: ⭐⭐ It sets what turn 1 opens with; ``/cb timeout`` moves the same number
+#: mid-fight, which is what turned one fight into four questions rather than
+#: one (Battle.turn_timeout_ms).
+#: ⚠️⚠️ Leaving it set makes smoke_room.py's turn-start assertions RED without
+#: anything being wrong: that script computes its expectation from its own
+#: process's TURN_TIMEOUT_MS, which is not this process's.
+TURN_TIMEOUT_MS_STOCK = 60_000
+TURN_TIMEOUT_MS = int(os.environ.get("TMO_TURN_TIMEOUT_MS")
+                      or TURN_TIMEOUT_MS_STOCK)
 
 #: How long THIS SERVER waits before resolving a turn nobody finished, in
 #: seconds. Normally exactly the 60 above, and the two are the same number for
@@ -225,6 +245,12 @@ TURN_TIMEOUT_MS = 60_000
 #: (「制限時間以内に入力を完了できなかった場合、キャラクターは行動しません」),
 #: which is the one behaviour it hides.
 TURN_DEADLINE_S = float(os.environ.get("TMO_TURN_DEADLINE_S") or TURN_TIMEOUT_MS / 1000)
+
+#: Whether the two above were split ON PURPOSE. Only Battle.deadline_s reads
+#: it: a fight whose wire deadline is being moved by ``/cb timeout`` moves this
+#: server's patience with it, unless somebody already said what that patience
+#: should be.
+DEADLINE_PINNED = bool(os.environ.get("TMO_TURN_DEADLINE_S"))
 
 #: 「1）〜3）を８ターンが終了するまで、もしくはどちらかの体力が全員０になるまで
 #: 繰り返します」 (p07_03). RESTORED, and it agrees with what the screen drew
@@ -1142,6 +1168,17 @@ class Battle:
         #: Living on the Battle is what makes it restore itself: no fight
         #: outlives its board, so nothing has to remember to put it back.
         self.turn_start_hp: "tuple[int, int] | None" = None
+        #: ⚠️ A PROBE, not gameplay: the ``timeoutTime`` offset every further
+        #: 0x5C09 of THIS fight carries, in ms, or None for TURN_TIMEOUT_MS.
+        #: Set by ``/cb timeout``.
+        #:
+        #: It exists because one value per server restart is one value per
+        #: fight — five minutes of clicking to ask one number — while a fight
+        #: has eight turns and each one carries a fresh deadline. That is what
+        #: settled the cap in TURN_TIMEOUT_MS (3): four values, one fight.
+        #: ⚠️ Lives on the Battle for the reason turn_start_hp does: no fight
+        #: outlives its board, so nothing has to remember to put it back.
+        self.turn_timeout_ms: "int | None" = None
         #: ⚠️⚠️ A PROBE, not gameplay: ``(chara_id, roster)`` for one extra
         #: 0x5C0D to send from INSIDE the handler round that receives that
         #: character's next 0x5C16, or None. Set by ``/cb ordernext``, cleared
@@ -1328,6 +1365,25 @@ class Battle:
             enumerate(chose), key=lambda pair: (-pair[1].speed, pair[0])
         )
         return [fighter for _index, fighter in order]
+
+    def timeout_ms(self) -> int:
+        """How far ahead of the reader's own clock this fight's 0x5C09 points."""
+        if self.turn_timeout_ms is None:
+            return TURN_TIMEOUT_MS
+        return self.turn_timeout_ms
+
+    def deadline_s(self) -> float:
+        """How long this server waits for a turn of this fight, in seconds.
+
+        ⭐ The probe moves BOTH sides together: the wire's timeoutTime and the
+        server's own patience naming different deadlines is a bug, not a
+        feature (see TURN_DEADLINE_S). An operator who deliberately split them
+        with TMO_TURN_DEADLINE_S keeps that split — it is pinned, and the probe
+        does not silently undo it.
+        """
+        if self.turn_timeout_ms is None or DEADLINE_PINNED:
+            return TURN_DEADLINE_S
+        return self.turn_timeout_ms / 1000
 
     def turn_rows(self) -> "list[bytes]":
         # ⚠️ The probe substitutes the two numbers and NOTHING else: same rows,

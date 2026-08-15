@@ -186,8 +186,15 @@ async def main(
     # only when they differ keeps a normal start quiet and makes a doctored one
     # impossible to miss. ⭐ It is also the only way to tell from the outside
     # whether a restart actually picked the variables up.
+    # ⚠️ TURN_TIMEOUT_MS is compared against the STOCK constant, not against
+    # itself: it is a knob now too, and a knob that is its own default can
+    # never report anything. The deadline below stays relative to the effective
+    # wire value, because what is worth shouting about there is the two of them
+    # disagreeing.
     for name, value, default in (
         ("TMO_IDLE_S", mps_session.IDLE_TIMEOUT_S, 300.0),
+        ("TMO_TURN_TIMEOUT_MS", clubbattle.TURN_TIMEOUT_MS,
+         clubbattle.TURN_TIMEOUT_MS_STOCK),
         ("TMO_TURN_DEADLINE_S", clubbattle.TURN_DEADLINE_S,
          clubbattle.TURN_TIMEOUT_MS / 1000),
     ):
