@@ -381,15 +381,24 @@ def parse_command(params: bytes) -> "tuple[int, int, int] | None":
     which is why this returns the raw triple and Battle.command does the
     lookup.
 
-    ⚠️ Whether ``itemNum`` is 0- or 1-based is UNREAD. Nothing has been on
-    screen yet that would say, and the first real 0x5C0A answers it for free:
-    a deck whose entries are distinguishable will name its own indexing.
+    ⭐ ``itemNum`` is a 0-BASED index into that deck -- not a keyword id, and
+    not 1-based. Read twice, on decks that tell the two apart: once with the
+    deck shuffled so the index and the id differ (two rows, two hits), and
+    once with the deck back in keyword order, where clicking the second row
+    produced ``itemNum=1`` and the resolution line named the card on row 2.
 
     ⭐ ``isAttck`` is the client's own word (from the dump at 0x8EE3C0), and
     the two sentences it must be choosing between are next to each other in
     ``msg_text``: 「敵対象を選択してください」 and 「味方対象を選択してくださ
     い」. So a card is aimed at one side or the other and this byte says which
     — which also means ``targetId`` is a charaId in the fight, not a slot.
+
+    ⭐ In a 1v1 with both sides connected the client fills ``targetId`` in on
+    its own -- picking the attack entry put the command on the wire inside a
+    single 500 ms frame, with no target prompt in between and no click on any
+    character. The two sentences above are what it shows when it cannot pick
+    a unique living enemy: the one prompt ever observed came from a fight
+    whose opponent had already disconnected.
     """
     if len(params) < 6:
         return None
