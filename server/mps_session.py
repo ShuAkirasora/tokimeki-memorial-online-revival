@@ -2408,17 +2408,19 @@ class MpsServer:
             if msg_type in (club.MSG_CL_QUERY_KEYWORD_LIST,
                             club.MSG_CL_QUERY_CLUB_SKILL_LIST):
                 # The 部活デッキ window, opened from the toolbar. Two queries,
-                # each answered with a count and then the rows. The 部活奥義 half
-                # is still always empty — nothing here performs 奥義合成 — and
-                # club.py says why an empty list is the original's answer rather
-                # than a stub. The キーワード half is whatever /kw granted.
+                # each answered with a count and then the rows. Each half is
+                # whatever its knob granted — /kw for キーワード, /cs for
+                # 部活奥義 — and club.py says why both defaulted to empty and
+                # what the grant does and does not invent.
                 member = self._chars(session).club(session.chara_id)
                 if msg_type == club.MSG_CL_QUERY_KEYWORD_LIST:
                     pairs = club.keyword_replies(member)
                     owned = len(member.keywords) if member else 0
                     print(f"[{self.tag}] club keyword list: {owned} owned")
                 else:
-                    pairs = club.skill_replies()
+                    pairs = club.skill_replies(member)
+                    owned = len(member.skills) if member else 0
+                    print(f"[{self.tag}] club skill list: {owned} owned")
                 out = b""
                 for reply_type, reply_params in pairs:
                     out += self._answer(session, sequence, reply_type, reply_params)
