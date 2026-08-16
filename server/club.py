@@ -265,6 +265,10 @@ MSG_CL_QUERY_CLUB_SKILL_LIST = 0x4306
 MSG_SV_RESULT_CLUB_SKILL_LIST = 0x4307
 MSG_SV_NOTIFY_CLUB_SKILL_LIST = 0x4308
 
+# How many rows one 0x4308 may carry. Not a guess: the client hangs on 33 and
+# is fine on 32 (Membership.club_skill_row_pages says how that was measured).
+CLUB_SKILL_LIST_PAGE = 32
+
 # The third query the same window makes, and the one that actually opens it.
 # Measured live: clicking the toolbar icon sends 0x4303 once, 0x4306 twice, then
 # 0x5B00 over and over until it is answered — the client retries this one.
@@ -648,7 +652,7 @@ class Membership:
         self.skills = [row for row in self.skills if row[:2] != [category, skill_id]]
         return len(self.skills) != before
 
-    def club_skill_rows(self) -> bytes:
+    def club_skill_rows(self, rows: "list[list] | None" = None) -> bytes:
         """0x4308's body: count u16 then five bytes per row.
 
         ⚠️ BIG-ENDIAN, unlike the deck payload for the same 部活奥義. These are
@@ -656,10 +660,27 @@ class Membership:
         デッキ entry are an opaque blob and are little-endian. See
         DECK_ITEM_KEYWORD for how that was caught.
         """
-        out = struct.pack(">H", len(self.skills))
-        for category, skill_id, completeness in self.skills:
+        rows = self.skills if rows is None else rows
+        out = struct.pack(">H", len(rows))
+        for category, skill_id, completeness in rows:
             out += struct.pack(">HHB", category, skill_id, completeness)
         return out
+
+    def club_skill_row_pages(self) -> "list[bytes]":
+        """The same body, split into messages the client's reader can hold.
+
+        ⚠️ A single 0x4308 carrying more than CLUB_SKILL_LIST_PAGE rows hangs
+        the client for good: the 部活デッキ window never opens, 通信中 stays up,
+        and the 0x5B00 that normally follows is never sent. Measured on the
+        real client, one row at a time: 32 rows fine, 33 rows hung. Paging is
+        what 0x4307 is for — it carries the total on its own, so the notify
+        does not have to be the whole list in one message.
+        """
+        pages = []
+        for start in range(0, max(len(self.skills), 1), CLUB_SKILL_LIST_PAGE):
+            pages.append(self.club_skill_rows(
+                self.skills[start:start + CLUB_SKILL_LIST_PAGE]))
+        return pages
 
     # ------------------------------------------------------------ 部活デッキ
 
@@ -801,11 +822,16 @@ def keyword_replies(member: "Membership | None") -> "list[tuple[int, bytes]]":
 
 
 def skill_replies(member: "Membership | None") -> "list[tuple[int, bytes]]":
-    """Same, for the 部活奥義 half of the window."""
-    rows = member.club_skill_rows() if member is not None else struct.pack(">H", 0)
-    owned = struct.unpack_from(">H", rows, 0)[0]
-    return [(MSG_SV_RESULT_CLUB_SKILL_LIST, struct.pack(">I", owned)),
-            (MSG_SV_NOTIFY_CLUB_SKILL_LIST, rows)]
+    """Same, for the 部活奥義 half of the window.
+
+    One Result carrying the total, then as many notifies as the list needs --
+    see Membership.club_skill_row_pages for why it cannot go in one.
+    """
+    pages = (member.club_skill_row_pages() if member is not None
+             else [struct.pack(">H", 0)])
+    owned = sum(struct.unpack_from(">H", page, 0)[0] for page in pages)
+    return ([(MSG_SV_RESULT_CLUB_SKILL_LIST, struct.pack(">I", owned))]
+            + [(MSG_SV_NOTIFY_CLUB_SKILL_LIST, page) for page in pages])
 
 
 def deck_reply(deck_id: int, use_type: int = USE_TYPE_NONE,
