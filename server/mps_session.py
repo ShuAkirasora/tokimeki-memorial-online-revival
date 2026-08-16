@@ -3910,6 +3910,16 @@ class MpsServer:
                            probe that separates 「0x5C09 repaints the bar」 from
                            「the client resets it at turn start」 — the turn
                            either opens short or it does not.
+        ``/cb states <c0,…,c7 | ruler | off> [@i]``  write one fighter's eight
+                           status counters, so every 0x5C09 from now on carries
+                           them. ⭐ The one probe for the last unread field of
+                           0x5C09: this server has sent all-zero counters in
+                           every fight ever, so nothing is known about what
+                           they draw — see Fighter.states. ``ruler`` gives each
+                           slot a different two-digit number (11,22,…,88), so
+                           one frame says which slots have a shadow at all and
+                           whether slot i means clubstatus id i. ⚠️ ``off`` is
+                           all-zero, which is the shipping value.
         ``/cb timeout [ms] | off``  make every 0x5C09 from now on name a
                            deadline this many ms ahead of the reader's own
                            clock, instead of clubbattle.TURN_TIMEOUT_MS.
@@ -4360,6 +4370,84 @@ class MpsServer:
             print(f"[{self.tag}] /cb vit: every 0x5C09 from now on carries "
                   f"{shown}")
             return self._say(session, sequence, f"/cb vit {shown}")
+        if what == "states":
+            # ⚠️⚠️ The only knob in here that writes a FIGHTER rather than the
+            # board, and it is a probe for exactly that reason: nothing in this
+            # server has ever written Fighter.states, so every 0x5C09 it has
+            # ever sent carried eight zeros. A field whose only value so far is
+            # its neutral one has not been measured at all — the reading 「the
+            # client ignores these」 and the reading 「they drive the lamps」 fit
+            # the same evidence (an earlier lesson).
+            #
+            # ⭐ Not one-shot, for turn_start_hp's reason: the question is what
+            # a turn OPENS with. It restores itself for turn_start_hp's other
+            # reason — the counters live on the Fighter, the Fighter dies with
+            # the Board, and no fight outlives its board.
+            #
+            # ⭐ The target defaults to the sender the way react/effect do, so
+            # the line each session drains aims at that session's own fighter.
+            # ⚠️ With the widget drawing ONLY the reader's own row (4.15), an
+            # explicit @i is what puts counters on one fighter and leaves the
+            # sparring partners at zero — which is how a frame gets a control.
+            index = None
+            for token in args[1:]:
+                if token.startswith("@"):
+                    try:
+                        index = int(token[1:], 0)
+                    except ValueError:
+                        continue
+            if index is not None:
+                if not 0 <= index < len(battle.fighters):
+                    return self._say(
+                        session, sequence,
+                        f"/cb states: no fighter @{index}",
+                    )
+                target = battle.fighters[index]
+            else:
+                target = next(
+                    (f for f in battle.fighters
+                     if f.chara_id == session.chara_id), None
+                )
+                if target is None:
+                    return self._say(
+                        session, sequence,
+                        "/cb states: this session has no fighter here, use @i",
+                    )
+            spec = next(
+                (a for a in args[1:] if not a.startswith("@")), "ruler"
+            )
+            if spec in ("off", "none", "-"):
+                counters = [0] * clubbattle.NUM_OF_CLUB_STATUS
+            elif spec == "ruler":
+                # ⭐ Two-digit repdigits rather than 1..8: if the client draws
+                # the number anywhere, 「66」 says slot 6 without counting, and
+                # a value that large cannot be mistaken for a turn or two of
+                # some counter running down on its own.
+                counters = [
+                    11 * (i + 1)
+                    for i in range(clubbattle.NUM_OF_CLUB_STATUS)
+                ]
+            else:
+                try:
+                    counters = [int(x, 0) for x in spec.split(",") if x != ""]
+                except ValueError:
+                    return self._say(
+                        session, sequence,
+                        "/cb states <c0,…,c7 | ruler | off> [@i]",
+                    )
+                counters = counters[:clubbattle.NUM_OF_CLUB_STATUS]
+                counters += [0] * (
+                    clubbattle.NUM_OF_CLUB_STATUS - len(counters)
+                )
+            target.states = counters
+            seat = battle.fighters.index(target)
+            print(f"[{self.tag}] /cb states: fighter @{seat} "
+                  f"{target.chara_id:#x} counters={counters} "
+                  f"(every 0x5C09 from now on carries them)")
+            return self._say(
+                session, sequence,
+                f"/cb states @{seat} {counters}",
+            )
         if what == "timeout":
             # ⚠️⚠️ A WIRE VALUE, and the only knob in here that is one. Every
             # other branch of this console sends a message; this one changes a
