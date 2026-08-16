@@ -265,8 +265,17 @@ MSG_CL_QUERY_CLUB_SKILL_LIST = 0x4306
 MSG_SV_RESULT_CLUB_SKILL_LIST = 0x4307
 MSG_SV_NOTIFY_CLUB_SKILL_LIST = 0x4308
 
-# How many rows one 0x4308 may carry. Not a guess: the client hangs on 33 and
-# is fine on 32 (Membership.club_skill_row_pages says how that was measured).
+# How many rows one 0x4308 may carry. Not a guess, and no longer just a
+# measurement either: it is the capacity of a fixed array inside the client's
+# own message class. Its deserializer stores the row count at +0xC4 and the
+# rows from +0x04 at six bytes each (five on the wire, one byte of padding),
+# so the array is exactly (0xC4 - 4) / 6 == 32 entries long, with the count
+# sitting immediately behind it and no bounds check anywhere.
+#
+# That is also why row 33 hangs rather than crashes: its first field lands on
+# the count itself, and the loop re-reads the count every iteration, so it
+# stops early and the remaining bytes are never consumed.
+# (Membership.club_skill_row_pages records how the limit was first measured.)
 CLUB_SKILL_LIST_PAGE = 32
 
 # The third query the same window makes, and the one that actually opens it.
