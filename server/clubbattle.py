@@ -1023,6 +1023,15 @@ class Fighter:
         self.vitality = self.max_vitality
         self.energy = self.max_energy
         #: One counter per clubstatus row; all zero is 通常, nothing afflicting.
+        #:
+        #: ⚠️⚠️ NO GAMEPLAY WRITES THIS, and none ever has: 0x5C11 is what puts
+        #: a status on a character and the client keeps it by itself (see the
+        #: class docstring), so every 0x5C09 this server has sent since the
+        #: message existed carried eight zeros. That makes the whole field
+        #: UNMEASURED rather than known-inert — zero is its neutral value, and
+        #: 「the client ignores these」 fits the evidence exactly as well as
+        #: 「they drive the lamps」 does (lesson 62). ``/cb states`` is the one
+        #: writer, and it is a probe.
         self.states = [0] * NUM_OF_CLUB_STATUS
         #: Set by 0x5C07 — 「my battle scene is up」, not 「I am ready to play」.
         self.ready = False
