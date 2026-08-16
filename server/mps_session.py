@@ -3427,6 +3427,15 @@ class MpsServer:
         for fighter, kind, payload in plays:
             assert fighter.command is not None
             _item_num, is_attck, target_id = fighter.command
+            # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb card armed it — see
+            # Battle.card_probe. It swaps the deckItem this ActionBegin names,
+            # which is the only way to make the client resolve a kind no deck
+            # here can hold.
+            if battle.card_probe is not None:
+                kind, payload = battle.card_probe
+                print(f"[{self.tag}] ⚠️ battle action: DOCTORED by /cb card — "
+                      f"deckItem is {club.describe_deck_item(kind, payload)} "
+                      f"instead of the card played")
             print(f"[{self.tag}] battle action: charaId={fighter.chara_id:#x} "
                   f"{'攻撃' if is_attck else '防御'} target={target_id:#x} "
                   f"{club.describe_deck_item(kind, payload)}")
@@ -3496,6 +3505,7 @@ class MpsServer:
         # ⭐ ``demo_first`` is the probe that finally asks the other half. It
         # never fires on a live path — only /cb replay first sets it.
         battle.fx_probe = None  # one shot: the next turn is a normal one again
+        battle.card_probe = None  # same, and for the same reason
         if not demo_first:
             out += demo_start()
         # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb ordertail armed it — see
@@ -3919,6 +3929,16 @@ class MpsServer:
                            in it, which is the one that works — see
                            _battle_replay_fx. ⭐ ``t`` may be a comma list, and
                            then one 0x5C11 per type goes into the same stream.
+        ``/cb card <kind> <12 hex digits> | off``  arm the NEXT turn so every
+                           0x5C0E ActionBegin in it names THIS deckItem instead
+                           of the card actually played. ⭐ The one way to ask
+                           what ``kind`` = 1 (部活奥義) does, since no deck here
+                           can hold one — see Battle.card_probe. ⚠️ The six
+                           bytes are the client's own little-endian struct and
+                           go out verbatim; for a クラブスキル that is
+                           ``categoryId u16, id u16`` and two bytes nothing has
+                           read yet, so 野球部 1:0 重いコンダラ is
+                           ``/cb card 1 010000006400``.
 
         ⭐ Every one of them is a message this server already knows how to
         build; nothing here invents a shape.
@@ -4282,6 +4302,36 @@ class MpsServer:
                   f"(fires on the next resolve, once)")
             return self._say(
                 session, sequence, f"/cb fxnext armed {battle.fx_probe}"
+            )
+        if what == "card":
+            # ⚠️ Arms the NEXT resolve, like fxnext and for the same measured
+            # reason: a stream spliced into a turn the client has already
+            # played is ignored outright (Battle.fx_probe).
+            if len(args) > 1 and args[1].lower() == "off":
+                battle.card_probe = None
+                return self._say(session, sequence, "/cb card off")
+            try:
+                kind = int(args[1], 0)
+                payload = bytes.fromhex(args[2])
+            except (IndexError, ValueError):
+                return self._say(
+                    session, sequence,
+                    "/cb card <kind> <"
+                    f"{club.DECK_ITEM_BYTES * 2} hex digits> | off",
+                )
+            if len(payload) != club.DECK_ITEM_BYTES:
+                return self._say(
+                    session, sequence,
+                    f"/cb card: deckItem payload is {club.DECK_ITEM_BYTES} "
+                    f"bytes, got {len(payload)}",
+                )
+            battle.card_probe = (kind & 0xFF, payload)
+            print(f"[{self.tag}] /cb card armed: "
+                  f"{club.describe_deck_item(*battle.card_probe)} "
+                  f"(fires on the next resolve, once)")
+            return self._say(
+                session, sequence,
+                f"/cb card armed {club.describe_deck_item(*battle.card_probe)}",
             )
         if what == "vit":
             # ⚠️⚠️ Also arms rather than sends: the question is what a turn

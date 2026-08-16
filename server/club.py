@@ -354,8 +354,16 @@ KEYWORD_COUNT = sum(last - first + 1 for first, last in KEYWORD_BLOCKS)  # 261
 # (keywordId, useCount, clubSource) triple the 0x4305 row carries, which the
 # client read big-endian off the wire and now writes back host-order.
 #
-# ⚠️ kind = 1 for 部活奥義 is still A GUESS. Nothing here can own one, so no
-# 0x5B03 has ever carried one.
+# ⭐⭐ kind = 1 IS 部活奥義, MEASURED — and the first four of the six bytes are
+# the `clubskill.bin` key, `categoryId u16` then `id u16`, same little-endian.
+# Nothing here can own one, so no 0x5B03 has ever carried one; what settled it
+# was doctoring a live 0x5C0E instead (`/cb card`, see Battle.card_probe). Sent
+# `01 00 00 00 64 00`, the client read it back out of its own data file and
+# said 「野球部奥義【重いコンダラ】を使用した！」 — that skill's own sentence,
+# which is row 1:0 of the table.
+#
+# ⚠️ The LAST TWO bytes are still unread: every probe so far sent `64 00` and
+# nothing on screen depended on them.
 DECK_ITEM_BYTES = 6
 DECK_ITEM_KEYWORD = 0
 DECK_ITEM_CLUB_SKILL = 1
@@ -729,8 +737,10 @@ def describe_deck_item(kind: int, payload: bytes) -> str:
         return (f"{raw} (keyword id={keyword_id}{known} "
                 f"useCount={use_count} clubSource={club_source})")
     if kind == DECK_ITEM_CLUB_SKILL:
-        # ⚠️ NOT MEASURED: nothing here can own a 部活奥義, so no 0x5B03 has ever
-        # carried one. The split follows the 0x4308 row (5B) plus one byte.
+        # ⭐ The first two u16 ARE MEASURED — they are the `clubskill.bin` key,
+        # and the client names the skill they point at (see DECK_ITEM_KEYWORD).
+        # ⚠️ The remaining byte-and-a-half is not: `completeness` follows the
+        # 0x4308 row (5B) plus one byte, and every probe so far sent 100.
         category, skill_id, completeness = struct.unpack("<HHB", payload[:5])
         return (f"{raw} (clubSkill? {category}:{skill_id} "
                 f"completeness={completeness} tail={payload[5]:#04x})")

@@ -1119,6 +1119,31 @@ class Battle:
         #: None means 「each type sends its own number」 — the label that lets a
         #: sweep be read off the log window.
         self.fx_probe: "tuple[tuple[int, ...], int | None, int, int] | None" = None
+        #: ⚠️⚠️ A PROBE, not gameplay: ``(kind, six bytes)`` to put into the
+        #: NEXT turn's 0x5C0E ActionBegin in place of the card actually played,
+        #: or None. Set by ``/cb card``, cleared with fx_probe as soon as the
+        #: turn it doctors goes out.
+        #:
+        #: It exists because ``kind`` had only ever carried 0 — キーワード. The
+        #: other half of that field, ``club.DECK_ITEM_CLUB_SKILL``, was a guess
+        #: this server could not test: 部活奥義 are earned in クラブ活動,
+        #: nothing here grants one, and so no 0x5B03 has ever carried one for a
+        #: deck to hold. Doctoring one ActionBegin is the only way to put a kind
+        #: the client must resolve against ``clubskill.bin`` in front of it —
+        #: and it settled that guess, see club.DECK_ITEM_CLUB_SKILL.
+        #:
+        #: ⭐ The probe answers itself, so no positive control has to be
+        #: arranged: every clubskill row carries its OWN sentence
+        #: (「野球部奥義【重いコンダラ】を使用した！」), so a payload the client
+        #: resolves names the skill on screen, while one it cannot resolve
+        #: leaves either nothing or the generic 攻撃 row.
+        #:
+        #: ⚠️ Like fx_probe it changes WHAT IS SENT during a normal resolve, so
+        #: it is one-shot and _battle_resolve says in the log that the turn was
+        #: doctored. ⚠️⚠️ The six bytes go out verbatim: they are the block the
+        #: client bulk-copies rather than parses (action_begin_params), which is
+        #: exactly why a wrong guess can only draw nothing, never a wrong field.
+        self.card_probe: "tuple[int, bytes] | None" = None
         #: ⚠️⚠️ A PROBE, not gameplay: when set, the next finish sends its
         #: 0x5C1A and then STOPS — no 0x5C1C, and this Battle stays on the
         #: board. One-shot, cleared when it fires. Set by ``/cb hold``.
