@@ -157,6 +157,8 @@ HELP = (
     "/buka [<番号 1-8>|force <番号>|part|clear] クラブ入部・退部 (/club はクライアント側)",
     "/kw [n <数>|add <id> [習熟度] [素]|del <id>|clear|blocks|deck <0-2> <id>…|use <0-2> <値>]"
     " キーワード所持と部活デッキの中身",
+    "/cs [ruler|n <数> [完成度]|add <cat>:<id> [完成度]|del <cat>:<id>|clear|keys"
+    "|deck <0-2> <cat>:<id>…] 部活奥義所持 (完成度の目盛りは ruler)",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words|lunch] <数> 0x6100 の実験用つまみ",
     "/skill [<拒否メッセージ> <reason>|clear] お助けスキル の reason を画面で確かめる",
@@ -746,6 +748,107 @@ def respond(
             return Reply([member.summary()] + ([owned] if owned else []))
         return Reply(["/kw [n <数>|add <id> [習熟度] [素]|del <id>|clear|blocks",
                       "     |deck <デッキ 0-2> <id>…|use <デッキ> <useType>]"])
+
+    if word in ("cs", "clubskill"):
+        # 部活奥義 ownership — the right half of the same window, and the half
+        # that stayed empty after /kw filled the left one. ⚠️ THE GRANT IS
+        # INVENTED in exactly the way /kw's is: the original reaches this state
+        # through 奥義合成 at a 顧問, out of an 「奥義の書」 and synthesis items,
+        # and none of those exist here. The keys, the wire layout and what
+        # completeness means are restored; see club.py.
+        #
+        # ⭐⭐ ``ruler`` is the one to reach for first, and it is why this
+        # command exists: it hands over one 奥義 per value in CLUB_SKILL_RULER,
+        # so the whole scale reads off ONE list rather than one probe per
+        # value — the same ruler trick §3.1 describes and /kw add uses for
+        # 習熟度. That is how the レベル column was settled (see club.py); keep
+        # it around, because every other field in `clubskill.bin` that the
+        # window draws can be read the same way.
+        if member is None:
+            return Reply(["クラブが読めない (キャラ未選択?)"])
+        words = rest.split()
+        verb = words[0].lower() if words else ""
+
+        def parse_key(text: str) -> "tuple[int, int] | None":
+            category, _, skill = text.partition(":")
+            if not (category.isdigit() and skill.isdigit()):
+                return None
+            return (int(category), int(skill))
+
+        if verb == "keys":
+            return Reply(
+                [f"clubskill.bin {club.CLUB_SKILL_COUNT} 個 (cat:id)"]
+                + [f"  {category}:0-{count - 1} {club.name(category)}"
+                   for category, count in enumerate(club.CLUB_SKILL_PER_CLUB)
+                   if count]
+            )
+        if verb == "clear":
+            member.skills.clear()
+            return Reply(["部活奥義を全部消した", member.summary()], club_save=True)
+        if verb == "ruler":
+            # One owned 奥義 per value in CLUB_SKILL_RULER, taken off the front
+            # of the key list so every row has a name that identifies it.
+            member.skills.clear()
+            keys = club.club_skill_keys()[:len(club.CLUB_SKILL_RULER)]
+            for (category, skill_id), completeness in zip(keys, club.CLUB_SKILL_RULER):
+                member.grant_club_skill(category, skill_id, completeness)
+            listed = " ".join(
+                f"{category}:{skill_id}={completeness}"
+                for category, skill_id, completeness in member.skills
+            )
+            return Reply([member.summary(), listed], club_save=True)
+        if verb == "n" and len(words) > 1 and words[1].lstrip("-").isdigit():
+            wanted = int(words[1])
+            if not 0 <= wanted <= club.CLUB_SKILL_COUNT:
+                return Reply([f"0-{club.CLUB_SKILL_COUNT} の範囲で"])
+            completeness = (int(words[2]) if len(words) > 2
+                            and words[2].lstrip("-").isdigit() else 1)
+            member.skills.clear()
+            for category, skill_id in club.club_skill_keys()[:wanted]:
+                member.grant_club_skill(category, skill_id, completeness)
+            return Reply([member.summary()], club_save=True)
+        if verb == "deck" and len(words) > 1 and words[1].lstrip("-").isdigit():
+            # ⚠️ Only 奥義 go in here; /kw deck is still the way to put
+            # キーワード in one. A deck the client would refuse to build is on
+            # purpose — 練習用 rejects other clubs' 奥義 (0x5B05 reason 4) and
+            # this cannot, which is how that refusal gets something to refuse.
+            deck_id = int(words[1])
+            if not 0 <= deck_id < club.DECK_COUNT:
+                return Reply([f"デッキは 0-{club.DECK_COUNT - 1} (画面の デッキ１ は 0)"])
+            items = []
+            for text in words[2:]:
+                key = parse_key(text)
+                if key is None:
+                    return Reply([f"{text} は <cat>:<id> の形で"])
+                entry = member.club_skill_deck_item(*key)
+                if entry is None:
+                    return Reply([f"{text} を持っていない (/cs add {text})"])
+                items.append(entry)
+            if len(items) > club.DECK_CAPACITY:
+                return Reply([f"1 デッキ {club.DECK_CAPACITY} 枚まで"])
+            member.set_deck(deck_id, items)
+            return Reply([member.summary()], club_save=True)
+        if verb in ("add", "del") and len(words) > 1:
+            key = parse_key(words[1])
+            if key is None:
+                return Reply([f"{words[1]} は <cat>:<id> の形で (/cs keys)"])
+            if verb == "del":
+                if not member.revoke_club_skill(*key):
+                    return Reply([f"{words[1]} は持っていない"])
+                return Reply([member.summary()], club_save=True)
+            completeness = (int(words[2]) if len(words) > 2
+                            and words[2].lstrip("-").isdigit() else 1)
+            if not member.grant_club_skill(*key, completeness):
+                return Reply([f"{words[1]} は clubskill.bin に無い (/cs keys)"])
+            return Reply([member.summary()], club_save=True)
+        if not words:
+            owned = " ".join(
+                f"{category}:{skill_id}({completeness})"
+                for category, skill_id, completeness in member.skills
+            )
+            return Reply([member.summary()] + ([owned] if owned else []))
+        return Reply(["/cs [ruler|n <数> [完成度]|add <cat>:<id> [完成度]",
+                      "     |del <cat>:<id>|clear|keys|deck <デッキ 0-2> <cat>:<id>…]"])
 
     if word == "ab":
         # 能力パラメータ, readable and pokeable — the same arrangement as /card

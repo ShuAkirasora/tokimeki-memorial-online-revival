@@ -215,10 +215,43 @@ MSG_SV_NG_CLUB_PART = 0x5A05
 # categoryId u16 + id u16 + completeness u8 is exactly five, and `clubskill.bin`
 # keys really are the pair (「1:0」重いコンダラ).
 #
-# ⚠️ THE 部活奥義 LIST IS STILL ALWAYS EMPTY, and that is a restored answer
-# rather than a stub: 奥義 are obtained by 奥義合成 at a 顧問 out of synthesis
-# items, and neither exists here. Same shape as 早弁's 「お弁当がない」 — the
-# refusal is the original's, not a gap in ours.
+# ⚠️ THE 部活奥義 LIST WAS ALWAYS EMPTY, and that was a restored answer rather
+# than a stub: 奥義 are obtained by 奥義合成 at a 顧問 out of an 「奥義の書」 and
+# synthesis items, and none of those exist here. Same shape as 早弁's
+# 「お弁当がない」 — the refusal is the original's, not a gap in ours. /cs now
+# opens the same door /kw opened in the キーワード half, for the same kind of
+# reason and with the same boundary: the grant is invented, the wire is not.
+#
+# ⭐ WHAT ``completeness`` MEANS IS RESTORED, from the manual rather than from
+# the wire. `p07_02` lists it as one of three 部活奥義 parameters shown in the
+# detail window a right-click opens (クラブ属性 / 完成度 / 性別属性), and
+# `p07_05` says what it is and what it does:
+#
+#     完成度は、レベル１〜１０まであり、完成度が高くなればなるほど、
+#     部活奥義の効果（攻撃力、成功率等）が上がります。
+#
+# It is decided once, at 奥義合成 time, by which consumable items went into the
+# synthesis.
+#
+# ⭐⭐⭐ 1..10 IS THE DISPLAYED LEVEL, NOT THE ENCODING — the byte is a
+# PERCENTAGE, and the window's レベル column draws
+#
+#     Lv = max(1, ceil(completeness / 10))
+#
+# with no upper clamp. MEASURED: ten rows in one list, one value each (/cs
+# ruler). 10 → Lv.1 but 11 → Lv.2 rules out floor(c/10)+1 and rounding; 0 →
+# Lv.1 gives the lower clamp; ⭐ 255 → Lv.26 shows there is no upper one. So
+# 100 really is this field's full value — which is what every probe before
+# this had been sending, and why nothing had ever seen the byte move.
+#
+# ⚠️⚠️ IT IS ALSO A FIELD THIS SERVER CANNOT CHECK BY PLAYING: everything the
+# manual says it raises — damage dealt, the success rate of sleep/confusion,
+# how far a パラメータダウン goes — is arithmetic the SERVER does. The client
+# is only told the result, in 0x5C11. So the one place a client has to read
+# this byte is the deck window, not a battle.
+# ⚠️ And the manual is wrong about WHERE: it lists 完成度 among the parameters
+# the right-click detail window shows, but that window has only クラブ属性 /
+# 性別 / 説明文. 完成度 is the list's レベル column.
 #
 # The キーワード list is no longer always empty. It was, for the same reason,
 # until it turned out to be the likely reason the deck window's ＯＫ never
@@ -338,6 +371,21 @@ KEYWORD_BLOCKS = (
 )
 KEYWORD_COUNT = sum(last - first + 1 for first, last in KEYWORD_BLOCKS)  # 261
 
+# `clubskill.bin`'s 57 keys. The key is the pair (categoryId, id) and the
+# category is the club, so this is simply "how many 部活奥義 each club has":
+# seven each, except 野球部 which has eight. Indexed by categoryId, and
+# category 0 does not exist (FIRST_CLUB is 1), so the first entry is a hole.
+CLUB_SKILL_PER_CLUB = (0, 8, 7, 7, 7, 7, 7, 7, 7)
+CLUB_SKILL_COUNT = sum(CLUB_SKILL_PER_CLUB)  # 57
+
+# What /cs ruler hands out, one 部活奥義 per value. Chosen to tell readings of
+# ``completeness`` apart on one screen rather than to walk a range: the manual
+# calls it a level from 1 to 10, so the run 1/2/5/9/10 shows whether the byte
+# is drawn as itself, 0 and 11 sit just outside it, 100 is what every probe so
+# far has sent, and 255 is the whole byte. ⚠️ Values, not steps — §3.1: ask
+# what it drives before asking how to convert it.
+CLUB_SKILL_RULER = (1, 2, 5, 9, 10, 0, 11, 50, 100, 255)
+
 # One entry of a デッキ on the wire: ``kind`` and then six bytes this server
 # stores without interpreting.
 #
@@ -418,6 +466,20 @@ def keyword_ids() -> "list[int]":
     return [i for first, last in KEYWORD_BLOCKS for i in range(first, last + 1)]
 
 
+def club_skill_exists(category: int, skill_id: int) -> bool:
+    """Is this a key `clubskill.bin` actually has? See CLUB_SKILL_PER_CLUB."""
+    if not 0 <= category < len(CLUB_SKILL_PER_CLUB):
+        return False
+    return 0 <= skill_id < CLUB_SKILL_PER_CLUB[category]
+
+
+def club_skill_keys() -> "list[tuple[int, int]]":
+    """Every legal 部活奥義 key, in `clubskill.bin` order."""
+    return [(category, skill_id)
+            for category, count in enumerate(CLUB_SKILL_PER_CLUB)
+            for skill_id in range(count)]
+
+
 def playable(club_id: int) -> bool:
     """One of the eight a character can actually join."""
     return FIRST_CLUB <= club_id <= LAST_CLUB
@@ -472,6 +534,23 @@ class Membership:
             if any(existing[0] == keyword_id for existing in self.keywords):
                 continue
             self.keywords.append([keyword_id, use_count & 0xFFFF, club_source & 0xFFFF])
+        # Owned 部活奥義, in the order 0x4308 will send them: one
+        # [categoryId, id, completeness] triple per row. Same treatment as
+        # キーワード — a key `clubskill.bin` does not have is dropped rather
+        # than sent on.
+        self.skills: "list[list[int]]" = []
+        for row in saved.get("clubSkills") or ():
+            try:
+                category, skill_id, completeness = (int(x) for x in row)
+            except (TypeError, ValueError):
+                continue
+            if not club_skill_exists(category, skill_id):
+                print(f"[club] club skill {category}:{skill_id} is not in "
+                      "clubskill.bin, dropping")
+                continue
+            if any(existing[:2] == [category, skill_id] for existing in self.skills):
+                continue
+            self.skills.append([category, skill_id, completeness & 0xFF])
         # Deck contents, as {deckId: [[kind, six-byte payload as hex], …]}. Hex
         # rather than a parsed record on purpose: the payload is a union this
         # server does not read, and storing it verbatim is what makes echoing it
@@ -501,6 +580,7 @@ class Membership:
             "left": {str(key): value for key, value in sorted(self.left.items())},
             "deckUse": {str(key): value for key, value in sorted(self.deck_use.items())},
             "keywords": [list(row) for row in self.keywords],
+            "clubSkills": [list(row) for row in self.skills],
             "deckItems": {
                 str(key): [list(row) for row in value]
                 for key, value in sorted(self.deck_items.items())
@@ -542,6 +622,45 @@ class Membership:
             out += struct.pack(">HHH", keyword_id, use_count, club_source)
         return out
 
+    # ------------------------------------------------------------ 部活奥義
+
+    def grant_club_skill(self, category: int, skill_id: int,
+                         completeness: int = 1) -> bool:
+        """Give this character a 部活奥義, or update the one it already has.
+
+        Returns False for a key `clubskill.bin` does not have. INVENTED that
+        this happens at all, exactly as for grant_keyword and for the same
+        reason: the original gets here through 奥義合成 at a 顧問, out of an
+        「奥義の書」 and synthesis items, and none of those exist here.
+        """
+        if not club_skill_exists(category, skill_id):
+            return False
+        row = [category, skill_id, completeness & 0xFF]
+        for index, existing in enumerate(self.skills):
+            if existing[:2] == [category, skill_id]:
+                self.skills[index] = row
+                return True
+        self.skills.append(row)
+        return True
+
+    def revoke_club_skill(self, category: int, skill_id: int) -> bool:
+        before = len(self.skills)
+        self.skills = [row for row in self.skills if row[:2] != [category, skill_id]]
+        return len(self.skills) != before
+
+    def club_skill_rows(self) -> bytes:
+        """0x4308's body: count u16 then five bytes per row.
+
+        ⚠️ BIG-ENDIAN, unlike the deck payload for the same 部活奥義. These are
+        message fields and go through the ordinary readers; the six bytes in a
+        デッキ entry are an opaque blob and are little-endian. See
+        DECK_ITEM_KEYWORD for how that was caught.
+        """
+        out = struct.pack(">H", len(self.skills))
+        for category, skill_id, completeness in self.skills:
+            out += struct.pack(">HHB", category, skill_id, completeness)
+        return out
+
     # ------------------------------------------------------------ 部活デッキ
 
     def deck(self, deck_id: int) -> "list[list]":
@@ -560,6 +679,23 @@ class Membership:
             if owned_id == keyword_id:
                 return (DECK_ITEM_KEYWORD,
                         struct.pack("<HHH", owned_id, use_count, club_source))
+        return None
+
+    def club_skill_deck_item(self, category: int,
+                             skill_id: int) -> "tuple[int, bytes] | None":
+        """The same, for an owned 部活奥義.
+
+        ⚠️ LITTLE-ENDIAN like the キーワード branch, and one byte shorter than
+        the six the union holds: 0x4308's row is categoryId u16 + id u16 +
+        completeness u8, which is five. The sixth byte is what the union costs
+        to hold the six-byte キーワード branch, so it goes out as zero — every
+        probe so far has sent it as zero too, and nothing has ever read it.
+        """
+        for owned_category, owned_id, completeness in self.skills:
+            if (owned_category, owned_id) == (category, skill_id):
+                return (DECK_ITEM_CLUB_SKILL,
+                        struct.pack("<HHBB", owned_category, owned_id,
+                                    completeness, 0))
         return None
 
     def set_deck(self, deck_id: int, items: "list[tuple[int, bytes]]") -> None:
@@ -638,6 +774,7 @@ class Membership:
         return (f"クラブ {name(self.in_club)}"
                 + (f" | 退部 {waits}" if waits else "")
                 + f" | キーワード {len(self.keywords)}"
+                + f" | 奥義 {len(self.skills)}"
                 + f" | デッキ {decks}")
 
 
@@ -663,10 +800,12 @@ def keyword_replies(member: "Membership | None") -> "list[tuple[int, bytes]]":
             (MSG_SV_NOTIFY_KEYWORD_LIST, rows)]
 
 
-def skill_replies(owned: int = 0) -> "list[tuple[int, bytes]]":
+def skill_replies(member: "Membership | None") -> "list[tuple[int, bytes]]":
     """Same, for the 部活奥義 half of the window."""
+    rows = member.club_skill_rows() if member is not None else struct.pack(">H", 0)
+    owned = struct.unpack_from(">H", rows, 0)[0]
     return [(MSG_SV_RESULT_CLUB_SKILL_LIST, struct.pack(">I", owned)),
-            (MSG_SV_NOTIFY_CLUB_SKILL_LIST, struct.pack(">H", owned))]
+            (MSG_SV_NOTIFY_CLUB_SKILL_LIST, rows)]
 
 
 def deck_reply(deck_id: int, use_type: int = USE_TYPE_NONE,
