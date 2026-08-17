@@ -525,6 +525,18 @@ def list_entry(
 
 TINY_ENTRY_SIZE = 74
 
+# ⭐⭐ friendGroupId's 「no group」 is 0xFFFFFFFF, not 0 -- measured in round 143
+# off the client's own code, not guessed. The PC 交流メニュー's 「グループ登録申込み」
+# is greyed out unless the person right-clicked answers -1 here: the predicate
+# behind that icon (VA 0x6FC2B2) reads friendGroupId out of the character record
+# and refuses on anything else, so a server that says 0 is saying 「already in
+# group 0」 and the invite can never be offered. Sending 0 is what kept that icon
+# grey through rounds 141-142 while every other explanation was ruled out.
+#
+# ⚠️ The neighbouring leaderAuthorityFlag is read by the same predicate, on the
+# *inviter* instead, and there 0/1 is right -- only this one field is a -1 field.
+NO_GROUP = 0xFFFFFFFF
+
 
 def add_entry(
     chara_id: int,
@@ -534,6 +546,7 @@ def add_entry(
     map_id: int = SPAWN_MAP_ID,
     direction: int = facing.DEFAULT,
     action: int = 0,
+    group_id: int = NO_GROUP,
 ) -> bytes:
     """Build one 74-byte MsgSvNotifyCharacterAdd (0x480F) entry.
 
@@ -588,7 +601,15 @@ def add_entry(
     # 自主トレ room -- so it gets a ruler of its own (chat.action_probes).
     out += struct.pack(">H", action)
     out += struct.pack(">B", 0)  # pose
-    out += struct.pack(">I", 0)  # friendGroupId
+    # ⭐⭐ This is the copy the client reaches for the *first* time somebody is
+    # right-clicked, before MsgSvResultCharaInfo for that id has come back --
+    # measured in round 143, where the 「グループ登録申込み」 icon stayed grey on
+    # the first right-click and went live on the second. So NO_GROUP has to be
+    # right in both messages or the menu is wrong exactly once per character.
+    # ⚠️ A character who really is in a group still shows -1 here: no caller
+    # passes group_id yet, and nothing on screen has been traced to this copy
+    # other than the icon above.
+    out += struct.pack(">I", group_id)  # friendGroupId
     if len(out) != TINY_ENTRY_SIZE:
         raise AssertionError(f"entry is {len(out)}B, reader wants {TINY_ENTRY_SIZE}")
     return bytes(out)
@@ -601,7 +622,7 @@ def chara_info(
     info: bytes,
     in_club: int = 0,
     group_name: bytes = b"",
-    group_id: int = 0,
+    group_id: int = NO_GROUP,
     leader_authority: int = 0,
     leader_qualification: int = 0,
 ) -> bytes:
