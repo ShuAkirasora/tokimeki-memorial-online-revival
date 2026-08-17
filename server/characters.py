@@ -467,6 +467,7 @@ def list_entry(
     captured_npc_id: int = NO_CAPTURED_NPC,
     couple_flag: int = 0,
     in_club: int = 0,
+    group_name: bytes = b"",
 ) -> bytes:
     """Build one 238-byte MsgSvResultCharacterListFromAccount entry.
 
@@ -478,6 +479,12 @@ def list_entry(
     無所属」 — which is what makes this entry the cheapest place to read a
     joined club back off the screen: the same slot prints the club's name from
     `club.bin` once ``in_club`` is not 0.
+
+    ⭐ ``group_name`` is the other half of that same line, and it is the cheapest
+    positive control there is for the 仲良しグループ work: the select screen
+    prints this string with no permission check of any kind, so if the name
+    shows up here but the toolbar's seventh icon still refuses to open, the
+    bytes are landing and the gate is somewhere else. See groups.py.
     """
     f = parse_create_info(info)
     out = bytearray()
@@ -492,7 +499,7 @@ def list_entry(
     for key in LOOKS + ACCESSORY:
         out += struct.pack(">H", f[key])
     out += struct.pack(">H", 1)  # period
-    out += b"\x00" * GROUP_NAME_LEN  # friendGroupName
+    out += group_name.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]  # friendGroupName
     out += struct.pack(">HH", 0, in_club)  # inClass (0 = A組), inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
     out += struct.pack(">BB", couple_flag, 1)  # coupleFlag, newbieFlag
@@ -590,7 +597,14 @@ def add_entry(
 CHARA_INFO_SIZE = 139
 
 
-def chara_info(info: bytes, in_club: int = 0) -> bytes:
+def chara_info(
+    info: bytes,
+    in_club: int = 0,
+    group_name: bytes = b"",
+    group_id: int = 0,
+    leader_authority: int = 0,
+    leader_qualification: int = 0,
+) -> bytes:
     """Build the 139-byte MsgSvResultCharaInfo (0x6501) parameter block.
 
     This is what the lobby asks for the moment a character appears in the scene:
@@ -601,6 +615,13 @@ def chara_info(info: bytes, in_club: int = 0) -> bytes:
     Compared with the 238-byte list entry this one drops everything the lobby has
     no use for — abilities, club levels, stress, playTime, position — and adds
     ``loverCharaId``, ``friendGroupId`` and the two leader flags.
+
+    ⚠️ Those last three are the only place this end can tell the client anything
+    about 仲良しグループ before a single 0x62xx message is exchanged: the seventh
+    toolbar icon and the PC menu's 「グループ登録申込み」 both decide whether they
+    are usable without asking. All four default to the zeros this server sent
+    before groups existed, so a character in no group is byte-identical to how it
+    always was; groups.GroupBook.fields is what fills them in.
     """
     f = parse_create_info(info)
     out = bytearray()
@@ -618,9 +639,9 @@ def chara_info(info: bytes, in_club: int = 0) -> bytes:
     out += struct.pack(">BB", 0, 1)  # coupleFlag, newbieFlag
     out += struct.pack(">HHH", 0, 0, 0)  # title, classPost, clubPost
     out += struct.pack(">I", 0)  # loverCharaId
-    out += b"\x00" * GROUP_NAME_LEN  # friendGroupName
-    out += struct.pack(">I", 0)  # friendGroupId
-    out += struct.pack(">BB", 0, 0)  # leaderAuthorityFlag, leaderQualificationFlag
+    out += group_name.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]  # friendGroupName
+    out += struct.pack(">I", group_id)  # friendGroupId
+    out += struct.pack(">BB", leader_authority, leader_qualification)
     if len(out) != CHARA_INFO_SIZE:
         raise AssertionError(f"info is {len(out)}B, reader wants {CHARA_INFO_SIZE}")
     return bytes(out)
@@ -639,6 +660,7 @@ class CharacterStore:
         path: Path | None,
         ids: "charaids.CharaIndex | None" = None,
         account_id: int = 0,
+        group_book: object = None,
     ) -> None:
         # ⚠️ path is None for a detached store: one that is never read from disk
         # and never written back. It exists so a connection that has not named an
@@ -653,6 +675,11 @@ class CharacterStore:
         # the index. See add() for what it does instead.
         self.ids = ids
         self.account_id = account_id
+        # ⚠️ Typed as object rather than annotated properly: groups.py imports
+        # this module for GROUP_NAME_LEN, so naming GroupBook here would close
+        # that circle. Only the select screen's 「グループ ...」 line needs it,
+        # and a detached store simply has none.
+        self.group_book = group_book
         self.records: list[dict[str, object]] = []
         if path is not None and path.exists():
             try:
@@ -746,6 +773,18 @@ class CharacterStore:
             self.ids.release(chara_id)
         return True
 
+    def group_name(self, chara_id: int) -> bytes:
+        """This character's 仲良しグループ name, or empty for 無所属.
+
+        Empty is what every character answered before groups.GroupBook existed,
+        and a detached store has no book at all, so both fall through to the
+        same bytes the select screen has always been sent.
+        """
+        book = self.group_book
+        if book is None:
+            return b""
+        return book.fields(chara_id)[0]
+
     def entries(self) -> bytes:
         """``u16 count`` followed by one entry per character.
 
@@ -766,6 +805,7 @@ class CharacterStore:
                     (pos_x, pos_y),
                     map_id,
                     in_club=self.in_club(chara_id),
+                    group_name=self.group_name(chara_id),
                 )
             )
         if self.records and LIST_PROBES:

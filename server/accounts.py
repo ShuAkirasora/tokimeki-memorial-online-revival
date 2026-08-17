@@ -99,6 +99,7 @@ import secrets
 import charaids
 import codes
 import friends
+import groups
 import item
 import konami_id
 from characters import CharacterStore
@@ -216,6 +217,8 @@ class AccountStore:
         # entry in one address book is an entry in somebody else's too, and the
         # two accounts it spans have no reason to be the same one.
         self.friends = friends.FriendBook(self.dir)
+        # Beside it, and for the same reason: a 仲良しグループ spans accounts.
+        self.groups = groups.GroupBook(self.dir)
         self.codes = codes.CodeTable(self.dir)
         # The three tables in runtime/accounts are built here so that everything
         # holding one holds the same one; run_all.py reaches the other two
@@ -500,6 +503,7 @@ class AccountStore:
                 self._path(account_id),
                 ids=self.charas,
                 account_id=account_id,
+                group_book=self.groups,
             )
             self._stores[account_id] = store
         return store
