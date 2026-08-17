@@ -8,12 +8,18 @@ open. The 「グループ登録申込み」 icon in the PC 交流メニュー is
 same reason, also without asking this end anything.
 
 So the gate is in the character record the client already holds, and this server
-sends all four of the fields that could hold it as zero:
+used to send all four of the fields that could hold it as zero:
 
     friendGroupName          21 bytes, all zero   (0x6501 and the 238B list entry)
     friendGroupId            u32 0                (0x6501 and the 74B tiny entry)
     leaderAuthorityFlag      u8 0                 (0x6501)
     leaderQualificationFlag  u8 0                 (0x6501)
+
+⭐⭐⭐ Round 143 finished that sentence: zero is not a neutral value on the
+second one. The client's predicate behind 「グループ登録申込み」 (VA 0x6FC2B2)
+reads the *target's* friendGroupId and refuses on anything but -1, so 0 was
+saying 「already in group 0」 about every character on the map. See
+characters.NO_GROUP; the three fields around it really are zero when empty.
 
 ⭐ The manual says what the last one means and it reads like a latch: 「リーダー
 試験」に合格し、リーダー資格を得ることにより、「仲良しグループ」を作成できる
@@ -47,7 +53,7 @@ import json
 import struct
 from pathlib import Path
 
-from characters import GROUP_NAME_LEN, NAME_LEN
+from characters import GROUP_NAME_LEN, NAME_LEN, NO_GROUP
 
 MSG_CL_REQUEST_CHARA_GROUP_CREATE = 0x6200
 MSG_SV_OK_CHARA_GROUP_CREATE = 0x6201
@@ -59,11 +65,46 @@ MSG_SV_NOTIFY_CHARA_GROUP_DESTROY = 0x6206
 MSG_CL_QUERY_CHARA_GROUP_INFO = 0x6207
 MSG_SV_RESULT_CHARA_GROUP_INFO = 0x6208
 MSG_SV_ERROR_CHARA_GROUP_INFO = 0x6209
+MSG_CL_REQUEST_CHARA_GROUP_INVITE_REQUEST = 0x6218
+MSG_SV_OK_CHARA_GROUP_INVITE_REQUEST = 0x6219
+MSG_SV_NG_CHARA_GROUP_INVITE_REQUEST = 0x621A
+MSG_SV_REQUEST_CHARA_GROUP_INVITE_RESPONSE = 0x621B
+MSG_CL_OK_CHARA_GROUP_INVITE_RESPONSE = 0x621C
+MSG_CL_NG_CHARA_GROUP_INVITE_RESPONSE = 0x621D
+MSG_SV_NOTIFY_CHARA_GROUP_JOIN = 0x621E
+MSG_CL_REQUEST_CHARA_GROUP_INVITE_CANCEL = 0x621F
+MSG_SV_OK_CHARA_GROUP_INVITE_CANCEL = 0x6220
+MSG_SV_NG_CHARA_GROUP_INVITE_CANCEL = 0x6221
+MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL = 0x6222
 
-#: What this module answers so far. 「グループ情報」 only -- 解散 and 引継, the
-#: other two rows the menu offers a leader, are their own handshakes and are
-#: left unanswered on purpose rather than half-answered.
-HANDLED = frozenset({MSG_CL_QUERY_CHARA_GROUP_INFO})
+#: The 勧誘 handshake, measured with the shape reader and the field-name extractor:
+#:
+#:   0x6218 targetId u32   the 「グループ登録申込み」 icon in the PC 交流メニュー
+#:   0x6219 (empty)        the inviter's receipt
+#:   0x621A reason u8      refused before the other side ever hears
+#:   0x621B senderId u32   the other side is asked; senderId is the *inviter*
+#:   0x621C answer u8      they accept  -- ⚠️ no id in it, see below
+#:   0x621D reason u8      they decline -- ⚠️ no id in it either
+#:   0x621E (empty)        it happened; a bell, the roster comes from 0x6207
+#:   0x621F (empty)        the inviter withdraws -- ⚠️ no id in it either
+#:
+#: ⚠️⚠️ Three of those carry no charaId at all, which is a statement about the
+#: shape of the feature and not an omission: a character can be one end of at
+#: most one application at a time, so the ids live in the session and the wire
+#: does not repeat them. friends' 0x6407 does carry one; this family does not.
+HANDLED = frozenset({
+    MSG_CL_QUERY_CHARA_GROUP_INFO,
+    MSG_CL_REQUEST_CHARA_GROUP_INVITE_REQUEST,
+    MSG_CL_OK_CHARA_GROUP_INVITE_RESPONSE,
+    MSG_CL_NG_CHARA_GROUP_INVITE_RESPONSE,
+    MSG_CL_REQUEST_CHARA_GROUP_INVITE_CANCEL,
+})
+
+#: 「仲良しグループ」は１５人まで登録できます (p05_05 §3). The client checks
+#: nothing about the size before it sends 0x6218 -- the icon is live whatever
+#: the roster holds -- so this end is the only place the manual's number can be
+#: enforced.
+MAX_MEMBERS = 15
 
 #: ⚠️ INVENTED, like every other reason byte here. See mps_session.NG_REASON.
 REASON = 0
@@ -218,13 +259,13 @@ class GroupBook:
 
         ⭐ The whole point of routing every record through one call: a character
         in no group answers exactly the bytes this server sent before groups
-        existed, so switching the store on changes nothing until something is
-        actually put in it.
+        existed, apart from the one correction round 143 measured -- see
+        characters.NO_GROUP.
         """
         group = self.of(chara_id)
         return (
             group.name if group is not None else b"\x00" * GROUP_NAME_LEN,
-            group.id if group is not None else 0,
+            group.id if group is not None else NO_GROUP,
             1 if group is not None and group.leader == chara_id else 0,
             1 if chara_id in self.qualified else 0,
         )

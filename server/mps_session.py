@@ -829,6 +829,13 @@ class _Session:
         # 0x6407/0x6408 answer one of the second.
         self.friends_asked: set[int] = set()
         self.friends_asking: set[int] = set()
+        # 仲良しグループ 勧誘, the same idea one size smaller: 0x621C/0x621D/0x621F
+        # carry no charaId, so a session can be one end of at most one invite at
+        # a time and a set would be answering a question the wire cannot ask.
+        # ``group_invited`` is whom this session has invited, ``group_inviter``
+        # is who invited it.
+        self.group_invited: int | None = None
+        self.group_inviter: int | None = None
         # The client's own clock, as of the last tag-8 probe, plus when that
         # arrived by our monotonic clock. MsgSvNotifyCharaMove has to state an
         # arrivalTime on the client's timebase, and the tag-8 exchange is the
@@ -2791,7 +2798,8 @@ class MpsServer:
                 # gets you.
                 return self._friends(session, sequence, msg_type, params)
             if msg_type in groups.HANDLED:
-                # 仲良しグループ. Only 「グループ情報」 so far; see _groups.
+                # 仲良しグループ: 「グループ情報」 and the 勧誘 handshake behind
+                # the PC 交流メニュー's 「グループ登録申込み」; see _groups.
                 return self._groups(session, sequence, msg_type, params)
             if msg_type in lesson_skill.HANDLED:
                 # お助けスキル. Eight skills, one entry point: what differs
@@ -5988,9 +5996,17 @@ class MpsServer:
         friendGroupId in the character's own 0x6501 record. Measured in round
         142, one field at a time: leaderQualificationFlag alone left the icon
         just as dead, and the id alone opened it.
+
+        ⭐⭐ Round 143 added the 勧誘 handshake behind 「グループ登録申込み」. The
+        icon needs the *inviter's* leaderAuthorityFlag set and the *target's*
+        friendGroupId equal to -1; nothing else about either side is consulted,
+        and in particular the client never checks the roster size, so 15 is
+        enforced here (groups.MAX_MEMBERS) and nowhere else.
         """
         book = self.accounts.groups
         me = session.chara_id
+        if msg_type != groups.MSG_CL_QUERY_CHARA_GROUP_INFO:
+            return self._group_invite(session, seen, msg_type, params)
         group = book.of(me)
         if group is None:
             # The client should not be able to ask -- it only draws the menu for
@@ -6022,6 +6038,142 @@ class MpsServer:
         return self._answer(
             session, seen, groups.MSG_SV_RESULT_CHARA_GROUP_INFO,
             groups.result_params(group, roster),
+        )
+
+    def _forget_stale_invite(self, session: "_Session") -> None:
+        """Drop either end of an invite whose other side is no longer connected."""
+        if (session.group_invited is not None
+                and self._session_of(session.group_invited) is None):
+            session.group_invited = None
+        if (session.group_inviter is not None
+                and self._session_of(session.group_inviter) is None):
+            session.group_inviter = None
+
+    def _group_invite(self, session: "_Session", seen: int,
+                      msg_type: int, params: bytes) -> bytes:
+        """勧誘: 0x6218 → 0x621B → 0x621C/0x621D → 0x621E. See server/groups.py.
+
+        Same shape as the 友達登録 handshake in _friends and refused on the same
+        ground when the other side is offline: nothing in the family can carry
+        an application across a logout, so writing one down would be writing
+        down a question nobody can ever be asked.
+
+        ⚠️ The one real difference is that the answering half carries no id, so
+        each session holds at most one invite in each direction. A second 0x6218
+        from a leader who is already waiting is refused rather than allowed to
+        overwrite the first: the client would then have no way to say which one
+        its 0x621C meant.
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        first = params[0] if params else 0
+
+        if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_INVITE_REQUEST:
+            target = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+            group = book.of(me)
+            other = self._session_of(target) if target else None
+            # An application whose other end has logged out is over, and the
+            # only trace of it is a stale id in a session. Clearing it here
+            # rather than at logout keeps the rule in one place: an invite is
+            # open exactly while both ends are connected.
+            self._forget_stale_invite(session)
+            if other is not None:
+                self._forget_stale_invite(other)
+            why = None
+            if target in (0, me) or other is None:
+                why = "no target" if target in (0, me) else "not online"
+            elif group is None or group.leader != me:
+                why = "not a leader"
+            elif book.of(target) is not None:
+                why = "already in a group"
+            elif len(group.members) >= groups.MAX_MEMBERS:
+                why = f"full ({groups.MAX_MEMBERS})"
+            elif session.group_invited is not None or other.group_inviter is not None:
+                why = "an application is already open"
+            if why is not None:
+                print(f"[{self.tag}] 勧誘 from charaId={me} to {target} refused: {why}")
+                return self._answer(
+                    session, seen, groups.MSG_SV_NG_CHARA_GROUP_INVITE_REQUEST,
+                    struct.pack(">B", groups.REASON),
+                )
+            assert other is not None
+            session.group_invited = target
+            other.group_inviter = me
+            print(f"[{self.tag}] 勧誘: charaId={me} is asking {target} "
+                  f"into {group.label()}")
+            reply = self._answer(
+                session, seen, groups.MSG_SV_OK_CHARA_GROUP_INVITE_REQUEST, b"",
+            )
+            self._push(other, self._answer(
+                other, 0, groups.MSG_SV_REQUEST_CHARA_GROUP_INVITE_RESPONSE,
+                struct.pack(">I", me),
+            ))
+            return reply
+
+        if msg_type == groups.MSG_CL_OK_CHARA_GROUP_INVITE_RESPONSE:
+            asker = session.group_inviter
+            leader = self._session_of(asker) if asker is not None else None
+            group = book.of(asker) if asker is not None else None
+            if asker is None or leader is None or group is None:
+                print(f"[{self.tag}] 勧誘 accept from charaId={me}: "
+                      f"nobody is asking, ignoring")
+                session.group_inviter = None
+                return b""
+            session.group_inviter = None
+            leader.group_invited = None
+            book.join(group.id, me)
+            print(f"[{self.tag}] 勧誘: charaId={me} accepted {asker} "
+                  f"(answer={first}); {group.label()}")
+            # ⚠️ A bell with no payload, so it cannot say who joined. Everybody
+            # already in the group gets one and re-opens the window to see the
+            # row; the joiner needs a 登校 for its own record to change.
+            for member in group.members:
+                if member == me:
+                    continue
+                peer = self._session_of(member)
+                if peer is not None:
+                    self._push(peer, self._answer(
+                        peer, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_JOIN, b"",
+                    ))
+            return self._answer(
+                session, seen, groups.MSG_SV_NOTIFY_CHARA_GROUP_JOIN, b"",
+            )
+
+        if msg_type == groups.MSG_CL_NG_CHARA_GROUP_INVITE_RESPONSE:
+            asker = session.group_inviter
+            session.group_inviter = None
+            leader = self._session_of(asker) if asker is not None else None
+            if leader is not None:
+                leader.group_invited = None
+                # The same judgement call _friends makes for 0x640D: the family
+                # has no 「they said no」 of its own and 0x6222 is the only
+                # message that tells somebody an application has ended.
+                self._push(leader, self._answer(
+                    leader, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL,
+                    struct.pack(">B", first),
+                ))
+            print(f"[{self.tag}] 勧誘: charaId={me} declined {asker} "
+                  f"(reason={first})")
+            return b""
+
+        # 0x621F, the inviter withdrawing. Empty request, empty Ok.
+        target = session.group_invited
+        if target is None:
+            return self._answer(
+                session, seen, groups.MSG_SV_NG_CHARA_GROUP_INVITE_CANCEL,
+                struct.pack(">B", groups.REASON),
+            )
+        session.group_invited = None
+        asked = self._session_of(target)
+        if asked is not None:
+            asked.group_inviter = None
+            self._push(asked, self._answer(
+                asked, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL,
+                struct.pack(">B", groups.REASON),
+            ))
+        print(f"[{self.tag}] 勧誘: charaId={me} withdrew the application to {target}")
+        return self._answer(
+            session, seen, groups.MSG_SV_OK_CHARA_GROUP_INVITE_CANCEL, b"",
         )
 
     def _friends(self, session: "_Session", seen: int,
