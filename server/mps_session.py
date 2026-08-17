@@ -80,6 +80,7 @@ import curriculum
 import exam
 import facing
 import friends
+import groups
 import item
 import konami_id
 import lesson
@@ -2077,6 +2078,9 @@ class MpsServer:
                     # all, and the friend on the other side would be left with a
                     # book they cannot repair from any button on screen.
                     self.accounts.friends.forget(chara_id)
+                    # And out of any 仲良しグループ, which for a leader means the
+                    # group goes with them -- see groups.GroupBook.leave.
+                    self.accounts.groups.forget(chara_id)
                     print(f"[{self.tag}] deleted charaId={chara_id}; left: {self._chars(session).summary()}")
                     return self._answer(session, sequence, MSG_SV_OK_CHARACTER_DESTROY, b"")
                 print(f"[{self.tag}] destroy: no charaId={chara_id}, answering Ng")
@@ -2393,6 +2397,14 @@ class MpsServer:
                     print(f"[{self.tag}] chara info: no charaId={chara_id}, answering Error")
                     return self._answer(session, sequence, MSG_SV_ERROR_CHARA_INFO, bytes(1))
                 print(f"[{self.tag}] chara info for charaId={chara_id}")
+                # The four 仲良しグループ fields. The book is one table for the
+                # whole server, so unlike the club flag there is no owner store
+                # to look the asked-about character up in.
+                gname, gid, authority, qualification = self.accounts.groups.fields(chara_id)
+                if gid or qualification:
+                    shown = gname.split(b"\x00")[0].decode("cp932", "replace")
+                    print(f"[{self.tag}]   group: id={gid} name={shown!r} "
+                          f"leaderAuthority={authority} qualified={qualification}")
                 return self._answer(
                     session,
                     sequence,
@@ -2404,6 +2416,10 @@ class MpsServer:
                         info,
                         in_club=(self.accounts.owner_of(chara_id) or self._chars(session))
                         .in_club(chara_id),
+                        group_name=gname,
+                        group_id=gid,
+                        leader_authority=authority,
+                        leader_qualification=qualification,
                     ),
                 )
             if msg_type == curriculum.MSG_CL_QUERY_CURRICULUM:
@@ -2774,6 +2790,9 @@ class MpsServer:
                 # window that lists nobody is what answering only the query
                 # gets you.
                 return self._friends(session, sequence, msg_type, params)
+            if msg_type in groups.HANDLED:
+                # 仲良しグループ. Only 「グループ情報」 so far; see _groups.
+                return self._groups(session, sequence, msg_type, params)
             if msg_type in lesson_skill.HANDLED:
                 # お助けスキル. Eight skills, one entry point: what differs
                 # between them is which rules apply and what goes back, and both
@@ -5528,6 +5547,76 @@ class MpsServer:
               f"here, 0xA4C4D0 rejected the reply with 「bad sequence number」")
         return reply
 
+    def _group_console(
+        self, session: "_Session", sequence: int, args: "list[str]"
+    ) -> bytes:
+        """``/group ...``: the 仲良しグループ store, from the console.
+
+        ⚠️ This is the only way into the store right now, and it is a stand-in
+        for two things that do not exist here: the リーダー試験 NPC event, which
+        is what awards 「リーダー資格」 in the real game, and the 0x6200 create
+        handshake, which is what the client would send once the button that
+        sends it is reachable. Both write exactly what this writes.
+
+        ⭐ Nothing here takes effect on a client that is already logged in. All
+        four fields ride in MsgSvResultCharaInfo, which the client asks for once
+        when a character enters the scene and then keeps -- so every one of
+        these is followed by a 登校 before it can be seen.
+
+            /group                     what the store holds
+            /group qual on|off         leaderQualificationFlag for me
+            /group create <name>       found one, me as leader
+            /group join <charaId>      put somebody else in mine (hex ok)
+            /group leave               脱退 -- the leader leaving disbands it
+            /group disband             解散
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        what = args[0].lower() if args else ""
+        mine = book.of(me)
+
+        def state() -> str:
+            where = mine.label() if mine is not None else "no group"
+            qual = "yes" if me in book.qualified else "no"
+            return f"/group {where}, qualified={qual} [{book.summary()}]"
+
+        if not what:
+            return self._say(session, sequence, state())
+        if what == "qual":
+            on = args[1:2] != ["off"]
+            book.qualify(me, on)
+            return self._say(session, sequence, f"/group qual {'on' if on else 'off'} "
+                                                f"(re-login to see it)")
+        if what == "create":
+            name = " ".join(args[1:]).strip()
+            if not name:
+                return self._say(session, sequence, "/group create <name>")
+            group = book.create(me, groups.name_bytes(name))
+            if group is None:
+                return self._say(session, sequence, f"/group: already in {mine.label()}")
+            return self._say(session, sequence, f"/group created {group.label()} "
+                                                f"(re-login to see it)")
+        if what == "join":
+            if mine is None:
+                return self._say(session, sequence, "/group: found one first")
+            try:
+                other = int(args[1], 0)
+            except (IndexError, ValueError):
+                return self._say(session, sequence, "/group join <charaId>")
+            ok = book.join(mine.id, other)
+            return self._say(session, sequence, f"/group join {other:#x}: "
+                                                f"{'ok' if ok else 'refused'}")
+        if what in ("leave", "disband"):
+            if mine is None:
+                return self._say(session, sequence, "/group: not in one")
+            was = mine.label()
+            if what == "leave":
+                book.leave(me)
+            else:
+                book.disband(mine.id)
+            return self._say(session, sequence, f"/group left {was} (re-login to see it)")
+        return self._say(session, sequence, f"/group: unknown '{what}'")
+
     def _apply_chat(self, session: "_Session", sequence: int, said: str) -> bytes:
         """Run one console line and pack whatever it asked for.
 
@@ -5538,6 +5627,8 @@ class MpsServer:
             return self._battle_probe(session, sequence, said.split()[1:])
         if said.split()[:1] == ["/seq"]:
             return self._seq_probe(session, sequence, said.split()[1:])
+        if said.split()[:1] == ["/group"]:
+            return self._group_console(session, sequence, said.split()[1:])
         reply = b""
         info = self._chars(session).find(session.chara_id)
         love = self._chars(session).romance(session.chara_id)
@@ -5885,6 +5976,52 @@ class MpsServer:
         sheet = self._chars(session).ability(session.chara_id)
         return sheet is not None and sheet.condition in (
             stress.NEUROSIS, stress.DOCTOR_STOP
+        )
+
+    def _groups(self, session: "_Session", seen: int,
+                msg_type: int, params: bytes) -> bytes:
+        """仲良しグループ. See server/groups.py.
+
+        ⭐ The toolbar's seventh icon opens a three-row menu -- グループ情報 /
+        グループ解散 / グループ引継 -- and only the first of those is answered
+        here. What made the menu appear at all is not a message: it is
+        friendGroupId in the character's own 0x6501 record. Measured in round
+        142, one field at a time: leaderQualificationFlag alone left the icon
+        just as dead, and the id alone opened it.
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        group = book.of(me)
+        if group is None:
+            # The client should not be able to ask -- it only draws the menu for
+            # somebody whose record carries an id -- but a record and a store
+            # that disagree is exactly the case worth answering rather than
+            # hanging, which is what an unanswered query does (see the 通信中 box).
+            print(f"[{self.tag}] group info: charaId={me} is in no group, answering Error")
+            return self._answer(
+                session, seen, groups.MSG_SV_ERROR_CHARA_GROUP_INFO,
+                struct.pack(">B", groups.REASON),
+            )
+        roster = []
+        for member in group.members:
+            info = self._peer_chara(member)
+            if info is None:
+                print(f"[{self.tag}] group info: no record for charaId={member}, "
+                      f"skipping the row")
+                continue
+            fields = parse_create_info(info)
+            roster.append((
+                member,
+                fields["familyName"],
+                fields["firstName"],
+                fields["sex"],
+                1 if self._session_of(member) is not None else 0,
+            ))
+        print(f"[{self.tag}] group info for charaId={me}: {group.label()}, "
+              f"{len(roster)} member row(s)")
+        return self._answer(
+            session, seen, groups.MSG_SV_RESULT_CHARA_GROUP_INFO,
+            groups.result_params(group, roster),
         )
 
     def _friends(self, session: "_Session", seen: int,
