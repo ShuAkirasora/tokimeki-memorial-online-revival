@@ -1,11 +1,13 @@
 """仲良しグループ -- the toolbar's seventh icon and the 0x62xx family.
 
 Where this starts. The sixth icon (アドレス帳) was answered in round 141; the
-seventh one, right beside it, does nothing when clicked. Hovering it turns the
-tooltip into 「グループ未所属」 and **not one byte goes out** -- same shape as the
-right-click menu in 2.90: the client decided on its own that there is nothing to
-open. The 「グループ登録申込み」 icon in the PC 交流メニュー is greyed out for the
-same reason, also without asking this end anything.
+seventh one, right beside it, opens a menu whose only row is a greyed
+「グループ未所属」, and **not one byte goes out** -- same shape as the right-click
+menu in 2.90: the client decided on its own that there is nothing to open. (The
+icon's own tooltip is always 「仲良しグループ」; round 142 wrote the greyed row's
+text down as the tooltip's, corrected in round 144.) The 「グループ登録申込み」
+icon in the PC 交流メニュー is greyed out for the same reason, also without asking
+this end anything.
 
 So the gate is in the character record the client already holds, and this server
 used to send all four of the fields that could hold it as zero:
@@ -42,6 +44,14 @@ None of the cooldowns are modelled here. They are calendar rules with no message
 of their own, and the school clock this server runs (curriculum.clock) is not
 the one those 30 days would be counted against.
 
+⭐⭐ Round 144 closed the window: ［更 新］ (0x620A) and ［除 名］ (0x6226) are
+answered, so every control the 仲良しグループ情報 window draws now does
+something. 解散 and 引継 are still open, and the reason to have left them is the
+one 2.93 states -- answering half a handshake is harder to debug than answering
+none of it -- but the two *inside* the window were a different case: an
+unanswered request from a window that is already open hangs the client on
+「通信中」 and costs a restart.
+
 The store is one file for the whole server, for the reason friends.FriendBook
 gives: a group spans accounts, so a per-account file would have to be written
 twice and could disagree with itself.
@@ -65,6 +75,9 @@ MSG_SV_NOTIFY_CHARA_GROUP_DESTROY = 0x6206
 MSG_CL_QUERY_CHARA_GROUP_INFO = 0x6207
 MSG_SV_RESULT_CHARA_GROUP_INFO = 0x6208
 MSG_SV_ERROR_CHARA_GROUP_INFO = 0x6209
+MSG_CL_REQUEST_CHARA_GROUP_UPDATE = 0x620A
+MSG_SV_OK_CHARA_GROUP_UPDATE = 0x620B
+MSG_SV_NG_CHARA_GROUP_UPDATE = 0x620C
 MSG_CL_REQUEST_CHARA_GROUP_INVITE_REQUEST = 0x6218
 MSG_SV_OK_CHARA_GROUP_INVITE_REQUEST = 0x6219
 MSG_SV_NG_CHARA_GROUP_INVITE_REQUEST = 0x621A
@@ -76,6 +89,26 @@ MSG_CL_REQUEST_CHARA_GROUP_INVITE_CANCEL = 0x621F
 MSG_SV_OK_CHARA_GROUP_INVITE_CANCEL = 0x6220
 MSG_SV_NG_CHARA_GROUP_INVITE_CANCEL = 0x6221
 MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL = 0x6222
+MSG_CL_REQUEST_CHARA_GROUP_KICK = 0x6226
+MSG_SV_OK_CHARA_GROUP_KICK = 0x6227
+MSG_SV_NG_CHARA_GROUP_KICK = 0x6228
+MSG_SV_NOTIFY_CHARA_GROUP_KICK = 0x6229
+
+#: The two buttons inside the 仲良しグループ情報 window, measured the same way:
+#:
+#:   0x620A publicFlag u8 + counted catchcopy   ← ［更 新］
+#:   0x620B (empty) / 0x620C reason u8
+#:   0x6226 targetCharaId u32                   ← ［除 名］
+#:   0x6227 (empty) / 0x6228 reason u8 / 0x6229 (empty)
+#:
+#: ⚠️ Until round 144 those two were the only controls in a window this server
+#: could otherwise draw completely, and an unanswered request is worse than a
+#: window that never opens: the client hangs on 「通信中」 and has to be
+#: restarted. Answering half a window is the thing 2.93 warned about.
+#:
+#: ⚠️⚠️ The catchcopy here is the counted string 0x6208 sends back, NOT the
+#: 21-byte fixed field the character record spends on its own catchCopy. See
+#: MAX_CATCHCOPY for why nothing pads it.
 
 #: The 勧誘 handshake, measured with the shape reader and the field-name extractor:
 #:
@@ -94,10 +127,12 @@ MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL = 0x6222
 #: does not repeat them. friends' 0x6407 does carry one; this family does not.
 HANDLED = frozenset({
     MSG_CL_QUERY_CHARA_GROUP_INFO,
+    MSG_CL_REQUEST_CHARA_GROUP_UPDATE,
     MSG_CL_REQUEST_CHARA_GROUP_INVITE_REQUEST,
     MSG_CL_OK_CHARA_GROUP_INVITE_RESPONSE,
     MSG_CL_NG_CHARA_GROUP_INVITE_RESPONSE,
     MSG_CL_REQUEST_CHARA_GROUP_INVITE_CANCEL,
+    MSG_CL_REQUEST_CHARA_GROUP_KICK,
 })
 
 #: 「仲良しグループ」は１５人まで登録できます (p05_05 §3). The client checks
@@ -115,6 +150,19 @@ MEMBER_LIMIT = 15
 CLUBLIKE_MEMBER_LIMIT = 30
 
 
+#: How much キャッチコピー this end will keep. ⚠️ INVENTED, and deliberately
+#: larger than anything the client has been seen to send rather than fitted to
+#: it: the wire field is counted, so unlike friendGroupName nothing in the
+#: protocol caps it, and a cap that is too small does not fail loudly -- it
+#: silently shortens what the player typed and makes the 「type it, press
+#: ［更 新］, reopen the window」 round trip look like it half-worked.
+#:
+#: ⭐ The one length that *is* measured is what arrives: _group_update logs it,
+#: so the client's own edit-box limit falls out of the first update anyone does
+#: instead of having to be read out of a dialog resource.
+MAX_CATCHCOPY = 64
+
+
 def name_bytes(text: str) -> bytes:
     """A group name as the record wants it: cp932, NUL-padded to 21 bytes.
 
@@ -124,6 +172,17 @@ def name_bytes(text: str) -> bytes:
     """
     raw = text.encode("cp932", "replace")
     return raw.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]
+
+
+def catchcopy_bytes(text: str) -> bytes:
+    """A キャッチコピー as this server keeps it: cp932, no padding.
+
+    ⚠️ Not name_bytes: the group name is a 21-byte field in the character
+    record and has to be padded to that width, but the catchcopy only ever
+    travels as a counted string (0x620A in, 0x6208 out) and padding it would be
+    inventing a width the protocol does not have.
+    """
+    return text.encode("cp932", "replace").split(b"\x00")[0][:MAX_CATCHCOPY]
 
 
 class Group:
@@ -143,9 +202,9 @@ class Group:
         self.name = name.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]
         self.leader = leader
         self.members: list[int] = list(members if members is not None else [leader])
-        self.public = public
+        self.public = public & 0xFF
         self.clublike = clublike
-        self.catchcopy = catchcopy.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]
+        self.catchcopy = catchcopy.split(b"\x00")[0][:MAX_CATCHCOPY]
 
     @property
     def limit(self) -> int:
@@ -158,7 +217,7 @@ class Group:
             "members": [f"0x{member:08x}" for member in self.members],
             "public": self.public,
             "clublike": self.clublike,
-            "catchcopy": self.catchcopy.split(b"\x00")[0].decode("cp932", "replace"),
+            "catchcopy": self.catchcopy.decode("cp932", "replace"),
         }
 
     def label(self) -> str:
@@ -226,7 +285,7 @@ class GroupBook:
                 members,
                 int(body.get("public", 1)),
                 int(body.get("clublike", 0)),
-                name_bytes(str(body.get("catchcopy", ""))),
+                catchcopy_bytes(str(body.get("catchcopy", ""))),
             )
 
     def _save(self) -> None:
@@ -306,6 +365,41 @@ class GroupBook:
         self._save()
         return True
 
+    def update(self, group_id: int, public: int, catchcopy: bytes) -> bool:
+        """［更 新］: the 公開 dropdown and the キャッチコピー box, 0x620A.
+
+        ⚠️ ``public`` is kept as the byte that arrived rather than clamped to
+        0/1. The dropdown has two entries and 1 is 公開 (round 142 read that off
+        the window), but a value this end invents cannot be told apart from a
+        value the client chose, and round-tripping the byte is what would make a
+        third state visible if there is one.
+        """
+        group = self.groups.get(group_id)
+        if group is None:
+            return False
+        group.public = public & 0xFF
+        group.catchcopy = catchcopy.split(b"\x00")[0][:MAX_CATCHCOPY]
+        self._save()
+        return True
+
+    def kick(self, group_id: int, chara_id: int) -> bool:
+        """除名, 0x6226. False if there is nobody there to remove.
+
+        ⚠️ The leader is not removable this way even though the roster lists
+        them and the button does not grey itself out on their row: 解散 (0x6203)
+        and 引継 (0x620D) are the two messages that exist for a leader leaving,
+        and letting 除名 do it as well would leave a group with no one who can
+        kick or disband -- the same hole GroupBook.leave avoids.
+        """
+        group = self.groups.get(group_id)
+        if group is None or chara_id == group.leader:
+            return False
+        if chara_id not in group.members:
+            return False
+        group.members.remove(chara_id)
+        self._save()
+        return True
+
     def leave(self, chara_id: int) -> bool:
         """脱退. The leader leaving takes the group with them for now.
 
@@ -371,7 +465,7 @@ def result_params(group: Group, roster: "list[tuple[int, bytes, bytes, int, int]
 
     ``roster`` is (charaId, familyName, firstName, sex, onlineFlag) per member.
     """
-    catchcopy = group.catchcopy.split(b"\x00")[0] + b"\x00"
+    catchcopy = group.catchcopy + b"\x00"
     out = struct.pack(">BB", group.clublike, group.public)
     out += struct.pack(">H", len(catchcopy)) + catchcopy
     out += struct.pack(">H", len(roster))
