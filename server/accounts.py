@@ -98,6 +98,7 @@ import secrets
 
 import charaids
 import codes
+import friends
 import item
 import konami_id
 from characters import CharacterStore
@@ -211,6 +212,10 @@ class AccountStore:
         # into account 1's directory, and the backfill reads directories.
         self.charas = charaids.CharaIndex(self.dir)
         self.charas.backfill(self._saved_chara_ids())
+        # Alongside charas.json rather than inside an account directory: an
+        # entry in one address book is an entry in somebody else's too, and the
+        # two accounts it spans have no reason to be the same one.
+        self.friends = friends.FriendBook(self.dir)
         self.codes = codes.CodeTable(self.dir)
         # The three tables in runtime/accounts are built here so that everything
         # holding one holds the same one; run_all.py reaches the other two

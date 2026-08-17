@@ -79,6 +79,7 @@ import codes
 import curriculum
 import exam
 import facing
+import friends
 import item
 import konami_id
 import lesson
@@ -169,11 +170,16 @@ EXAM_SCHOOL_ID = 1
 EMPTY_LIST_REPLIES = {
     0x0312: 0x0313,  # MsgClQueryGalleryList  -> MsgSvResultGalleryList
     0x0315: 0x0316,  # MsgClQueryEndingList   -> MsgSvResultEndingList
-    0x6400: 0x6401,  # MsgClQueryFriendList   -> MsgSvResultFriendList (28B entries)
     # ⚠️ 0x0406 MsgClQueryLockerList used to be stubbed here with an empty list.
     # It is answered for real now, out of the account's own store -- see
     # item.Locker and the 0x0406 branch below -- because 0x4D0A can put things
     # into that store and a stub would have swallowed them.
+    #
+    # ⚠️ 0x6400 MsgClQueryFriendList was the second one to leave, in round 141,
+    # for the same reason: 0x6403 can now put a name into the address book, and
+    # a stub would have answered "you have no friends" over the top of it. See
+    # friends.py -- and note that the query is the *only* thing that fills that
+    # window, so the stub was also the reason it had never shown a row.
 }
 
 # The four things the アイテム window's buttons do to a row. Grouped because the
@@ -814,6 +820,14 @@ class _Session:
         # changes the map, so this is rebuilt rather than computed once.
         self._markers: tuple[tuple[str, int, int], ...] = ()
         self._markers_map = -1
+        # 友達登録 applications this session has out, by the charaId they were
+        # sent to, and the ones sent *to* it. Per session and not saved: an
+        # application is a question somebody is standing there waiting on, and a
+        # player who logs out has stopped waiting. The two sets are kept apart
+        # because the messages are -- 0x640A withdraws one of the first kind and
+        # 0x6407/0x6408 answer one of the second.
+        self.friends_asked: set[int] = set()
+        self.friends_asking: set[int] = set()
         # The client's own clock, as of the last tag-8 probe, plus when that
         # arrived by our monotonic clock. MsgSvNotifyCharaMove has to state an
         # arrivalTime on the client's timebase, and the tag-8 exchange is the
@@ -2057,6 +2071,12 @@ class MpsServer:
                 # than silence, which would leave the dialog spinning forever.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
                 if self._chars(session).remove(chara_id):
+                    # Out of everybody's アドレス帳 as well. A row is built from
+                    # the character's own record, so an edge to a deleted one
+                    # would not show a stale name -- it would show nothing at
+                    # all, and the friend on the other side would be left with a
+                    # book they cannot repair from any button on screen.
+                    self.accounts.friends.forget(chara_id)
                     print(f"[{self.tag}] deleted charaId={chara_id}; left: {self._chars(session).summary()}")
                     return self._answer(session, sequence, MSG_SV_OK_CHARACTER_DESTROY, b"")
                 print(f"[{self.tag}] destroy: no charaId={chara_id}, answering Ng")
@@ -2747,6 +2767,13 @@ class MpsServer:
                       f"choiceId={choice_id} "
                       f"({'○' if period.would_be_right() else '×'} once time is up)")
                 return b""
+            if msg_type in friends.HANDLED:
+                # 友達登録 and the アドレス帳 window it fills. Grouped for the
+                # same reason the item operations are: the list query and the
+                # four-message application handshake are one feature, and a
+                # window that lists nobody is what answering only the query
+                # gets you.
+                return self._friends(session, sequence, msg_type, params)
             if msg_type in lesson_skill.HANDLED:
                 # お助けスキル. Eight skills, one entry point: what differs
                 # between them is which rules apply and what goes back, and both
@@ -5858,6 +5885,161 @@ class MpsServer:
         sheet = self._chars(session).ability(session.chara_id)
         return sheet is not None and sheet.condition in (
             stress.NEUROSIS, stress.DOCTOR_STOP
+        )
+
+    def _friends(self, session: "_Session", seen: int,
+                 msg_type: int, params: bytes) -> bytes:
+        """アドレス帳 and the 友達登録 handshake. See server/friends.py.
+
+        ⚠️ Both halves of an application have to be online at once, and that is
+        the protocol's shape rather than a shortcut: 0x6403 is answered by a
+        person, through 0x6407/0x6408, and there is no message in the family for
+        an application that outlives the session it was sent from. So an offline
+        target is refused here instead of being written down somewhere it could
+        never be collected from.
+        """
+        book = self.accounts.friends
+        me = session.chara_id
+        target = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+        tail = params[4] if len(params) >= 5 else 0
+
+        if msg_type == friends.MSG_CL_QUERY_FRIEND_LIST:
+            # ⚠️ The one message that fills the window, sent once at login and
+            # never again while the player walks around. Anything this end wants
+            # in that list has to be in the store before 登校.
+            rows = []
+            for other in book.of(me):
+                info = self._peer_chara(other)
+                if info is None:
+                    # The store points at somebody no account claims any more.
+                    # Not fatal and not silent: a row cannot be built without a
+                    # record, and knowing which id went missing is the whole
+                    # value of noticing.
+                    print(f"[{self.tag}] address book: no record for "
+                          f"charaId={other}, skipping the row")
+                    continue
+                rows.append(friends.entry(other, info))
+            print(f"[{self.tag}] address book for charaId={me}: {len(rows)} row(s)")
+            return self._answer(
+                session, seen, friends.MSG_SV_RESULT_FRIEND_LIST,
+                friends.list_params(rows),
+            )
+
+        if msg_type == friends.MSG_CL_REQUEST_FRIEND_ADD_REQUEST:
+            other = self._session_of(target) if target else None
+            if target in (0, me) or book.linked(me, target) or other is None:
+                why = (
+                    "no target" if target in (0, me)
+                    else "already friends" if book.linked(me, target)
+                    else "not online"
+                )
+                print(f"[{self.tag}] 友達登録 from charaId={me} to {target} "
+                      f"refused: {why}")
+                return self._answer(
+                    session, seen, friends.MSG_SV_NG_FRIEND_ADD_REQUEST,
+                    struct.pack(">IB", target, friends.REASON),
+                )
+            session.friends_asked.add(target)
+            other.friends_asking.add(me)
+            print(f"[{self.tag}] 友達登録: charaId={me} is asking {target}")
+            reply = self._answer(
+                session, seen, friends.MSG_SV_OK_FRIEND_ADD_REQUEST,
+                struct.pack(">I", target),
+            )
+            self._push(other, self._answer(
+                other, 0, friends.MSG_SV_REQUEST_FRIEND_ADD_RESPONSE,
+                struct.pack(">I", me),
+            ))
+            return reply
+
+        if msg_type == friends.MSG_CL_OK_FRIEND_RESPONSE:
+            # ``answer`` is the second field and nothing here reads it: the
+            # message's own name already says yes, and what a value other than
+            # agreement would mean in an Ok has not been measured. Logged so a
+            # capture that ever carries something else is not lost.
+            asker = self._session_of(target)
+            if target not in session.friends_asking or asker is None:
+                print(f"[{self.tag}] 友達登録 accept from charaId={me} for "
+                      f"{target}: nothing was asked, ignoring")
+                return b""
+            session.friends_asking.discard(target)
+            asker.friends_asked.discard(me)
+            book.link(me, target)
+            print(f"[{self.tag}] 友達登録: charaId={me} accepted {target} "
+                  f"(answer={tail}); {book.summary()}")
+            # Both sides are told, each about the other. The message carries one
+            # id and no name, so this is only a bell -- the row itself comes out
+            # of the store the next time the window is filled.
+            self._push(asker, self._answer(
+                asker, 0, friends.MSG_SV_NOTIFY_FRIEND_ADD, struct.pack(">I", me),
+            ))
+            return self._answer(
+                session, seen, friends.MSG_SV_NOTIFY_FRIEND_ADD,
+                struct.pack(">I", target),
+            )
+
+        if msg_type == friends.MSG_CL_NG_FRIEND_RESPONSE:
+            asker = self._session_of(target)
+            session.friends_asking.discard(target)
+            if asker is not None:
+                asker.friends_asked.discard(me)
+                # ⚠️ A judgement call, not a reading. The family has no
+                # "they said no" message of its own, and 0x640D is the only one
+                # that tells somebody an application they were part of has
+                # ended. A capture showing the original answering the asker some
+                # other way is the thing that would replace this line.
+                self._push(asker, self._answer(
+                    asker, 0, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
+                    struct.pack(">IB", me, tail),
+                ))
+            print(f"[{self.tag}] 友達登録: charaId={me} declined {target} "
+                  f"(reason={tail})")
+            return b""
+
+        if msg_type == friends.MSG_CL_REQUEST_FRIEND_ADD_CANCEL:
+            if target not in session.friends_asked:
+                return self._answer(
+                    session, seen, friends.MSG_SV_NG_FRIEND_ADD_CANCEL,
+                    struct.pack(">IB", target, friends.REASON),
+                )
+            session.friends_asked.discard(target)
+            asked = self._session_of(target)
+            if asked is not None:
+                asked.friends_asking.discard(me)
+                self._push(asked, self._answer(
+                    asked, 0, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
+                    struct.pack(">IB", me, friends.REASON),
+                ))
+            print(f"[{self.tag}] 友達登録: charaId={me} withdrew the "
+                  f"application to {target}")
+            return self._answer(
+                session, seen, friends.MSG_SV_OK_FRIEND_ADD_CANCEL,
+                struct.pack(">I", target),
+            )
+
+        if msg_type == friends.MSG_CL_REQUEST_FRIEND_DEL:
+            # The 消去 button under the list. Ok carries nothing (listshape:
+            # 0x640f empty), Ng carries one reason byte.
+            if not book.unlink(me, target):
+                print(f"[{self.tag}] 消去: charaId={me} has no {target} to drop")
+                return self._answer(
+                    session, seen, friends.MSG_SV_NG_FRIEND_DEL,
+                    struct.pack(">B", friends.REASON),
+                )
+            print(f"[{self.tag}] 消去: charaId={me} dropped {target}; "
+                  f"{book.summary()}")
+            return self._answer(session, seen, friends.MSG_SV_OK_FRIEND_DEL, b"")
+
+        # MsgClQueryFriendState. Nothing has ever sent one here; it is answered
+        # ahead of the client because the shape is known and a query left
+        # hanging is how a window greys itself out forever.
+        state = (
+            friends.STATE_ONLINE if self._session_of(target)
+            else friends.STATE_OFFLINE
+        )
+        return self._answer(
+            session, seen, friends.MSG_SV_RESULT_FRIEND_STATE,
+            struct.pack(">IB", target, state),
         )
 
     def _lesson_skill(self, session: "_Session", seen: int,
