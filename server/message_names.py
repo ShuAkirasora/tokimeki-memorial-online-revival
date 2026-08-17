@@ -12,6 +12,7 @@ actually observed on the wire.
 """
 
 MESSAGE_NAMES = {
+    0x0001: 'MsgSvRequestMpsGameServerLogout',
     0x0020: 'MsgClNotifyAuthCode',
     0x0100: 'MsgClNotifyGameServerLogout',
     0x0200: 'MsgClRequestGameServerLogin',
@@ -121,6 +122,7 @@ MESSAGE_NAMES = {
     0x4003: 'MsgClRequestLobbyDataEnd',
     0x4004: 'MsgSvOkLobbyDataEnd',
     0x4005: 'MsgSvNgLobbyDataEnd',
+    0x4100: 'MsgSvNotifyActionIcon',
     0x4200: 'MsgClQueryDramaeventMatchingPossible',
     0x4201: 'MsgSvResultDramaeventMatchingPossible',
     0x4300: 'MsgClQueryCharaMenuDramaEventList',
@@ -631,6 +633,7 @@ MESSAGE_NAMES = {
     0x7000: 'MsgClRequestLoginServerLogin',
     0x7001: 'MsgSvOkLoginServerLogin',
     0x7002: 'MsgSvNgLoginServerLogin',
+    0x7100: 'MsgClNotifyLoginServerLogout',
     0x7200: 'MsgSvRequestScriptReady',
     0x7201: 'MsgClOkScriptReady',
     0x7202: 'MsgClNgScriptReady',
