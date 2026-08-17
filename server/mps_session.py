@@ -79,6 +79,7 @@ import codes
 import curriculum
 import exam
 import facing
+import item
 import konami_id
 import lesson
 import lesson_skill
@@ -2423,6 +2424,22 @@ class MpsServer:
                     print(f"[{self.tag}] club skill list: {owned} owned")
                 out = b""
                 for reply_type, reply_params in pairs:
+                    out += self._answer(session, sequence, reply_type, reply_params)
+                return out
+            if msg_type == item.MSG_CL_QUERY_ITEM_LIST:
+                # The アイテム window, opened by the toolbar's fourth icon and
+                # queried again on every tab click. The u16 it carries is the
+                # TAB, not a category — item.py maps one to the other, and says
+                # why one query can need more than one notify.
+                tab = item.parse_query(params)
+                inv = self._chars(session).items(session.chara_id)
+                rows = inv.for_tab(tab) if inv is not None else []
+                print(f"[{self.tag}] item list: tab {tab} "
+                      f"({item.tab_name(tab)}), {len(rows)} rows"
+                      + (" [probe: every tab gets everything]"
+                         if item.PROBE_ALL_TABS else ""))
+                out = b""
+                for reply_type, reply_params in item.list_replies(inv, tab):
                     out += self._answer(session, sequence, reply_type, reply_params)
                 return out
             if msg_type == club.MSG_CL_QUERY_CLUB_DECK_LIST:
@@ -5359,9 +5376,10 @@ class MpsServer:
         card = self._chars(session).scorecard(session.chara_id)
         sheet = self._chars(session).ability(session.chara_id)
         member = self._chars(session).club(session.chara_id)
+        inv = self._chars(session).items(session.chara_id)
         answer = chat.respond(
             said, session.map_id, session.pos, love, card, session.lesson,
-            sheet, session.in_class, session.exam, member,
+            sheet, session.in_class, session.exam, member, inv,
         )
         if answer.romance_save and love is not None:
             self._chars(session).set_romance(session.chara_id, love)
@@ -5371,6 +5389,8 @@ class MpsServer:
             self._chars(session).set_ability(session.chara_id, sheet)
         if answer.club_save and member is not None:
             self._chars(session).set_club(session.chara_id, member)
+        if answer.item_save and inv is not None:
+            self._chars(session).set_items(session.chara_id, inv)
         if answer.npc_event is not None:
             session.npc_event = answer.npc_event
         if answer.select is not None:

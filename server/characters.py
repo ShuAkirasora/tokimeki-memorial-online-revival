@@ -34,6 +34,7 @@ import ability
 import club
 import curriculum
 import facing
+import item
 import romance
 
 if TYPE_CHECKING:
@@ -890,6 +891,28 @@ class CharacterStore:
             if int(record["charaId"]) != chara_id:
                 continue
             record["club"] = state.to_json()
+            self._save()
+            return True
+        return False
+
+    def items(self, chara_id: int) -> "item.Inventory | None":
+        """This character's アイテム, or None if it is not ours.
+
+        Same treatment as ``club``, one subsystem over.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            saved = record.get("items")
+            return item.Inventory(saved if isinstance(saved, dict) else None)
+        return None
+
+    def set_items(self, chara_id: int, inv: "item.Inventory") -> bool:
+        """Write one character's アイテム back. False if it is not ours."""
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            record["items"] = inv.to_json()
             self._save()
             return True
         return False
