@@ -6002,9 +6002,20 @@ class MpsServer:
         friendGroupId equal to -1; nothing else about either side is consulted,
         and in particular the client never checks the roster size, so 15 is
         enforced here (groups.MAX_MEMBERS) and nowhere else.
+
+        ⭐⭐ Round 144 answered the two buttons inside the 仲良しグループ情報
+        window itself -- ［更 新］ (0x620A) and ［除 名］ (0x6226) -- which until
+        then hung the client on 「通信中」 when pressed. 解散 (0x6203) and 引継
+        (0x620D..0x6217) are still unanswered, but those are two rows of the
+        icon's menu rather than controls in an open window, and a menu row that
+        does nothing costs a restart only if it is clicked.
         """
         book = self.accounts.groups
         me = session.chara_id
+        if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_UPDATE:
+            return self._group_update(session, seen, params)
+        if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_KICK:
+            return self._group_kick(session, seen, params)
         if msg_type != groups.MSG_CL_QUERY_CHARA_GROUP_INFO:
             return self._group_invite(session, seen, msg_type, params)
         group = book.of(me)
@@ -6039,6 +6050,111 @@ class MpsServer:
             session, seen, groups.MSG_SV_RESULT_CHARA_GROUP_INFO,
             groups.result_params(group, roster),
         )
+
+    def _group_update(self, session: "_Session", seen: int, params: bytes) -> bytes:
+        """［更 新］ inside the 仲良しグループ情報 window: 0x620A → 0x620B/0x620C.
+
+        ``publicFlag u8`` then the キャッチコピー as a counted string -- the same
+        u16-length-then-bytes convention 0x6208 sends it back with, and *not*
+        the 21-byte fixed field the character record spends on its own catchCopy
+        (2.93). Both halves of the window's top block travel in this one
+        message; nothing else in the family carries either of them.
+
+        ⚠️ Leader only. The window opens for every member, and this end is the
+        only place that can say no -- the button is not greyed on a member's
+        screen, which is itself worth knowing: the client trusts the server for
+        this one where it gates 「グループ登録申込み」 itself.
+
+        ⭐ There is no notify in this family, so the other members do not learn
+        about a new キャッチコピー until they reopen the window (0x6207 asks
+        every time it opens, measured in round 142).
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        group = book.of(me)
+        public = params[0] if params else 0
+        catchcopy = b""
+        if len(params) >= 3:
+            length = struct.unpack_from(">H", params, 1)[0]
+            catchcopy = params[3:3 + length]
+        why = None
+        if group is None:
+            why = "in no group"
+        elif group.leader != me:
+            why = "not the leader"
+        if why is not None:
+            print(f"[{self.tag}] group update from charaId={me} refused: {why}")
+            return self._answer(
+                session, seen, groups.MSG_SV_NG_CHARA_GROUP_UPDATE,
+                struct.pack(">B", groups.REASON),
+            )
+        assert group is not None
+        # ⭐ The length is logged raw because it is the cheapest reading of the
+        # client's own edit-box limit: type as much as the box takes, press the
+        # button, and the number is here. Nothing else measures it -- the wire
+        # field is counted, so the protocol does not state a maximum.
+        shown = catchcopy.split(b"\x00")[0].decode("cp932", "replace")
+        print(f"[{self.tag}] group update by charaId={me} on {group.label()}: "
+              f"public={public} catchcopy[{len(catchcopy)}]={shown!r}")
+        if len(catchcopy) > groups.MAX_CATCHCOPY:
+            print(f"[{self.tag}]   ⚠️ keeping only the first "
+                  f"{groups.MAX_CATCHCOPY} bytes of it")
+        book.update(group.id, public, catchcopy)
+        return self._answer(
+            session, seen, groups.MSG_SV_OK_CHARA_GROUP_UPDATE, b"",
+        )
+
+    def _group_kick(self, session: "_Session", seen: int, params: bytes) -> bytes:
+        """［除 名］ at the bottom of the same window: 0x6226 → 0x6227/0x6228.
+
+        ``targetCharaId u32``, the row that was selected. 0x6229 goes to the
+        character who was removed.
+
+        ⚠️ 0x6229 carries no body, so it cannot say who it is about, and that
+        decides who may receive it: pushing 「somebody was removed」 to the rest
+        of the roster would arrive on their screens as 「you were removed」.
+        Only the target gets one. ⭐ The join bell (0x621E) is empty for the same
+        reason and goes the other way -- to everyone -- because there the
+        sentence that fits every recipient is the general one.
+
+        ⭐⭐ Measured in round 144 with a real client on each end: nothing at all
+        happens on the removed player's screen when 0x6229 arrives, but the
+        toolbar's seventh icon is 未所属 from that moment on -- one greyed row,
+        zero bytes out. The client applies it to its own copy of the record and
+        does not ask. ⚠️ That is not a contradiction of 「the four group fields
+        are asked once, at 登校」 (round 142): that sentence is about what this
+        end sends, not about what the client does to what it already holds.
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        target = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+        group = book.of(me)
+        why = None
+        if group is None or group.leader != me:
+            why = "not the leader"
+        elif target == me:
+            why = "a leader leaves through 解散 or 引継, not 除名"
+        elif target not in group.members:
+            why = f"charaId={target} is not in this group"
+        if why is not None:
+            print(f"[{self.tag}] 除名 of {target} by charaId={me} refused: {why}")
+            return self._answer(
+                session, seen, groups.MSG_SV_NG_CHARA_GROUP_KICK,
+                struct.pack(">B", groups.REASON),
+            )
+        assert group is not None
+        book.kick(group.id, target)
+        print(f"[{self.tag}] 除名: charaId={me} removed {target} "
+              f"from {group.label()}")
+        reply = self._answer(
+            session, seen, groups.MSG_SV_OK_CHARA_GROUP_KICK, b"",
+        )
+        removed = self._session_of(target)
+        if removed is not None:
+            self._push(removed, self._answer(
+                removed, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_KICK, b"",
+            ))
+        return reply
 
     def _forget_stale_invite(self, session: "_Session") -> None:
         """Drop either end of an invite whose other side is no longer connected."""
