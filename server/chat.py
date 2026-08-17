@@ -327,6 +327,11 @@ class Reply(NamedTuple):
     club_save: bool = False
     # Same, for the アイテム inventory; see /item.
     item_save: bool = False
+    # Same, for the account's ロッカー; see /locker. ⚠️ A separate flag rather
+    # than a second use of item_save because the two live in different files and
+    # belong to different owners — the inventory to a character, the locker to
+    # the account behind it.
+    locker_save: bool = False
 
 
 def respond(
@@ -341,6 +346,7 @@ def respond(
     exam_period: "exam.Period | None" = None,
     member: "club.Membership | None" = None,
     inv: "item.Inventory | None" = None,
+    locker: "item.Locker | None" = None,
 ) -> Reply:
     """Answer one chat line.
 
@@ -353,8 +359,10 @@ def respond(
     throw the player off the server; see the guard in that branch.
     ``exam_period`` is the session's 試験期間, mutated in place by /exam — it is
     never saved, so unlike the three above it needs no write-back flag.
-    ``member`` is the クラブ membership, same arrangement as ``sheet``, and
-    ``inv`` the アイテム inventory.
+    ``member`` is the クラブ membership, same arrangement as ``sheet``,
+    ``inv`` the アイテム inventory and ``locker`` the account's ロッカー — the
+    one argument here that is not the speaking character's, because the locker
+    is shared by every character on the account.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -893,7 +901,7 @@ def respond(
                 lines.append(f"  タブ{tab} {name}: {spread}")
             return Reply(lines)
         if verb == "clear":
-            inv.rows.clear()
+            inv.clear()
             return Reply(["アイテムを全部消した", inv.summary()], item_save=True)
         if verb == "sample":
             # One item per categoryId, taken off the front of each category's
@@ -901,7 +909,7 @@ def respond(
             # own category on screen — the 個数 column is the only place a
             # number of ours is drawn, and +1 keeps category 0 off a count of
             # zero, which is a row the window might reasonably decline to draw.
-            inv.rows.clear()
+            inv.clear()
             for category, item_id in item.category_keys():
                 inv.grant(category, item_id, category + 1)
             return Reply([inv.summary()], item_save=True)
@@ -915,7 +923,7 @@ def respond(
                 return Reply([f"0-{item.ITEM_COUNT} の範囲で"])
             count = (int(words[2]) if len(words) > 2
                      and words[2].lstrip("-").isdigit() else 1)
-            inv.rows.clear()
+            inv.clear()
             for category, item_id in item.keys()[:wanted]:
                 inv.grant(category, item_id, count)
             return Reply([inv.summary()], item_save=True)
@@ -944,14 +952,72 @@ def respond(
                      else "⚠️ どのタブにも出ない")
             return Reply([inv.summary(), f"{words[1]} ×{count} → {where}"],
                          item_save=True)
+        if verb == "wear" and len(words) > 1:
+            # ⭐ The same door 0x4D04 opens, without a client: what the window
+            # sends when a 装飾 row is equipped. Here so that the worn state can
+            # be set up for a test — and so the refusals can be read on the
+            # console instead of only as a sentence on screen.
+            key = parse_item_key(words[1])
+            if key is None:
+                return Reply([f"{words[1]} は <cat>:<id> の形で (/item keys)"])
+            on = not (len(words) > 2 and words[2].lower() in ("off", "0", "no"))
+            body = struct.pack(">HHB", key[0], key[1], 1 if on else 0)
+            replies, changed = item.equip_replies(inv, 0, body)
+            if not changed:
+                # The refusal the client would have been sent, by number: the
+                # sentences themselves live in the client's error_message.bin
+                # and are named next to each constant in item.py.
+                return Reply([f"0x4D05 reason={replies[0][1][0]} で拒否 "
+                              "(item.py の EQUIP_* 参照)"])
+            return Reply([inv.summary(),
+                          f"{words[1]} を{'装備' if on else '外した'}"
+                          + (f"（{len(replies) - 1} 個外れた）" if len(replies) > 1 else "")],
+                         item_save=True)
         if not words:
             owned = " ".join(
                 f"{category}:{item_id}({count})"
+                + ("装" if inv.is_worn(category, item_id) else "")
                 for category, item_id, count in inv.rows
             )
             return Reply([inv.summary()] + ([owned] if owned else []))
         return Reply(["/item [sample|n <数> [個数]|add <cat>:<id> [個数]",
-                      "      |del <cat>:<id>|clear|keys|probe [on|off]]"])
+                      "      |del <cat>:<id>|wear <cat>:<id> [off]",
+                      "      |clear|keys|probe [on|off]]"])
+
+    if word in ("locker", "lo"):
+        # The account's ロッカー, which is not the character's inventory and is
+        # not stored with it — see item.Locker for the client's own sentences
+        # that put it at the account level. Read-mostly: the way things get in
+        # is 「ロッカーにしまう」 in the item window, and this is here to see
+        # what arrived and to seed one without a client.
+        if locker is None:
+            return Reply(["ロッカーが読めない (アカウント未確定?)"])
+        words = rest.split()
+        verb = words[0].lower() if words else ""
+        if verb == "clear":
+            locker.rows.clear()
+            return Reply(["ロッカーを空にした"], locker_save=True)
+        if verb in ("add", "del") and len(words) > 1:
+            category, _, item_id = words[1].partition(":")
+            if not (category.isdigit() and item_id.isdigit()):
+                return Reply([f"{words[1]} は <cat>:<id> の形で (/item keys)"])
+            key = (int(category), int(item_id))
+            count = (int(words[2]) if len(words) > 2
+                     and words[2].lstrip("-").isdigit() else 1)
+            if verb == "del":
+                if locker.take(*key, count) is None:
+                    return Reply([f"{words[1]} は {count} 個入っていない"])
+            elif not locker.receive(*key, count):
+                return Reply([f"{words[1]} ×{count} は入らない "
+                              f"(1 行 {item.ROW_MAX} 個まで / キー要確認)"])
+            return Reply([locker.summary()], locker_save=True)
+        if not words:
+            stored = " ".join(
+                f"{category}:{item_id}({count})"
+                for category, item_id, count in locker.rows
+            )
+            return Reply([locker.summary()] + ([stored] if stored else []))
+        return Reply(["/locker [add <cat>:<id> [個数]|del <cat>:<id> [個数]|clear]"])
 
     if word == "ab":
         # 能力パラメータ, readable and pokeable — the same arrangement as /card

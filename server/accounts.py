@@ -98,6 +98,7 @@ import secrets
 
 import charaids
 import codes
+import item
 import konami_id
 from characters import CharacterStore
 
@@ -203,6 +204,7 @@ class AccountStore:
         self.index_path = self.dir / "index.json"
         self.index: dict[str, int] = {}
         self._stores: dict[int, CharacterStore] = {}
+        self._lockers: dict[int, "item.Locker"] = {}
         self._load()
         self._adopt_single_account_file(root / "runtime" / "characters.json")
         # ⚠️ After the adopt, not before: that call moves the pre-account save
@@ -336,6 +338,55 @@ class AccountStore:
 
     def _path(self, account_id: int) -> Path:
         return self.dir / str(account_id) / "characters.json"
+
+    def _locker_path(self, account_id: int) -> Path:
+        return self.dir / str(account_id) / "locker.json"
+
+    def locker(self, account_id: int) -> "item.Locker | None":
+        """This account's ロッカー, or None for a connection with no account.
+
+        ⭐⭐ ONE PER ACCOUNT, ALONGSIDE characters.json RATHER THAN INSIDE IT,
+        because the client's own refusal sentences put it at this level: the two
+        locker-side refusals say 「アカウントデータの取得に失敗しました。」 where
+        every carried-side refusal says 「キャラクター情報」. See item.Locker.
+        A separate file rather than a key in characters.json for the same reason
+        the store is separate: it belongs to the account, not to any record in
+        that list, and putting it in the list would give it a character to
+        belong to.
+
+        Held in the cache the same way CharacterStore is, so two connections on
+        one account see each other's writes -- which is the whole point of a
+        locker and the one thing a per-connection copy would get wrong.
+        """
+        if account_id <= 0:
+            return None
+        cached = self._lockers.get(account_id)
+        if cached is not None:
+            return cached
+        path = self._locker_path(account_id)
+        saved: "dict | None" = None
+        if path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                saved = loaded if isinstance(loaded, dict) else None
+            except (OSError, ValueError) as exc:
+                print(f"[accounts] ignoring unreadable {path}: {exc}")
+        locker = item.Locker(saved)
+        self._lockers[account_id] = locker
+        return locker
+
+    def save_locker(self, account_id: int) -> bool:
+        """Write this account's ロッカー back. False if it has none loaded."""
+        locker = self._lockers.get(account_id)
+        if account_id <= 0 or locker is None:
+            return False
+        path = self._locker_path(account_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(locker.to_json(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return True
 
     def _saved_chara_ids(self) -> dict[int, list[int]]:
         """``{accountId: [charaId, ...]}`` straight off the save files.

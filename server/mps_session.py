@@ -170,12 +170,21 @@ EMPTY_LIST_REPLIES = {
     0x0312: 0x0313,  # MsgClQueryGalleryList  -> MsgSvResultGalleryList
     0x0315: 0x0316,  # MsgClQueryEndingList   -> MsgSvResultEndingList
     0x6400: 0x6401,  # MsgClQueryFriendList   -> MsgSvResultFriendList (28B entries)
-    # MsgSvResultLockerList is the odd one out: listshape.py calls it "empty",
-    # i.e. its reader takes nothing off the wire at all. The items presumably
-    # arrive separately as MsgSvNotifyLockerList (0x0409), which *is* counted,
-    # with 5-byte entries.
-    0x0406: 0x0407,  # MsgClQueryLockerList   -> MsgSvResultLockerList
+    # ⚠️ 0x0406 MsgClQueryLockerList used to be stubbed here with an empty list.
+    # It is answered for real now, out of the account's own store -- see
+    # item.Locker and the 0x0406 branch below -- because 0x4D0A can put things
+    # into that store and a stub would have swallowed them.
 }
+
+# The four things the アイテム window's buttons do to a row. Grouped because the
+# window serialises its requests: answering three of them is not three quarters
+# of the feature, it is a window that wedges on the fourth click.
+ITEM_OPERATIONS = (
+    item.MSG_CL_CAST_ITEM_EQUIP,
+    item.MSG_CL_CAST_ITEM_USE,
+    item.MSG_CL_REQUEST_ITEM_PUT_IN_LOCKER,
+    item.MSG_CL_REQUEST_ITEM_DEL,
+)
 
 # Requests answered with a constant parameter block. Each layout comes from
 # tools/listshape.py plus the field names in the reply's dump function.
@@ -1029,6 +1038,49 @@ class MpsServer:
         if _is_loopback(session.peer_host):
             return FALLBACK_ACCOUNT_ID
         return None
+
+    def _equip_replay(self, session: "_Session") -> bytes:
+        """0x4D06 for everything this character is wearing, on entering a scene.
+
+        ⭐⭐ NOTHING ELSE CAN CARRY IT. 0x4D03's rows are {categoryId, id, count}
+        and have no room for a "worn" bit, so the tick in the window's 装備
+        column and the clothes on the avatar are set by 0x4D06 and by nothing
+        else. Measured twice: the client honoured an unsolicited 0x4D06 that
+        took an item off a row it had not asked about, and -- the other half --
+        after the server's worn list was emptied behind its back the window
+        reopened with the tick still drawn, because the client was going by what
+        it had last been told rather than by the list it had just been sent.
+        Without this a relog would leave a dressed character drawn undressed and
+        the column blank while the save still said otherwise.
+
+        ⚠️ INVENTED THAT IT BELONGS HERE. The message is a Notify, i.e. built to
+        report a change, and where the original put the *initial* state is not
+        known -- the appearance block the create carries is the other candidate.
+        Replaying at scene-build is the only route this server has, and it puts
+        the player and the peers in the same pass.
+        """
+        inv = self._chars(session).items(session.chara_id)
+        if inv is None or not inv.worn:
+            return b""
+        out = b""
+        for category, item_id in inv.worn:
+            params = item.equip_params(session.chara_id, category, item_id, 1)
+            self._presence_relay(session, item.MSG_SV_NOTIFY_ITEM_EQUIP, params)
+            out += self._answer(session, 0, item.MSG_SV_NOTIFY_ITEM_EQUIP, params)
+        print(f"[{self.tag}] equip replay: charaId={session.chara_id} is wearing "
+              + " ".join(f"{c}:{i}" for c, i in inv.worn))
+        return out
+
+    def _locker(self, session: "_Session") -> "item.Locker | None":
+        """This connection's account's ロッカー, or None if it has no account.
+
+        ⚠️ Goes through _chars first, and not as a formality: that is what binds
+        a connection which has not named an account yet, and without it the
+        locker would be looked up under account 0 and come back None for a
+        connection whose characters resolve fine.
+        """
+        self._chars(session)
+        return self.accounts.locker(session.account_id)
 
     def _chars(self, session: "_Session") -> CharacterStore:
         """This connection's characters; a detached empty store if it never said.
@@ -2288,7 +2340,7 @@ class MpsServer:
                 # The other direction, once this scene is built: they can see the
                 # peers now, so the peers have to be told about them.
                 self._presence_announce(session)
-                return reply
+                return reply + self._equip_replay(session)
             if msg_type == MSG_CL_QUERY_CHARA_INFO:
                 # 「サーバーからの返答待ちです」 in the lobby: the client asks this
                 # about every character it has been told to draw, one u32 charaId
@@ -2440,6 +2492,95 @@ class MpsServer:
                          if item.PROBE_ALL_TABS else ""))
                 out = b""
                 for reply_type, reply_params in item.list_replies(inv, tab):
+                    out += self._answer(session, sequence, reply_type, reply_params)
+                return out
+            if msg_type in ITEM_OPERATIONS:
+                # The buttons under that list: 装備 / 使用 / ロッカーにしまう /
+                # 捨てる. ⚠️⚠️ ALL FOUR OR NONE. The window serialises its
+                # requests -- measured: after one went unanswered the next press
+                # only raised 「通信中」 and put nothing on the wire -- so one
+                # missing answer freezes every other button too, and a partly
+                # implemented window is worse than none.
+                #
+                # Which sentence a refusal picks is item.py's business, not this
+                # branch's: that is where the evidence for each reason is
+                # written down, including which ones this server cannot honestly
+                # send at all.
+                inv = self._chars(session).items(session.chara_id)
+                locker = self._locker(session)
+                if msg_type == item.MSG_CL_CAST_ITEM_EQUIP:
+                    replies, changed = item.equip_replies(
+                        inv, session.chara_id, params)
+                elif msg_type == item.MSG_CL_CAST_ITEM_USE:
+                    replies, changed = item.use_replies(
+                        inv, session.chara_id, params)
+                elif msg_type == item.MSG_CL_REQUEST_ITEM_PUT_IN_LOCKER:
+                    replies, changed = item.put_in_locker_replies(
+                        inv, locker, params)
+                else:
+                    replies, changed = item.del_replies(inv, params)
+                if changed and inv is not None:
+                    self._chars(session).set_items(session.chara_id, inv)
+                    if msg_type == item.MSG_CL_REQUEST_ITEM_PUT_IN_LOCKER:
+                        self.accounts.save_locker(session.account_id)
+                print(f"[{self.tag}] item {name}: "
+                      + " ".join(f"{t:#06x}" for t, _ in replies)
+                      + (f" | {inv.summary()}" if inv is not None else "")
+                      + (f" | {locker.summary()}" if locker is not None else ""))
+                out = b""
+                for reply_type, reply_params in replies:
+                    # ⭐ The Notify answers carry a charaId and the Ok answers do
+                    # not, which is the difference between something other
+                    # players watch happen and something only the asker sees.
+                    if reply_type in item.RELAYED:
+                        self._presence_relay(session, reply_type, reply_params)
+                    out += self._answer(session, sequence, reply_type, reply_params)
+                return out
+            if msg_type in (item.MSG_CL_REQUEST_LOCKER_ACCESS_START,
+                            item.MSG_CL_REQUEST_LOCKER_ACCESS_END):
+                # The bracket around an open ロッカー window. Both the requests
+                # and their Oks read nothing off the wire (listshape: empty), so
+                # there is nothing to decide -- but they still have to be sent,
+                # for the same serialisation reason as the four above.
+                reply_type = (item.MSG_SV_OK_LOCKER_ACCESS_START
+                              if msg_type == item.MSG_CL_REQUEST_LOCKER_ACCESS_START
+                              else item.MSG_SV_OK_LOCKER_ACCESS_END)
+                print(f"[{self.tag}] locker {name}")
+                return self._answer(session, sequence, reply_type, b"")
+            if msg_type == item.MSG_CL_QUERY_LOCKER_LIST:
+                # ⭐ The account's store, not the character's -- item.Locker has
+                # the client's own sentences that say which. Answered exactly
+                # like 0x4D00 because it is read by exactly the same code: one
+                # Result with the total, then pages of at most 32 rows.
+                tab = item.parse_query(params)
+                locker = self._locker(session)
+                rows = locker.for_tab(tab) if locker is not None else []
+                print(f"[{self.tag}] locker list: tab {tab} "
+                      f"({item.tab_name(tab)}), {len(rows)} rows")
+                out = b""
+                for reply_type, reply_params in item.locker_list_replies(locker, tab):
+                    out += self._answer(session, sequence, reply_type, reply_params)
+                return out
+            if msg_type in (item.MSG_CL_REQUEST_LOCKER_TAKE,
+                            item.MSG_CL_REQUEST_LOCKER_DEL):
+                # 取り出す / 捨てる inside the locker window. ⚠️ These two count
+                # in a u8 where the item window's two count in a u16; see
+                # item.parse_locker_quantity.
+                inv = self._chars(session).items(session.chara_id)
+                locker = self._locker(session)
+                if msg_type == item.MSG_CL_REQUEST_LOCKER_TAKE:
+                    replies, changed = item.locker_take_replies(inv, locker, params)
+                else:
+                    replies, changed = item.locker_del_replies(locker, params)
+                if changed:
+                    self.accounts.save_locker(session.account_id)
+                    if msg_type == item.MSG_CL_REQUEST_LOCKER_TAKE and inv is not None:
+                        self._chars(session).set_items(session.chara_id, inv)
+                print(f"[{self.tag}] locker {name}: "
+                      + " ".join(f"{t:#06x}" for t, _ in replies)
+                      + (f" | {locker.summary()}" if locker is not None else ""))
+                out = b""
+                for reply_type, reply_params in replies:
                     out += self._answer(session, sequence, reply_type, reply_params)
                 return out
             if msg_type == club.MSG_CL_QUERY_CLUB_DECK_LIST:
@@ -5377,9 +5518,10 @@ class MpsServer:
         sheet = self._chars(session).ability(session.chara_id)
         member = self._chars(session).club(session.chara_id)
         inv = self._chars(session).items(session.chara_id)
+        locker = self._locker(session)
         answer = chat.respond(
             said, session.map_id, session.pos, love, card, session.lesson,
-            sheet, session.in_class, session.exam, member, inv,
+            sheet, session.in_class, session.exam, member, inv, locker,
         )
         if answer.romance_save and love is not None:
             self._chars(session).set_romance(session.chara_id, love)
@@ -5391,6 +5533,8 @@ class MpsServer:
             self._chars(session).set_club(session.chara_id, member)
         if answer.item_save and inv is not None:
             self._chars(session).set_items(session.chara_id, inv)
+        if answer.locker_save:
+            self.accounts.save_locker(session.account_id)
         if answer.npc_event is not None:
             session.npc_event = answer.npc_event
         if answer.select is not None:
