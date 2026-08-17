@@ -48,6 +48,7 @@ import club
 import curriculum
 import exam
 import facing
+import item
 import lesson
 import mapgraph
 import quiz
@@ -159,6 +160,9 @@ HELP = (
     " キーワード所持と部活デッキの中身",
     "/cs [ruler|n <数> [完成度]|add <cat>:<id> [完成度]|del <cat>:<id>|clear|keys"
     "|deck <0-2> <cat>:<id>…] 部活奥義所持 (完成度の目盛りは ruler)",
+    "/item [sample|n <数> [個数]|add <cat>:<id> [個数]|del <cat>:<id>|clear|keys"
+    "|probe [on|off]]"
+    " アイテム所持 (タブとカテゴリの対応は sample + probe)",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words|lunch] <数> 0x6100 の実験用つまみ",
     "/skill [<拒否メッセージ> <reason>|clear] お助けスキル の reason を画面で確かめる",
@@ -321,6 +325,8 @@ class Reply(NamedTuple):
     ability_save: bool = False
     # Same, for the クラブ membership; see /buka.
     club_save: bool = False
+    # Same, for the アイテム inventory; see /item.
+    item_save: bool = False
 
 
 def respond(
@@ -334,6 +340,7 @@ def respond(
     in_class: int = 0,
     exam_period: "exam.Period | None" = None,
     member: "club.Membership | None" = None,
+    inv: "item.Inventory | None" = None,
 ) -> Reply:
     """Answer one chat line.
 
@@ -346,7 +353,8 @@ def respond(
     throw the player off the server; see the guard in that branch.
     ``exam_period`` is the session's 試験期間, mutated in place by /exam — it is
     never saved, so unlike the three above it needs no write-back flag.
-    ``member`` is the クラブ membership, same arrangement as ``sheet``.
+    ``member`` is the クラブ membership, same arrangement as ``sheet``, and
+    ``inv`` the アイテム inventory.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -849,6 +857,101 @@ def respond(
             return Reply([member.summary()] + ([owned] if owned else []))
         return Reply(["/cs [ruler|n <数> [完成度]|add <cat>:<id> [完成度]",
                       "     |del <cat>:<id>|clear|keys|deck <デッキ 0-2> <cat>:<id>…]"])
+
+    if word in ("item", "it"):
+        # アイテム ownership. ⚠️ THE GRANT IS INVENTED, the same way /kw's and
+        # /cs's are: every route the original hands an item over by is missing
+        # here. The keys, the tab mapping and the wire layout are restored; see
+        # item.py.
+        #
+        # ⭐⭐ ``sample`` is the one to reach for first: one item per categoryId,
+        # 26 rows, which is under the page limit and covers every group the
+        # client could sort into a tab. Together with ``probe`` it turns the
+        # client's own filter into the oracle for which tab owns which category
+        # — the same ruler trick /cs ruler uses for 完成度, one screen instead
+        # of one login per candidate.
+        if inv is None:
+            return Reply(["アイテムが読めない (キャラ未選択?)"])
+        words = rest.split()
+        verb = words[0].lower() if words else ""
+
+        def parse_item_key(text: str) -> "tuple[int, int] | None":
+            category, _, item_id = text.partition(":")
+            if not (category.isdigit() and item_id.isdigit()):
+                return None
+            return (int(category), int(item_id))
+
+        if verb == "keys":
+            lines = [f"item.bin + item_skillbook.bin {item.ITEM_COUNT} 個 (cat:id)"]
+            for tab, (name, categories) in enumerate(item.TABS):
+                spread = " ".join(
+                    f"{category}:"
+                    + ",".join(f"{first}-{last}"
+                               for first, last in item.ITEM_KEYS[category])
+                    for category in categories
+                ) or "キー不明"
+                lines.append(f"  タブ{tab} {name}: {spread}")
+            return Reply(lines)
+        if verb == "clear":
+            inv.rows.clear()
+            return Reply(["アイテムを全部消した", inv.summary()], item_save=True)
+        if verb == "sample":
+            # One item per categoryId, taken off the front of each category's
+            # keys, with 個数 set to categoryId + 1 so that every row names its
+            # own category on screen — the 個数 column is the only place a
+            # number of ours is drawn, and +1 keeps category 0 off a count of
+            # zero, which is a row the window might reasonably decline to draw.
+            inv.rows.clear()
+            for category, item_id in item.category_keys():
+                inv.grant(category, item_id, category + 1)
+            return Reply([inv.summary()], item_save=True)
+        if verb == "n" and len(words) > 1 and words[1].lstrip("-").isdigit():
+            # The first N keys in table order, one of each. ⭐ Table order puts
+            # all 25 of category 0 and then category 1 in front, so the first
+            # 33 all land on the 装飾 tab — which is how the page limit gets
+            # something to page.
+            wanted = int(words[1])
+            if not 0 <= wanted <= item.ITEM_COUNT:
+                return Reply([f"0-{item.ITEM_COUNT} の範囲で"])
+            count = (int(words[2]) if len(words) > 2
+                     and words[2].lstrip("-").isdigit() else 1)
+            inv.rows.clear()
+            for category, item_id in item.keys()[:wanted]:
+                inv.grant(category, item_id, count)
+            return Reply([inv.summary()], item_save=True)
+        if verb == "probe":
+            # ⚠️ IN MEMORY ONLY, and off at every start. See item.PROBE_ALL_TABS.
+            state = words[1].lower() if len(words) > 1 else "on"
+            item.PROBE_ALL_TABS = state not in ("off", "0", "no")
+            return Reply([f"probe {'on' if item.PROBE_ALL_TABS else 'off'}: "
+                          + ("どのタブにも全部返す" if item.PROBE_ALL_TABS
+                             else "タブごとに絞って返す")])
+        if verb in ("add", "del") and len(words) > 1:
+            key = parse_item_key(words[1])
+            if key is None:
+                return Reply([f"{words[1]} は <cat>:<id> の形で (/item keys)"])
+            if verb == "del":
+                if not inv.revoke(*key):
+                    return Reply([f"{words[1]} は持っていない"])
+                return Reply([inv.summary()], item_save=True)
+            count = (int(words[2]) if len(words) > 2
+                     and words[2].lstrip("-").isdigit() else 1)
+            if not inv.grant(*key, count):
+                return Reply([f"{words[1]} は item.bin にも item_skillbook.bin "
+                              "にも無い (/item keys)"])
+            tab = item.tab_of(key[0])
+            where = (f"タブ{tab} {item.tab_name(tab)}" if tab is not None
+                     else "⚠️ どのタブにも出ない")
+            return Reply([inv.summary(), f"{words[1]} ×{count} → {where}"],
+                         item_save=True)
+        if not words:
+            owned = " ".join(
+                f"{category}:{item_id}({count})"
+                for category, item_id, count in inv.rows
+            )
+            return Reply([inv.summary()] + ([owned] if owned else []))
+        return Reply(["/item [sample|n <数> [個数]|add <cat>:<id> [個数]",
+                      "      |del <cat>:<id>|clear|keys|probe [on|off]]"])
 
     if word == "ab":
         # 能力パラメータ, readable and pokeable — the same arrangement as /card
