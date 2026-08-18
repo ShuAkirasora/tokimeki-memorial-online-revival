@@ -175,6 +175,10 @@ OP_BR_WIDTH = 8
 # the menu item's own number. None of the doors this project spent rounds 34-36
 # on (0x4200, 0x5700, 0xe000) is involved — the conversation entrance lives in
 # the same 0x63xx family as the spawn.
+# UNANSWERED 0x6301 -- the same message for the other kind of menu item.
+#   0x6301 and 0x6304 are one action landing two ways, chosen by a
+#   `menu_item.bin` record's type: 0 is an event (this one), 1 opens a
+#   sub-menu. Nothing here can draw a type 1 item, so nothing can send it.
 MSG_CL_REQUEST_NPC_MAP_OBJECT_EVENT = 0x6304
 MSG_SV_OK_NPC_MAP_OBJECT_EVENT = 0x6305
 MSG_SV_NG_NPC_MAP_OBJECT_EVENT = 0x6306

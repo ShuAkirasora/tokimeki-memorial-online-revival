@@ -1,6 +1,7 @@
 """The bottom chat bar: reading what was typed, and answering it.
 
-Two messages, both read straight out of the client rather than guessed at:
+Two messages on the map, both read straight out of the client rather than
+guessed at (the 授業 screen has a pair of its own; see LESSON_NAME_MAX below):
 
 ``MsgClCastNormalChat`` (0x4900), deserializer 0x8E0590::
 
@@ -142,6 +143,77 @@ def notify_params(sender_id: int, name: str, text: str) -> bytes:
         + struct.pack(">H", len(text_raw))
         + text_raw
     )
+
+
+# ── the 授業 chat bar ────────────────────────────────────────────────────────
+# The same box on screen, a different pair on the wire: in class the client
+# casts MsgClCastLessonChat (0x6109) and never 0x4900. Nothing about that is
+# inferred -- round 51's log has a `/quiz` typed during a lesson arriving as
+# 0x6109 and drawing "no reply implemented", which is also why the console's
+# commands quietly did nothing in class.
+#
+# ``MsgClCastLessonChat`` (0x6109) is 0x4900's body exactly -- one counted
+# utterance -- so `parse_cast` reads it as it stands.
+#
+# ``MsgSvNotifyLessonChat`` (0x610A), deserializer 0x8E5240, is 0x4901 with the
+# speaker's name split in two::
+#
+#     u32 senderId                                        +0x04
+#     u16 familyLen,    bytes familyName    len +0x14, buffer +0x08
+#     u16 firstLen,     bytes firstName     len +0x22, buffer +0x16
+#     u16 utteranceLen, bytes utterance     len +0x82, buffer +0x24
+#
+# Unchecked the same way 0x8D6230 is, so the buffers are again the gap between
+# a string's destination and its own length field: 12, 12 and 94 bytes. ⭐ The
+# 12 is the create block's NAME_LEN (11) plus one, so a name that fits the
+# character sheet fits here by construction, and the 94 is TEXT_MAX again.
+LESSON_NAME_MAX = 12
+
+
+def lesson_notify_params(sender_id: int, family: bytes, first: bytes, text: str) -> bytes:
+    """A MsgSvNotifyLessonChat body. Names arrive as the create block holds them.
+
+    ``characters.full_name`` hands back both names NUL-padded to NAME_LEN, which
+    is not what a counted string wants: the count on this wire includes exactly
+    one terminator, and padding past it is what leaves an earlier, longer line
+    hanging off the end of the client's buffer (see `notify_params`). So each
+    name is cut at its first NUL and given its terminator back.
+    """
+    def name(raw: bytes) -> bytes:
+        cut = raw.split(b"\x00", 1)[0].decode("cp932", "replace")
+        return clip(cut, LESSON_NAME_MAX - 1) + b"\x00"
+
+    family_raw, first_raw = name(family), name(first)
+    text_raw = clip(text, TEXT_MAX - 1) + b"\x00"
+    return (
+        struct.pack(">IH", sender_id, len(family_raw))
+        + family_raw
+        + struct.pack(">H", len(first_raw))
+        + first_raw
+        + struct.pack(">H", len(text_raw))
+        + text_raw
+    )
+
+
+def parse_emotion(params: bytes) -> int:
+    """The `emotion` a MsgClCastLessonEmotion (0x610C) carries, one u16."""
+    if len(params) < 2:
+        return 0
+    (emotion,) = struct.unpack_from(">H", params, 0)
+    return emotion
+
+
+def lesson_emotion_params(sender_id: int, emotion: int) -> bytes:
+    """A MsgSvNotifyLessonEmotion (0x610D) body.
+
+    Deserializer 0x8F1840: ``u32 senderId`` at +0x04 and ``u16 emotion`` at
+    +0x08, and nothing else -- the shortest message in the family.
+
+    ⚠️ Unlike its chat twin this one is ahead of the client: no 0x610C has ever
+    been seen. It is here because the pair is one feature and one of them being
+    answered is the state that reads as a bug later.
+    """
+    return struct.pack(">IH", sender_id, emotion)
 
 
 HELP = (
