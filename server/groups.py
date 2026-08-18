@@ -429,6 +429,20 @@ class GroupBook:
                 return group
         return None
 
+    def id_of(self, chara_id: int) -> int:
+        """This character's ``friendGroupId``: the group's id, or NO_GROUP.
+
+        ⚠️ The 74-byte 0x480F entry carries this field too, and it is a
+        different copy from the 139-byte 0x6501 record -- the client reaches for
+        whichever it has. Round 150 measured what happens when only one of them
+        is filled in: two characters both in TESTGROUP, and the PC menu still
+        offered 「グループ登録申込み」 because the predicate behind that icon was
+        reading the tiny entry, where this end had been sending NO_GROUP to
+        everybody. So both messages go through this, not just fields() below.
+        """
+        group = self.of(chara_id)
+        return group.id if group is not None else NO_GROUP
+
     def fields(self, chara_id: int) -> "tuple[bytes, int, int, int]":
         """``friendGroupName, friendGroupId, leaderAuthority, leaderQualification``.
 
@@ -440,7 +454,7 @@ class GroupBook:
         group = self.of(chara_id)
         return (
             group.name if group is not None else b"\x00" * GROUP_NAME_LEN,
-            group.id if group is not None else NO_GROUP,
+            self.id_of(chara_id),
             1 if group is not None and group.leader == chara_id else 0,
             1 if chara_id in self.qualified else 0,
         )

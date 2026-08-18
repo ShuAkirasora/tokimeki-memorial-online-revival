@@ -606,9 +606,17 @@ def add_entry(
     # measured in round 143, where the 「グループ登録申込み」 icon stayed grey on
     # the first right-click and went live on the second. So NO_GROUP has to be
     # right in both messages or the menu is wrong exactly once per character.
-    # ⚠️ A character who really is in a group still shows -1 here: no caller
-    # passes group_id yet, and nothing on screen has been traced to this copy
-    # other than the icon above.
+    # ⚠️⚠️ And it is the copy that decides the icon even long after 0x6501 has
+    # been answered: round 150 right-clicked a player who was in the same group
+    # as the person clicking, and 「グループ登録申込み」 was offered anyway,
+    # because this entry had been going out with NO_GROUP for everybody. The
+    # stand-ins (markers, rulers) keep the default -- they are in no group and
+    # there is nobody to ask -- but every entry for a real character now carries
+    # the real id, out of groups.GroupBook.id_of.
+    #
+    # ⚠️ 0x480F is an *add*, not a refresh, so a character whose group changes
+    # while somebody is looking at them has to be redrawn: see
+    # _presence_refresh_onlookers and the callers around each mutation.
     out += struct.pack(">I", group_id)  # friendGroupId
     if len(out) != TINY_ENTRY_SIZE:
         raise AssertionError(f"entry is {len(out)}B, reader wants {TINY_ENTRY_SIZE}")
