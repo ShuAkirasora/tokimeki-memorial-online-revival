@@ -836,6 +836,14 @@ class _Session:
         # is who invited it.
         self.group_invited: int | None = None
         self.group_inviter: int | None = None
+        # 引継 is the same handshake one field wider (0x620D carries a comment
+        # as well as the id) and is held the same way, in its own pair: a
+        # character can be one end of an invite and one end of a handover at
+        # once, and 0x6211/0x6212/0x6214 are as id-less as 0x621C/0x621D/0x621F.
+        # ``group_handover_to`` is the member this leader has offered the group
+        # to, ``group_handover_from`` is the leader who offered it.
+        self.group_handover_to: int | None = None
+        self.group_handover_from: int | None = None
         # The client's own clock, as of the last tag-8 probe, plus when that
         # arrived by our monotonic clock. MsgSvNotifyCharaMove has to state an
         # arrivalTime on the client's timebase, and the tag-8 exchange is the
@@ -5577,6 +5585,12 @@ class MpsServer:
             /group join <charaId>      put somebody else in mine (hex ok)
             /group leave               脱退 -- the leader leaving disbands it
             /group disband             解散
+            /group hand <charaId>      引継 -- hand the group to a member (hex ok)
+
+        ⚠️ `hand` is the store half of 0x620D..0x6213 with the handshake taken
+        out. It exists so a test can put an account on either side of the leader
+        flag in one line; the wire path is _group_transfer and it asks the other
+        end first.
         """
         book = self.accounts.groups
         me = session.chara_id
@@ -5614,6 +5628,17 @@ class MpsServer:
             ok = book.join(mine.id, other)
             return self._say(session, sequence, f"/group join {other:#x}: "
                                                 f"{'ok' if ok else 'refused'}")
+        if what == "hand":
+            if mine is None or mine.leader != me:
+                return self._say(session, sequence, "/group: not the leader of one")
+            try:
+                other = int(args[1], 0)
+            except (IndexError, ValueError):
+                return self._say(session, sequence, "/group hand <charaId>")
+            ok = book.hand_over(mine.id, other)
+            return self._say(session, sequence, f"/group hand {other:#x}: "
+                                                f"{'ok' if ok else 'refused'} "
+                                                f"(re-login to see it)")
         if what in ("leave", "disband"):
             if mine is None:
                 return self._say(session, sequence, "/group: not in one")
@@ -6005,10 +6030,16 @@ class MpsServer:
 
         ⭐⭐ Round 144 answered the two buttons inside the 仲良しグループ情報
         window itself -- ［更 新］ (0x620A) and ［除 名］ (0x6226) -- which until
-        then hung the client on 「通信中」 when pressed. 解散 (0x6203) and 引継
-        (0x620D..0x6217) are still unanswered, but those are two rows of the
-        icon's menu rather than controls in an open window, and a menu row that
-        does nothing costs a restart only if it is clicked.
+        then hung the client on 「通信中」 when pressed.
+
+        ⭐⭐⭐ Round 146 answered the menu itself: 解散 (0x6203), 引継
+        (0x620D..0x6217) and 脱退 (0x6223). ⚠️ The third of those was not on
+        anybody's list -- the menu was written down as three rows because that
+        is what a *leader's* client draws, and 脱退 is the row a member gets
+        where the leader has 解散 and 引継. Counting the unanswered client
+        messages in the family rather than the rows on one screen is what found
+        it, which is the cheap check: every MsgCl in a family either has a
+        handler or has a reason written down for not having one.
         """
         book = self.accounts.groups
         me = session.chara_id
@@ -6016,6 +6047,12 @@ class MpsServer:
             return self._group_update(session, seen, params)
         if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_KICK:
             return self._group_kick(session, seen, params)
+        if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_DESTROY:
+            return self._group_destroy(session, seen, params)
+        if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_PART:
+            return self._group_part(session, seen)
+        if msg_type in groups.TRANSFER:
+            return self._group_transfer(session, seen, msg_type, params)
         if msg_type != groups.MSG_CL_QUERY_CHARA_GROUP_INFO:
             return self._group_invite(session, seen, msg_type, params)
         group = book.of(me)
@@ -6073,10 +6110,7 @@ class MpsServer:
         me = session.chara_id
         group = book.of(me)
         public = params[0] if params else 0
-        catchcopy = b""
-        if len(params) >= 3:
-            length = struct.unpack_from(">H", params, 1)[0]
-            catchcopy = params[3:3 + length]
+        catchcopy = groups.read_counted(params, 1)
         why = None
         if group is None:
             why = "in no group"
@@ -6156,14 +6190,296 @@ class MpsServer:
             ))
         return reply
 
-    def _forget_stale_invite(self, session: "_Session") -> None:
-        """Drop either end of an invite whose other side is no longer connected."""
+    def _group_destroy(self, session: "_Session", seen: int, params: bytes) -> bytes:
+        """［グループ解散］, the icon menu's second row: 0x6203 -> 0x6204/0x6205.
+
+        A counted comment and nothing else, and 0x6206 hands the same bytes on
+        to everybody who was still in the group.
+
+        ⭐ That body is what settles who gets the notify. 0x6229 could not say
+        who it was about because it is empty; this one is not empty, but what it
+        carries is the leader's farewell rather than an id, so the sentence is
+        still 「the group you are in is gone」 -- true for every member except
+        the one who typed it, and they have the Ok instead.
+
+        ⚠️ Leader only. A member's client should be drawing 脱退 in this row
+        rather than 解散, so a 0x6203 from one is a disagreement between the two
+        ends and gets 0x6205 -- the same call _group_update and _group_kick
+        make, for the same reason: refusing is the only way this end can say
+        「that is not your row」 at all.
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        group = book.of(me)
+        comment = groups.read_counted(params)
+        why = None
+        if group is None:
+            why = "in no group"
+        elif group.leader != me:
+            why = "not the leader"
+        if why is not None:
+            print(f"[{self.tag}] 解散 by charaId={me} refused: {why}")
+            return self._answer(
+                session, seen, groups.MSG_SV_NG_CHARA_GROUP_DESTROY,
+                struct.pack(">B", groups.REASON),
+            )
+        assert group is not None
+        # ⭐ Logged raw for the reason _group_update logs its catchcopy length:
+        # the wire field is counted, so nothing in the protocol states what the
+        # client's own edit box takes -- the first real 解散 says it here.
+        shown = comment.split(b"\x00")[0].decode("cp932", "replace")
+        print(f"[{self.tag}] 解散: charaId={me} is dissolving {group.label()}: "
+              f"comment[{len(comment)}]={shown!r}")
+        told = [member for member in group.members if member != me]
+        book.disband(group.id)
+        self._forget_group_handshakes(session)
+        reply = self._answer(
+            session, seen, groups.MSG_SV_OK_CHARA_GROUP_DESTROY, b"",
+        )
+        body = groups.counted(comment[:groups.MAX_COMMENT])
+        for member in told:
+            peer = self._session_of(member)
+            if peer is None:
+                continue
+            self._forget_group_handshakes(peer)
+            self._push(peer, self._answer(
+                peer, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_DESTROY, body,
+            ))
+        return reply
+
+    def _group_part(self, session: "_Session", seen: int) -> bytes:
+        """［グループ脱退］: 0x6223 -> 0x6224/0x6225. Empty in both directions.
+
+        ⚠️⚠️ The row a *member* is given where a leader has 解散 and 引継, and
+        the only one of the three with no notify at all: nobody is told when
+        somebody walks out. The roster catches up when the window is next
+        opened, which asks 0x6207 every time (round 142). ⭐ That is ［更 新］'s
+        shape and the opposite of 除名's 0x6229 -- what a message does about
+        telling the others is decided one message at a time, not per family.
+
+        ⚠️ A leader is refused. The manual gives them two doors of their own and
+        a group whose leader had walked out would have nobody left who can kick,
+        update or disband it. GroupBook.leave still folds the two together, but
+        that is the console's shortcut and its docstring says so.
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        group = book.of(me)
+        why = None
+        if group is None:
+            why = "in no group"
+        elif group.leader == me:
+            why = "a leader leaves through 解散 or 引継, not 脱退"
+        if why is not None:
+            print(f"[{self.tag}] 脱退 by charaId={me} refused: {why}")
+            return self._answer(
+                session, seen, groups.MSG_SV_NG_CHARA_GROUP_PART,
+                struct.pack(">B", groups.REASON),
+            )
+        assert group is not None
+        was = group.label()
+        book.leave(me)
+        self._forget_group_handshakes(session)
+        print(f"[{self.tag}] 脱退: charaId={me} left {was}")
+        return self._answer(
+            session, seen, groups.MSG_SV_OK_CHARA_GROUP_PART, b"",
+        )
+
+    def _group_transfer(self, session: "_Session", seen: int,
+                        msg_type: int, params: bytes) -> bytes:
+        """［グループ引継］: 0x620D -> 0x6210 -> 0x6211/0x6212 -> 0x6213.
+
+        The 勧誘 handshake with one field more on each half -- a counted comment
+        rides with the offer and is handed on -- and held in the session for the
+        same reason: the three answering messages carry no charaId, so each end
+        can be in at most one handover at a time.
+
+        ⚠️ The target has to be in the group already (GroupBook.hand_over says
+        why), and this end does *not* require リーダー資格 of them: that is the
+        exam that lets somebody create a group, and refusing here on a rule the
+        real server may not have would be indistinguishable from a handshake
+        that does not work.
+
+        ⚠️⚠️ ［断 る］ sends 0x6211 too. See the branch below: the Ok/Ng pair in
+        this family is not accept/decline, the answer byte is.
+
+        ⭐⭐⭐ Both ends get the empty 0x6213, and round 146 measured why that is
+        right rather than assuming it. The two screens show the same sentence --
+        「仲良しグループリーダーの引継ぎが行われました」 -- and then each client
+        flips its *own* leader flag in its own direction, with zero bytes going
+        back up: the ex-leader's icon menu drops to 情報/脱退 and the new
+        leader's grows to 情報/解散/引継. A bodyless notify can mean opposite
+        things at its two ends when both of them were parties to the handshake,
+        because each already knows which side it was on.
+
+        ⚠️ Which is also why it must not go to the rest of the roster: a third
+        member was not part of the handshake and has no side to flip. What they
+        see is a new leaderId the next time they open the window.
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        first = params[0] if params else 0
+
+        if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_TRANSFER_REQUEST:
+            target = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+            comment = groups.read_counted(params, 4)
+            group = book.of(me)
+            other = self._session_of(target) if target else None
+            self._forget_stale_group(session)
+            if other is not None:
+                self._forget_stale_group(other)
+            why = None
+            if target in (0, me) or other is None:
+                why = "no target" if target in (0, me) else "not online"
+            elif group is None or group.leader != me:
+                why = "not the leader"
+            elif target not in group.members:
+                why = f"charaId={target} is not in this group"
+            elif (session.group_handover_to is not None
+                  or other.group_handover_from is not None):
+                why = "a handover is already open"
+            if why is not None:
+                print(f"[{self.tag}] 引継 from charaId={me} to {target} refused: {why}")
+                return self._answer(
+                    session, seen, groups.MSG_SV_NG_CHARA_GROUP_TRANSFER_REQUEST,
+                    struct.pack(">B", groups.REASON),
+                )
+            assert other is not None and group is not None
+            session.group_handover_to = target
+            other.group_handover_from = me
+            shown = comment.split(b"\x00")[0].decode("cp932", "replace")
+            print(f"[{self.tag}] 引継: charaId={me} is offering {group.label()} "
+                  f"to {target}: comment[{len(comment)}]={shown!r}")
+            reply = self._answer(
+                session, seen, groups.MSG_SV_OK_CHARA_GROUP_TRANSFER_REQUEST, b"",
+            )
+            self._push(other, self._answer(
+                other, 0, groups.MSG_SV_REQUEST_CHARA_GROUP_TRANSFER_RESPONSE,
+                struct.pack(">I", me) + groups.counted(comment[:groups.MAX_COMMENT]),
+            ))
+            return reply
+
+        if (msg_type == groups.MSG_CL_OK_CHARA_GROUP_TRANSFER_RESPONSE
+                and first != groups.ANSWER_YES):
+            # ⚠️⚠️ ［断 る］ does NOT send the Ng message. Both buttons in the
+            # 「引継ぎ依頼」 box send 0x6211 and the answer byte is the answer:
+            # 1 from ［引き継ぐ］, 0 from ［断 る］ (round 146, one client on each
+            # end, cursor screenshotted on the button before each click). The
+            # names in the client's own dump say Ok/Ng, and reading the split
+            # off those names is what put a handover through on a refusal here
+            # twice before the byte was looked at. 0x6212 has never been seen.
+            msg_type = groups.MSG_CL_NG_CHARA_GROUP_TRANSFER_RESPONSE
+
+        if msg_type == groups.MSG_CL_OK_CHARA_GROUP_TRANSFER_RESPONSE:
+            asker = session.group_handover_from
+            leader = self._session_of(asker) if asker is not None else None
+            group = book.of(asker) if asker is not None else None
+            if asker is None or leader is None or group is None or group.leader != asker:
+                print(f"[{self.tag}] 引継 accept from charaId={me}: "
+                      f"nobody is handing anything over, ignoring")
+                session.group_handover_from = None
+                return b""
+            session.group_handover_from = None
+            leader.group_handover_to = None
+            book.hand_over(group.id, me)
+            print(f"[{self.tag}] 引継: charaId={me} accepted {asker} "
+                  f"(answer={first}); {group.label()} is now led by {me}")
+            self._push(leader, self._answer(
+                leader, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER, b"",
+            ))
+            return self._answer(
+                session, seen, groups.MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER, b"",
+            )
+
+        if msg_type == groups.MSG_CL_NG_CHARA_GROUP_TRANSFER_RESPONSE:
+            asker = session.group_handover_from
+            session.group_handover_from = None
+            leader = self._session_of(asker) if asker is not None else None
+            if leader is not None:
+                leader.group_handover_to = None
+                # 0x6217 is the only message that tells the other end an offer
+                # has ended, exactly as 0x6222 is for 勧誘 -- the family has no
+                # 「they said no」 of its own.
+                self._push(leader, self._answer(
+                    leader, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER_CANCEL,
+                    struct.pack(">B", first),
+                ))
+            print(f"[{self.tag}] 引継: charaId={me} declined {asker} "
+                  f"(reason={first})")
+            return b""
+
+        # 0x6214, the leader withdrawing the offer. Empty request, empty Ok.
+        target = session.group_handover_to
+        if target is None:
+            return self._answer(
+                session, seen, groups.MSG_SV_NG_CHARA_GROUP_TRANSFER_CANCEL,
+                struct.pack(">B", groups.REASON),
+            )
+        session.group_handover_to = None
+        asked = self._session_of(target)
+        if asked is not None:
+            asked.group_handover_from = None
+            self._push(asked, self._answer(
+                asked, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER_CANCEL,
+                struct.pack(">B", groups.REASON),
+            ))
+        print(f"[{self.tag}] 引継: charaId={me} withdrew the offer to {target}")
+        return self._answer(
+            session, seen, groups.MSG_SV_OK_CHARA_GROUP_TRANSFER_CANCEL, b"",
+        )
+
+    def _forget_stale_group(self, session: "_Session") -> None:
+        """Drop either end of a 勧誘 or a 引継 whose other side has logged out.
+
+        Both kinds in one place because they have one rule: an application is
+        open exactly while both ends are connected. Nothing in either family can
+        carry a question across a logout, so a stale id in a session is the only
+        trace one leaves.
+        """
         if (session.group_invited is not None
                 and self._session_of(session.group_invited) is None):
             session.group_invited = None
         if (session.group_inviter is not None
                 and self._session_of(session.group_inviter) is None):
             session.group_inviter = None
+        if (session.group_handover_to is not None
+                and self._session_of(session.group_handover_to) is None):
+            session.group_handover_to = None
+        if (session.group_handover_from is not None
+                and self._session_of(session.group_handover_from) is None):
+            session.group_handover_from = None
+
+    def _forget_group_handshakes(self, session: "_Session") -> None:
+        """Drop every application this session is an end of, both directions.
+
+        ⚠️ Called when the group under it stops existing (解散) or it walks out
+        of one (脱退). An application whose group is gone can still be answered
+        by the other end, and that answer would be applied to whatever group the
+        sender is in by then -- which is how a withdrawn invite turns into a
+        join nobody asked for. Clearing both ends here is cheaper than
+        re-checking the group in four more places.
+        """
+        me = session.chara_id
+        for target in (session.group_invited, session.group_handover_to):
+            other = self._session_of(target) if target is not None else None
+            if other is None:
+                continue
+            if other.group_inviter == me:
+                other.group_inviter = None
+            if other.group_handover_from == me:
+                other.group_handover_from = None
+        for asker in (session.group_inviter, session.group_handover_from):
+            other = self._session_of(asker) if asker is not None else None
+            if other is None:
+                continue
+            if other.group_invited == me:
+                other.group_invited = None
+            if other.group_handover_to == me:
+                other.group_handover_to = None
+        session.group_invited = None
+        session.group_inviter = None
+        session.group_handover_to = None
+        session.group_handover_from = None
 
     def _group_invite(self, session: "_Session", seen: int,
                       msg_type: int, params: bytes) -> bytes:
@@ -6179,6 +6495,10 @@ class MpsServer:
         from a leader who is already waiting is refused rather than allowed to
         overwrite the first: the client would then have no way to say which one
         its 0x621C meant.
+
+        ⚠️⚠️ Both buttons in the 「仲良し登録確認」 box send 0x621C. The answer
+        byte is the answer; the Ok/Ng pair of messages is not. See the branch
+        below -- and see groups.ANSWER_YES for how long that went unnoticed.
         """
         book = self.accounts.groups
         me = session.chara_id
@@ -6192,9 +6512,9 @@ class MpsServer:
             # only trace of it is a stale id in a session. Clearing it here
             # rather than at logout keeps the rule in one place: an invite is
             # open exactly while both ends are connected.
-            self._forget_stale_invite(session)
+            self._forget_stale_group(session)
             if other is not None:
-                self._forget_stale_invite(other)
+                self._forget_stale_group(other)
             why = None
             if target in (0, me) or other is None:
                 why = "no target" if target in (0, me) else "not online"
@@ -6226,11 +6546,25 @@ class MpsServer:
             ))
             return reply
 
+        if (msg_type == groups.MSG_CL_OK_CHARA_GROUP_INVITE_RESPONSE
+                and first != groups.ANSWER_YES):
+            # ⚠️⚠️ ［いいえ］ in the 「仲良し登録確認」 box sends 0x621C with
+            # answer=0, not 0x621D. Measured in round 146 with a real client on
+            # the answering end; round 143 built this handshake against a script
+            # that always accepted, and until this line existed a refusal put
+            # the refuser into the group. 0x621D has never been seen.
+            msg_type = groups.MSG_CL_NG_CHARA_GROUP_INVITE_RESPONSE
+
         if msg_type == groups.MSG_CL_OK_CHARA_GROUP_INVITE_RESPONSE:
             asker = session.group_inviter
             leader = self._session_of(asker) if asker is not None else None
             group = book.of(asker) if asker is not None else None
-            if asker is None or leader is None or group is None:
+            # ⚠️ Leadership is re-checked here and not only when the invite was
+            # sent: 引継 can hand the group away while an application is open,
+            # and an accept that arrives after that would put somebody into a
+            # group on the say-so of a character who no longer runs it.
+            if (asker is None or leader is None or group is None
+                    or group.leader != asker):
                 print(f"[{self.tag}] 勧誘 accept from charaId={me}: "
                       f"nobody is asking, ignoring")
                 session.group_inviter = None
@@ -6357,11 +6691,24 @@ class MpsServer:
             ))
             return reply
 
+        if (msg_type == friends.MSG_CL_OK_FRIEND_RESPONSE
+                and tail != friends.ANSWER_YES):
+            # ⚠️⚠️ Round 146 caught the two 仲良しグループ handshakes doing exactly
+            # what the comment that used to stand here assumed they could not:
+            # both buttons of the confirmation box send the *Ok* message and put
+            # the decision in its answer byte. This family has the same shape and
+            # the same box, and its yes has been seen: a client that already had
+            # the asker in its address book answered 0x6407 with answer=1 on its
+            # own. So 0 is not this family's yes, whatever else it is.
+            #
+            # ⚠️ What has *not* been seen is a real client pressing ［いいえ］
+            # here -- the right-click menu would not open on the third try and
+            # the reading was dropped rather than guessed. Treating a non-yes as
+            # a refusal is the safe half of that uncertainty: if ［いいえ］ turns
+            # out to send 0x6408 after all, this branch is simply never taken.
+            msg_type = friends.MSG_CL_NG_FRIEND_RESPONSE
+
         if msg_type == friends.MSG_CL_OK_FRIEND_RESPONSE:
-            # ``answer`` is the second field and nothing here reads it: the
-            # message's own name already says yes, and what a value other than
-            # agreement would mean in an Ok has not been measured. Logged so a
-            # capture that ever carries something else is not lost.
             asker = self._session_of(target)
             if target not in session.friends_asking or asker is None:
                 print(f"[{self.tag}] 友達登録 accept from charaId={me} for "
