@@ -46,11 +46,15 @@ the one those 30 days would be counted against.
 
 ⭐⭐ Round 144 closed the window: ［更 新］ (0x620A) and ［除 名］ (0x6226) are
 answered, so every control the 仲良しグループ情報 window draws now does
-something. 解散 and 引継 are still open, and the reason to have left them is the
-one 2.93 states -- answering half a handshake is harder to debug than answering
-none of it -- but the two *inside* the window were a different case: an
-unanswered request from a window that is already open hangs the client on
-「通信中」 and costs a restart.
+something. ⭐⭐⭐ Round 146 closed the menu that opens it -- 解散 (0x6203), 引継
+(0x620D..0x6217) and 脱退 (0x6223), the rows beside 「グループ情報」. Counting
+the rows is what found the third one: 引継 and 解散 are what a *leader* is
+offered, and the menu a member gets has 脱退 in their place, so a family that
+looked like two unanswered rows was three.
+
+⚠️ What is left in 0x62xx after that is 0x6200 create (the button that sends it
+is an NPC event this server cannot stage) and 0x622A グループ一覧 (同じ, 理事長
+秘書). 0x4700 グループチャット is a 会話ツール message, not this menu's.
 
 The store is one file for the whole server, for the reason friends.FriendBook
 gives: a group spans accounts, so a per-account file would have to be written
@@ -78,6 +82,17 @@ MSG_SV_ERROR_CHARA_GROUP_INFO = 0x6209
 MSG_CL_REQUEST_CHARA_GROUP_UPDATE = 0x620A
 MSG_SV_OK_CHARA_GROUP_UPDATE = 0x620B
 MSG_SV_NG_CHARA_GROUP_UPDATE = 0x620C
+MSG_CL_REQUEST_CHARA_GROUP_TRANSFER_REQUEST = 0x620D
+MSG_SV_OK_CHARA_GROUP_TRANSFER_REQUEST = 0x620E
+MSG_SV_NG_CHARA_GROUP_TRANSFER_REQUEST = 0x620F
+MSG_SV_REQUEST_CHARA_GROUP_TRANSFER_RESPONSE = 0x6210
+MSG_CL_OK_CHARA_GROUP_TRANSFER_RESPONSE = 0x6211
+MSG_CL_NG_CHARA_GROUP_TRANSFER_RESPONSE = 0x6212
+MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER = 0x6213
+MSG_CL_REQUEST_CHARA_GROUP_TRANSFER_CANCEL = 0x6214
+MSG_SV_OK_CHARA_GROUP_TRANSFER_CANCEL = 0x6215
+MSG_SV_NG_CHARA_GROUP_TRANSFER_CANCEL = 0x6216
+MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER_CANCEL = 0x6217
 MSG_CL_REQUEST_CHARA_GROUP_INVITE_REQUEST = 0x6218
 MSG_SV_OK_CHARA_GROUP_INVITE_REQUEST = 0x6219
 MSG_SV_NG_CHARA_GROUP_INVITE_REQUEST = 0x621A
@@ -89,6 +104,9 @@ MSG_CL_REQUEST_CHARA_GROUP_INVITE_CANCEL = 0x621F
 MSG_SV_OK_CHARA_GROUP_INVITE_CANCEL = 0x6220
 MSG_SV_NG_CHARA_GROUP_INVITE_CANCEL = 0x6221
 MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL = 0x6222
+MSG_CL_REQUEST_CHARA_GROUP_PART = 0x6223
+MSG_SV_OK_CHARA_GROUP_PART = 0x6224
+MSG_SV_NG_CHARA_GROUP_PART = 0x6225
 MSG_CL_REQUEST_CHARA_GROUP_KICK = 0x6226
 MSG_SV_OK_CHARA_GROUP_KICK = 0x6227
 MSG_SV_NG_CHARA_GROUP_KICK = 0x6228
@@ -125,6 +143,51 @@ MSG_SV_NOTIFY_CHARA_GROUP_KICK = 0x6229
 #: shape of the feature and not an omission: a character can be one end of at
 #: most one application at a time, so the ids live in the session and the wire
 #: does not repeat them. friends' 0x6407 does carry one; this family does not.
+
+#: The rest of the icon menu, measured the same way in round 146:
+#:
+#:   0x6203 comment (counted)                 <- the leader's ［グループ解散］
+#:   0x6204 (empty)        their receipt
+#:   0x6205 reason u8      refused
+#:   0x6206 comment (counted)                 the members are told, and the
+#:                                            leader's farewell rides along
+#:   0x6223 (empty)                           <- a member's ［グループ脱退］
+#:   0x6224 (empty) / 0x6225 reason u8        -- and no notify at all
+#:   0x620D targetId u32 + comment (counted)  <- the leader's ［グループ引継］
+#:   0x620E (empty)        the leader's receipt
+#:   0x620F reason u8      refused before the other side ever hears
+#:   0x6210 senderId u32 + comment (counted)  the member is asked; senderId is
+#:                                            the *leader*, as in 0x621B
+#:   0x6211 answer u8      they accept   -- no id in it, as in 0x621C
+#:   0x6212 reason u8      they decline  -- no id in it either
+#:   0x6213 (empty)        it happened
+#:   0x6214 (empty)        the leader withdraws
+#:   0x6215 (empty) / 0x6216 reason u8 / 0x6217 reason u8 -> the other end
+#:
+#: ⭐ 引継 is the 勧誘 handshake with one field more on each half: a counted
+#: comment. 解散 carries one too and 0x6206 hands the same bytes on, so the
+#: farewell the leader types is meant to reach the members -- dropping it here
+#: would be answering the message without delivering it.
+#:
+#: ⚠️⚠️ 脱退 has an Ok, an Ng and *no* notify: nobody is told when a member
+#: walks out, and the roster catches up when somebody next opens the window
+#: (0x6207 asks every time). That is ［更 新］'s shape and the opposite of
+#: 除名's 0x6229 -- one more row of the round-144 table, not a gap to fill in.
+#:
+#: ⚠️ Which of these the client draws is the *leader flag's* doing: a leader
+#: gets 情報/解散/引継 and a member gets 情報/脱退, so 0x6203 and 0x620D should
+#: only ever arrive from a leader and 0x6223 only from a member. This end
+#: refuses the other way round anyway -- the same rule the two buttons inside
+#: the window needed, where the client greys nothing and trusts this side.
+
+#: 引継 arrives as four different messages and they all mean the same handshake.
+TRANSFER = frozenset({
+    MSG_CL_REQUEST_CHARA_GROUP_TRANSFER_REQUEST,
+    MSG_CL_OK_CHARA_GROUP_TRANSFER_RESPONSE,
+    MSG_CL_NG_CHARA_GROUP_TRANSFER_RESPONSE,
+    MSG_CL_REQUEST_CHARA_GROUP_TRANSFER_CANCEL,
+})
+
 HANDLED = frozenset({
     MSG_CL_QUERY_CHARA_GROUP_INFO,
     MSG_CL_REQUEST_CHARA_GROUP_UPDATE,
@@ -133,7 +196,9 @@ HANDLED = frozenset({
     MSG_CL_NG_CHARA_GROUP_INVITE_RESPONSE,
     MSG_CL_REQUEST_CHARA_GROUP_INVITE_CANCEL,
     MSG_CL_REQUEST_CHARA_GROUP_KICK,
-})
+    MSG_CL_REQUEST_CHARA_GROUP_DESTROY,
+    MSG_CL_REQUEST_CHARA_GROUP_PART,
+}) | TRANSFER
 
 #: 「仲良しグループ」は１５人まで登録できます (p05_05 §3). The client checks
 #: nothing about the size before it sends 0x6218 -- the icon is live whatever
@@ -143,6 +208,18 @@ MAX_MEMBERS = 15
 
 #: ⚠️ INVENTED, like every other reason byte here. See mps_session.NG_REASON.
 REASON = 0
+
+#: ⚠️⚠️ NOT invented, and not what the message names suggest: the two buttons in
+#: the 「引継ぎ依頼」 box both send 0x6211 (the *Ok* message) and put the decision
+#: in its answer byte -- 1 from ［引き継ぐ］, 0 from ［断 る］. 0x6212, whose name
+#: says Ng, has never been seen on the wire. Measured in round 146 with a client
+#: on each end and the cursor screenshotted on the button before each click.
+#:
+#: ⭐ Worth carrying to the rest of the family: 勧誘's 0x621C carries an answer
+#: byte of its own (0x621D is its Ng) and no real client has ever been watched
+#: pressing 拒否 there -- round 143 read that half off a script that always
+#: accepted. Until somebody does, 0x621D being the refusal is an assumption.
+ANSWER_YES = 1
 
 #: 15 for a 仲良しグループ, 30 once it is a 同好会 (p05_05 §3). Enforced only as
 #: a refusal on join; nothing on the wire has been seen to carry it.
@@ -161,6 +238,37 @@ CLUBLIKE_MEMBER_LIMIT = 30
 #: so the client's own edit-box limit falls out of the first update anyone does
 #: instead of having to be read out of a dialog resource.
 MAX_CATCHCOPY = 64
+
+#: How much of 解散's and 引継's comment this end will hand on. ⚠️ INVENTED for
+#: the same reason MAX_CATCHCOPY is, and it only ever caps what gets *echoed*:
+#: nothing here stores a comment, so a cap that is too small does not lose data,
+#: it truncates a sentence on somebody else's screen. Kept well above anything
+#: the client has been seen to send; _group_destroy logs what arrives, which is
+#: where the client's own limit can be read off when a real one types into it.
+MAX_COMMENT = 256
+
+
+def read_counted(params: bytes, at: int = 0) -> bytes:
+    """A u16 count and that many bytes: this family's one string convention.
+
+    0x620A's catchcopy, 0x6203's and 0x620D's comment all arrive this way, and
+    0x6208/0x6206/0x6210 send one back. ⭐ The count includes the trailing NUL
+    (2.95 measured the bytes), so what comes out of here is the string *and* its
+    terminator -- echo it verbatim rather than trying to tidy it.
+
+    Short or truncated params answer b"" instead of raising: whether a request
+    is acceptable is the caller's rule, and a parser that throws turns a
+    malformed message into a dropped connection.
+    """
+    if len(params) < at + 2:
+        return b""
+    length = struct.unpack_from(">H", params, at)[0]
+    return params[at + 2:at + 2 + length]
+
+
+def counted(raw: bytes) -> bytes:
+    """The other direction of read_counted."""
+    return struct.pack(">H", len(raw)) + raw
 
 
 def name_bytes(text: str) -> bytes:
@@ -400,12 +508,44 @@ class GroupBook:
         self._save()
         return True
 
-    def leave(self, chara_id: int) -> bool:
-        """脱退. The leader leaving takes the group with them for now.
+    def hand_over(self, group_id: int, new_leader: int) -> bool:
+        """引継, 0x620D..0x6213: the leader gives the group to another member.
 
-        ⚠️ A decision, not a reading: the manual hands leadership over through
-        引継 (0x620D..0x6217), a handshake this server does not answer yet, and a
-        group whose leader is gone would have no one who can kick or disband it.
+        ⚠️ The new leader has to be in the group already. Handing it to somebody
+        outside would be a join and a promotion in one message, and the wire has
+        0x6218 for the first half of that.
+
+        ⚠️ Nothing here touches the qualified set. リーダー資格 is a pass at an
+        NPC exam and the manual lists it as what lets you *create* a group, not
+        as what lets you receive one; whether the client refuses to offer the
+        handover to somebody without it is not known, and inventing the refusal
+        here would look exactly like a handshake that does not work.
+
+        ⚠️⚠️ The roster is left in the order it was in. Nothing on the wire says
+        the leader is first -- 0x6208 sends leaderId as its own field after the
+        rows, which is the protocol saying position does not mean anything.
+        """
+        group = self.groups.get(group_id)
+        if group is None or new_leader not in group.members:
+            return False
+        if group.leader == new_leader:
+            return False
+        group.leader = new_leader
+        self._save()
+        return True
+
+    def leave(self, chara_id: int) -> bool:
+        """脱退, the console's version: a leader leaving takes the group along.
+
+        ⚠️ The wire has its own door for this now (0x6223) and it refuses a
+        leader outright -- the manual gives them 解散 and 引継 instead, and the
+        client draws the menu that way. mps_session._group_part is where that
+        rule lives.
+
+        ⭐ This one keeps folding the two together because the console has no
+        menu to grey out: `/group leave` is how a test puts an account back to
+        無所属 in one line whichever end of a group it is on, and a leader alone
+        in a group has nobody to hand it to.
         """
         group = self.of(chara_id)
         if group is None:

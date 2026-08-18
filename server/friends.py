@@ -60,6 +60,12 @@ MSG_CL_REQUEST_FRIEND_ADD_REQUEST = 0x6403
 MSG_SV_OK_FRIEND_ADD_REQUEST = 0x6404
 MSG_SV_NG_FRIEND_ADD_REQUEST = 0x6405
 MSG_SV_REQUEST_FRIEND_ADD_RESPONSE = 0x6406
+#: ⚠️ 1 = yes, measured in round 146: a client that already held the asker in
+#: its address book answered 0x6407 with answer=1 without showing its dialog at
+#: all. The same byte is the yes in both 仲良しグループ handshakes, where it is
+#: also what carries the *no* -- see groups.ANSWER_YES for why that matters.
+ANSWER_YES = 1
+
 MSG_CL_OK_FRIEND_RESPONSE = 0x6407
 MSG_CL_NG_FRIEND_RESPONSE = 0x6408
 MSG_SV_NOTIFY_FRIEND_ADD = 0x6409
