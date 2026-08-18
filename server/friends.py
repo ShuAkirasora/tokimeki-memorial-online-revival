@@ -40,9 +40,10 @@ bell and not a payload.
 a second login -- with the other player not even connected -- to see the window
 filled from MsgSvResultFriendList. The two have to be checked separately.
 
-The graph is symmetric and lives in one file for the whole server rather than
-one per account, because an edge belongs to two accounts at once and a per
-account file would have to be written twice and could disagree with itself.
+The graph is **directed** -- see FriendBook.unlink for the sentence in the
+manual that settles it -- and lives in one file for the whole server rather than
+one per account, because 友達登録 writes two books at once and a per account
+file would have to be written twice and could disagree with itself.
 """
 
 from __future__ import annotations
@@ -141,10 +142,11 @@ def list_params(rows: "list[bytes]") -> bytes:
 class FriendBook:
     """Who is in whose アドレス帳, for the whole server.
 
-    Edges are symmetric: 友達登録 needs both sides to agree, and the manual says
-    so in as many words -- 「相手が承諾すると、相手の情報がアドレス帳に登録され」.
-    Storing one edge as two entries costs a few bytes and makes every lookup a
-    dict hit instead of a scan.
+    ⚠️ Edges are directed, and the file has always stored them that way: one
+    key per owner, one list of whoever is in that owner's book. 友達登録 writes
+    both directions at once -- 「相手が承諾すると、相手の情報がアドレス帳に登録され」
+    -- but 消去 writes only one, which is what makes the direction matter. See
+    link and unlink; every lookup stays a dict hit instead of a scan.
 
     Every mutation writes the file, for the reason charaids.CharaIndex gives:
     holding it in memory until exit turns a crash into a save file that has
@@ -207,28 +209,48 @@ class FriendBook:
         return other in self.edges.get(one, ())
 
     def link(self, one: int, other: int) -> bool:
-        """Register the two with each other. False if they already were."""
-        if one == other or self.linked(one, other):
+        """友達登録: write both books. False if neither of them changed.
+
+        ⚠️⚠️ Both directions are written even when one of them is already
+        there, and that matters now that 消去 is one-way: after ``one`` drops
+        ``other``, ``other``'s book still lists ``one``, so a re-registration
+        arrives with half the pair already in place. Returning early on the
+        half that exists would leave the other half missing and put the two of
+        them back in exactly the state the request was meant to end.
+        """
+        if one == other:
             return False
-        self.edges.setdefault(one, set()).add(other)
-        self.edges.setdefault(other, set()).add(one)
+        changed = other not in self.edges.setdefault(one, set())
+        changed |= one not in self.edges.setdefault(other, set())
+        if not changed:
+            return False
+        self.edges[one].add(other)
+        self.edges[other].add(one)
         self._save()
         return True
 
     def unlink(self, one: int, other: int) -> bool:
-        """⚠️ Both directions, and that is a decision rather than a reading.
+        """消去: one direction only -- ``one``'s book drops ``other``.
 
-        The family has no MsgSvNotifyFriendDel: nothing tells the other side
-        their book just lost a row. Keeping the edge one-way would leave a book
-        listing somebody who no longer lists them, which the 消去 button cannot
-        express and no message can repair. Symmetric it is -- and if a capture
-        ever shows the original keeping the far side, this is the one line to
-        change.
+        ⭐⭐⭐ The manual settles this in one sentence (p05_05 §2):
+        「アドレス帳から名前を消去することができますが、**自分のアドレス帳から
+        消去しても、相手のアドレス帳からは消去されません**」. So a book listing
+        somebody who no longer lists them is not a hole -- it is the design.
+
+        ⚠️⚠️ This end used to drop both, on the reasoning that the family has no
+        MsgSvNotifyFriendDel and nothing could ever repair the one-sided state.
+        Read the other way round, the missing notify is the *evidence*: there is
+        no message telling the far side because the far side does not change.
+        Round 149 turned that invention back into a reading.
+
+        ⭐ What the asymmetry costs the players is exactly what the wire allows:
+        ``one`` can ask again (the 0x6403 gate reads linked(me, target), which is
+        directed too), while ``other`` cannot -- their book still has the row, so
+        they are told 「already friends」. Only the side that deleted can undo it.
         """
         if not self.linked(one, other):
             return False
         self.edges.get(one, set()).discard(other)
-        self.edges.get(other, set()).discard(one)
         self._save()
         return True
 
