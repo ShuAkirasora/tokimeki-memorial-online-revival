@@ -1115,6 +1115,48 @@ class MpsServer:
               + " ".join(f"{c}:{i}" for c, i in inv.worn))
         return out
 
+    def _equip_replay_peers(
+        self, session: "_Session", peers: "list[_Session]"
+    ) -> bytes:
+        """0x4D06 for what everybody ALREADY STANDING HERE is wearing.
+
+        ⚠️⚠️ _equip_replay covers one direction only. It replays the entrant's
+        own worn list and relays it to the peers, so a character who walks in
+        arrives dressed on every screen that was already open -- but the screen
+        that is being built right now is never told about anybody else's, and
+        0x480F carries no worn bit to make up for it (see _equip_replay: this
+        message and nothing else sets the clothes).
+
+        ⭐ MEASURED round 148, A/B/A on two clients: a viewer who logged in
+        while the other player stood there drew them bare-headed; the other
+        player then re-entered and the ears appeared on that same screen; a
+        fresh login by the viewer lost them again. So it is the entering
+        client that is short of a message, not the record.
+
+        ⚠️ Same invention boundary as _equip_replay -- that a scene build is
+        where the initial state belongs is this server's route, not a restored
+        one. What is restored is that only 0x4D06 can carry it.
+        """
+        out = b""
+        dressed = []
+        for other in peers:
+            inv = self._chars(other).items(other.chara_id)
+            if inv is None or not inv.worn:
+                continue
+            for category, item_id in inv.worn:
+                out += self._answer(
+                    session, 0, item.MSG_SV_NOTIFY_ITEM_EQUIP,
+                    item.equip_params(other.chara_id, category, item_id, 1),
+                )
+            dressed.append(
+                f"{other.chara_id}="
+                + ",".join(f"{c}:{i}" for c, i in inv.worn)
+            )
+        if dressed:
+            print(f"[{self.tag}] equip replay: charaId={session.chara_id} is "
+                  f"shown " + " ".join(dressed))
+        return out
+
     def _locker(self, session: "_Session") -> "item.Locker | None":
         """This connection's account's ロッカー, or None if it has no account.
 
@@ -2265,6 +2307,26 @@ class MpsServer:
                     self._battle_carry_on(gone)
                     print(f"[{self.tag}] battle left at logout, "
                           f"now {self.battles.summary()}")
+                # ⚠️⚠️ The same 0x4810 the disconnect path owes the others, for
+                # the same reason and in the same place in the order. MEASURED
+                # round 148, and the failure was neither an error nor a stale
+                # sprite: without it the peers keep the leaver in their scene,
+                # and the *next* login hands them a second 0x480F for a charaId
+                # they still hold. Round 67 measured what a repeated add does to
+                # a roster (it counts the person twice); on the map it puts the
+                # right-click menu of that character entirely out of action --
+                # all six icons grey, zero bytes on click -- and nothing on
+                # screen says why. Relogging the *viewer* clears it, which is
+                # what pinned the state to the viewer's copy rather than to the
+                # leaver's record.
+                #
+                # ⚠️ This connection stays live (it is going to the character
+                # select, not closing), so _peers still finds the audience --
+                # unlike the disconnect path, which has to pass its watchers in
+                # because it takes the session out of self.live first.
+                peers = self._peers(session)
+                if peers:
+                    self._presence_withdraw(session, peers)
                 # ⚠️ A 看板 has to come down here and not only on disconnect:
                 # 「ゲームを中断（キャラクター選択画面に戻る）しても、退出する
                 # ことになります」 (p07_06), and clearing chara_id below would
@@ -2393,7 +2455,12 @@ class MpsServer:
                 # The other direction, once this scene is built: they can see the
                 # peers now, so the peers have to be told about them.
                 self._presence_announce(session)
-                return reply + self._equip_replay(session)
+                # ⚠️ Both directions, and both AFTER the 0x480F batches above:
+                # 0x4D06 names a charaId the client has to be holding already,
+                # so dressing anybody ahead of the add that creates them would
+                # be talking about somebody who is not in the scene yet.
+                return (reply + self._equip_replay(session)
+                        + self._equip_replay_peers(session, peers))
             if msg_type == MSG_CL_QUERY_CHARA_INFO:
                 # 「サーバーからの返答待ちです」 in the lobby: the client asks this
                 # about every character it has been told to draw, one u32 charaId
