@@ -254,6 +254,27 @@ FIXED_REPLIES = {
     # whatever an event needs beyond being acknowledged is still unknown.
     0x5600: (0x5601, b""),  # MsgClRequestNpcEventStart -> MsgSvOkNpcEventStart
     0x5603: (0x5604, b""),  # MsgClRequestNpcEventEnd   -> MsgSvOkNpcEventEnd
+    # ⭐⭐ Three of the six icons in the PC 交流メニュー, measured in round 151 by
+    # right-clicking a second player and pressing them one at a time. All three
+    # carry exactly one u32 -- the charaId of the person clicked -- and all three
+    # had gone unanswered, which is the failure this project has already written
+    # down twice: the client puts up 「通信中 / サーバーからの返答待ちです」 and
+    # sits there. Round 151 measured that too, and measured the way out: an Ng or
+    # an Error takes the box down with nothing else on screen, no re-login.
+    #
+    # ⭐ 経歴 is not an invention. This server's own MsgSvResultOption (0x0700
+    # above) says career=0, i.e. 経歴公開 is off, so 「that card is not public」
+    # is the answer this end has already committed to. The other two are:
+    # ツーショット and トレード are whole subsystems (0x5000..0x5203 and
+    # 0x5100..0x5118) and a refusal is a rule nobody has read off the client.
+    # ⚠️ INVENTED, and what overturns it is implementing either family -- at
+    # which point these two rows come out.
+    #
+    # Reason byte is the NG_REASON placeholder defined below; the table is built
+    # before that name exists, hence the literal.
+    0x4315: (0x4317, b"\x00"),  # MsgClQueryCharaCareer      -> MsgSvErrorCharaCareer
+    0x5000: (0x5002, b"\x00"),  # MsgClRequestTwoshotRequest -> MsgSvNgTwoshotRequest
+    0x5100: (0x5102, b"\x00"),  # MsgClRequestTradeRequest   -> MsgSvNgTradeRequest
 }
 
 MSG_CL_QUERY_CHARACTER_LIST = 0x0318
@@ -1325,6 +1346,11 @@ class MpsServer:
             map_id=other.map_id,
             direction=other.direction,
             action=self._presence_action(other) if action is None else action,
+            # ⭐ The 仲良しグループ this character is in, and the PC menu's
+            # 「グループ登録申込み」 reads it off this entry rather than off
+            # 0x6501 -- round 150 saw the invite offered between two members of
+            # the same group because this field was NO_GROUP for everybody.
+            group_id=self.accounts.groups.id_of(other.chara_id),
         )
 
     def _presence_action(self, other: "_Session") -> int:
@@ -2457,6 +2483,7 @@ class MpsServer:
                         pos=session.pos,
                         map_id=session.map_id,
                         direction=session.direction,
+                        group_id=self.accounts.groups.id_of(session.chara_id),
                     )
                 ]
                 for index, (label, pos_x, pos_y) in enumerate(markers):
@@ -2598,14 +2625,29 @@ class MpsServer:
             if msg_type == curriculum.MSG_CL_QUERY_SCORE_CARD:
                 # 「生徒情報」→「通知表」. One u32 charaId, because a player can
                 # look at someone else's if their 通知表公開 option is on — ours
-                # is off (FIXED_REPLIES 0x0700), which costs nothing here since
-                # the only characters that exist are this account's.
+                # is off (FIXED_REPLIES 0x0700).
+                #
+                # ⭐⭐ Round 151: that last sentence has teeth now. The PC menu's
+                # 「通知表を見る」 sends this very message with *the other player's*
+                # charaId, so this is not only the 生徒情報 window's own query --
+                # and until this branch said so, a peer's card fell out through
+                # 「no charaId=…」 below, which reads like a lookup bug rather
+                # than the policy it is. ⚠️ The refusal is unchanged; what
+                # changed is that it is now a decision. Turning 通知表公開 on
+                # means answering out of the owner's store the way chara_info
+                # does (accounts.owner_of), not just deleting this test.
                 #
                 # The three 必要 columns are absent from the answer on purpose:
                 # they are not on the wire at all, and the client fills them
                 # from lesson.bin. Whether it really does is what opening this
                 # screen is meant to show.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+                if chara_id != session.chara_id and not FIXED_REPLIES[0x0700][1][2]:
+                    print(f"[{self.tag}] scorecard for charaId={chara_id}: refused, "
+                          f"通知表公開 is off (0x0701 says so)")
+                    return self._answer(
+                        session, sequence, curriculum.MSG_SV_ERROR_SCORE_CARD, bytes(1)
+                    )
                 card = self._chars(session).scorecard(chara_id)
                 names = self._chars(session).full_name(chara_id)
                 if card is None or names is None:
@@ -5810,10 +5852,13 @@ class MpsServer:
         handshake, which is what the client would send once the button that
         sends it is reachable. Both write exactly what this writes.
 
-        ⭐ Nothing here takes effect on a client that is already logged in. All
-        four fields ride in MsgSvResultCharaInfo, which the client asks for once
-        when a character enters the scene and then keeps -- so every one of
-        these is followed by a 登校 before it can be seen.
+        ⭐ Most of this takes effect on a client that is already logged in only
+        after a 登校. All four fields ride in MsgSvResultCharaInfo, which the
+        client asks for once when a character enters the scene and then keeps.
+        ⚠️ friendGroupId is the exception, because it rides in the 0x480F entry
+        as well: the lines that change who is in a group redraw the characters
+        they moved, so the PC menu on somebody else's screen keeps up without a
+        再ログイン. The name and the two leader flags still need one.
 
             /group                     what the store holds
             /group qual on|off         leaderQualificationFlag for me
@@ -5852,8 +5897,9 @@ class MpsServer:
             group = book.create(me, groups.name_bytes(name))
             if group is None:
                 return self._say(session, sequence, f"/group: already in {mine.label()}")
+            self._presence_refresh_onlookers(session)
             return self._say(session, sequence, f"/group created {group.label()} "
-                                                f"(re-login to see it)")
+                                                f"(re-login to see the name)")
         if what == "join":
             if mine is None:
                 return self._say(session, sequence, "/group: found one first")
@@ -5862,6 +5908,10 @@ class MpsServer:
             except (IndexError, ValueError):
                 return self._say(session, sequence, "/group join <charaId>")
             ok = book.join(mine.id, other)
+            if ok:
+                joined = self._session_of(other)
+                if joined is not None:
+                    self._presence_refresh_onlookers(joined)
             return self._say(session, sequence, f"/group join {other:#x}: "
                                                 f"{'ok' if ok else 'refused'}")
         if what == "hand":
@@ -5879,10 +5929,18 @@ class MpsServer:
             if mine is None:
                 return self._say(session, sequence, "/group: not in one")
             was = mine.label()
+            members = list(mine.members)
             if what == "leave":
                 book.leave(me)
             else:
                 book.disband(mine.id)
+            # ⚠️ 脱退 by a member moves one character; 解散 -- and 脱退 by the
+            # leader, which GroupBook.leave folds into 解散 -- moves everybody
+            # who was in it, so redraw the lot rather than just this session.
+            for member in members:
+                moved = self._session_of(member)
+                if moved is not None and book.of(member) is None:
+                    self._presence_refresh_onlookers(moved)
             return self._say(session, sequence, f"/group left {was} (re-login to see it)")
         return self._say(session, sequence, f"/group: unknown '{what}'")
 
@@ -6433,15 +6491,24 @@ class MpsServer:
         book.kick(group.id, target)
         print(f"[{self.tag}] 除名: charaId={me} removed {target} "
               f"from {group.label()}")
-        reply = self._answer(
-            session, seen, groups.MSG_SV_OK_CHARA_GROUP_KICK, b"",
-        )
         removed = self._session_of(target)
         if removed is not None:
             self._push(removed, self._answer(
                 removed, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_KICK, b"",
             ))
-        return reply
+            # ⚠️ 0x6229 fixes the removed player's *own* copy of the record;
+            # everybody looking at them still holds the 0x480F entry that says
+            # they are in this group, and that entry is what the PC menu reads.
+            self._presence_refresh_onlookers(removed)
+        # ⚠️⚠️ The Ok is built *after* that redraw, not before. Sequence numbers
+        # are handed out by _answer at the moment it is called, and the redraw
+        # goes out to the onlookers — this leader among them — the moment it is
+        # asked for, while this reply waits to be returned. Building it first
+        # put a lower number behind a higher one on the leader's own connection,
+        # which is the one thing 0xA4C4D0 hangs up over (round 105, 2.60).
+        return self._answer(
+            session, seen, groups.MSG_SV_OK_CHARA_GROUP_KICK, b"",
+        )
 
     def _group_destroy(self, session: "_Session", seen: int, params: bytes) -> bytes:
         """［グループ解散］, the icon menu's second row: 0x6203 -> 0x6204/0x6205.
@@ -6486,10 +6553,10 @@ class MpsServer:
         told = [member for member in group.members if member != me]
         book.disband(group.id)
         self._forget_group_handshakes(session)
-        reply = self._answer(
-            session, seen, groups.MSG_SV_OK_CHARA_GROUP_DESTROY, b"",
-        )
         body = groups.counted(comment[:groups.MAX_COMMENT])
+        # Everybody who was in it is now 未所属, so every one of their 0x480F
+        # entries is stale on every screen -- the leader's included.
+        self._presence_refresh_onlookers(session)
         for member in told:
             peer = self._session_of(member)
             if peer is None:
@@ -6498,7 +6565,15 @@ class MpsServer:
             self._push(peer, self._answer(
                 peer, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_DESTROY, body,
             ))
-        return reply
+            # ⚠️ This redraws a member for *their* onlookers, and the leader
+            # standing beside them is one, so it reaches this connection too.
+            self._presence_refresh_onlookers(peer)
+        # ⚠️⚠️ Built last, for the reason spelled out in _group_kick: _answer
+        # takes a sequence number when it is called, and everything above has
+        # already gone out on this same socket.
+        return self._answer(
+            session, seen, groups.MSG_SV_OK_CHARA_GROUP_DESTROY, b"",
+        )
 
     def _group_part(self, session: "_Session", seen: int) -> bytes:
         """［グループ脱退］: 0x6223 -> 0x6224/0x6225. Empty in both directions.
@@ -6534,6 +6609,10 @@ class MpsServer:
         book.leave(me)
         self._forget_group_handshakes(session)
         print(f"[{self.tag}] 脱退: charaId={me} left {was}")
+        # ⚠️ Nobody is told 「they walked out」 -- but the walker's own 0x480F
+        # entry now says the wrong group on every screen it is drawn on, and
+        # that is a redraw rather than a notify.
+        self._presence_refresh_onlookers(session)
         return self._answer(
             session, seen, groups.MSG_SV_OK_CHARA_GROUP_PART, b"",
         )
@@ -6827,6 +6906,11 @@ class MpsServer:
             book.join(group.id, me)
             print(f"[{self.tag}] 勧誘: charaId={me} accepted {asker} "
                   f"(answer={first}); {group.label()}")
+            # ⭐ The joiner is now in a group, and the copy every onlooker holds
+            # of them still says 未所属 -- which is exactly the copy the PC
+            # menu's 「グループ登録申込み」 asks, so without this the invite
+            # stays on offer to somebody who has just accepted one.
+            self._presence_refresh_onlookers(session)
             # ⚠️ A bell with no payload, so it cannot say who joined. Everybody
             # already in the group gets one and re-opens the window to see the
             # row; the joiner needs a 登校 for its own record to change.
