@@ -119,6 +119,14 @@ STRESS_PER_LESSON = 26          # ≈ 10 / 100 on screen
 NEUROSIS_AT = 180               # ≈ 70 / 100 on screen
 SIT_SECONDS_PER_POINT = 3.0     # a full bar in ~13 minutes
 HEALING_SECONDS_PER_POINT = 1.0 # three times that, in the 保健室
+
+# 「クラブ活動」 is the second entry on the manual's list of what adds ストレス,
+# and it is worth what a lesson is worth for the same reason 試験 is: the page
+# names the three sources in one sentence and gives a figure for none of them,
+# so a difference between them would be a second invention on top of the first.
+# ⚠️ One 自主トレ fight is one クラブ活動, whatever its length -- turns are not
+# what the sentence counts.
+STRESS_PER_CLUB_ACTIVITY = 26
 # ── end INVENTED ───────────────────────────────────────────────────────────
 
 
@@ -151,7 +159,28 @@ def healing(map_id: int) -> bool:
     return map_id in HEALING_MAPS
 
 
-def charge(sheet, amount: int) -> "tuple[int, int]":
+def worsen(condition: int, added: int) -> int:
+    """Put `added` on top of `condition`. 「ノイローゼと怪我が重なった状態」.
+
+    ⭐⭐⭐ RESTORED, and the whole of ドクターストップ is in that one clause:
+    the fourth 体調 is not a thing anything gives you, it is what the other two
+    add up to. Which is also why nothing needs to name it -- 授業 gives
+    ノイローゼ, クラブ活動 gives 怪我, and a player who collects both arrives
+    here.
+
+        健康     + X       = X
+        X        + X       = X          (already there; nothing gets worse)
+        ノイローゼ + 怪我     = ドクターストップ   (and the other way round)
+        ドクターストップ + X    = ドクターストップ   (there is nothing above it)
+    """
+    if condition == DOCTOR_STOP or condition == added or added == HEALTHY:
+        return condition
+    if condition == HEALTHY:
+        return added
+    return DOCTOR_STOP
+
+
+def charge(sheet, amount: int, breaks_into: int = NEUROSIS) -> "tuple[int, int]":
     """Charge `amount` of stress, and decide whether it broke the player.
 
     Returns (stress_added, new_condition). Order matters and follows the
@@ -164,17 +193,50 @@ def charge(sheet, amount: int) -> "tuple[int, int]":
     two activities: 授業 and 試験 both charge, by the same rule, and only the
     quantity is theirs to name. Both quantities are invented — see the block
     above and exam.STRESS_PER_EXAM.
+
+    ⭐⭐ ``breaks_into`` is the caller's for the same reason, and it is the
+    half round 148 and everything before it left out: the manual names *two*
+    ways to break, one per kind of activity — 「授業や試験を受けると、ノイローゼ
+    になることがあります」 and 「クラブ活動を行なうと、怪我をすることがあります」
+    — and this end only ever charged the 学業 half. See worsen for what happens
+    when a player collects both.
     """
     was = sheet.stress
     sheet.stress = min(FULL, was + amount)
-    if was >= NEUROSIS_AT and sheet.condition == HEALTHY:
-        sheet.condition = NEUROSIS
+    if was >= NEUROSIS_AT:
+        sheet.condition = worsen(sheet.condition, breaks_into)
     return sheet.stress - was, sheet.condition
 
 
 def after_lesson(sheet) -> "tuple[int, int]":
     """One 授業's worth. See charge."""
     return charge(sheet, STRESS_PER_LESSON)
+
+
+def after_club_activity(sheet) -> "tuple[int, int]":
+    """One クラブ活動's worth, and it breaks into 怪我 rather than ノイローゼ.
+
+    ⚠️ 奥義合成 is the third source on the manual's list and has no call site:
+    0x5306 MsgClRequestGousei is unanswered here because the door to it is the
+    顧問's 交流メニュー, which this server cannot draw (2.90). When that door
+    opens, this is the function it wants -- 合成 is クラブ活動 as far as p05_09
+    is concerned, both being on the same list.
+    """
+    return charge(sheet, STRESS_PER_CLUB_ACTIVITY, breaks_into=INJURY)
+
+
+def barred_from_club(condition: int) -> bool:
+    """怪我をするとクラブ活動に参加できなくなります.
+
+    ⭐⭐⭐ RESTORED down to the refusal bytes: the client ships the sentences
+    (trainingroom.py lists them) -- 0x5802 reason 11 「怪我をしていると、自主トレ
+    に参加することはできません。」 and 0x5808 reason 10. A rule the other end
+    already has a sentence for is not one this end gets to invent.
+
+    ドクターストップ is 「ノイローゼと怪我が重なった状態」, so it bars this too,
+    exactly as it bars 学業.
+    """
+    return condition in (INJURY, DOCTOR_STOP)
 
 
 def recover(sheet, seconds: float, map_id: int) -> int:
