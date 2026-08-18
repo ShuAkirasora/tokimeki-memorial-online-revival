@@ -342,13 +342,30 @@ ADD_BATCH = 16
 # rather than to add anything, and the ruler would come out with holes in it.
 DIRECTION_PROBE_ID_BASE = PROBE_ID_BASE + 100
 ACTION_PROBE_ID_BASE = PROBE_ID_BASE + 300  # /act, clear of the direction ruler
-# The tinychara ``action`` field is the icon over a character's head. Read off
-# the /act ruler in round 71 -- sixteen stand-ins, one per value, one screenshot:
-# 8 is a signboard on a post, 10 is a figure lifting weights, 13 a heart, 3 a
-# blackboard, and 0/4/12/15 draw nothing. Only the one this server needs is
-# named here; the rest are in PROTOCOL 2.xx with the screenshot.
-ACTION_NONE = 0
-ACTION_TRAINING_ROOM = 10
+# The tinychara ``action`` field is the icon over a character's head.
+ACTION_NONE = 0             # and so is 15, and so is everything from 16 up
+# ⭐⭐⭐ Round 150 named the whole field. Two readings agree, neither of them a
+# guess: the client ships fourteen icons as mch/act/act_bin/act_01..act_14 with
+# one atlas behind them (mch/act/act_vrm), and the manual page p05_08 draws ten
+# of them with their names (beta/manual/images/*.gif). Laying the two side by
+# side matches act_NN to the manual's picture one for one, and the /act ruler
+# then read the same fourteen back off the screen at exactly value == NN.
+# ⚠️ Round 71's ruler recorded 4 and 12 as drawing nothing; both draw. 16-31
+# were walked in round 150 as well and every one of them is blank.
+ACTION_TALKING = 1           # 会話中        (kaiwa_chu)
+ACTION_TRADING = 2           # トレード中    (trading_chu)
+ACTION_LESSON = 3            # 授業中        (jugyou_shu)
+ACTION_CLUB_ACTIVITY = 4     # クラブ活動中  (club_chu)
+ACTION_DRAMA_EVENT = 5       # ドラマイベント中 (2shot_chat)
+ACTION_READING_PAPER = 6     # 校内新聞閲覧中 (shinbun_eturan)
+ACTION_LOCKER_OPEN = 7       # ロッカー開き中 (locker_hirakichu)
+ACTION_SIGNBOARD = 8         # 看板          (kanban)
+ACTION_CHAT_ROOM = 9         # チャット募集中 (chat_boshu)
+ACTION_TRAINING_ROOM = 10    # 自主トレ募集中 (jishutore_boshu)
+# 11-14 draw, but p05_08 names only ten and these four are not among them:
+# 11 is a character holding out a heart, 12 a heart breaking, 13 a whole heart,
+# and 14 is byte-identical artwork to 4. The hearts belong to 恋愛 / p05_12
+# カップル; nothing here sends any of them.
 
 # What the client sends while the player moves around, decoded rather than left
 # as a hex blob because these carry the only coordinates the client ever states
@@ -1313,16 +1330,60 @@ class MpsServer:
     def _presence_action(self, other: "_Session") -> int:
         """The icon to draw over this character's head.
 
-        Leading a 自主トレ room is the only thing that puts one there so far,
-        and it has to: the manual's only way into somebody else\'s room is
-        「ルームを作成したキャラクターの頭上のアイコン」を右クリック, so with no
-        icon there is no way in. ⚠️ The 10 is measured (the ruler draws a figure
-        lifting weights) but the *pairing* -- that this is the icon the 自主トレ
-        board puts up rather than one of the other sixteen -- is settled by the
-        client offering 参加 when it is set, not by anything in the data.
+        Which byte draws which picture is recovered (see the constants). What
+        this server puts up is three of them:
+
+        * 授業中 while a period is running. `p05_08`: 「授業中のマップキャラの
+          頭上に表示されます」 -- the character keeps standing on the map while
+          its owner is in the lesson scene, and until round 150 it stood there
+          with nothing over its head, which reads as idling.
+        * クラブ活動中 while a fight is on. `p05_09` counts 自主トレ as クラブ
+          活動 for ストレス, and the same word names this icon.
+        * 自主トレ募集中 for a room leader, and it has to be there: the manual's
+          only way into somebody else\'s room is 「ルームを作成したキャラクター
+          の頭上のアイコン」を右クリック. ⚠️ That 10 was settled twice over --
+          the ruler draws a figure lifting weights, and the client offers 参加
+          only when this byte is set.
+
+        ⚠️ INVENTED: the order. Nothing says which icon wins when two apply, and
+        as written a lesson beats a fight beats a room. Nobody can be in two of
+        these at once today, so the ordering has never been exercised; what
+        would overturn it is a manual line or a capture showing a different one
+        on a character who qualifies for two.
         """
+        if other.lesson is not None:
+            return ACTION_LESSON
+        if self.battles.battle_of(other.chara_id) is not None:
+            return ACTION_CLUB_ACTIVITY
         room = self.trainingrooms.rooms.get(other.chara_id)
         return ACTION_TRAINING_ROOM if room is not None else ACTION_NONE
+
+    def _presence_blocked(
+        self, session: "_Session", also: "set[int] | None" = None
+    ) -> "set[int]":
+        """charaIds a 0x4810+0x480F pair must not reach right now.
+
+        The pair edits the map scene, and round 96 measured what happens when it
+        arrives at a client that has a different screen up: the 結果画面 took
+        one and closed the connection. So it goes only to peers who are looking
+        at the map -- not to somebody sitting in a lesson, not to somebody in a
+        fight, and not to whatever extra ids the caller knows about (the fighters
+        on a 結果画面 are exactly that case: the board has already forgotten the
+        fight by the time their screen catches up).
+        """
+        blocked = set(also or ())
+        for peer in self._peers(session):
+            if peer.lesson is not None:
+                blocked.add(peer.chara_id)
+            elif self.battles.battle_of(peer.chara_id) is not None:
+                blocked.add(peer.chara_id)
+        return blocked
+
+    def _presence_refresh_onlookers(
+        self, session: "_Session", also: "set[int] | None" = None
+    ) -> None:
+        """Redraw this character for everybody whose map scene is actually up."""
+        self._presence_refresh(session, skip=self._presence_blocked(session, also))
 
     def _presence_refresh(
         self, session: "_Session", skip: "set[int] | None" = None
@@ -3411,6 +3472,15 @@ class MpsServer:
                 )
 
         battle = self.battles.open(fighters)
+        # クラブ活動中 goes up over everybody who is fighting. ⚠️ The fighters
+        # themselves are excluded: they are leaving the map scene for the fight,
+        # and the 0x4810+0x480F pair is only safe for a client looking at the
+        # map (round 96). The audience is the bystanders standing around them.
+        combatants = {f.chara_id for f in fighters}
+        for fighter in fighters:
+            other = self._session_of(fighter.chara_id)
+            if other is not None:
+                self._presence_refresh_onlookers(other, also=combatants)
         sides = {t: [f.info_row() for f in battle.side(t)] for t in trainingroom.TEAMS}
         counts = "/".join(str(len(sides[t])) for t in trainingroom.TEAMS)
         print(f"[{self.tag}] battle info: Ａ/Ｂ={counts}, {self.battles.summary()}")
@@ -4153,21 +4223,22 @@ class MpsServer:
             board.part(chara_id)
             print(f"[{self.tag}] trainingroom left at battle end: "
                   f"charaId={chara_id:#x}, now {board.summary()}")
-            # ⚠️ Only leadership moves a pixel: _presence_action puts the 看板
-            # over the leader and nobody else, so a plain member's refresh would
-            # be a 0x4810/0x480F pair that redraws the frame it replaced.
-            # ⚠️⚠️ And it must not reach the fighters — that pair is what
+            # ⚠️ Two things move a pixel here, and until round 150 only one of
+            # them did: leadership (the 看板 goes to whoever leads the room now)
+            # and the fight itself (クラブ活動中 sits on every fighter while one
+            # is on, so every fighter's byte changes when it ends). So the
+            # refresh is no longer conditional on having led the room.
+            # ⚠️⚠️ It must not reach the fighters — that pair is what
             # 「通信が断たれました」 came out of; see _presence_refresh. They do
             # not need it either: pressing ［終 了］ sends 0x4000, and that
             # branch rebuilds the whole scene with a freshly computed action
-            # byte for every peer. ⚠️ What is left uncovered is a bystander who
-            # never fought and never reloads — they keep a 看板 over somebody
-            # who no longer leads a room until something else redraws them.
-            if was_leader:
-                for who in {chara_id, room.leader_id}:
-                    other = self._session_of(who)
-                    if other is not None:
-                        self._presence_refresh(other, skip=skip)
+            # byte for every peer. ⚠️ Note self.battles.close() has already run,
+            # so battle_of() no longer knows these are the people on a 結果画面
+            # — `skip` is what keeps them out, not _presence_blocked.
+            for who in ({chara_id, room.leader_id} if was_leader else {chara_id}):
+                other = self._session_of(who)
+                if other is not None:
+                    self._presence_refresh(other, skip=skip)
             if room.members:
                 if room not in emptied:
                     emptied.append(room)
@@ -6056,6 +6127,8 @@ class MpsServer:
         # client cannot look up, and it says so in the log.
         if quiz.loaded():
             session.lesson = lesson.Lesson(subject, session.chara_id)
+            # 授業中 goes up now, for the people still standing on the map.
+            self._presence_refresh_onlookers(session)
         else:
             print(f"[{self.tag}] lesson start: no question bank, no questions")
         return self._answer(session, seen, lesson.MSG_SV_NOTIFY_LESSON_START, params)
@@ -7161,6 +7234,9 @@ class MpsServer:
         if period.finished():
             out += self._lesson_end(session, period)
             session.lesson = None
+            # …and comes down again. ⚠️ After the clear, not before: the icon
+            # is computed from session.lesson.
+            self._presence_refresh_onlookers(session)
         return out
 
     def _lesson_end(self, session: "_Session", period: "lesson.Lesson") -> bytes:
