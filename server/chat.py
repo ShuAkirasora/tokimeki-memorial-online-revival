@@ -221,7 +221,7 @@ HELP = (
     "/pos 現在地",
     "/maps <名前> 検索",
     "/dirs 方向の目盛りを置く",
-    "/act action の目盛りを置く (頭上アイコン探し)",
+    "/act [開始値] action の目盛りを置く (頭上アイコン探し)",
     "/npc <cat>:<id> <cat>:<id> NPC制御 (2つめが台本キー)",
     "/npca 登場済みの恋愛候補生を配置 / <始> <終> [分類] で生キー",
     "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
@@ -317,9 +317,14 @@ DIRECTION_PROBE_STEP = 3  # cells between neighbours; adjacent ones overlap
 
 
 def direction_probes(
-    map_id: int, pos: tuple[int, int]
+    map_id: int, pos: tuple[int, int], base: int = 0
 ) -> list[tuple[str, int, int, int]]:
-    """``(label, x, y, direction)`` for the grid, kept inside the map."""
+    """``(label, x, y, direction)`` for the grid, kept inside the map.
+
+    ``base`` shifts the values the grid spells out, so ``/act 16`` reads the
+    next sixteen without moving the geometry. It defaults to the factory value
+    of 0, which is what every caller before round 150 asked for.
+    """
     rows = -(-DIRECTION_PROBE_COUNT // DIRECTION_PROBE_COLS)
     span_x = DIRECTION_PROBE_COLS * DIRECTION_PROBE_STEP
     span_y = rows * DIRECTION_PROBE_STEP
@@ -333,8 +338,9 @@ def direction_probes(
     # labels on one square is the reading the ruler can least afford to get wrong.
     top = min(max(pos[1] - span_y // 2 + 1, 0), max(height - span_y, 0))
     probes = []
-    for value in range(DIRECTION_PROBE_COUNT):
-        column, row = value % DIRECTION_PROBE_COLS, value // DIRECTION_PROBE_COLS
+    for slot in range(DIRECTION_PROBE_COUNT):
+        column, row = slot % DIRECTION_PROBE_COLS, slot // DIRECTION_PROBE_COLS
+        value = base + slot
         probes.append(
             (
                 str(value),
@@ -476,9 +482,19 @@ def respond(
         # per candidate. What is being looked for is the 看板 icon over a room
         # leader's head; if none of these draws one, action is not where it
         # lives and the search moves on.
-        probes = direction_probes(map_id, pos)
+        #
+        # The optional argument is the first value of the sixteen. It exists
+        # because the field is a u16 and round 71 only ever walked 0-15, so
+        # "16 and up was never tried" has been an open debt ever since; `/act
+        # 16` walks the next sixteen without touching the geometry. No argument
+        # means 0, which is what the ruler has always done.
+        try:
+            base = int(rest) if rest.strip() else 0
+        except ValueError:
+            return Reply([f"「{rest}」は数字ではない"])
+        probes = direction_probes(map_id, pos, base)
         return Reply(
-            [f"action 0-{DIRECTION_PROBE_COUNT - 1} を並べた"],
+            [f"action {base}-{base + DIRECTION_PROBE_COUNT - 1} を並べた"],
             action_probes=probes,
         )
 
