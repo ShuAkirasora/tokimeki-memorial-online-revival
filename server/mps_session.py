@@ -4012,6 +4012,7 @@ class MpsServer:
             if other is not None:
                 other.battle_due = 0.0
         if close:
+            self._battle_stress(everyone)
             self.battles.close(session.chara_id)
             # ⚠️ Tied to `close`, not to `send_end`: a HELD fight is a probe
             # standing still, and taking its room away would move a second
@@ -4021,6 +4022,49 @@ class MpsServer:
             print(f"[{self.tag}] battle HELD open (probe): fight still on the "
                   f"board, /cb still has a target")
         return out
+
+    def _battle_stress(self, everyone: "list[int]") -> None:
+        """One クラブ活動's worth of ストレス for everybody who fought.
+
+        ⭐⭐⭐ RESTORED from `p05_09`: 「授業・試験 / クラブ活動 / 奥義合成 を
+        行なうと、ストレスがたまります」 and 「ストレスが高い状態でクラブ活動を
+        行なうと、怪我をすることがあります」. Only the quantity is invented, and
+        it is the same one a lesson costs -- see stress.STRESS_PER_CLUB_ACTIVITY.
+        ⚠️ Rounds 36 through 148 built this whole family without ever charging
+        it, so 怪我 and ドクターストップ were unreachable states; _injured says
+        how that survived so long.
+
+        ⚠️ Tied to the real ending only. The caller charges inside ``if close``,
+        because a ``/cb hold`` fight passes through _battle_finish twice and a
+        probe holding the board open must not cost the players two 部活.
+
+        ⚠️ Everybody, not just the handling session: 自主トレ is a fight between
+        accounts and the sheet of each one lives in its own store, which is why
+        this goes through accounts.owner_of exactly as _battle_sheet does. A
+        fighter who has already dropped still pays -- they did the activity --
+        and simply has no session to be told about it.
+
+        ⚠️⚠️ NOTHING IS SENT FROM HERE, and that is deliberate. The moment this
+        runs is the 結果画面, which is the one moment round 96 measured a client
+        dying on a message it takes calmly everywhere else (0x4810+0x480F, and
+        _battle_leave_rooms carries the whole warning). 0x4811/0x4812 are not
+        that pair, but they would be *new* traffic at that instant on nothing
+        better than an assumption. _drain_vitals already pushes both the moment
+        either value differs from what this session was last told, and it runs
+        on every arriving packet -- so the screen is updated by the client's
+        next breath instead, off the path this server has already measured.
+        """
+        for chara_id in everyone:
+            store = self.accounts.owner_of(chara_id)
+            sheet = store.ability(chara_id) if store else None
+            if sheet is None:
+                continue
+            added, condition = stress.after_club_activity(sheet)
+            store.set_ability(chara_id, sheet)
+            print(f"[{self.tag}] club activity: charaId={chara_id:#x} "
+                  f"ストレス +{added} -> {sheet.stress} "
+                  f"({stress.screen(sheet.stress)}/100), 体調 "
+                  f"{stress.name(condition)}")
 
     def _battle_leave_rooms(
         self, everyone: "list[int]", refresh_fighters: bool = False
@@ -5354,7 +5398,12 @@ class MpsServer:
             # strings, so the client has already said no to some presses.
             parsed = trainingroom.parse_add(params)
             headline, limit = parsed if parsed else (None, 0)
-            reason = board.add_refusal(chara_id, headline, limit)
+            # ⭐⭐⭐ RESTORED, sentence and reason byte both: 0x5802 reason 11 is
+            # 「怪我をしていると、自主トレに参加することはできません。」 — the
+            # client has been carrying that string all along and this end never
+            # sent the byte that draws it. See stress.barred_from_club.
+            reason = (trainingroom.NG_ADD_INJURED if self._injured(session)
+                      else board.add_refusal(chara_id, headline, limit))
             if reason is not None:
                 return ng(trainingroom.MSG_SV_NG_ADD, reason, f"add {params.hex()}")
             family, first = self._tr_names(chara_id)
@@ -5389,7 +5438,9 @@ class MpsServer:
                     trainingroom.NG_JOIN_NOT_FOUND,
                     "join with no leaderId",
                 )
-            reason = board.join_refusal(chara_id, leader_id)
+            # The same rule at the other door; 0x5808 reason 10 is its sentence.
+            reason = (trainingroom.NG_JOIN_INJURED if self._injured(session)
+                      else board.join_refusal(chara_id, leader_id))
             if reason is not None:
                 return ng(
                     trainingroom.MSG_SV_NG_JOIN, reason, f"join leaderId={leader_id:#x}"
@@ -6118,12 +6169,27 @@ class MpsServer:
         """Is this player currently barred from 学業?
 
         ドクターストップ is 「ノイローゼと怪我が重なった状態」, so it bars 学業
-        as well; 怪我 alone bars クラブ活動, which this server does not have.
+        as well; 怪我 alone bars クラブ活動 -- see _injured.
         """
         sheet = self._chars(session).ability(session.chara_id)
         return sheet is not None and sheet.condition in (
             stress.NEUROSIS, stress.DOCTOR_STOP
         )
+
+    def _injured(self, session: "_Session") -> bool:
+        """Is this player currently barred from クラブ活動?
+
+        ⚠️⚠️ The comment that used to stand above _neurotic said 怪我 bars
+        「クラブ活動, which this server does not have」. That was true when it was
+        written and had stopped being true by round 87 -- 自主トレ, the fight
+        behind it and 部活デッキ are all here -- and nothing re-read it, so two
+        of the four 体調 stayed unreachable for sixty rounds. Round 149 found it
+        by reading the manual instead of the message table.
+        ⭐ The general form (an earlier lesson): a rule's stated reason
+        does not re-evaluate itself when the premise underneath it expires.
+        """
+        sheet = self._chars(session).ability(session.chara_id)
+        return sheet is not None and stress.barred_from_club(sheet.condition)
 
     def _groups(self, session: "_Session", seen: int,
                 msg_type: int, params: bytes) -> bytes:
