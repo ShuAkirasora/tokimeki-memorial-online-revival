@@ -67,6 +67,17 @@ MSG_SV_NOTIFY_LESSON_QUESTION_START = 0x6103
 MSG_SV_NOTIFY_LESSON_QUESTION_END = 0x6104
 MSG_CL_CAST_LESSON_ANSWER = 0x6105
 MSG_SV_NOTIFY_LESSON_ANSWER = 0x6106
+# The 授業 screen keeps a chat bar of its own. It is a separate pair from the
+# map's 通常会話 (0x4900/0x4901) even though the box on screen is the same one:
+# during a lesson the client casts 0x6109 and never 0x4900, which is why a
+# `/quiz` typed in class in round 51 reached the server, printed "no reply
+# implemented for 0x6109 yet", and did nothing at all. Layouts in chat.py.
+MSG_CL_CAST_LESSON_CHAT = 0x6109
+MSG_SV_NOTIFY_LESSON_CHAT = 0x610A
+MSG_SV_ERROR_LESSON_CHAT = 0x610B
+MSG_CL_CAST_LESSON_EMOTION = 0x610C
+MSG_SV_NOTIFY_LESSON_EMOTION = 0x610D
+MSG_SV_ERROR_LESSON_EMOTION = 0x610E
 
 # 一般教室校舎 has an 「自分の教室」 pseudo-map at key 128 that no ordinary warp
 # leads to. Not used here — the room a lesson happens in is a real map, the one

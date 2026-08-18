@@ -69,6 +69,14 @@ from pathlib import Path
 
 from characters import GROUP_NAME_LEN, NAME_LEN, NO_GROUP
 
+# The three the family is missing, marked so that tools/msgaudit.py counts them
+# as decided rather than as forgotten. Reasons are one line each here and at
+# length in the docstring above.
+# UNANSWERED 0x6200 -- 作成: the button that sends it is an NPC event (理事長秘書)
+#   this server cannot stage, so nothing can reach it; /group create stands in.
+# UNANSWERED 0x622A -- グループ一覧: same door, same NPC.
+# UNANSWERED 0x4700 -- グループチャット: a 会話ツール message, not this menu's;
+#   the whole 会話ツール window is unopened. Shape is 0x6109's, see chat.py.
 MSG_CL_REQUEST_CHARA_GROUP_CREATE = 0x6200
 MSG_SV_OK_CHARA_GROUP_CREATE = 0x6201
 MSG_SV_NG_CHARA_GROUP_CREATE = 0x6202

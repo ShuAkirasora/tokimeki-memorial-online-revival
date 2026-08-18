@@ -202,6 +202,9 @@ FIXED_REPLIES = {
     # The manual page manual/p05_02 spells them out as ON/OFF pairs, so all-zero
     # is not neutral — it means skipping lessons and exams. Attend both; keep the
     # two 公開 flags off, which is the private-by-default reading.
+    # UNANSWERED 0x0703 -- the push-back half of this one. A Request, so it wants
+    #   an Ok, and what to do with four flags this server does not act on is the
+    #   open half; nothing has ever sent it, オプション being a client-side window.
     0x0700: (0x0701, bytes((1, 1, 0, 0))),  # lesson, test, scorecard, career
     # The lobby handshake that follows 登校. All six messages of the two trios
     # are "empty" by listshape, and Input_MsgSvOkLobbyDataStart's vtable[0] is
@@ -317,6 +320,17 @@ MSG_SV_OK_CHARA_WARP = 0x4801
 MSG_SV_NG_CHARA_WARP = 0x4802
 MSG_CL_CAST_NORMAL_CHAT = 0x4900
 MSG_SV_NOTIFY_NORMAL_CHAT = 0x4901
+# The other things the player can say, and why none of them is answered.
+# Marked in the form tools/msgaudit.py reads, so that the audit counts them as
+# decided rather than as forgotten.
+# UNANSWERED 0x4A00 -- ひそひそ話 is addressed at one character, and nothing has
+#   ever been seen selecting a target; answering it as a broadcast would be the
+#   opposite of what it means.
+# UNANSWERED 0x4600 -- 友達チャット, one of the 会話ツール window's channels. That
+#   window has never been opened here, so nothing would ever send it (0x4700,
+#   the group channel, is the same story -- see groups.py).
+# UNANSWERED 0x480C -- 表情 on the map. Its lesson twin (0x610C) is answered
+#   because the pair was being measured anyway; this one has no measured layout.
 
 # How many 74-byte entries go into one MsgSvNotifyCharacterAdd. Sixteen keeps a
 # batch at 1186 bytes of parameters — the same order as the messages already
@@ -2798,6 +2812,38 @@ class MpsServer:
                       f"choiceId={choice_id} "
                       f"({'○' if period.would_be_right() else '×'} once time is up)")
                 return b""
+            if msg_type == lesson.MSG_CL_CAST_LESSON_CHAT:
+                # The chat bar during 授業. A different message from the map's
+                # 0x4900 for the same box on screen, which is why the console
+                # used to go silent the moment a lesson started -- `/quiz` typed
+                # in class in round 51 arrived here and drew "no reply
+                # implemented". A Cast, so nothing appears until it is echoed.
+                #
+                # One seat, so the echo is the whole broadcast; if a second
+                # student ever shares a lesson this is where their copy goes,
+                # the way _presence_relay does it for the map.
+                said = chat.parse_cast(params)
+                names = self._chars(session).full_name(session.chara_id)
+                family, first = names if names else (b"", b"")
+                print(f"[{self.tag}] lesson chat: {said!r}")
+                reply = self._answer(
+                    session, sequence, lesson.MSG_SV_NOTIFY_LESSON_CHAT,
+                    chat.lesson_notify_params(session.chara_id, family, first, said),
+                )
+                # ⭐ And this is the point of answering it at all: the console
+                # works in class again, so a lesson can be steered without
+                # leaving it.
+                return reply + self._apply_chat(session, sequence, said)
+            if msg_type == lesson.MSG_CL_CAST_LESSON_EMOTION:
+                # 「/emotion」 in class. Never seen -- see chat.lesson_emotion_params
+                # for why it is answered anyway -- and the echo is all there is
+                # to do with it: the client draws the icon from the id it sent.
+                emotion = chat.parse_emotion(params)
+                print(f"[{self.tag}] lesson emotion: {emotion}")
+                return self._answer(
+                    session, sequence, lesson.MSG_SV_NOTIFY_LESSON_EMOTION,
+                    chat.lesson_emotion_params(session.chara_id, emotion),
+                )
             if msg_type in friends.HANDLED:
                 # 友達登録 and the アドレス帳 window it fills. Grouped for the
                 # same reason the item operations are: the list query and the
@@ -3085,7 +3131,8 @@ class MpsServer:
                 chat_params = chat.notify_params(session.chara_id, who, said)
                 # Everyone on the map hears it. 「通常会話」 is the map-wide
                 # channel -- ひそひそ話 (0x4A00) is the one that is not, and it
-                # is not answered here at all.
+                # is not answered here at all; see MSG_CL_CAST_NORMAL_CHAT for
+                # the other three channels this one does not cover.
                 self._presence_relay(session, MSG_SV_NOTIFY_NORMAL_CHAT, chat_params)
                 reply = self._answer(
                     session, sequence, MSG_SV_NOTIFY_NORMAL_CHAT, chat_params
