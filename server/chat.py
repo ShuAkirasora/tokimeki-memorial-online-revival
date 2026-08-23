@@ -250,6 +250,7 @@ HELP = (
     "/quiz [sec <秒>|wait <秒>|ab [before|after] <値×6>|ab off] 出題の状態と正解 (採点の検証用)",
     "/npcx 補充をやめる (画面上の分は地図を跨ぐまで残る)",
     "/nev [<cat>:<id>] 会話イベントキー (既定 16:1)",
+    "/smenu [<キー>] 0x6302 で返す sub_menu (既定 2 ロッカー・手紙メニュー)",
     "/sc <名前|scriptId> [ctrl] [actor:npcId] 台本開始",
     "/scn 次の命令へ  /sce 台本終了  /scl 一覧",
     "/sel [<select> [timer]] 選択肢を問い直す (無引数で既定に戻す)",
@@ -391,6 +392,8 @@ class Reply(NamedTuple):
     script: ScriptAction | None = None
     # A new capture_npc_event key for this session; see /nev.
     npc_event: tuple[int, int] | None = None
+    # A new sub_menu.bin key to answer 0x6301 with; see /smenu.
+    sub_menu: int | None = None
     # Forget the remembered ちびキャラ pushes, so the lobby stops re-sending
     # them; see /npcx.
     npc_clear: bool = False
@@ -1859,6 +1862,22 @@ def respond(
         if event is None:
             return Reply([f"イベントidが読めない: {rest}"])
         return Reply([f"会話イベント = {event[0]}:{event[1]}"], npc_event=event)
+
+    if word == "smenu":
+        # Which sub_menu.bin key 0x6301 is answered with. The request says
+        # nothing about which sub-menu is wanted, so this end picks — and the
+        # picking is the whole experiment: 2 is ロッカー・手紙メニュー, 0/1 are
+        # its two leaves, and 3/4/5 (クラス委員長選挙) draw nothing at all on
+        # this build. No restart: right-click the locker again.
+        if not rest.strip():
+            return Reply([f"/smenu <キー>  今: {script.DEFAULT_SUB_MENU} が既定"])
+        try:
+            key = int(rest.split()[0], 0)
+        except ValueError:
+            return Reply(["/smenu <キー>  例: /smenu 2 (ロッカー・手紙メニュー)"])
+        if not 0 <= key <= 0xFFFF:
+            return Reply(["sub_menu のキーは u16"])
+        return Reply([f"0x6302 で返す sub_menu = {key}"], sub_menu=key)
 
     if word == "raw":
         # Push any message at all, by number. Exists because every question in

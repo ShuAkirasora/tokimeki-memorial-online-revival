@@ -445,6 +445,7 @@ DRAMA_DOORS = {
     script.MSG_CL_QUERY_DRAMAEVENT_MATCHING_POSSIBLE,
     script.MSG_CL_QUERY_CHARA_MENU_DRAMA_EVENT_LIST,
     script.MSG_CL_REQUEST_NPC_MAP_OBJECT_EVENT,
+    script.MSG_CL_REQUEST_NPC_MAP_OBJECT_MENU,
     script.MSG_CL_REQUEST_NPC_EVENT_START,
     script.MSG_CL_REQUEST_DRAMA_EVENT_START,
 }
@@ -919,6 +920,11 @@ class _Session:
         # chibi. Per-session rather than global so that /nev can be tried
         # against a running client without a restart; see script.py.
         self.npc_event: tuple[int, int] = script.DEFAULT_NPC_EVENT
+        # Which sub_menu.bin key we hand back when a type 1 menu item is picked
+        # off a map object. Per-session for the same reason npc_event is: the
+        # whole point of the knob is to try one key against a running client and
+        # then the next; see script.DEFAULT_SUB_MENU and /smenu.
+        self.sub_menu: int = script.DEFAULT_SUB_MENU
         # MsgSvNotifyNpcControl bodies /npc has pushed, so that a map reload can
         # put the same chibis back. Bodies rather than parsed pairs: nothing
         # here needs to read them, only to send them again.
@@ -1723,6 +1729,24 @@ class MpsServer:
             return self._answer(
                 session, seen, script.MSG_SV_OK_NPC_MAP_OBJECT_EVENT,
                 script.npc_map_object_event_params(session.npc_event, npc_id),
+            )
+
+        if msg_type == script.MSG_CL_REQUEST_NPC_MAP_OBJECT_MENU:
+            # The same right-click, one item further along: a menu_item whose
+            # type is 1 opens a sub-menu instead of starting an event. The body
+            # is the 0x6304 body -- npcId u32, menuItemId u16 -- and the answer
+            # is a single sub_menu.bin key that this end gets to choose.
+            if len(params) < 6:
+                print(f"[{self.tag}] map object menu: short body {params.hex()}")
+                return None
+            npc_id, menu_item = struct.unpack_from(">IH", params, 0)
+            print(
+                f"[{self.tag}] map object menu npcId={npc_id} "
+                f"menuItemId={menu_item} -> sub_menu {session.sub_menu}"
+            )
+            return self._answer(
+                session, seen, script.MSG_SV_OK_NPC_MAP_OBJECT_MENU,
+                struct.pack(">H", session.sub_menu),
             )
 
         if msg_type == script.MSG_CL_REQUEST_NPC_EVENT_START:
@@ -6293,6 +6317,8 @@ class MpsServer:
             self.accounts.save_locker(session.account_id)
         if answer.npc_event is not None:
             session.npc_event = answer.npc_event
+        if answer.sub_menu is not None:
+            session.sub_menu = answer.sub_menu
         if answer.select is not None:
             # (-1, -1) is /sel with no arguments: hand the decision back to the
             # script's own option count rather than remembering a number.

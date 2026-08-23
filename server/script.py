@@ -175,13 +175,48 @@ OP_BR_WIDTH = 8
 # the menu item's own number. None of the doors this project spent rounds 34-36
 # on (0x4200, 0x5700, 0xe000) is involved — the conversation entrance lives in
 # the same 0x63xx family as the spawn.
-# UNANSWERED 0x6301 -- the same message for the other kind of menu item.
-#   0x6301 and 0x6304 are one action landing two ways, chosen by a
-#   `menu_item.bin` record's type: 0 is an event (this one), 1 opens a
-#   sub-menu. Nothing here can draw a type 1 item, so nothing can send it.
 MSG_CL_REQUEST_NPC_MAP_OBJECT_EVENT = 0x6304
 MSG_SV_OK_NPC_MAP_OBJECT_EVENT = 0x6305
 MSG_SV_NG_NPC_MAP_OBJECT_EVENT = 0x6306
+
+# The other half of that pair. 0x6301 and 0x6304 are one action landing two
+# ways, chosen by the `menu_item.bin` record's type: 0 starts an event (0x6304,
+# above), 1 opens a sub-menu (this one). Both bodies are npcId u32 then
+# menuItemId u16; only the answers differ.
+#
+# ⭐ For a long time nothing here could send it, because the only type 1 item in
+# the whole table is `403 ロッカー開く` and it hangs off a *map object* menu
+# rather than an NPC one -- and no map object had ever been found standing on
+# any map. One is: hovering the run of grey cabinets along the window wall at
+# the back of Ａ組教室 (map 3) draws the tooltip 「ロッカー」, one highlight per
+# segment. The manual said where to look -- 「自分の教室のロッカー」 -- and the
+# corridor and changing-room locker artwork that had been tried before is
+# background painting with no tooltip at all.
+MSG_CL_REQUEST_NPC_MAP_OBJECT_MENU = 0x6301
+MSG_SV_OK_NPC_MAP_OBJECT_MENU = 0x6302
+MSG_SV_NG_NPC_MAP_OBJECT_MENU = 0x6303
+
+# What we answer 0x6301 with: one `sub_menu.bin` key, and the server is the one
+# that picks it. The request carries no hint of which sub-menu is wanted -- it
+# names the object and the item that was clicked and nothing else -- so this end
+# chooses, exactly the way DEFAULT_NPC_EVENT above chooses a conversation.
+#
+# 2 is ロッカー・手紙メニュー, the parent of 0 ロッカー起動 and 1 手紙イベント起動,
+# which is what a locker's 「ロッカー開く」 should reasonably lead to. Measured,
+# one key at a time, against a live client: 0 opens the locker window outright,
+# 2 asks 「手紙を読みますか？」 first and opens it on 読まない, and 1 starts a
+# script.
+#
+# ⛔️ The rest of the table is 3/4/5 -- クラス委員長選挙 立候補受付 / 選挙活動中 /
+# 投票 -- and answering any of them does NOTHING: no screen, and not one byte
+# back from the client. That is the judgement, and it is not "the client had no
+# data to draw with": those screens have to ask for the candidate list first
+# (0x5509 / 0x550D) and the client never asked. Their own menu items, 405 and
+# 406, are switched off in the data too, so there is no other way in either.
+# ⛔️ Do not implement 0x5500-0x5518 -- nothing on this build can reach it.
+#
+# /smenu moves this without a restart.
+DEFAULT_SUB_MENU = 2
 
 # The menu item the client sends for the speech balloon. Only this one has ever
 # been seen; the others in that menu have not been clicked yet.
