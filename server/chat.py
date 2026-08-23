@@ -45,6 +45,7 @@ from datetime import timedelta
 from typing import NamedTuple
 
 import ability
+import career
 import club
 import curriculum
 import exam
@@ -228,6 +229,8 @@ HELP = (
     "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
     "/opt [<項目> <on|off>|clear] オプション (授業/試験/通知表公開/経歴公開)",
+    "/career [probe <inClass> <称号> <登校> <時間> <出席> <奥義>|probe off"
+    "|title <値>|visits <値>|hours <値>|add <0-2>|del <0-2>|clear] 経歴",
     "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
     "/buka [<番号 1-8>|force <番号>|part|clear] クラブ入部・退部 (/club はクライアント側)",
     "/kw [n <数>|add <id> [習熟度] [素]|del <id>|clear|blocks|deck <0-2> <id>…|use <0-2> <値>]"
@@ -403,6 +406,8 @@ class Reply(NamedTuple):
     scorecard_save: bool = False
     # Same, for the オプション flags; see /opt.
     options_save: bool = False
+    # Same, for the 経歴; see /career.
+    career_save: bool = False
     # Same, for the 能力パラメータ sheet; see /ab.
     ability_save: bool = False
     # Same, for the クラブ membership; see /buka.
@@ -430,6 +435,9 @@ def respond(
     inv: "item.Inventory | None" = None,
     locker: "item.Locker | None" = None,
     opts: "options.GameOptions | None" = None,
+    career_state: "career.Career | None" = None,
+    attended: int = 0,
+    learned: int = 0,
 ) -> Reply:
     """Answer one chat line.
 
@@ -446,7 +454,11 @@ def respond(
     ``inv`` the アイテム inventory and ``locker`` the account's ロッカー — the
     one argument here that is not the speaking character's, because the locker
     is shared by every character on the account. ``opts`` is the オプション
-    flags, same arrangement as ``card``.
+    flags, same arrangement as ``card``, and ``career_state`` the 経歴.
+    ``attended`` and ``learned`` are the two 経歴 numbers that live elsewhere —
+    the 通知表's attendance summed, and how many 部活奥義 are owned — passed in
+    read-only so /career can print the card the wire would send rather than a
+    different one. See career.py.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -747,6 +759,82 @@ def respond(
             return Reply([f"/opt {verb} <on|off>"])
         opts.set(verb, value in ("on", "1"))
         return Reply(opts.lines(), options_save=True)
+
+    if word == "career":
+        # 経歴. ⚠️ NOT named /history or /record: the client reserves both
+        # (CLIENT_RESERVED) for its own two 公開 toggles, so either one typed in
+        # the chat box never reaches this server.
+        #
+        # Three different kinds of thing behind one word, kept apart on purpose:
+        #
+        #   read      /career                 the card as the wire would send it
+        #   ruler     /career probe …         SIX numbers into ONE card, once
+        #   knob      /career title|add|del   what nothing in this server awards
+        #
+        # ⭐ The ruler is what settles which screen line each field draws on,
+        # and it earned its keep the first time it ran: the window has eight
+        # rows and the card has six numbers, so reading the two lists off in
+        # order is wrong -- 「1期生として入学」 is not on this wire. Six values
+        # that are all different settle every line from one screenshot. It is
+        # consumed by the next card built and restores itself; see career.PROBE.
+        # ⚠️ ``visits`` and ``hours`` are NOT rulers — they are the two counters
+        # this server keeps, and setting them is editing save data, which is why
+        # they are spelled out separately from probe.
+        if career_state is None:
+            return Reply(["経歴が読めない (キャラ未選択?)"])
+        words = rest.split()
+        if not words:
+            return Reply(career_state.lines(attended, learned))
+        verb = words[0].lower()
+        if verb == "probe":
+            if len(words) >= 2 and words[1].lower() in ("off", "clear"):
+                career.PROBE = None
+                return Reply(["目盛りを外した"])
+            try:
+                numbers = [int(value, 0) for value in words[1:]]
+            except ValueError:
+                numbers = []
+            if len(numbers) != 6:
+                return Reply([
+                    "/career probe <inClass> <称号> <登校回数> <時間> <出席数> <奥義数>",
+                    "次の一枚だけ差し替える (off で解除)",
+                ])
+            career.PROBE = tuple(numbers)  # type: ignore[assignment]
+            return Reply(["次の経歴カードに目盛りを入れた",
+                          " ".join(str(n) for n in numbers)])
+        if verb == "clear":
+            blank = career.Career()
+            career_state.visits = blank.visits
+            career_state.seconds = blank.seconds
+            career_state.title = blank.title
+            career_state.achievements[:] = blank.achievements
+            return Reply(["経歴を白紙に戻した"], career_save=True)
+        if verb in ("title", "visits", "hours", "add", "del"):
+            if len(words) < 2:
+                return Reply([f"/career {verb} <値>"])
+            try:
+                value = int(words[1], 0)
+            except ValueError:
+                return Reply([f"/career {verb} <値>"])
+            if verb == "title":
+                if not 0 <= value < career.TITLE_COUNT:
+                    return Reply([f"称号は 0〜{career.TITLE_COUNT - 1} "
+                                  "(designation.bin は１行しかない)"])
+                career_state.title = value
+            elif verb == "visits":
+                career_state.visits = max(0, value)
+            elif verb == "hours":
+                career_state.seconds = max(0, value) * career.ATTEND_TIME_UNIT
+            elif verb == "add":
+                if not career_state.grant(value):
+                    return Reply([f"実績は 0〜{career.CAREER_COUNT - 1}"])
+            elif not career_state.revoke(value):
+                return Reply([f"持っていない: {value}"])
+            return Reply(career_state.lines(attended, learned), career_save=True)
+        return Reply([
+            "/career [probe …|title <値>|visits <値>|hours <値>"
+            "|add <0-2>|del <0-2>|clear]",
+        ])
 
     if word == "buka":
         # クラブ, readable and pokeable. ⚠️ NOT named /club: the client's own

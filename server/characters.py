@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import ability
+import career
 import club
 import curriculum
 import facing
@@ -1014,6 +1015,30 @@ class CharacterStore:
             if int(record["charaId"]) != chara_id:
                 continue
             record["options"] = opts.to_json()
+            self._save()
+            return True
+        return False
+
+    def career(self, chara_id: int) -> "career.Career | None":
+        """This character's 経歴, or None if it is not ours.
+
+        Same treatment as ``options``, and asked about a peer's charaId for the
+        same reason: 経歴公開 gates a card somebody else opens, so the answer
+        has to be built out of the owner's store.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            saved = record.get("career")
+            return career.Career(saved if isinstance(saved, dict) else None)
+        return None
+
+    def set_career(self, chara_id: int, state: "career.Career") -> bool:
+        """Write one character's 経歴 back. False if it is not ours."""
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            record["career"] = state.to_json()
             self._save()
             return True
         return False

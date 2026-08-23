@@ -72,6 +72,7 @@ from characters import (
 )
 import ability
 import accounts
+import career
 import chat
 import club
 import clubbattle
@@ -258,23 +259,18 @@ FIXED_REPLIES = {
     # sits there. Round 151 measured that too, and measured the way out: an Ng or
     # an Error takes the box down with nothing else on screen, no re-login.
     #
-    # ⭐ 経歴 is not an invention. career defaults to 0, i.e. 経歴公開 is off,
-    # so 「that card is not public」 is an answer this end has already committed
-    # to. ⚠️ Since 0x0703 that default can be turned ON per character, and this
-    # row does NOT consult it -- unlike 通知表, which now does. Refusing anyway
-    # is honest and not laziness: 0x4316 is a whole card (2+11+11+2+4+8+4+2) and
-    # there is no 経歴 behind it to send, so a character whose career flag is ON
-    # is being refused for lack of data, not for lack of permission. What takes
-    # this row out is building that card, and then the flag becomes its gate the
-    # way scorecard is 通知表's.
-    # The other two are: ツーショット and トレード are whole subsystems
+    # ⭐ 経歴 IS NO LONGER ONE OF THEM. Its row said, for fifty rounds, that a
+    # refusal was honest because there was no card to send -- and that the thing
+    # which would take the row out is building the card, at which point 経歴公開
+    # becomes its gate the way 通知表公開 is 0x430D's. That is what career.py
+    # did; 0x4315 is handled below and the flag is read there.
+    # The two that are left are: ツーショット and トレード are whole subsystems
     # (0x5000..0x5203 and 0x5100..0x5118) and a refusal is a rule nobody has read
     # off the client. ⚠️ INVENTED, and what overturns it is implementing either
     # family -- at which point these two rows come out.
     #
     # Reason byte is the NG_REASON placeholder defined below; the table is built
     # before that name exists, hence the literal.
-    0x4315: (0x4317, b"\x00"),  # MsgClQueryCharaCareer      -> MsgSvErrorCharaCareer
     0x5000: (0x5002, b"\x00"),  # MsgClRequestTwoshotRequest -> MsgSvNgTwoshotRequest
     0x5100: (0x5102, b"\x00"),  # MsgClRequestTradeRequest   -> MsgSvNgTradeRequest
 }
@@ -825,6 +821,11 @@ class _Session:
         # in handle(); None until then, which _chars reads as "not local".
         self.peer_host: str | None = None
         self.chara_id = 0  # whoever MsgClRequestSchoolLogin named, 0 before 登校
+        # When 登校 happened, by the monotonic clock; 0.0 = not at school.
+        # 累計登校時間 on the 経歴 card is the sum of the spans this opens, so
+        # every path that ends one has to close it -- 下校 and the disconnect
+        # teardown both do. See MpsServer._career_depart.
+        self.arrived_at = 0.0
         # 授業の鐘. Not saved with the character: a bell is a moment, and one
         # that rang while nobody was logged in is not owed to anyone afterwards.
         # It stays quiet until 登校 primes it — see the school-login handler.
@@ -1937,6 +1938,29 @@ class MpsServer:
                             script.MSG_SV_QUERY_SCRIPT_COMMAND_SELECT,
                             script.select_params(select, timer))
 
+    def _career_depart(self, session: "_Session") -> None:
+        """Close the 登校 span this session opened, if it opened one.
+
+        Called from both ways a school day can end -- 下校 and the socket going
+        away -- because 累計登校時間 is a sum of spans and a span that is never
+        closed is time the player spent and the card never shows. ⚠️ It clears
+        ``arrived_at`` so that calling it twice adds the span once: the logout
+        path runs first and the teardown runs afterwards on the same session.
+        """
+        if not session.arrived_at or not session.chara_id:
+            session.arrived_at = 0.0
+            return
+        span = time.monotonic() - session.arrived_at
+        session.arrived_at = 0.0
+        store = self._chars(session)
+        state = store.career(session.chara_id)
+        if state is None:
+            return
+        total = state.depart(span)
+        store.set_career(session.chara_id, state)
+        print(f"[{self.tag}] 下校 after {int(span)}s for "
+              f"charaId={session.chara_id}: 累計 {total}s")
+
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
         self.conn_seq += 1
@@ -2009,6 +2033,12 @@ class MpsServer:
             # ⚠️ Order: leave self.live FIRST. _tr_part_notice looks the room's
             # members up by charaId, and a session that is on its way out must
             # not be handed its own farewell.
+            # 累計登校時間 owes this session whatever it spent at school, and
+            # this is the last place that still knows who it was. ⚠️ It has to
+            # be ahead of the removal below because it needs session.chara_id;
+            # the logout path may already have closed the span, in which case
+            # this is a no-op.
+            self._career_depart(session)
             # Who was watching this character, worked out before the removal for
             # the same reason: after it, _peers can no longer see the session at
             # all, and the answer would be the wrong map's crowd.
@@ -2339,6 +2369,17 @@ class MpsServer:
                 # 登校 at 14:53 does not ring the 14:45 本鈴 at someone who
                 # could not have attended it anyway.
                 session.bell.prime()
+                # 登校回数 and the clock behind 累計登校時間. This message *is*
+                # 登校, which is why the 経歴 card's two counted fields are
+                # counted here and nowhere else -- career.py's docstring says
+                # why they are the two nothing else in this server knows.
+                state = self._chars(session).career(chara_id)
+                if state is not None:
+                    visits = state.arrive()
+                    self._chars(session).set_career(chara_id, state)
+                    print(f"[{self.tag}] 登校 #{visits} for "
+                          f"charaId={chara_id}: {state.summary()}")
+                session.arrived_at = time.monotonic()
                 begins, subject = curriculum.next_lesson()
                 print(
                     f"[{self.tag}] school login for charaId={chara_id}, last on map "
@@ -2376,6 +2417,7 @@ class MpsServer:
                     f"last on map {session.map_id} "
                     f"({MAP_NAMES.get(session.map_id, '?')}) at {session.pos}"
                 )
+                self._career_depart(session)
                 # Same treatment as the disconnect path: 「中断」 takes this
                 # player out of the fight, and the fight carries on for whoever
                 # is left rather than being taken off the board (Fighter.gone).
@@ -2767,6 +2809,95 @@ class MpsServer:
                     sequence,
                     ability.MSG_SV_RESULT_CHARA_MENU_ABILITY,
                     sheet.result_params(card.test_level() - 1),
+                )
+            if msg_type in (career.MSG_CL_QUERY_CHARA_CAREER,
+                            career.MSG_CL_QUERY_CHARA_CAREER_LIST):
+                # 「経歴」 -- the 生徒情報 window's last tab, and the bottom-right
+                # icon of the PC 交流メニュー when it is somebody else's. Two
+                # queries, each one u32 charaId, and the same permission in
+                # front of both: 経歴公開, the fourth オプション flag, read out
+                # of the OWNER's store exactly the way 通知表公開 is above.
+                #
+                # ⭐ 0x4315 is the row that used to sit in FIXED_REPLIES, and
+                # what took it out is career.py -- the refusal was for lack of a
+                # card, not for lack of permission, and the flag had no reader
+                # anywhere. It has one now, which is the whole point of the
+                # exercise: 0x0703 could turn 経歴公開 ON since round 152 and
+                # nothing downstream could tell.
+                #
+                # ⚠️ The two queries are answered together because they are
+                # one screen, and that turned out to be load-bearing rather
+                # than tidy: 0x4318 had never arrived in any log, and it flew
+                # in the very next packet after the first 0x4316 went out. It
+                # is sent once the card is up, so it could not have been seen
+                # before the card existed. A window that opens and then hangs
+                # on its second question is worse than one that never opens --
+                # item.py's ALL FOUR OR NONE, for the same reason.
+                #
+                # ⚠️⚠️ THE TWO DO NOT ALWAYS NAME THE SAME PERSON. Right-click
+                # someone and pick 経歴を見る and 0x4315 carries THEIR charaId
+                # while the 0x4318 behind it carries YOUR OWN -- measured
+                # twice, same both times. So the 過去の実績 pane on somebody
+                # else's card lists the viewer's achievements. That is the
+                # client's doing; each query is answered for the id it names,
+                # because guessing who it "meant" would turn a difference that
+                # can be seen into an assumption that cannot.
+                chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+                store = self._chars(session)
+                if chara_id != session.chara_id:
+                    store = self.accounts.owner_of(chara_id) or store
+                    opts = store.options(chara_id)
+                    if opts is None or not opts["career"]:
+                        why = "unknown character" if opts is None else "経歴公開 is off"
+                        print(f"[{self.tag}] career for charaId={chara_id}: "
+                              f"refused, {why}")
+                        return self._answer(
+                            session, sequence,
+                            career.MSG_SV_ERROR_CHARA_CAREER, bytes(1)
+                        )
+                state = store.career(chara_id)
+                if state is None:
+                    print(f"[{self.tag}] career: no charaId={chara_id}, answering Error")
+                    return self._answer(
+                        session, sequence, career.MSG_SV_ERROR_CHARA_CAREER, bytes(1)
+                    )
+                if msg_type == career.MSG_CL_QUERY_CHARA_CAREER_LIST:
+                    print(f"[{self.tag}] career list for charaId={chara_id}: "
+                          f"{len(state.achievements)} 実績")
+                    out = b""
+                    for reply_type, reply_params in career.list_replies(state):
+                        out += self._answer(session, sequence, reply_type, reply_params)
+                    return out
+                names = store.full_name(chara_id)
+                if names is None:
+                    print(f"[{self.tag}] career: no charaId={chara_id}, answering Error")
+                    return self._answer(
+                        session, sequence, career.MSG_SV_ERROR_CHARA_CAREER, bytes(1)
+                    )
+                # 授業出席数 and 習得部活奥義 are read off the 通知表 and the
+                # 部活奥義 list rather than stored a second time; career.py says
+                # why. Both come out of the same store as the card itself, so a
+                # peer's card is a peer's numbers.
+                card = store.scorecard(chara_id)
+                member = store.club(chara_id)
+                attended = sum(card.attendance) if card is not None else 0
+                skills = len(member.skills) if member is not None else 0
+                # ⚠️ inClass is the same value 0x430D has been sending all
+                # along -- see the note on session.in_class. It draws as 組 and
+                # not as 期生: the 経歴 window's 「1期生として入学」 line comes
+                # from the client's own copy of period, not from this card.
+                # Measured with /career probe; career.py's docstring has the
+                # whole mapping.
+                body = state.params(names[0], names[1], session.in_class,
+                                    attended, skills)
+                # ⚠️ Decoded back out of the body rather than printed off the
+                # record: with /career probe armed the two disagree, and a log
+                # that says what was stored while the wire says something else
+                # is a log that cannot be used to read the screen.
+                print(f"[{self.tag}] career for charaId={chara_id}: "
+                      f"{career.describe(body)}")
+                return self._answer(
+                    session, sequence, career.MSG_SV_RESULT_CHARA_CAREER, body
                 )
             if msg_type in (club.MSG_CL_QUERY_KEYWORD_LIST,
                             club.MSG_CL_QUERY_CLUB_SKILL_LIST):
@@ -6118,9 +6249,12 @@ class MpsServer:
         inv = self._chars(session).items(session.chara_id)
         locker = self._locker(session)
         opts = self._chars(session).options(session.chara_id)
+        cv = self._chars(session).career(session.chara_id)
         answer = chat.respond(
             said, session.map_id, session.pos, love, card, session.lesson,
             sheet, session.in_class, session.exam, member, inv, locker, opts,
+            cv, sum(card.attendance) if card is not None else 0,
+            len(member.skills) if member is not None else 0,
         )
         if answer.romance_save and love is not None:
             self._chars(session).set_romance(session.chara_id, love)
@@ -6134,6 +6268,8 @@ class MpsServer:
             self._chars(session).set_items(session.chara_id, inv)
         if answer.options_save and opts is not None:
             self._chars(session).set_options(session.chara_id, opts)
+        if answer.career_save and cv is not None:
+            self._chars(session).set_career(session.chara_id, cv)
         if answer.locker_save:
             self.accounts.save_locker(session.account_id)
         if answer.npc_event is not None:
