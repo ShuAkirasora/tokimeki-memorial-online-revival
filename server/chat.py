@@ -1342,6 +1342,20 @@ def respond(
             # command's only possible outcome is a logout, so it does not fire
             # unless the caller says `force`, which is the experiment.
             room = lesson.classroom_of(in_class)
+            # 授業の有無 OFF is refused by admit() exactly as the wrong room is,
+            # and a refusal after the bell is a logout — so it gets the same
+            # guard, and `force` is still the way past it. Round 153 rang this
+            # deliberately with the option OFF to find out whether the client
+            # enforces its own setting (it does not); that experiment is what
+            # `force` is for, which is why this warns rather than forbids.
+            attends = opts is None or bool(opts["lesson"])
+            if not attends and not forced:
+                return Reply([
+                    "本鈴は鳴らさない: オプション「授業の有無」が OFF",
+                    "鳴らすと入場を断られ、クライアントが切断する。"
+                    "先に /opt lesson on",
+                    "実験でわざと鳴らすなら /bell force",
+                ])
             if map_id != room and not forced:
                 return Reply([
                     f"本鈴は鳴らさない: 今 map {map_id}、教室は map {room}",
@@ -1349,6 +1363,11 @@ def respond(
                     "実験でわざと鳴らすなら /bell force",
                 ])
             lines = ["本鈴 (0x6000 NotifyLessonReady) を鳴らした"]
+            if not attends:
+                lines.append(
+                    "⚠️ 「授業の有無」が OFF なので入場は断られる。"
+                    f"reason={lesson.NG_PROBE['reason']}"
+                )
             if map_id != room:
                 lines.append(
                     f"⚠️ 教室 (map {room}) の外なので入場は断られる。"
@@ -1407,6 +1426,12 @@ def respond(
             room = lesson.classroom_of(in_class)
             if not exam_period.on:
                 return Reply(["先に /exam on"])
+            # ⚠️⚠️ 試験の有無 gets NO guard here, unlike /bell's 授業の有無.
+            # /bell's exists because a refusal after the bell is a logout; that
+            # reason does not carry over. Round 153 rang this with the row OFF
+            # and the client simply reloaded the lobby and never sent 0x6602 —
+            # it declines on its own, and no refusal is ever reached. Adding a
+            # guard here would only hide that from whoever tries it next.
             if map_id != room and not forced:
                 # Identical to /bell's guard and for the identical reason: the
                 # client tears its scene down on 0x6601 and asks to come in by

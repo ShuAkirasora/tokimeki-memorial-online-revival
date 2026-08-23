@@ -2986,6 +2986,7 @@ class MpsServer:
                 refusal = session.bell.admit(
                     session.map_id, session.in_class,
                     neurotic=self._neurotic(session),
+                    attends=self._attends(session, sitting=False),
                 )
                 if refusal is not None:
                     sent = lesson.refusal_reason(refusal)
@@ -6378,6 +6379,33 @@ class MpsServer:
             stress.NEUROSIS, stress.DOCTOR_STOP
         )
 
+    def _attends(self, session: "_Session", *, sitting: bool) -> bool:
+        """Has this character opted in to 授業 (or, in 試験期間, to 試験)?
+
+        オプション's first two rows, 授業の有無 and 試験の有無, are ON/OFF pairs
+        the manual glosses as 出席する / 出席しない (`p05_02`). They reach this
+        server as the first two bytes of 0x0703 and live on the character record
+        — see options.py.
+
+        ⚠️⚠️ ``sitting`` picks which of the two, and it has to: 試験期間 does not
+        replace the timetable, it changes which pair of messages the same bells
+        are (see _drain_bells). A character who sits exams but skips lessons is
+        a setting the option screen offers, so the two are read separately even
+        though everything downstream of them is shared.
+
+        ⚠️⚠️ The two rows are also enforced by different ends of the wire — 授業
+        here, 試験 by the client itself. _drain_bells has the measurement and
+        what follows from it; the short version is that ``sitting=True`` reaches
+        only a backstop, never a live decision.
+
+        A character with nothing saved gets options.DEFAULTS, which is ON for
+        both — so this cannot quietly stop anybody attending anything.
+        """
+        opts = self._chars(session).options(session.chara_id)
+        if opts is None:
+            return True
+        return bool(opts["test" if sitting else "lesson"])
+
     def _injured(self, session: "_Session") -> bool:
         """Is this player currently barred from クラブ活動?
 
@@ -7505,15 +7533,34 @@ class MpsServer:
 
         The admission rule is 授業's, reused rather than restated: `p06_03` says
         outright 「試験は、授業と同じように開始時間に教室に待機していることで参加
-        できます」, so lesson.Bell.admit already holds three of the four
-        conditions. The fourth is the exam's own — 「１科目につき１回しか受けら
-        れません」 — and it is checked here.
+        できます」, so lesson.Bell.admit already holds four conditions. The two
+        that are the exam's own — 「１科目につき１回しか受けられません」 and an
+        empty question bank — are checked here.
+
+        ⚠️⚠️ ``attends`` reads 試験の有無, not 授業の有無 (separate rows; a
+        character may have one on and the other off) — and unlike 授業's, this
+        check is **unreachable with the real client**, which declines the bell
+        itself rather than sending 0x6602. Measured in round 153; see
+        _drain_bells. It is kept because the manual's rule is a rule about
+        attendance and not about who happens to enforce it, and because the
+        round that removed a check on the strength of "the client does it"
+        would be repeating the mistake this very check was added to fix. ⚠️ Do
+        not cite it as evidence of anything: nothing has ever come through it.
+
+        ⚠️⚠️ admit() answers in lesson.py's numbering and this hands it straight
+        to exam.ng_params, whose table numbers the same names differently
+        (lesson's ノイローゼ is 3, this block's is 2). Harmless on the wire —
+        0x6604's byte draws the same dialog whatever it says, measured — but the
+        `reason=` this logs is a lesson.py number, so read it against that
+        table and not the one in exam.py. Renumbering either would make a
+        recovered-looking table out of two invented ones.
 
         ⚠️ Refusing costs the connection exactly as 0x6003 does, which is why
         _drain_bells checks the same conditions *before* ringing 0x6601.
         """
         refusal = session.bell.admit(
             session.map_id, session.in_class, neurotic=self._neurotic(session),
+            attends=self._attends(session, sitting=True),
         )
         subject = session.bell.rang_subject
         if refusal is None and session.exam.taken(subject):
@@ -7698,8 +7745,30 @@ class MpsServer:
         # refused logs them out — the client asks to come in on its own and
         # closes the connection when told no. See Bell.poll.
         neurotic = self._neurotic(session)
+        # ⚠️⚠️ The option screen's two 出席 rows are honoured on OPPOSITE SIDES of
+        # the wire, which round 153 found by ringing each bell with its own row
+        # turned OFF and watching what came back:
+        #
+        #   授業の有無 OFF → the client answers 0x6000 with 0x6001 exactly as it
+        #     does with the row ON, and sits the whole lesson. Nothing over there
+        #     honours it, so this side has to: the 本鈴 is suppressed below.
+        #
+        #   試験の有無 OFF → the client takes 0x6601, reloads the lobby and never
+        #     sends 0x6602. It declines by itself. ⭐ And the existence of that
+        #     path is the evidence that the original rang anyway — a client does
+        #     not carry handling for a message it was never sent. So the 試験
+        #     bell is NOT suppressed here; doing so would override a measured
+        #     behaviour with a guess, and cost the player nothing but the scene
+        #     reload the client itself chose to do.
+        #
+        # ⚠️ _exam_ready still refuses on the flag. That is a backstop against a
+        # client that does not do what this one does, and with this one it is
+        # unreachable — which is why it must not be read as a measurement.
+        attends = sitting or self._attends(session, sitting=False)
         admits = (
-            session.map_id == lesson.classroom_of(session.in_class) and not neurotic
+            attends
+            and session.map_id == lesson.classroom_of(session.in_class)
+            and not neurotic
         )
         for kind, subject in session.bell.poll(admits=admits):
             name = curriculum.SUBJECTS[subject]
@@ -7711,7 +7780,9 @@ class MpsServer:
                 continue
             if kind == "skip":
                 why = (
-                    "player is ノイローゼ" if neurotic
+                    # Only ever 授業's row: 試験's is left to the client, above.
+                    "オプション 授業の有無 is OFF" if not attends
+                    else "player is ノイローゼ" if neurotic
                     else f"player is on map {session.map_id}, not classroom "
                          f"{lesson.classroom_of(session.in_class)}"
                 )

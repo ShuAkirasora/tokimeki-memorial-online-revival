@@ -318,6 +318,14 @@ class Bell:
         suppresses the 本鈴, never the 予鈴, because the 予鈴 is exactly the
         warning that sends a player to the right room in time.
 
+        ⚠️ That rationale covers the two situational conditions — wrong room,
+        ノイローゼ — and does *not* obviously cover 授業の有無 OFF, where there
+        is no room to be sent to and nothing the warning could avert. The 予鈴
+        is left ringing anyway because it is a bare notice with no consequence
+        and there is no evidence either way; what would settle it is a capture
+        of the original, or a client that reacts to 0x6005 differently with the
+        option off. INVENTED, and the cheaper half of the choice to undo.
+
         ⚠️ This is an inference, not something read off the wire: the original
         server cannot have rung 本鈴 at players in corridors either, or every
         one of them would have been disconnected on the quarter hour.
@@ -383,21 +391,43 @@ class Bell:
         when: datetime | None = None,
         *,
         neurotic: bool = False,
+        attends: bool = True,
     ) -> int | None:
         """Let this player into the lesson now starting, or say why not.
 
-        Returns None on success — three of `p06_02`'s four conditions:
-        「あなたが在籍しているクラスの教室で」, 「授業の途中から参加すること
-        はできません」, and ノイローゼ's 「学業に参加できなくなります」. The
-        fourth, the 授業の有無 option, lives in the client and never reaches
-        here.
+        Returns None on success — all four of `p06_02`'s conditions:
+        オプション's 授業の有無, 「あなたが在籍しているクラスの教室で」,
+        「授業の途中から参加することはできません」, and ノイローゼ's
+        「学業に参加できなくなります」.
 
-        ``neurotic`` rather than a whole AbilitySheet: the only thing this rule
-        reads is one boolean, and lesson.py has no other reason to know what a
-        体調 is. Whoever calls it must suppress the 本鈴 on the same condition —
-        see Bell.poll for why refusing after the bell costs the connection.
+        ⚠️⚠️ The 授業の有無 one used to be written off here as living in the
+        client and never reaching this side. **It does not.** Round 153 set the
+        option to OFF on the real client's オプション screen, watched the 0x0703
+        that carries it arrive, then rang the 本鈴: the client tore its scene
+        down and asked to come in (0x6001) exactly as it does with the option
+        ON, and sat through the whole lesson. So the client does not enforce its
+        own setting, and this is the only place the manual's 「出席しない」 can
+        be honoured. See an earlier lesson: a reason nobody has measured is
+        a guess wearing a comment's clothes.
+
+        ⚠️ 試験の有無, the row underneath it on the same screen, goes the other
+        way: the client declines 0x6601 by itself. Same window, same wording in
+        the manual, opposite enforcer — so ``attends`` is load-bearing for
+        lessons and a never-taken backstop for exams. mps_session._drain_bells
+        carries the measurement.
+
+        ``neurotic`` and ``attends`` rather than an AbilitySheet and a
+        GameOptions: the only thing either rule reads is one boolean, and
+        lesson.py has no reason to know what a 体調 or an option record is.
+        Whoever calls it must suppress the 本鈴 on the same conditions — see
+        Bell.poll for why refusing after the bell costs the connection.
         """
         now = when or datetime.now()
+        # First, because it is the only one of the four that is a standing
+        # property of the character rather than of this moment: a player with
+        # 授業の有無 OFF is not attending whatever room they are standing in.
+        if not attends:
+            return REASON_LESSON_OFF
         if map_id != classroom_of(in_class):
             return REASON_NOT_IN_CLASSROOM
         if neurotic:
