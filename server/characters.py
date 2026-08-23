@@ -634,6 +634,7 @@ def chara_info(
     group_id: int = NO_GROUP,
     leader_authority: int = 0,
     leader_qualification: int = 0,
+    lover_chara_id: int = 0,
 ) -> bytes:
     """Build the 139-byte MsgSvResultCharaInfo (0x6501) parameter block.
 
@@ -666,9 +667,13 @@ def chara_info(
     out += struct.pack(">H", f["charaType"])
     out += struct.pack(">HHH", 1, 0, in_club)  # period (1 期生), inClass (A組), inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
-    out += struct.pack(">BB", 0, 1)  # coupleFlag, newbieFlag
+    # ⚠️ coupleFlag is derived, never stored: one field cannot say 「恋人あり」
+    # while the other says who, so the flag is 1 exactly when there is an id.
+    # Both were hard zeros until round 154 and a character with no 恋人 is still
+    # byte-identical to what this server always sent.
+    out += struct.pack(">BB", 1 if lover_chara_id else 0, 1)  # coupleFlag, newbieFlag
     out += struct.pack(">HHH", 0, 0, 0)  # title, classPost, clubPost
-    out += struct.pack(">I", 0)  # loverCharaId
+    out += struct.pack(">I", lover_chara_id)  # loverCharaId
     out += group_name.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]  # friendGroupName
     out += struct.pack(">I", group_id)  # friendGroupId
     out += struct.pack(">BB", leader_authority, leader_qualification)
@@ -836,6 +841,7 @@ class CharacterStore:
                     map_id,
                     in_club=self.in_club(chara_id),
                     group_name=self.group_name(chara_id),
+                    couple_flag=1 if self.lover(chara_id) else 0,
                 )
             )
         if self.records and LIST_PROBES:
@@ -1008,6 +1014,52 @@ class CharacterStore:
             if int(record["charaId"]) != chara_id:
                 continue
             record["options"] = opts.to_json()
+            self._save()
+            return True
+        return False
+
+    def lover(self, chara_id: int) -> int:
+        """This character's ``loverCharaId``, 0 for 恋人なし or not ours.
+
+        ⭐ ``coupleFlag`` is the half that shows: with it set, the right-click
+        info box draws a pink heart where a newbie draws the green 若葉マーク.
+        Round 154 measured that on screen, one variable at a time.
+
+        ⚠️⚠️ ``loverCharaId`` is carriage only -- no screen anywhere yet. Both
+        fields have a setter in the client's chara store (0x6F909D, 0x6F910B)
+        and **neither has a getter**, while every neighbour that does something
+        (charaType +0x48, inClub +0x4E, friendGroupId +0x8C, the two leader
+        flags +0x90/+0x91) has both. ⚠️ That is a fact about the *store*, not
+        about the value: the heart proves something reads coupleFlag, and it
+        reads it off the 0x6501 message rather than out of the store. So "no
+        getter here" is never a reason to call a field inert -- see PROTOCOL
+        2.104 and an earlier lesson.
+
+        What is *not* here is deliberate: how a couple forms, what breaks one,
+        and whether either side may refuse are rules the manual states no
+        numbers for and the client cannot be asked about (the smallest-invention rule).
+        The knob sets the field; it does not invent a 交際 system around it.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            return int(record.get("lover", 0) or 0)
+        return 0
+
+    def set_lover(self, chara_id: int, lover_id: int) -> bool:
+        """Point one character's ``loverCharaId`` somewhere. False if not ours.
+
+        One side only. Pairing both is the caller's job because the other half
+        often lives in a different account's store, and this class only ever
+        speaks for its own.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            if lover_id:
+                record["lover"] = int(lover_id)
+            else:
+                record.pop("lover", None)
             self._save()
             return True
         return False

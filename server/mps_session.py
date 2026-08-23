@@ -2587,6 +2587,12 @@ class MpsServer:
                 # whole server, so unlike the club flag there is no owner store
                 # to look the asked-about character up in.
                 gname, gid, authority, qualification = self.accounts.groups.fields(chara_id)
+                # ⚠️ Same owner-store rule as in_club below: 恋人 is a fact about
+                # the character being asked about, so it comes out of whichever
+                # account holds that id, not out of the asker's store.
+                lover = (self.accounts.owner_of(chara_id) or self._chars(session)).lover(chara_id)
+                if lover:
+                    print(f"[{self.tag}]   couple: loverCharaId={lover} (coupleFlag=1)")
                 if gid or qualification:
                     shown = gname.split(b"\x00")[0].decode("cp932", "replace")
                     print(f"[{self.tag}]   group: id={gid} name={shown!r} "
@@ -2606,6 +2612,7 @@ class MpsServer:
                         group_id=gid,
                         leader_authority=authority,
                         leader_qualification=qualification,
+                        lover_chara_id=lover,
                     ),
                 )
             if msg_type == curriculum.MSG_CL_QUERY_CURRICULUM:
@@ -6013,6 +6020,81 @@ class MpsServer:
             return self._say(session, sequence, f"/group left {was} (re-login to see it)")
         return self._say(session, sequence, f"/group: unknown '{what}'")
 
+    def _couple_console(
+        self, session: "_Session", sequence: int, args: "list[str]"
+    ) -> bytes:
+        """``/couple ...``: the カップル pair, from the console.
+
+            /couple                    who this character is paired with
+            /couple <charaId>          pair with that character (hex ok)
+            /couple clear              break the pair
+
+        ⚠️⚠️ **This is a knob on two wire fields, not a 交際 system.** The
+        manual (`manual/p05_12`) says a couple exists and that 恋人 get an extra
+        「デート申込み」 on each other's 交流メニュー; it says nothing about how a
+        pair is made, refused or broken, and there is no handshake in the
+        message table to read one off. Round 154 measured the other half and it
+        is worse than unattested — see PROTOCOL 2.104:
+
+          * the ring is **eight fixed slots**, menu item ids 0..7, built by the
+            constructor at 0x6A6AE8 walking the 8-record table at 0xD85790;
+          * slot 1 **is** デートチャット, 表示文「デート申込み」, and its 有効
+            word in `menu_item.bin` is **0** -- the gate at 0x6A6E4F reads that
+            byte (+0x39) and refuses;
+          * slot 7 ＧＭチャット has a CanUse of ``xor al,al; ret 4``.
+
+        ⇒ six items is a **ceiling in the client**, and no value of these two
+        fields moves it. ⭐ What coupleFlag *does* drive is the pink heart on
+        the right-click info box; loverCharaId drives nothing anyone has found.
+        See characters.lover for both halves.
+
+        ⭐ Both sides are written when both are reachable, because a couple with
+        one arrow is not a state the game has a name for. When the other id
+        belongs to no account here -- a probe, a stand-in -- only this side is
+        set, and the reply says so rather than pretending it paired.
+
+        ⚠️ Takes effect on an already-logged-in client only after the *other*
+        character re-enters the scene: both fields ride in 0x6501 alone, which
+        is asked once per character per 登校. The 74-byte 0x480F entry has no
+        room for either, so _presence_refresh_onlookers cannot help here the way
+        it does for friendGroupId.
+        """
+        me = session.chara_id
+        mine = self._chars(session)
+        what = args[0].lower() if args else ""
+
+        def state() -> str:
+            lover = mine.lover(me)
+            if not lover:
+                return "/couple 恋人なし (coupleFlag=0)"
+            return f"/couple loverCharaId={lover:#x} (coupleFlag=1)"
+
+        if not what:
+            return self._say(session, sequence, state())
+        if what == "clear":
+            was = mine.lover(me)
+            if not was:
+                return self._say(session, sequence, "/couple 恋人なし (何もしていない)")
+            mine.set_lover(me, 0)
+            other = self.accounts.owner_of(was)
+            if other is not None and other.lover(was) == me:
+                other.set_lover(was, 0)
+            return self._say(session, sequence, f"/couple cleared {was:#x} "
+                                                f"(相手の再入場で反映)")
+        try:
+            other_id = int(what, 0)
+        except ValueError:
+            return self._say(session, sequence, f"/couple: unknown '{what}'")
+        if other_id == me:
+            return self._say(session, sequence, "/couple: 自分とは組めない")
+        if not mine.set_lover(me, other_id):
+            return self._say(session, sequence, "/couple: このキャラが見つからない")
+        store = self.accounts.owner_of(other_id)
+        both = store is not None and store.set_lover(other_id, me)
+        return self._say(session, sequence, f"/couple loverCharaId={other_id:#x} "
+                                            f"{'両側' if both else '片側のみ'} "
+                                            f"(相手の再入場で反映)")
+
     def _apply_chat(self, session: "_Session", sequence: int, said: str) -> bytes:
         """Run one console line and pack whatever it asked for.
 
@@ -6025,6 +6107,8 @@ class MpsServer:
             return self._seq_probe(session, sequence, said.split()[1:])
         if said.split()[:1] == ["/group"]:
             return self._group_console(session, sequence, said.split()[1:])
+        if said.split()[:1] == ["/couple"]:
+            return self._couple_console(session, sequence, said.split()[1:])
         reply = b""
         info = self._chars(session).find(session.chara_id)
         love = self._chars(session).romance(session.chara_id)
