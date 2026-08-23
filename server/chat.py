@@ -52,6 +52,7 @@ import facing
 import item
 import lesson
 import mapgraph
+import options
 import quiz
 import romance
 import script
@@ -226,6 +227,7 @@ HELP = (
     "/npca 登場済みの恋愛候補生を配置 / <始> <終> [分類] で生キー",
     "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
+    "/opt [<項目> <on|off>|clear] オプション (授業/試験/通知表公開/経歴公開)",
     "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
     "/buka [<番号 1-8>|force <番号>|part|clear] クラブ入部・退部 (/club はクライアント側)",
     "/kw [n <数>|add <id> [習熟度] [素]|del <id>|clear|blocks|deck <0-2> <id>…|use <0-2> <値>]"
@@ -399,6 +401,8 @@ class Reply(NamedTuple):
     romance_save: bool = False
     # Same, for the 通知表; see /card.
     scorecard_save: bool = False
+    # Same, for the オプション flags; see /opt.
+    options_save: bool = False
     # Same, for the 能力パラメータ sheet; see /ab.
     ability_save: bool = False
     # Same, for the クラブ membership; see /buka.
@@ -425,6 +429,7 @@ def respond(
     member: "club.Membership | None" = None,
     inv: "item.Inventory | None" = None,
     locker: "item.Locker | None" = None,
+    opts: "options.GameOptions | None" = None,
 ) -> Reply:
     """Answer one chat line.
 
@@ -440,7 +445,8 @@ def respond(
     ``member`` is the クラブ membership, same arrangement as ``sheet``,
     ``inv`` the アイテム inventory and ``locker`` the account's ロッカー — the
     one argument here that is not the speaking character's, because the locker
-    is shared by every character on the account.
+    is shared by every character on the account. ``opts`` is the オプション
+    flags, same arrangement as ``card``.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -703,6 +709,44 @@ def respond(
                 return Reply([f"課程は 1〜{curriculum.COURSES}"])
             card.record_exam(subject, course, numbers[3])
         return Reply(card.lines(), scorecard_save=True)
+
+    if word == "opt":
+        # オプション. ⚠️ NOT named /option: the client reserves that word
+        # (CLIENT_RESERVED) for its own settings window, so a /option typed in
+        # the chat box never reaches this server.
+        #
+        # This is the back door to the same four flags the client pushes with
+        # 0x0703, and it exists for a reason the 通知表 branch makes concrete:
+        # 通知表公開 gates whether another player may open this character's
+        # card, and the character on the far side of that test is often one
+        # nobody is sitting in front of -- a second account run from a script
+        # has no オプション window to click. It is also what tests the gate at
+        # all if the client turns out never to send 0x0703.
+        #
+        # ⚠️ No self-restoring knob here on purpose: these are settings, not
+        # probes. What is set stays set, and `clear` is the factory value.
+        if opts is None:
+            return Reply(["オプションが読めない (キャラ未選択?)"])
+        words = rest.split()
+        if not words:
+            return Reply(opts.lines())
+        verb = words[0].lower()
+        if verb == "clear":
+            opts.update(options.DEFAULTS)
+            return Reply(["オプションを初期値に戻した"] + opts.lines(),
+                         options_save=True)
+        if verb not in options.FIELDS:
+            return Reply([
+                "/opt [<項目> <on|off>|clear]",
+                "項目: " + " ".join(options.FIELDS),
+            ])
+        if len(words) < 2:
+            return Reply([f"/opt {verb} <on|off>"])
+        value = words[1].lower()
+        if value not in ("on", "off", "1", "0"):
+            return Reply([f"/opt {verb} <on|off>"])
+        opts.set(verb, value in ("on", "1"))
+        return Reply(opts.lines(), options_save=True)
 
     if word == "buka":
         # クラブ, readable and pokeable. ⚠️ NOT named /club: the client's own

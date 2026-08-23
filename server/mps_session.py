@@ -87,6 +87,7 @@ import lesson
 import lesson_skill
 import mapgraph
 import mps_cipher
+import options
 import quiz
 import romance
 import script
@@ -196,16 +197,11 @@ ITEM_OPERATIONS = (
 # Requests answered with a constant parameter block. Each layout comes from
 # the shape reader plus the field names in the reply's dump function.
 FIXED_REPLIES = {
-    # MsgClQueryOption -> MsgSvResultOption: four u8 flags, named lesson, test,
-    # scorecard and career by the dump at 0x8DA0D0. They are settings the client
-    # can push back with MsgClRequestGameOptionUpdate (0x0703, same four bytes).
-    # The manual page manual/p05_02 spells them out as ON/OFF pairs, so all-zero
-    # is not neutral — it means skipping lessons and exams. Attend both; keep the
-    # two 公開 flags off, which is the private-by-default reading.
-    # UNANSWERED 0x0703 -- the push-back half of this one. A Request, so it wants
-    #   an Ok, and what to do with four flags this server does not act on is the
-    #   open half; nothing has ever sent it, オプション being a client-side window.
-    0x0700: (0x0701, bytes((1, 1, 0, 0))),  # lesson, test, scorecard, career
+    # 0x0700/0x0703 used to be here as a constant (1, 1, 0, 0) with 0x0703
+    # written off as unanswerable. Both now have branches of their own further
+    # down: the flags are per character, because 通知表公開 is a permission one
+    # player grants about their own card and a server-wide constant cannot say
+    # that. See options.py for the four names and what each one means.
     # The lobby handshake that follows 登校. All six messages of the two trios
     # are "empty" by the shape reader, and Input_MsgSvOkLobbyDataStart's vtable[0] is
     # 0x8CB9A0 — the same ``xor eax,eax; ret 8`` zero-param stub that
@@ -262,13 +258,19 @@ FIXED_REPLIES = {
     # sits there. Round 151 measured that too, and measured the way out: an Ng or
     # an Error takes the box down with nothing else on screen, no re-login.
     #
-    # ⭐ 経歴 is not an invention. This server's own MsgSvResultOption (0x0700
-    # above) says career=0, i.e. 経歴公開 is off, so 「that card is not public」
-    # is the answer this end has already committed to. The other two are:
-    # ツーショット and トレード are whole subsystems (0x5000..0x5203 and
-    # 0x5100..0x5118) and a refusal is a rule nobody has read off the client.
-    # ⚠️ INVENTED, and what overturns it is implementing either family -- at
-    # which point these two rows come out.
+    # ⭐ 経歴 is not an invention. career defaults to 0, i.e. 経歴公開 is off,
+    # so 「that card is not public」 is an answer this end has already committed
+    # to. ⚠️ Since 0x0703 that default can be turned ON per character, and this
+    # row does NOT consult it -- unlike 通知表, which now does. Refusing anyway
+    # is honest and not laziness: 0x4316 is a whole card (2+11+11+2+4+8+4+2) and
+    # there is no 経歴 behind it to send, so a character whose career flag is ON
+    # is being refused for lack of data, not for lack of permission. What takes
+    # this row out is building that card, and then the flag becomes its gate the
+    # way scorecard is 通知表's.
+    # The other two are: ツーショット and トレード are whole subsystems
+    # (0x5000..0x5203 and 0x5100..0x5118) and a refusal is a rule nobody has read
+    # off the client. ⚠️ INVENTED, and what overturns it is implementing either
+    # family -- at which point these two rows come out.
     #
     # Reason byte is the NG_REASON placeholder defined below; the table is built
     # before that name exists, hence the literal.
@@ -2622,34 +2624,100 @@ class MpsServer:
                 return self._answer(
                     session, sequence, curriculum.MSG_SV_RESULT_CURRICULUM, body
                 )
+            if msg_type == options.MSG_CL_QUERY_OPTION:
+                # オプション, the four flags that cross the wire. Asked once
+                # during 登校, right after the friend list. Answered out of the
+                # character's own record since round 152; before that it was a
+                # constant in FIXED_REPLIES, which was fine right up to the
+                # moment one of the four had to mean something -- and 通知表公開
+                # does, one branch down.
+                #
+                # ⚠️ Nothing has been seen asking this before a character is
+                # picked, but a connection that did would have chara_id 0 and no
+                # record; the defaults answer it, and they are byte for byte
+                # what this server sent for the 140 rounds before the record
+                # existed. Nobody's settings moved when this stopped being a
+                # constant.
+                opts = (
+                    self._chars(session).options(session.chara_id)
+                    or options.GameOptions()
+                )
+                print(f"[{self.tag}] option: {opts.summary()}")
+                return self._answer(
+                    session,
+                    sequence,
+                    options.MSG_SV_RESULT_OPTION,
+                    opts.result_params(),
+                )
+            if msg_type == options.MSG_CL_REQUEST_GAME_OPTION_UPDATE:
+                # The push-back half: the same four u8 coming the other way when
+                # the player closes the オプション window. This went unanswered
+                # until round 152 on the grounds that オプション is a client-side
+                # window and nothing had ever sent it -- ⚠️ which was never
+                # measured, only assumed, and a Request that goes unanswered is
+                # the 「通信中」 wedge this project has now paid for twice.
+                #
+                # ⭐⭐ Round 152 pressed ［適 用］ with 通知表公開 alone flipped
+                # and got 01 01 01 00 -- byte three, and only byte three. So the
+                # four u8 really are 0x0701's four in 0x0701's order, measured
+                # rather than inferred. The log below names each byte, which is
+                # what made that readable at a glance; keep it that way.
+                values = options.parse_update(params)
+                opts = self._chars(session).options(session.chara_id)
+                if values is None or opts is None:
+                    print(f"[{self.tag}] option update: short body or no "
+                          f"charaId={session.chara_id}, answering Ng")
+                    return self._answer(
+                        session,
+                        sequence,
+                        options.MSG_SV_NG_GAME_OPTION_UPDATE,
+                        NG_REASON,
+                    )
+                was = opts.summary()
+                opts.update(values)
+                self._chars(session).set_options(session.chara_id, opts)
+                print(f"[{self.tag}] option update: {opts.summary()} (was {was})")
+                return self._answer(
+                    session, sequence, options.MSG_SV_OK_GAME_OPTION_UPDATE, b""
+                )
             if msg_type == curriculum.MSG_CL_QUERY_SCORE_CARD:
                 # 「生徒情報」→「通知表」. One u32 charaId, because a player can
-                # look at someone else's if their 通知表公開 option is on — ours
-                # is off (FIXED_REPLIES 0x0700).
+                # look at someone else's if that character's 通知表公開 is on.
                 #
-                # ⭐⭐ Round 151: that last sentence has teeth now. The PC menu's
-                # 「通知表を見る」 sends this very message with *the other player's*
-                # charaId, so this is not only the 生徒情報 window's own query --
-                # and until this branch said so, a peer's card fell out through
-                # 「no charaId=…」 below, which reads like a lookup bug rather
-                # than the policy it is. ⚠️ The refusal is unchanged; what
-                # changed is that it is now a decision. Turning 通知表公開 on
-                # means answering out of the owner's store the way chara_info
-                # does (accounts.owner_of), not just deleting this test.
+                # ⭐⭐ Round 151: the PC menu's 「通知表を見る」 sends this very
+                # message with *the other player's* charaId, so this is not only
+                # the 生徒情報 window's own query -- and until that round this
+                # branch let a peer's card fall out through 「no charaId=…」
+                # below, which reads like a lookup bug rather than the policy it
+                # is. Round 152 made the policy real: the permission is the
+                # owner's ``scorecard`` flag (options.py), read out of the
+                # OWNER's store the way chara_info reads the record itself.
+                # Asking this connection's store about somebody else's id
+                # answers about nobody -- accounts keep separate stores.
+                #
+                # ⚠️ Which flag is consulted is the owner's, never the asker's:
+                # 通知表公開 is a permission a player grants about their own
+                # card. A viewer looking at their own card needs no permission,
+                # hence the chara_id == session.chara_id shortcut staying in.
                 #
                 # The three 必要 columns are absent from the answer on purpose:
                 # they are not on the wire at all, and the client fills them
                 # from lesson.bin. Whether it really does is what opening this
                 # screen is meant to show.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
-                if chara_id != session.chara_id and not FIXED_REPLIES[0x0700][1][2]:
-                    print(f"[{self.tag}] scorecard for charaId={chara_id}: refused, "
-                          f"通知表公開 is off (0x0701 says so)")
-                    return self._answer(
-                        session, sequence, curriculum.MSG_SV_ERROR_SCORE_CARD, bytes(1)
-                    )
-                card = self._chars(session).scorecard(chara_id)
-                names = self._chars(session).full_name(chara_id)
+                store = self._chars(session)
+                if chara_id != session.chara_id:
+                    store = self.accounts.owner_of(chara_id) or store
+                    opts = store.options(chara_id)
+                    if opts is None or not opts["scorecard"]:
+                        why = "unknown character" if opts is None else "通知表公開 is off"
+                        print(f"[{self.tag}] scorecard for charaId={chara_id}: "
+                              f"refused, {why}")
+                        return self._answer(
+                            session, sequence, curriculum.MSG_SV_ERROR_SCORE_CARD, bytes(1)
+                        )
+                card = store.scorecard(chara_id)
+                names = store.full_name(chara_id)
                 if card is None or names is None:
                     print(f"[{self.tag}] scorecard: no charaId={chara_id}, answering Error")
                     return self._answer(
@@ -5964,9 +6032,10 @@ class MpsServer:
         member = self._chars(session).club(session.chara_id)
         inv = self._chars(session).items(session.chara_id)
         locker = self._locker(session)
+        opts = self._chars(session).options(session.chara_id)
         answer = chat.respond(
             said, session.map_id, session.pos, love, card, session.lesson,
-            sheet, session.in_class, session.exam, member, inv, locker,
+            sheet, session.in_class, session.exam, member, inv, locker, opts,
         )
         if answer.romance_save and love is not None:
             self._chars(session).set_romance(session.chara_id, love)
@@ -5978,6 +6047,8 @@ class MpsServer:
             self._chars(session).set_club(session.chara_id, member)
         if answer.item_save and inv is not None:
             self._chars(session).set_items(session.chara_id, inv)
+        if answer.options_save and opts is not None:
+            self._chars(session).set_options(session.chara_id, opts)
         if answer.locker_save:
             self.accounts.save_locker(session.account_id)
         if answer.npc_event is not None:

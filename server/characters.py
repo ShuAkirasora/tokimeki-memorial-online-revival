@@ -35,6 +35,7 @@ import club
 import curriculum
 import facing
 import item
+import options
 import romance
 
 if TYPE_CHECKING:
@@ -982,6 +983,31 @@ class CharacterStore:
             if int(record["charaId"]) != chara_id:
                 continue
             record["items"] = inv.to_json()
+            self._save()
+            return True
+        return False
+
+    def options(self, chara_id: int) -> "options.GameOptions | None":
+        """This character's オプション flags, or None if it is not ours.
+
+        Same treatment as ``club``, and asked about somebody else's charaId as
+        often as about our own: 通知表公開 is a permission the *owner* granted,
+        so the branch that answers a peer's 通知表 looks the setting up in the
+        owner's store (accounts.owner_of) rather than in the asker's.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            saved = record.get("options")
+            return options.GameOptions(saved if isinstance(saved, dict) else None)
+        return None
+
+    def set_options(self, chara_id: int, opts: "options.GameOptions") -> bool:
+        """Write one character's オプション flags back. False if not ours."""
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            record["options"] = opts.to_json()
             self._save()
             return True
         return False
