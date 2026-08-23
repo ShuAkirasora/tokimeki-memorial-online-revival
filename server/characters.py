@@ -37,6 +37,7 @@ import curriculum
 import facing
 import item
 import options
+import posts
 import romance
 
 if TYPE_CHECKING:
@@ -470,6 +471,9 @@ def list_entry(
     couple_flag: int = 0,
     in_club: int = 0,
     group_name: bytes = b"",
+    title: int = 0,
+    class_post: int = 0,
+    club_post: int = posts.NO_CLUB_POST,
 ) -> bytes:
     """Build one 238-byte MsgSvResultCharacterListFromAccount entry.
 
@@ -505,7 +509,10 @@ def list_entry(
     out += struct.pack(">HH", 0, in_club)  # inClass (0 = A組), inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
     out += struct.pack(">BB", couple_flag, 1)  # coupleFlag, newbieFlag
-    out += struct.pack(">HHH", 0, 0, 0)  # title, classPost, clubPost
+    # ⭐ Three hard zeros until round 156. ``title`` is the 称号 out of the 経歴
+    # -- one per character, not one per message -- and the other two are
+    # posts.Posts; see that module for what each one keys and what draws it.
+    out += struct.pack(">HHH", title, class_post, club_post)
     out += struct.pack(">H", f["charaType"])
     out += struct.pack(">H", 0)  # testLv
     out += b"\x00" * (2 * NUM_OF_CHARA_ABILITY)  # abilityParam[6]
@@ -636,6 +643,9 @@ def chara_info(
     leader_authority: int = 0,
     leader_qualification: int = 0,
     lover_chara_id: int = 0,
+    title: int = 0,
+    class_post: int = 0,
+    club_post: int = posts.NO_CLUB_POST,
 ) -> bytes:
     """Build the 139-byte MsgSvResultCharaInfo (0x6501) parameter block.
 
@@ -673,7 +683,10 @@ def chara_info(
     # Both were hard zeros until round 154 and a character with no 恋人 is still
     # byte-identical to what this server always sent.
     out += struct.pack(">BB", 1 if lover_chara_id else 0, 1)  # coupleFlag, newbieFlag
-    out += struct.pack(">HHH", 0, 0, 0)  # title, classPost, clubPost
+    # ⭐ See list_entry: the same three, and this is the copy the right-click
+    # name card is built from -- the one that has a 「所属部：%1%  役職：%2%」
+    # line to put a 部活役職 in (posts.py names the rows).
+    out += struct.pack(">HHH", title, class_post, club_post)
     out += struct.pack(">I", lover_chara_id)  # loverCharaId
     out += group_name.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]  # friendGroupName
     out += struct.pack(">I", group_id)  # friendGroupId
@@ -834,6 +847,7 @@ class CharacterStore:
         for record in self.records:
             chara_id = int(record["charaId"])
             map_id, pos_x, pos_y = self.location(chara_id)
+            held = self.posts(chara_id) or posts.Posts()
             parts.append(
                 list_entry(
                     chara_id,
@@ -843,6 +857,9 @@ class CharacterStore:
                     in_club=self.in_club(chara_id),
                     group_name=self.group_name(chara_id),
                     couple_flag=1 if self.lover(chara_id) else 0,
+                    title=self.title(chara_id),
+                    class_post=held.class_post,
+                    club_post=held.club_post,
                 )
             )
         if self.records and LIST_PROBES:
@@ -1042,6 +1059,44 @@ class CharacterStore:
             self._save()
             return True
         return False
+
+    def posts(self, chara_id: int) -> "posts.Posts | None":
+        """This character's two 役職 keys, or None if it is not ours.
+
+        Same treatment as ``options`` and ``career``, and asked about a peer's
+        charaId for the same reason: the right-click name card is built out of
+        the record of whoever was clicked, so the answer has to come from that
+        character's own account store.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            saved = record.get("posts")
+            return posts.Posts(saved if isinstance(saved, dict) else None)
+        return None
+
+    def set_posts(self, chara_id: int, held: "posts.Posts") -> bool:
+        """Write one character's 役職 back. False if it is not ours."""
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            record["posts"] = held.to_json()
+            self._save()
+            return True
+        return False
+
+    def title(self, chara_id: int) -> int:
+        """The 称号 to put on the wire, out of the 経歴 where it is stored.
+
+        ⭐ One 称号 per character, not one per message: 0x4316 has carried this
+        value since round 155 while 0x0319 and 0x6501 packed a constant 0
+        beside it. They agree now. ⚠️ Nothing awards a 称号 and
+        `designation.bin` has exactly one row, so today this is still 0 down
+        every path -- the point is that it is no longer 0 for two different
+        reasons. See career.TITLE_NONE.
+        """
+        state = self.career(chara_id)
+        return state.title if state is not None else career.TITLE_NONE
 
     def lover(self, chara_id: int) -> int:
         """This character's ``loverCharaId``, 0 for 恋人なし or not ours.

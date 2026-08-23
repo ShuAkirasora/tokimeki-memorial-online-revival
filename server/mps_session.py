@@ -89,6 +89,7 @@ import lesson_skill
 import mapgraph
 import mps_cipher
 import options
+import posts
 import quiz
 import romance
 import script
@@ -2632,7 +2633,20 @@ class MpsServer:
                 # ⚠️ Same owner-store rule as in_club below: 恋人 is a fact about
                 # the character being asked about, so it comes out of whichever
                 # account holds that id, not out of the asker's store.
-                lover = (self.accounts.owner_of(chara_id) or self._chars(session)).lover(chara_id)
+                owner = self.accounts.owner_of(chara_id) or self._chars(session)
+                lover = owner.lover(chara_id)
+                # ⚠️ Same owner-store rule again: a 役職 and a 称号 are facts
+                # about the character being asked about. The name card that
+                # comes out of this message has a 「所属部：%1%  役職：%2%」 line
+                # (posts.py), so this is the copy that decides whether it is
+                # drawn with a post or without one.
+                held = owner.posts(chara_id) or posts.Posts()
+                title = owner.title(chara_id)
+                if (held.class_post != posts.CLASS_POST_NONE
+                        or held.club_post != posts.NO_CLUB_POST or title):
+                    print(f"[{self.tag}]   posts: {held.summary()} title={title} "
+                          + " ".join(posts.club_post_readings(
+                              held.club_post, owner.in_club(chara_id))))
                 if lover:
                     print(f"[{self.tag}]   couple: loverCharaId={lover} (coupleFlag=1)")
                 if gid or qualification:
@@ -2648,13 +2662,15 @@ class MpsServer:
                     # somebody else's id answers about nobody.
                     chara_info(
                         info,
-                        in_club=(self.accounts.owner_of(chara_id) or self._chars(session))
-                        .in_club(chara_id),
+                        in_club=owner.in_club(chara_id),
                         group_name=gname,
                         group_id=gid,
                         leader_authority=authority,
                         leader_qualification=qualification,
                         lover_chara_id=lover,
+                        title=title,
+                        class_post=held.class_post,
+                        club_post=held.club_post,
                     ),
                 )
             if msg_type == curriculum.MSG_CL_QUERY_CURRICULUM:
@@ -6250,11 +6266,12 @@ class MpsServer:
         locker = self._locker(session)
         opts = self._chars(session).options(session.chara_id)
         cv = self._chars(session).career(session.chara_id)
+        held = self._chars(session).posts(session.chara_id)
         answer = chat.respond(
             said, session.map_id, session.pos, love, card, session.lesson,
             sheet, session.in_class, session.exam, member, inv, locker, opts,
             cv, sum(card.attendance) if card is not None else 0,
-            len(member.skills) if member is not None else 0,
+            len(member.skills) if member is not None else 0, held,
         )
         if answer.romance_save and love is not None:
             self._chars(session).set_romance(session.chara_id, love)
@@ -6270,6 +6287,8 @@ class MpsServer:
             self._chars(session).set_options(session.chara_id, opts)
         if answer.career_save and cv is not None:
             self._chars(session).set_career(session.chara_id, cv)
+        if answer.posts_save and held is not None:
+            self._chars(session).set_posts(session.chara_id, held)
         if answer.locker_save:
             self.accounts.save_locker(session.account_id)
         if answer.npc_event is not None:

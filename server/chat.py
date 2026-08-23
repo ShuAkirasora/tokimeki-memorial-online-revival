@@ -54,6 +54,7 @@ import item
 import lesson
 import mapgraph
 import options
+import posts
 import quiz
 import romance
 import script
@@ -231,6 +232,7 @@ HELP = (
     "/opt [<項目> <on|off>|clear] オプション (授業/試験/通知表公開/経歴公開)",
     "/career [probe <inClass> <称号> <登校> <時間> <出席> <奥義>|probe off"
     "|title <値>|visits <値>|hours <値>|add <0-2>|del <0-2>|clear] 経歴",
+    "/post [class <キー>|club <値>|clear] クラス役職・部活役職 (0x0319/0x6501)",
     "/ab [ruler|clear|p <値×6>|club <番号> <lv> <gauge>|<能力>|徳|ストレス|体調|日数 <値>] 能力パラメータ",
     "/buka [<番号 1-8>|force <番号>|part|clear] クラブ入部・退部 (/club はクライアント側)",
     "/kw [n <数>|add <id> [習熟度] [素]|del <id>|clear|blocks|deck <0-2> <id>…|use <0-2> <値>]"
@@ -408,6 +410,8 @@ class Reply(NamedTuple):
     options_save: bool = False
     # Same, for the 経歴; see /career.
     career_save: bool = False
+    # Same, for the two 役職 keys; see /post.
+    posts_save: bool = False
     # Same, for the 能力パラメータ sheet; see /ab.
     ability_save: bool = False
     # Same, for the クラブ membership; see /buka.
@@ -438,6 +442,7 @@ def respond(
     career_state: "career.Career | None" = None,
     attended: int = 0,
     learned: int = 0,
+    held: "posts.Posts | None" = None,
 ) -> Reply:
     """Answer one chat line.
 
@@ -458,7 +463,9 @@ def respond(
     ``attended`` and ``learned`` are the two 経歴 numbers that live elsewhere —
     the 通知表's attendance summed, and how many 部活奥義 are owned — passed in
     read-only so /career can print the card the wire would send rather than a
-    different one. See career.py.
+    different one. See career.py. ``held`` is the two 役職 keys, same
+    arrangement as ``opts`` -- mutated in place and written back through
+    ``Reply.posts_save``.
     """
     # NULs are dropped here as well as in parse_cast: str.strip() does not count
     # one as whitespace, so a terminator that slips through turns an argument
@@ -835,6 +842,54 @@ def respond(
             "/career [probe …|title <値>|visits <値>|hours <値>"
             "|add <0-2>|del <0-2>|clear]",
         ])
+
+    if word == "post":
+        # 役職: the two keys that ride beside 称号 in 0x0319 and 0x6501, and
+        # were a hard 0 in both from round 1 until round 156. See posts.py.
+        #
+        #   read   /post                    both keys, and what each reading of
+        #                                   clubPost would look up
+        #   knob   /post class <キー>       a `class_post.bin` key
+        #   ruler  /post club <値>          ⚠️ ANY u16 -- see below
+        #
+        # ⚠️⚠️ ``club`` takes any u16 on purpose, and keeps doing so now that
+        # the answer is in: it is the `postId`, and the client pairs it with its
+        # own `inClub`. Refusing keys outside the table would refuse exactly the
+        # values that measured what an absent key does -- which is how
+        # NO_CLUB_POST was found. The reply still prints all three readings, so
+        # one screenshot can re-settle it if the table is ever re-read.
+        # ⭐ ``class`` is checked, because that table is keyed by one number and
+        # its keys are 0-7 and 9 -- there is nothing at 8, and sending the
+        # client a key its own tables do not have has crashed it before.
+        # ⚠️⚠️ ``clear`` puts clubPost back to posts.NO_CLUB_POST, NOT to 0:
+        # 0 is a club member's row 0, which for 野球部 is 「１軍レギュラー」.
+        if held is None:
+            return Reply(["役職が読めない (キャラ未選択?)"])
+        in_club = member.in_club if member is not None else 0
+        words = rest.split()
+        if not words:
+            return Reply(held.lines(in_club))
+        verb = words[0].lower()
+        if verb == "clear":
+            held.class_post = posts.CLASS_POST_NONE
+            held.club_post = posts.NO_CLUB_POST
+            return Reply(["役職なしに戻した"] + held.lines(in_club), posts_save=True)
+        if verb in ("class", "club") and len(words) >= 2:
+            try:
+                value = int(words[1], 0)
+            except ValueError:
+                return Reply([f"/post {verb} <値>"])
+            if verb == "class":
+                if not posts.class_post_exists(value):
+                    return Reply([
+                        "class_post.bin のキーは "
+                        + " ".join(str(k) for k in posts.CLASS_POST_KEYS),
+                    ])
+                held.class_post = value
+            else:
+                held.club_post = value & 0xFFFF
+            return Reply(held.lines(in_club), posts_save=True)
+        return Reply(["/post [class <キー>|club <値>|clear]"])
 
     if word == "buka":
         # クラブ, readable and pokeable. ⚠️ NOT named /club: the client's own
