@@ -72,13 +72,23 @@ So it ships, in ``reference/branches.json``:
   other branch in the game tests a script variable, which this end always
   answers "no" to, and a "no" needs no target — it is the reported ip plus
   ``OP_BR_WIDTH``. 5125 entries survive that cut out of 15586 branches.
-* ⭐ Plus ``gates``, a second and much smaller class round 167 found: an
-  ``OP_BR`` testing a player-data field the *same run* wrote a few dozen ips
-  earlier, in the branch the choice box picked. "The condition holds" and "the
-  player picked option k" are then the same statement, and k is a thing this
-  end already knows. Five entries, one per ``<キャラ>_e011``, and the standing
-  "no" was not a shrug there but the wrong answer: it is what made every
-  ending event stop at 「生徒会室か……。」 and walk back out to the map.
+⚠️ Round 167 shipped a second class here, ``gates``, and round 167 took it
+back out; the episode is worth the paragraph. One ``OP_BR`` per
+``<キャラ>_e011`` tests a player-data field that the choice box's own branch
+wrote a few dozen ips earlier, so "the condition holds" and "the player picked
+option 0" looked like one statement — and answering it "yes" does play the
+confession scene the letter is inviting you to, measured on a real client.
+
+⚠️⚠️ **But that is a guess about what the original server answered, not a
+reading of it.** The client does not evaluate the condition; it *asks*. So the
+arithmetic in the script is what the author meant the condition to say, and
+never what the server said back. And the game ships that same confession twice
+— once here as a ``BGNPC`` cutscene, once as ``<キャラ>:20`` / ``*_o011`` with
+the same 92 lines and 桜井 as a real ``NPC`` standing in the room — which is
+what an invitation followed by a trip to the 生徒会室 looks like. Answering
+"yes" collapses the two into one and fires a route's climax for a character the
+player has never met. So the standing "no" is back, and the confession waits
+for its own entrance to be found.
 
 ``runtime/scripts/<name>.json``, written by ``the script exporter``, is the
 other source and is *not* shipped: it carries the instruction stream, the cast
@@ -117,8 +127,6 @@ def _load_branches() -> dict[int, dict]:
             "codeBase": entry["codeBase"],
             "branches": {int(ip): target
                          for ip, target in entry["branches"].items()},
-            "gates": {int(ip): tuple(pair)
-                      for ip, pair in entry.get("gates", {}).items()},
         }
         for script_id, entry in raw.items()
     }
@@ -321,10 +329,6 @@ class Script:
         self.branches: dict[int, int] = {
             int(ip): target for ip, target in data.get("branches", {}).items()
         } or dict(known.get("branches", {}))
-        # {OP_BR ip: (option that makes it hold, where it goes then)}. Only
-        # the shipped table has these -- an export carries the instruction
-        # stream, which is a different question, and never the reading.
-        self.gates: dict[int, tuple[int, int]] = dict(known.get("gates", {}))
         # {INPUT_SELECT ip: {"prompt": str, "options": [str, ...]}}
         self.selects: dict[int, dict] = {
             int(ip): entry for ip, entry in data.get("selects", {}).items()
@@ -520,9 +524,6 @@ class Runner:
         # See `resolve_branch` for what the pair is for.
         self.choice: int | None = None
         self.since_choice = 0
-        # The same number, but kept after the chain has consumed `choice`: a
-        # gate can be dozens of instructions past the chain that armed it.
-        self.last_choice: int | None = None
         # The 0x721c Begin the client is stopped on, as `(wire ip, op)`. Kept
         # because the release has to echo it back verbatim, and the client is
         # the only one who knows which instruction it stopped on.
@@ -530,7 +531,7 @@ class Runner:
 
     def chose(self, result: int) -> None:
         """Remember a MsgClResultScriptCommandSelect and start counting."""
-        self.choice = self.last_choice = result
+        self.choice = result
         self.since_choice = 0
 
     def resolve_branch(self, wire: int) -> tuple[int, str]:
@@ -554,14 +555,13 @@ class Runner:
         says nothing about an OP_BR that is not part of one, which is why the
         counter is armed only by `chose` and disarmed the moment it fires.
 
-        ⭐ `gates` is the second case, and it is why "the standing answer is
-        no, and no is harmless" had to go: a gate tests a player-data field the
-        choice branch wrote a few dozen ips earlier in this same run, so the
-        answer is decided by a number this end already has. It reads
-        `last_choice` rather than `choice` precisely because the chain has
-        usually consumed `choice` by the time the gate comes by.
+        ⚠️ The standing "no" is still not a neutral default -- it is a
+        decision, and for the `<キャラ>_e011` gate it is the decision that
+        keeps the confession scene off the screen (see the module docstring).
+        It stays because "no" is the conservative half of a question this end
+        cannot yet answer, not because it is known to be right.
 
-        ⚠️ `FORCED_BRANCHES` outranks both and looks at nothing at all. That is
+        ⚠️ `FORCED_BRANCHES` outranks it and looks at nothing at all. That is
         what it is for -- finding out what an unanswered branch plays, before
         there is any reading of it to encode.
         """
@@ -571,12 +571,6 @@ class Runner:
         target = forced.get(local)
         if target is not None:
             return self.script.wire_ip(target), f"強制 -> ip={target}"
-        gate = self.script.gates.get(local)
-        if gate is not None:
-            wants, goes = gate
-            if self.last_choice == wants:
-                return self.script.wire_ip(goes), f"関門 (選択肢 {wants}) -> ip={goes}"
-            return fall_through, f"関門 fall-through (選択肢 {self.last_choice} ≠ {wants})"
         if self.choice is None or taken is None:
             return fall_through, "fall-through"
         seen, self.since_choice = self.since_choice, self.since_choice + 1
