@@ -254,6 +254,7 @@ HELP = (
     "/evend [auto|manual] 0x5603 の返し方 (manual は返事なし、/raw で手動終了)",
     "/sc <名前|scriptId> [ctrl] [actor:npcId] 台本開始",
     "/scn 次の命令へ  /sce 台本終了  /scl 一覧",
+    "/scb [<scriptId> <ip> <分岐先>|clear] OP_BR を強制 (無引数で一覧、既定なし)",
     "/sel [<select> [timer]] 選択肢を問い直す (無引数で既定に戻す)",
     "/de [<genre>:<番号>|un007 …] ドラマ一覧通知",
     "/dms マッチング画面を開かせる (0xe002+0xe003+0xe004)",
@@ -1954,6 +1955,31 @@ def respond(
              f"配役: {cast}"],
             script=ScriptAction("start", words[0], ctrl, infos),
         )
+
+    if word == "scb":
+        # Force one OP_BR to answer "yes". `resolve_branch`'s standing answer is
+        # "no" for every branch that is not part of a choice chain, which is
+        # right for a condition this end cannot read and wrong for a gate the
+        # script sets itself a few instructions earlier -- and the two look the
+        # same from here. Forcing one is how the difference gets onto a screen.
+        #
+        # ips are local (u16 words from the code section), the unit the log
+        # prints and `branches.json` stores, not the wire's file bytes.
+        words = rest.split()
+        if not words:
+            if not script.FORCED_BRANCHES:
+                return Reply(["強制中の分岐なし"])
+            return Reply([f"{sid}: " + " ".join(f"{ip}->{tgt}"
+                                                for ip, tgt in sorted(m.items()))
+                          for sid, m in sorted(script.FORCED_BRANCHES.items())])
+        if words[0] == "clear":
+            script.FORCED_BRANCHES.clear()
+            return Reply(["強制中の分岐を全部消した"])
+        if len(words) != 3 or not all(w.isdigit() for w in words):
+            return Reply(["/scb <scriptId> <ip> <分岐先>  例: /scb 8445 151 174"])
+        script_id, ip, target = (int(w) for w in words)
+        script.FORCED_BRANCHES.setdefault(script_id, {})[ip] = target
+        return Reply([f"台本 {script_id}: ip={ip} は必ず ip={target} へ"])
 
     if word == "scn":
         # A manual step, so that "the client never acknowledged" and "the

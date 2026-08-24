@@ -72,6 +72,13 @@ So it ships, in ``reference/branches.json``:
   other branch in the game tests a script variable, which this end always
   answers "no" to, and a "no" needs no target — it is the reported ip plus
   ``OP_BR_WIDTH``. 5125 entries survive that cut out of 15586 branches.
+* ⭐ Plus ``gates``, a second and much smaller class round 167 found: an
+  ``OP_BR`` testing a player-data field the *same run* wrote a few dozen ips
+  earlier, in the branch the choice box picked. "The condition holds" and "the
+  player picked option k" are then the same statement, and k is a thing this
+  end already knows. Five entries, one per ``<キャラ>_e011``, and the standing
+  "no" was not a shrug there but the wrong answer: it is what made every
+  ending event stop at 「生徒会室か……。」 and walk back out to the map.
 
 ``runtime/scripts/<name>.json``, written by ``the script exporter``, is the
 other source and is *not* shipped: it carries the instruction stream, the cast
@@ -110,12 +117,24 @@ def _load_branches() -> dict[int, dict]:
             "codeBase": entry["codeBase"],
             "branches": {int(ip): target
                          for ip, target in entry["branches"].items()},
+            "gates": {int(ip): tuple(pair)
+                      for ip, pair in entry.get("gates", {}).items()},
         }
         for script_id, entry in raw.items()
     }
 
 
 BRANCHES = _load_branches()
+
+# {scriptId: {local ip: local target}} — branches answered "yes" no matter what,
+# set from `/scb` and empty on every start, so the factory answer is the one the
+# shipped table gives and a forced answer never outlives the session that typed
+# it. It exists because the standing "no" of `Runner.resolve_branch` is not only
+# a shrug: for a gate the script itself decides (round 167 found one, the
+# `*_e011` letter gating its own confession scene) the standing answer is the
+# wrong answer, and the cheapest way to find out what the right one plays is to
+# force it once and watch.
+FORCED_BRANCHES: dict[int, dict[int, int]] = {}
 
 MSG_SV_REQUEST_SCRIPT_READY = 0x7200
 MSG_CL_OK_SCRIPT_READY = 0x7201
@@ -302,6 +321,10 @@ class Script:
         self.branches: dict[int, int] = {
             int(ip): target for ip, target in data.get("branches", {}).items()
         } or dict(known.get("branches", {}))
+        # {OP_BR ip: (option that makes it hold, where it goes then)}. Only
+        # the shipped table has these -- an export carries the instruction
+        # stream, which is a different question, and never the reading.
+        self.gates: dict[int, tuple[int, int]] = dict(known.get("gates", {}))
         # {INPUT_SELECT ip: {"prompt": str, "options": [str, ...]}}
         self.selects: dict[int, dict] = {
             int(ip): entry for ip, entry in data.get("selects", {}).items()
@@ -497,6 +520,9 @@ class Runner:
         # See `resolve_branch` for what the pair is for.
         self.choice: int | None = None
         self.since_choice = 0
+        # The same number, but kept after the chain has consumed `choice`: a
+        # gate can be dozens of instructions past the chain that armed it.
+        self.last_choice: int | None = None
         # The 0x721c Begin the client is stopped on, as `(wire ip, op)`. Kept
         # because the release has to echo it back verbatim, and the client is
         # the only one who knows which instruction it stopped on.
@@ -504,7 +530,7 @@ class Runner:
 
     def chose(self, result: int) -> None:
         """Remember a MsgClResultScriptCommandSelect and start counting."""
-        self.choice = result
+        self.choice = self.last_choice = result
         self.since_choice = 0
 
     def resolve_branch(self, wire: int) -> tuple[int, str]:
@@ -527,8 +553,30 @@ class Runner:
         not a reading of the condition. It is right for the chain idiom and
         says nothing about an OP_BR that is not part of one, which is why the
         counter is armed only by `chose` and disarmed the moment it fires.
+
+        ⭐ `gates` is the second case, and it is why "the standing answer is
+        no, and no is harmless" had to go: a gate tests a player-data field the
+        choice branch wrote a few dozen ips earlier in this same run, so the
+        answer is decided by a number this end already has. It reads
+        `last_choice` rather than `choice` precisely because the chain has
+        usually consumed `choice` by the time the gate comes by.
+
+        ⚠️ `FORCED_BRANCHES` outranks both and looks at nothing at all. That is
+        what it is for -- finding out what an unanswered branch plays, before
+        there is any reading of it to encode.
         """
         fall_through, taken = self.script.branch_roads(wire)
+        local = self.script.local_ip(wire)
+        forced = FORCED_BRANCHES.get(self.script.script_id or -1, {})
+        target = forced.get(local)
+        if target is not None:
+            return self.script.wire_ip(target), f"強制 -> ip={target}"
+        gate = self.script.gates.get(local)
+        if gate is not None:
+            wants, goes = gate
+            if self.last_choice == wants:
+                return self.script.wire_ip(goes), f"関門 (選択肢 {wants}) -> ip={goes}"
+            return fall_through, f"関門 fall-through (選択肢 {self.last_choice} ≠ {wants})"
         if self.choice is None or taken is None:
             return fall_through, "fall-through"
         seen, self.since_choice = self.since_choice, self.since_choice + 1
