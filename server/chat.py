@@ -251,6 +251,7 @@ HELP = (
     "/npcx 補充をやめる (画面上の分は地図を跨ぐまで残る)",
     "/nev [<cat>:<id>] 会話イベントキー (既定 16:1)",
     "/smenu [<キー>] 0x6302 で返す sub_menu (既定 2 ロッカー・手紙メニュー)",
+    "/evend [auto|manual] 0x5603 の返し方 (manual は返事なし、/raw で手動終了)",
     "/sc <名前|scriptId> [ctrl] [actor:npcId] 台本開始",
     "/scn 次の命令へ  /sce 台本終了  /scl 一覧",
     "/sel [<select> [timer]] 選択肢を問い直す (無引数で既定に戻す)",
@@ -394,6 +395,9 @@ class Reply(NamedTuple):
     npc_event: tuple[int, int] | None = None
     # A new sub_menu.bin key to answer 0x6301 with; see /smenu.
     sub_menu: int | None = None
+    # "auto" or "manual": how 0x5603 MsgClRequestNpcEventEnd is answered; see
+    # /evend.
+    npc_event_end: str | None = None
     # Forget the remembered ちびキャラ pushes, so the lobby stops re-sending
     # them; see /npcx.
     npc_clear: bool = False
@@ -1878,6 +1882,20 @@ def respond(
         if not 0 <= key <= 0xFFFF:
             return Reply(["sub_menu のキーは u16"])
         return Reply([f"0x6302 で返す sub_menu = {key}"], sub_menu=key)
+
+    if word == "evend":
+        # Whether 0x5603 MsgClRequestNpcEventEnd is answered by the server or
+        # left to /raw. The reason a knob exists at all: an event that started
+        # from a map object ends with the client sending 0x5603 and then going
+        # quiet on a black screen, and the three candidate teardowns (Ok alone,
+        # ClearCharacterInfo then Ok, Ok then ClearCharacterInfo) differ only in
+        # what goes out first. The server cannot try an order it always wins.
+        mode = rest.strip().lower()
+        if not mode:
+            return Reply(["/evend [auto|manual]  auto=0x5604 を即返す"])
+        if mode not in ("auto", "manual"):
+            return Reply(["/evend [auto|manual]"])
+        return Reply([f"0x5603 の返し方 = {mode}"], npc_event_end=mode)
 
     if word == "raw":
         # Push any message at all, by number. Exists because every question in

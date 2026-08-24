@@ -251,7 +251,13 @@ FIXED_REPLIES = {
     # The requests do carry something (0x5600 reads one u16) which is ignored;
     # whatever an event needs beyond being acknowledged is still unknown.
     0x5600: (0x5601, b""),  # MsgClRequestNpcEventStart -> MsgSvOkNpcEventStart
-    0x5603: (0x5604, b""),  # MsgClRequestNpcEventEnd   -> MsgSvOkNpcEventEnd
+    # ⭐ 0x5603 used to be the row below this one. It moved into the drama
+    # branch in round 160, because answering it is no longer a formality: a
+    # script started from a map object ends with the client sending this and
+    # then saying nothing at all, on a black screen, while a script started by
+    # talking to a chibi never sends it and reloads the map by itself. The
+    # branch keeps the same Ok as its default and adds a knob (/evend) for
+    # sending the teardown by hand.
     # ⭐⭐ Three of the six icons in the PC 交流メニュー, measured in round 151 by
     # right-clicking a second player and pressing them one at a time. All three
     # carry exactly one u32 -- the charaId of the person clicked -- and all three
@@ -447,6 +453,7 @@ DRAMA_DOORS = {
     script.MSG_CL_REQUEST_NPC_MAP_OBJECT_EVENT,
     script.MSG_CL_REQUEST_NPC_MAP_OBJECT_MENU,
     script.MSG_CL_REQUEST_NPC_EVENT_START,
+    script.MSG_CL_REQUEST_NPC_EVENT_END,
     script.MSG_CL_REQUEST_DRAMA_EVENT_START,
 }
 
@@ -925,6 +932,14 @@ class _Session:
         # whole point of the knob is to try one key against a running client and
         # then the next; see script.DEFAULT_SUB_MENU and /smenu.
         self.sub_menu: int = script.DEFAULT_SUB_MENU
+        # How 0x5603 MsgClRequestNpcEventEnd is answered. "auto" is the factory
+        # behaviour and what every round before 160 did: the bare Ok, straight
+        # away. "manual" logs the request and answers nothing, which hands the
+        # whole teardown to /raw -- the only way to try an order other than
+        # "Ok first" without spending a login per ordering. See /evend.
+        # ⚠️ A knob whose default is the factory value, so forgetting to put it
+        # back cannot leave a changed server behind.
+        self.npc_event_end: str = "auto"
         # MsgSvNotifyNpcControl bodies /npc has pushed, so that a map reload can
         # put the same chibis back. Bodies rather than parsed pairs: nothing
         # here needs to read them, only to send them again.
@@ -1780,6 +1795,19 @@ class MpsServer:
             infos = [(actor["actorId"], actor["id"]) for actor in found.actors]
             session.talking_about = session.npc_event
             return reply + self._script_start(session, seen, found, 0, infos)
+
+        if msg_type == script.MSG_CL_REQUEST_NPC_EVENT_END:
+            # ⚠️ The client only sends this after an event that started from a
+            # map object (npcId 16:1, the row of lockers). The same script
+            # started by right-clicking a chibi ends with 0x4000 instead and the
+            # map comes back on its own -- so this message is not a formality,
+            # it is the client asking to be let out, and answering only the Ok
+            # leaves it on a black screen with nothing further to say.
+            if session.npc_event_end == "manual":
+                print(f"[{self.tag}] npc event end — /evend manual: 返事なし")
+                return None
+            return self._answer(
+                session, seen, script.MSG_SV_OK_NPC_EVENT_END, b"")
 
         if msg_type == script.MSG_CL_REQUEST_DRAMA_EVENT_START:
             # scriptId, actorId in; a u64 dramaEventId back. Nothing is known
@@ -6319,6 +6347,8 @@ class MpsServer:
             session.npc_event = answer.npc_event
         if answer.sub_menu is not None:
             session.sub_menu = answer.sub_menu
+        if answer.npc_event_end is not None:
+            session.npc_event_end = answer.npc_event_end
         if answer.select is not None:
             # (-1, -1) is /sel with no arguments: hand the decision back to the
             # script's own option count rather than remembering a number.

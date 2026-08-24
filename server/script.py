@@ -619,6 +619,18 @@ MSG_CL_QUERY_DRAMAEVENT_MATCHING_POSSIBLE = 0x4200
 MSG_SV_RESULT_DRAMAEVENT_MATCHING_POSSIBLE = 0x4201
 MSG_CL_REQUEST_NPC_EVENT_START = 0x5600
 MSG_SV_OK_NPC_EVENT_START = 0x5601
+# The closing half of the same bracket. Round 160 read the client's own list of
+# what this subsystem can be told: the debug strings that sit beside
+# `.\client\procedure\NpcEventMessageProcedure.cpp` name exactly five server
+# messages -- Ok/Ng Start, Ok/Ng End, and NotifyNpcEventClearCharacterInfo --
+# so whatever the client is waiting for after an event that came off a map
+# object is one of these three and nothing else in the 0x56xx range.
+MSG_CL_REQUEST_NPC_EVENT_END = 0x5603
+MSG_SV_OK_NPC_EVENT_END = 0x5604
+MSG_SV_NG_NPC_EVENT_END = 0x5605
+# counted list, 4-byte entries (the shape reader). What the four bytes are --
+# charaId or npcId -- has not been measured.
+MSG_SV_NOTIFY_NPC_EVENT_CLEAR_CHARACTER_INFO = 0x5606
 MSG_CL_REQUEST_DRAMA_EVENT_START = 0x5700
 MSG_SV_OK_DRAMA_EVENT_START = 0x5701
 MSG_SV_NG_DRAMA_EVENT_START = 0x5702
