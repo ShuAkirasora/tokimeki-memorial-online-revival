@@ -1801,13 +1801,23 @@ class MpsServer:
             # map object (npcId 16:1, the row of lockers). The same script
             # started by right-clicking a chibi ends with 0x4000 instead and the
             # map comes back on its own -- so this message is not a formality,
-            # it is the client asking to be let out, and answering only the Ok
-            # leaves it on a black screen with nothing further to say.
+            # it is the client asking to be let out.
+            #
+            # The Ok alone is not letting it out: its handler is the shared
+            # empty stub (`mov al,1; ret 4`), so the answer is received,
+            # acknowledged and dropped, and the client sits on a black screen.
+            # What ends the event is the ClearCharacterInfo that follows, with
+            # the 0xffff sentinel -- see script.NPC_EVENT_CLEAR_TO_FIELD.
             if session.npc_event_end == "manual":
                 print(f"[{self.tag}] npc event end — /evend manual: 返事なし")
                 return None
             return self._answer(
-                session, seen, script.MSG_SV_OK_NPC_EVENT_END, b"")
+                session, seen, script.MSG_SV_OK_NPC_EVENT_END, b""
+            ) + self._answer(
+                session, 0,
+                script.MSG_SV_NOTIFY_NPC_EVENT_CLEAR_CHARACTER_INFO,
+                script.npc_event_clear_params(script.NPC_EVENT_CLEAR_TO_FIELD),
+            )
 
         if msg_type == script.MSG_CL_REQUEST_DRAMA_EVENT_START:
             # scriptId, actorId in; a u64 dramaEventId back. Nothing is known

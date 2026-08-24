@@ -628,9 +628,38 @@ MSG_SV_OK_NPC_EVENT_START = 0x5601
 MSG_CL_REQUEST_NPC_EVENT_END = 0x5603
 MSG_SV_OK_NPC_EVENT_END = 0x5604
 MSG_SV_NG_NPC_EVENT_END = 0x5605
-# counted list, 4-byte entries (the shape reader). What the four bytes are --
-# charaId or npcId -- has not been measured.
+# `info = { npcId: u16, eventFlag[MAX_GALLERY_ROUTE_FLAG_COUNT]: u32 x 2 }` --
+# ten bytes, read field by field out of the client's own deserialiser. Not the
+# counted list `the shape reader` classifies it as: the 2 it sees is a
+# `mov ebx,2` constant loop bound, not a count on the wire.
 MSG_SV_NOTIFY_NPC_EVENT_CLEAR_CHARACTER_INFO = 0x5606
+# ⭐ This message is the only server-driven way out of an NPC event that was
+# started from a map object, and `npcId` is what picks which way out.
+#
+# The handler (0x784cd1) is two branches and both of them end in the client's
+# one and only "put a screen back on" call, 0x412547:
+#
+#   npcId == 0xffff -> 0x412547(5)     the field: map, toolbar, the player
+#   otherwise       -> clear that npc's cached info, then 0x412547(0x0e), which
+#                      is the ending: a four-minute staff roll, and then a
+#                      black screen with nothing left listening.
+#
+# So the sentinel is not "clear every character", it is "the event is over,
+# give the player the map back". Sending a real npcId here plays the credits.
+NPC_EVENT_CLEAR_TO_FIELD = 0xFFFF
+# tmn::MAX_GALLERY_ROUTE_FLAG_COUNT. The bits are unread; zero is what an event
+# that grants no gallery route should say, and it is what the field branch
+# ignores anyway.
+GALLERY_ROUTE_FLAG_COUNT = 2
+
+
+def npc_event_clear_params(npc_id: int, flags: tuple[int, ...] = ()) -> bytes:
+    """A MsgSvNotifyNpcEventClearCharacterInfo body: npcId u16 + two u32 flags."""
+    kept = list(flags[:GALLERY_ROUTE_FLAG_COUNT])
+    kept += [0] * (GALLERY_ROUTE_FLAG_COUNT - len(kept))
+    return struct.pack(">H", npc_id) + b"".join(struct.pack(">I", f) for f in kept)
+
+
 MSG_CL_REQUEST_DRAMA_EVENT_START = 0x5700
 MSG_SV_OK_DRAMA_EVENT_START = 0x5701
 MSG_SV_NG_DRAMA_EVENT_START = 0x5702
