@@ -258,6 +258,51 @@ def talk_answers(key: tuple[int, int] | None) -> int:
     return len(TALK_BY_CHOICE.get(key, ())) if key is not None else 0
 
 
+# ── The locker letter, and the ending it leads to ──────────────────────────
+#
+# ⭐ None of the rules below are restated here, because this end does not decide
+# them: `lck_s103` and `lck_s102` -- the original server's own scripts -- are
+# run as bytecode by `gs3vm`, and all this section does is say which save field
+# is which data cell. Which 進行度 a letter waits for, how much 親密さ it takes,
+# the order the five are checked in and the two-group split are all read out of
+# those scripts at run time and are written down nowhere on this side.
+#
+# A cell number here is the little-endian u16 the operand carries.
+PC_DEBUT_BASE = 0x3900     # per candidate; zero means she is not in play yet
+PC_LETTER_BASE = 0x3910    # per candidate; 1 means her letter is in the locker
+PC_INTIMACY_BASE = 0x3920  # per candidate; the 親密さ the gates read
+PC_LETTER_EVENT = 0x3A04   # which candidate's letter event is running, -1 for none
+NO_LETTER_EVENT = -1       # what sys_s000 -- the new-game reset -- writes there
+
+# ⚠️ Which of the two groups the locker scripts check is `PC[0x3013]`, and the
+# split is 天宮/春日/弥生 against 桜井/犬飼 -- exactly the female candidates
+# against the male ones. So this end sends the player's own sex, and an
+# opposite-sex cast falls out of the script rather than out of a rule here.
+# ⛔️ That the cell *is* the player's sex is a reading, not a name read off
+# anything: nothing writes it in either script set. It is the only 3-2 split of
+# these five that any table supports.
+PC_PLAYER_SEX = 0x3013
+
+# The CTX side. `c000[0xd900]` is a candidate's 進行度 as the scripts count it,
+# which is this end's `progress` plus two (see `intimacy_needed`), and its
+# subject is her 日常会話 category. `c000[0x8103]` is the menu_item that started
+# the call and has no subject.
+CTX_PROGRESS = 0xD900
+CTX_MENU_ITEM = 0x8103
+PROGRESS_OFFSET = 2
+
+# The two menu_item ids the locker answers to. 403 is 「ロッカー開く」; 404 is the
+# one behind it. ⚠️ Each script gates on its own id, so sending the wrong pair
+# is not a silent mistake -- the script falls through and offers nothing.
+LOCKER_OPEN_ITEM = 403
+LOCKER_LETTER_ITEM = 404
+LOCKER_SCRIPTS = {LOCKER_OPEN_ITEM: "lck_s103", LOCKER_LETTER_ITEM: "lck_s102"}
+
+
+def candidate_index(name: str) -> int:
+    return list(CANDIDATES).index(name)
+
+
 def intimacy_needed(progress: int) -> int:
     """親密さ required before the メインイベント after `progress` will play.
 
@@ -423,7 +468,13 @@ class Romance:
                 # Absent from saves written before round 171; 0 is the value a
                 # fresh day would have anyway, so no migration is needed.
                 "todayBest": int(row.get("todayBest", 0)),
+                # PC[0x3910+i]: her letter is sitting in the locker. Written by
+                # lck_s103 when the gates open, cleared only by a new game.
+                "letter": int(row.get("letter", 0)),
             }
+        # PC[0x3a04]: whose letter event is running. -1 is what the new-game
+        # reset writes, and it is what 「手紙を読まない」 puts back.
+        self.letter_event = int((saved or {}).get("letterEvent", NO_LETTER_EVENT))
 
     # ── reading ────────────────────────────────────────────────────────────
     def on_stage(self) -> list[str]:
@@ -580,4 +631,50 @@ class Romance:
         return True
 
     def to_json(self) -> dict:
-        return self.state
+        return {**self.state, "letterEvent": self.letter_event}
+
+    # ── the locker scripts' view of all this ──────────────────────────────
+    def locker_cells(self, menu_item: int) -> dict:
+        """Every data cell `lck_s103` / `lck_s102` reads, as `gs3vm` wants it.
+
+        ⚠️ Deliberately complete rather than lazy: `gs3vm` raises on a cell it
+        was not given, and a missing cell should surface as a log line and a
+        fallback, not as a branch quietly taken the wrong way.
+        """
+        cells: dict = {
+            ("CTX", (CTX_MENU_ITEM, 0)): menu_item,
+            ("PC", PC_PLAYER_SEX): self.player_sex,
+            ("PC", PC_LETTER_EVENT): self.letter_event,
+        }
+        for name, row in self.state.items():
+            i = candidate_index(name)
+            cells[("PC", PC_DEBUT_BASE + i)] = 1 if row["debut"] else 0
+            cells[("PC", PC_LETTER_BASE + i)] = row["letter"]
+            cells[("PC", PC_INTIMACY_BASE + i)] = row["intimacy"]
+            cells[("CTX", (CTX_PROGRESS, TALK_CATEGORY_BASE + i))] = (
+                row["progress"] + PROGRESS_OFFSET
+            )
+        return cells
+
+    def absorb(self, writes: dict) -> bool:
+        """Take a script run's cell writes back into the save. True if changed."""
+        names = list(CANDIDATES)
+        changed = False
+        for (family, address), value in writes.items():
+            if family != "PC" or isinstance(address, tuple):
+                continue
+            if PC_LETTER_BASE <= address < PC_LETTER_BASE + len(names):
+                row = self.state[names[address - PC_LETTER_BASE]]
+                changed |= row["letter"] != value
+                row["letter"] = value
+            elif address == PC_LETTER_EVENT:
+                changed |= self.letter_event != value
+                self.letter_event = value
+        return changed
+
+    def waiting_letter(self) -> str | None:
+        """Whose letter is in the locker, if anyone's."""
+        for name, row in self.state.items():
+            if row["letter"]:
+                return name
+        return None

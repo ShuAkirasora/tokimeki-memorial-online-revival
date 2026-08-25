@@ -82,6 +82,7 @@ import exam
 import facing
 import friends
 import groups
+import gs3vm
 import item
 import konami_id
 import lesson
@@ -1667,6 +1668,42 @@ class MpsServer:
             reply += self._romance_credit(session, seen)
         return reply
 
+    def _run_locker(self, session: "_Session", menu_item: int):
+        """Run the original server's locker script for this menu_item.
+
+        ⭐ Nothing about when a letter appears, whose it is, or which sub-menu
+        goes with it is decided here. `lck_s103` and `lck_s102` are the scripts
+        the original server ran, they are still the game's own bytecode, and
+        `gs3vm` runs them -- so the thresholds and the ordering stay in the data.
+
+        None means "this end could not run it", and every caller falls back to
+        the constant it used before. Three ways to get there, all of them
+        logged: the script was never exported, the character is not ours, or the
+        script read a cell nobody supplied. ⚠️ The last one is the important
+        one: gs3vm raises rather than reading a missing cell as zero, so a hole
+        in `locker_cells` surfaces as a fallback and a line in the log instead
+        of as a branch quietly taken the wrong way.
+        """
+        name = romance.LOCKER_SCRIPTS.get(menu_item)
+        if name is None:
+            return None
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return None
+        try:
+            result = gs3vm.run(name, love.locker_cells(menu_item))
+        except (gs3vm.UnknownCell, gs3vm.UnsupportedOp, gs3vm.Runaway) as exc:
+            print(f"[{self.tag}] {name}: {exc} — 台本を回せず、従来の答えに戻ります")
+            return None
+        if result is None:
+            print(f"[{self.tag}] {name}: runtime/scripts に無し — 従来の答えに戻ります")
+            return None
+        if love.absorb(result.writes) and not self._chars(session).set_romance(
+            session.chara_id, love
+        ):
+            print(f"[{self.tag}] {name}: 書き戻せませんでした")
+        return result
+
     def _romance_credit(self, session: "_Session", seen: int) -> bytes:
         """A finished conversation counts towards 親密さ; a main event moves her.
 
@@ -1808,9 +1845,19 @@ class MpsServer:
             )
             # The eventId we hand back is what chooses the conversation; see
             # script.DEFAULT_NPC_EVENT. npcId goes back unchanged.
+            #
+            # ⭐ Except behind the locker's letter item, where the game has a
+            # script for exactly this question: lck_s102 reads which letter is
+            # waiting and names its <キャラ>_e011. One letter, one candidate --
+            # the correspondence is the script's, not a table here.
+            event = session.npc_event
+            result = self._run_locker(session, menu_item)
+            if result is not None and result.event is not None:
+                event = result.event
+                print(f"[{self.tag}] lck_s102 → event {event[0]}:{event[1]}")
             return self._answer(
                 session, seen, script.MSG_SV_OK_NPC_MAP_OBJECT_EVENT,
-                script.npc_map_object_event_params(session.npc_event, npc_id),
+                script.npc_map_object_event_params(event, npc_id),
             )
 
         if msg_type == script.MSG_CL_REQUEST_NPC_MAP_OBJECT_MENU:
@@ -1822,13 +1869,23 @@ class MpsServer:
                 print(f"[{self.tag}] map object menu: short body {params.hex()}")
                 return None
             npc_id, menu_item = struct.unpack_from(">IH", params, 0)
+            # ⭐ The locker's own script picks the sub-menu. What it offers says
+            # whether there is a letter: 0 ロッカー起動 alone when there is none,
+            # 1 手紙イベント起動 then 2 ロッカー・手紙メニュー on the visit that
+            # puts one there, and 2 alone when one is already waiting.
+            answer, why = session.sub_menu, "既定値"
+            result = self._run_locker(session, menu_item)
+            if result is not None and result.menu is not None:
+                answer = result.menu
+                offered = "/".join(hex(m) for m in result.menus)
+                why = f"lck_s103 → {offered}"
             print(
                 f"[{self.tag}] map object menu npcId={npc_id} "
-                f"menuItemId={menu_item} -> sub_menu {session.sub_menu}"
+                f"menuItemId={menu_item} -> sub_menu {answer} ({why})"
             )
             return self._answer(
                 session, seen, script.MSG_SV_OK_NPC_MAP_OBJECT_MENU,
-                struct.pack(">H", session.sub_menu),
+                struct.pack(">H", answer),
             )
 
         if msg_type == script.MSG_CL_REQUEST_NPC_EVENT_START:
@@ -1878,12 +1935,29 @@ class MpsServer:
             if session.npc_event_end == "manual":
                 print(f"[{self.tag}] npc event end — /evend manual: 返事なし")
                 return None
+            # ⭐ Whose ending, or none. PC[0x3a04] is the cell <キャラ>_e011
+            # writes when the player opens the letter -- her index on the way in,
+            # -1 on 「読まない」 -- and the ending this message plays is chosen by
+            # exactly that number. ⚠️ Until this end runs the scenario scripts
+            # too, nothing writes it, so this stays at the sentinel and the
+            # player gets the map back, which is the behaviour that predates it.
+            npc_id = script.NPC_EVENT_CLEAR_TO_FIELD
+            love = self._chars(session).romance(session.chara_id)
+            names = list(romance.CANDIDATES)
+            if love is not None and 0 <= love.letter_event < len(names):
+                npc_id = love.letter_event
+                print(f"[{self.tag}] npc event end — {names[npc_id]} の"
+                      f"エンディングへ (0x5606 npcId={npc_id})")
+                # One-shot: the credits play once, and the next event out of the
+                # locker is a fresh question.
+                love.letter_event = romance.NO_LETTER_EVENT
+                self._chars(session).set_romance(session.chara_id, love)
             return self._answer(
                 session, seen, script.MSG_SV_OK_NPC_EVENT_END, b""
             ) + self._answer(
                 session, 0,
                 script.MSG_SV_NOTIFY_NPC_EVENT_CLEAR_CHARACTER_INFO,
-                script.npc_event_clear_params(script.NPC_EVENT_CLEAR_TO_FIELD),
+                script.npc_event_clear_params(npc_id),
             )
 
         if msg_type == script.MSG_CL_REQUEST_DRAMA_EVENT_START:
