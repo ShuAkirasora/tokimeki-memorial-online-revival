@@ -274,6 +274,41 @@ PC_INTIMACY_BASE = 0x3920  # per candidate; the 親密さ the gates read
 PC_LETTER_EVENT = 0x3A04   # which candidate's letter event is running, -1 for none
 NO_LETTER_EVENT = -1       # what sys_s000 -- the new-game reset -- writes there
 
+# The client's own 683 scripts keep 進行度 in a cell of their own, and it is on
+# neither of the two rulers above.
+#
+#   PCEV[0x6020+i]   進行度 as those scripts count it. `<name>_e0NN` writes NN
+#                    when it finishes -- 57 writes across the corpus, one per
+#                    メインイベント, and nothing else in either script set ever
+#                    touches the cell.
+#
+# ⭐⭐ It runs exactly one *behind* the CTX cell -- not level with it, and not
+# two behind. `<name>_s102` fires `<name>_e0k` when `c000[0xd900] == k`, and
+# that script then writes k, so a k in this cell means the ladder now stands at
+# k+1. The three same-shaped readings were measured against each other rather
+# than argued about: walk the real ladder (`the script evaluator` running all five `_s102` and
+# `lck_s103` for every rung) and feed each rung's outcome back through the
+# corpus's own writes:
+#
+#   PCEV = CTX      every rung re-fires the event that just played:   0 of 10
+#   PCEV = CTX - 1  その２ … その１１, in order, once each:           10 of 10
+#   PCEV = CTX - 2  every second メインイベント is unreachable:        5 of 10
+#
+# and both ends of the corpus agree with the winner: the constants the client
+# scripts test this cell against run 1-10 (64 of 桜井's have a `== 1` arm),
+# while the constants the server scripts test the CTX cell against run 2-11.
+# One apart, at both ends, across two script sets that share no bytes.
+#
+# ⚠️ The bottom rung is the one place they are not a plain shift. 天宮 and 桜井
+# have an `_e001` -- their 初登校 -- and it writes 1; the other three are
+# introduced by a drama event that writes nothing at all, so they sit at 0.
+# Both map to the same `c000[0xd900] == 2`, so the ladder cannot tell them
+# apart, but the 日常会話 can: that `== 1` arm of 桜井's is what it selects.
+#
+# ⚠️⚠️ Read-only, deliberately. `absorb` does not take this cell back out of a
+# script run, so nothing here can move 進行度 -- `see_main_event` still owns it.
+PCEV_PROGRESS_BASE = 0x6020
+
 # ⚠️ Which of the two groups the locker scripts check is `PC[0x3013]`, and the
 # split is 天宮/春日/弥生 against 桜井/犬飼 -- exactly the female candidates
 # against the male ones. So this end sends the player's own sex, and an
@@ -301,6 +336,18 @@ LOCKER_SCRIPTS = {LOCKER_OPEN_ITEM: "lck_s103", LOCKER_LETTER_ITEM: "lck_s102"}
 
 def candidate_index(name: str) -> int:
     return list(CANDIDATES).index(name)
+
+
+def progress_cell(name: str, progress: int, debut: bool) -> int:
+    """`PCEV[0x6020+i]` -- 進行度 on the client scripts' ruler, not this one.
+
+    See the comment above PCEV_PROGRESS_BASE for why it is `progress + 1` and
+    not `progress` or `progress + 2`, and why the two candidates with an
+    `_e001` start a rung above the three without one.
+    """
+    if progress:
+        return progress + 1
+    return 1 if debut and CANDIDATES[name].debut is not None else 0
 
 
 def intimacy_needed(progress: int) -> int:
@@ -651,6 +698,9 @@ class Romance:
             cells[("PC", PC_DEBUT_BASE + i)] = 1 if row["debut"] else 0
             cells[("PC", PC_LETTER_BASE + i)] = row["letter"]
             cells[("PC", PC_INTIMACY_BASE + i)] = row["intimacy"]
+            cells[("PCEV", PCEV_PROGRESS_BASE + i)] = progress_cell(
+                name, row["progress"], row["debut"]
+            )
             cells[("CTX", (CTX_PROGRESS, TALK_CATEGORY_BASE + i))] = (
                 row["progress"] + PROGRESS_OFFSET
             )

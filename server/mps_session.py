@@ -2124,15 +2124,29 @@ class MpsServer:
             # whole diagnostic for a script that plays but plays wrong.
             fall_through, taken = session.script.script.branch_roads(wire_ip)
             target, why = session.script.resolve_branch(wire_ip)
+            if shadow is not None and why == script.STANDING_NO:
+                # ⭐⭐ The one place the shadow decides instead of reporting,
+                # and it is fenced twice over: the answer it replaces must be
+                # the standing "no" (a forced branch or a choice chain outranks
+                # it), and taking the branch must change nothing but the
+                # background and the ambient loop. That family is the 進行度
+                # switch every 日常会話 opens with -- 「恋愛候補生が立っている
+                # 位置は、メインイベントを体験するごとに変わります」 -- and
+                # until this existed every arm of it fell through, so a
+                # candidate's daily conversations never changed their setting.
+                verdict, goes_to = shadow.branch()
+                if (verdict is not None and verdict is not gs3vm.TOP and verdict
+                        and shadow.scenery_road()):
+                    target = found.wire_ip(goes_to)
+                    why = f"背景/環境音 (vm cond={verdict})"
             other = "" if taken is None else f" 分岐先は ip={found.local_ip(taken)}"
             print(f"[{self.tag}] script branch -> wire {target} "
                   f"(ip={found.local_ip(target)}, {why}){other}")
             if shadow is not None:
-                # ⚠️ Reported, not obeyed. The answer that goes out is the one
-                # `resolve_branch` just produced; this line says what the
-                # script's own arithmetic makes of the same question, so that
-                # the two can be compared against a screen before either one is
-                # allowed to move.
+                # ⚠️ Reported, not obeyed -- with the one exception just above.
+                # This line says what the script's own arithmetic makes of the
+                # same question, so that the two can be compared against a
+                # screen before any more of it is allowed to move.
                 condition, would = shadow.branch()
                 if condition is gs3vm.TOP:
                     print(f"[{self.tag}] vm cond=⊤ — this branch is not answerable here")

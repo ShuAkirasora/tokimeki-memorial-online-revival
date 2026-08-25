@@ -196,6 +196,13 @@ OP_INPUT_SELECT = 0x7000
 # live: the client sat on the OP_BR at file 1148, was told 1156, and moved on.
 OP_BR_WIDTH = 8
 
+# ⭐ The reason string `resolve_branch` gives when its answer is the standing
+# "no" and nothing else -- no forced branch, no choice chain in flight. It is a
+# constant because a caller that owns a second opinion is allowed to overrule
+# exactly this one answer and no other (`mps_session`'s scenery branches), and
+# "is this the default?" should not be a string comparison spelled out twice.
+STANDING_NO = "fall-through"
+
 # Talking to a chibi on the map. Found in round 37 by right-clicking the NPC
 # that /npc had just put on the campus: the client opens a small menu, and
 # picking the speech balloon sends 0x6304 with the npcId it was drawn from and
@@ -599,6 +606,14 @@ class Runner:
         It stays because "no" is the conservative half of a question this end
         cannot yet answer, not because it is known to be right.
 
+        ⭐ One family of branches is now answered rather than defaulted, and
+        the caller does it, not this method: `mps_session` overrules exactly
+        the `STANDING_NO` answer, and only when the shadow VM has a definite
+        condition *and* taking the branch would change nothing but the
+        background and the ambient loop (`gs3vm.Follower.scenery_road`). A
+        forced branch and a choice chain both outrank it, which is why the
+        override keys off this one reason string and not off the target.
+
         ⚠️ `FORCED_BRANCHES` outranks it and looks at nothing at all. That is
         what it is for -- finding out what an unanswered branch plays, before
         there is any reading of it to encode.
@@ -610,7 +625,7 @@ class Runner:
         if target is not None:
             return self.script.wire_ip(target), f"強制 -> ip={target}"
         if self.choice is None or taken is None:
-            return fall_through, "fall-through"
+            return fall_through, STANDING_NO
         seen, self.since_choice = self.since_choice, self.since_choice + 1
         if seen != self.choice:
             return fall_through, f"fall-through (選択肢 {seen} ≠ {self.choice})"

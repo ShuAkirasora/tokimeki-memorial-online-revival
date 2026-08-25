@@ -105,6 +105,15 @@ OP_EVENT_CALL = 0x9180
 # `Follower.select`.
 OP_INPUT_SELECT = 0x7000
 
+# ⭐⭐ The three commands that make a 日常会話's setting: which background is
+# loaded, which ambient loop plays over it, and the fade-in. They are the whole
+# of what a 進行度 switch's taken road contains -- see `Follower.scenery_road`,
+# which is the one place this end is allowed to answer a branch out of the
+# script's own arithmetic.
+OP_EVENT_BG_LOAD = 0x5100
+OP_EVENT_BG_DISP_ON = 0x5101
+OP_SD_ENV_PLAY = 0x6080
+
 # Two register categories this end has to name, out of the eight the operand
 # encoding allows. 5 is SELITEM_DISP_FLAG -- one register per option of the
 # next choice box, and the low five bits of the number are the option number
@@ -741,6 +750,56 @@ class Follower(Machine):
             self._lose(str(exc))
             return None, None
         return condition, _jump_target(args)
+
+    def scenery_road(self) -> bool:
+        """Does taking the OP_BR the client is on change nothing but scenery?
+
+        ⭐⭐ This is the whole of what lets one branch family be answered out of
+        the script's own arithmetic while every other branch keeps the standing
+        "no" (`script.Runner.resolve_branch`). The test is on the *road*, not on
+        the condition: walk where the branch would go and ask whether anything
+        on it can be seen by the save or by the story. Concretely it must load a
+        background and it must not contain a data-cell write, an `EVENT_CALL`,
+        a choice box, or an `OP_BA`.
+
+        ⚠️ Measured over the whole corpus before it was wired to anything: of
+        the 2756 `OP_BR` whose condition reads nothing but `PCEV[0x6020+i]`,
+        2589 are this shape and **4** reach a `PCEV` write (`ink_c511`/`c513`/
+        `c515`, `ksg_c511`). ⛔️ So "the condition is 進行度" is *not* a safe
+        test on its own, which is why this one looks at the destination.
+
+        ⚠️ `OP_JP` ends the walk rather than being followed: it is where the
+        switch arm rejoins the scenario, and everything past that point is the
+        conversation itself, which this branch did not decide.
+        """
+        if self.lost or self.script.code[self.pos][1] != OP_BR:
+            return False
+        start = self.script.index.get(_jump_target(self.script.code[self.pos][2]))
+        if start is None:
+            return False
+        forbidden = set(DATA_WRITE) | {OP_EVENT_CALL, OP_INPUT_SELECT,
+                                       OP_BA, OP_BR}
+        loads_background = False
+        pending, seen = [start], set()
+        while pending:
+            i = pending.pop()
+            if i is None or i in seen or not 0 <= i < len(self.script.code):
+                continue
+            seen.add(i)
+            op = self.script.code[i][1]
+            if op in forbidden:
+                return False
+            if op == OP_EVENT_BG_LOAD:
+                loads_background = True
+            if op in (OP_RTN, OP_END, OP_JP):
+                continue
+            if op == OP_JS:
+                number = int.from_bytes(self.script.code[i][2][0:2], "little") & 0x3FF
+                if not 1 <= number <= len(self.script.labels):
+                    return False
+                pending.append(self.script.index.get(self.script.labels[number - 1]))
+            pending.append(i + 1)
+        return loads_background
 
     def select(self) -> tuple[int, int, int]:
         """The mask for the choice box the client is stopped on, right now.
