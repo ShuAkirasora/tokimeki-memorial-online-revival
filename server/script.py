@@ -475,6 +475,19 @@ def select_params(select: int, timer_count: int) -> bytes:
     query drew *three* — the script's own number, not thirty-two. The client
     caps to what the ``.ssb`` declares, so this end never has to know how many
     options there are, and ``select_query`` does not try to.
+
+    ⭐ **The scripts number their options the same way, and that is a separate
+    source.** Every ``INPUT_SELECT`` in the game's 683 client scripts is
+    preceded by exactly one ``SELITEM_DISP_FLAG`` write per option, and the
+    low five bits of those flag numbers are exactly ``0..n-1`` — 1853 of 1853,
+    no exception. Three complementary pairs of conditions (a ``<`` branch and
+    a ``>=`` branch on the same stat) land on the option the number names, and
+    the six option texts read correctly. So "bit k is option k" holds on the
+    wire *and* in the bytecode, established once from each end.
+
+    ⚠️ Knowing that does **not** let this end compute the mask: the flags are
+    written from expressions over the player's own stats, and nothing here
+    evaluates script arithmetic. ``select_query`` still sends every bit.
     """
     return struct.pack(">IQ", select & 0xFFFFFFFF, timer_count)
 
