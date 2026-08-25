@@ -277,13 +277,83 @@ def intimacy_needed(progress: int) -> int:
 # answer the player picked is not something this end sees yet, so see_main_event
 # grants nothing. ⚠️ That is a gap, not a decision: it is the one number in this
 # file that is known and still unused.
+# ────────────────────────────────────────────────────────────────────────────
+
+# 「プレイヤーの能力が低い間は見られないメインイベントもあります（そこからさらに
+# 仲良くなることはできません）」— the manual's other gate, and in the scripts it
+# is an `OP_RTN`: `<name>_s102` returns before the EVENT_CALL unless every 能力
+# it lists clears its number.
 #
-# Also still not modelled: 「プレイヤーの能力が低い間は見られないメインイベント
-# もあります」. The gate is real and readable — `amm_s102` bails out unless five
-# PC[0x310x] slots clear 3/4/5, and it guards exactly one event, her first —
-# but which five stats those slots are has not been pinned down (the shape
-# matches the six of chara_ability_type minus one, which is a shape, not a
-# judgement). Until it is, the gate stays absent rather than guessed.
+# ⭐ Which slots those are was open for three rounds. `PC[0x310i]` is
+# ``abilityParam[i]``, from the client's own dump string for fixedCharaData:
+#
+#     param = { abilityParam[tmn::NUM_OF_CHARA_ABILITY]              six
+#               personalityParam[tmn::CHARA_PERSONALITY_PLUS_TYPE]   four
+#               virtue, charm, stress, charaCondition, vitality, energy,
+#               agility, tokimekido[tmn::NUM_OF_CAPTURE_NPC] }       five
+#
+# Only two of those arrays are five long or more, and the five-long one —
+# ときめき度, one per candidate — is already `PC[0x392+i]`, the slot 日常会話
+# adds to. Reading 0x310i as that one would have 天宮's first event demand a
+# feeling for all five candidates at once, which is not a threshold, it is
+# nonsense. The four-long one is ruled out by the index: `amm_s102` reads
+# 0x3100 through 0x3104, one further than four axes go.
+#
+# ⭐⭐ The neighbouring family settles it from the other side. `PC[0x320i]` is
+# ``personalityParam[i]`` — un065 gates one choice on `>= 0` and another on
+# `< 0`, a pair that is only meaningful for a signed value, and abilityParam is
+# u16 on the wire. The axis it reads is 3, and axis 3 of
+# chara_personality_plus/minus_type is 良い子 / 悪い子; the two choices are
+# 「代わりに答える」above zero and 「先生に飛び蹴り」below it. Named axes, named
+# order, and the script agrees with both.
+#
+# ⚠️ レベル or raw value is NOT settled, and this end picks レベル. abilityParam
+# is 8.8 fixed point, so read raw these thresholds — 3, 4, 5, and 10 in un043's
+# バレンタイン — are cleared by a character who has never been to a lesson,
+# leaving the manual's sentence saying nothing. That is a judgement about which
+# reading leaves the gate a gate, not a decode of the shift.
+ABILITY_GATES = {
+    "天宮": {0: 5, 1: 3, 2: 5, 3: 3, 4: 5},
+    "桜井": {0: 4, 2: 3, 3: 4},
+}
+
+
+def ability_gate(name: str, progress: int) -> dict:
+    """``{ability index: レベル needed}`` before her next メインイベント plays.
+
+    Empty for the three candidates whose `_s102` carries no such test, and empty
+    at every step but the first, which is why this takes a progress and not just
+    a name. In both scripts that do carry one, the comparisons sit inside the
+    `c000[00d9] == 2` arm — 進行度 0 — between that test and `EVENT_CALL 0:1`
+    (`3:1` for 桜井). Her later events are gated on 親密さ alone.
+
+    ⭐ `0:1` is その２, not その１: `_s102` pairs `c000[00d9] == k` with event
+    id `k - 1` all the way up its ladder, so id = progress + 1, and 2.121 read
+    `0:10` off `lck_s102` as `amm_e011` = その１１ — ids are 0-based where その
+    is 1-based. その１ is id 0, which is exactly what `capture_npc` +394 names
+    as her 登場イベント. So the gate stands in front of the first main event
+    *after* her debut, and — a second source for the question see_main_event
+    leaves open — 進行度 counts events after that debut, not including it.
+    """
+    return dict(ABILITY_GATES.get(name, {})) if progress == 0 else {}
+
+
+def ability_short(name: str, progress: int, levels: "list[int] | None") -> dict:
+    """``{index: (have, need)}`` for the gated 能力 still below their number.
+
+    ``levels`` is AbilitySheet.levels(). ⚠️ ``None`` means the caller had no
+    sheet to read, and then this reports nothing rather than everything: a
+    character record this end failed to load is a fault here, and it should not
+    turn into a player who can never see an event.
+    """
+    if levels is None:
+        return {}
+    short = {}
+    for index, need in sorted(ability_gate(name, progress).items()):
+        have = levels[index] if index < len(levels) else 0
+        if have < need:
+            short[index] = (have, need)
+    return short
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -396,7 +466,8 @@ class Romance:
         return True
 
     def talk(self, name: str, today: str | None = None,
-             gain: int = GAIN_PLAIN) -> tuple[bool, bool]:
+             gain: int = GAIN_PLAIN,
+             levels: "list[int] | None" = None) -> tuple[bool, bool]:
         """One 日常会話 worth of 親密さ. Returns ``(changed, advanced)``.
 
         ``gain`` is what the script that just played is worth, which the caller
@@ -414,6 +485,13 @@ class Romance:
         day, so a repeat is worth the difference and a worse repeat is worth
         nothing. Returning ``(False, False)`` for that case is not an error —
         it is the manual's sentence happening.
+
+        ``levels`` is AbilitySheet.levels(), and it is the second gate: 親密さ
+        can be at the rung and her first メインイベント still not play, because
+        「能力が低い間は見られない」. 親密さ keeps climbing while that holds —
+        the script's `OP_RTN` skips the event, it does not refuse the
+        conversation — so this returns ``(True, False)``, the same shape as
+        being short of the rung.
         """
         row = self.state[name]
         if not row["debut"]:
@@ -429,10 +507,34 @@ class Romance:
         row["todayBest"] = gain
         if row["intimacy"] < intimacy_needed(row["progress"]):
             return True, False
+        if ability_short(name, row["progress"], levels):
+            return True, False
         # No subtraction: 親密さ is a running total and the next rung is higher,
         # not the same one again. What the old model called "carrying the
         # remainder over" was an artefact of the invented constant.
         return True, self.see_main_event(name)
+
+    def gate_of(self, name: str) -> dict:
+        """``{ability index: レベル needed}`` at her current 進行度, or ``{}``.
+
+        The module-level ability_gate() takes a progress because that is what it
+        keys on; this is the same question asked of a live sheet, and it exists
+        so callers do not have to reach into ``state`` to find the progress.
+        """
+        return ability_gate(name, self.state[name]["progress"])
+
+    def blocked_by_ability(self, name: str, levels: "list[int] | None") -> dict:
+        """``{index: (have, need)}`` when 能力 is what is holding her back.
+
+        Empty while 親密さ is still short of the rung: the two gates are both
+        real, but only one of them is ever the answer to 「なぜイベントが出ない」
+        at a time, and reporting the ability one before the intimacy one is met
+        would name a reason that is not yet operative.
+        """
+        row = self.state[name]
+        if not row["debut"] or row["intimacy"] < intimacy_needed(row["progress"]):
+            return {}
+        return ability_short(name, row["progress"], levels)
 
     def see_main_event(self, name: str) -> bool:
         """One メインイベント watched: she moves to the next spot.

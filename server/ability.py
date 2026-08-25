@@ -151,6 +151,21 @@ class AbilitySheet:
             "elapsedDays": self.elapsed_days,
         }
 
+    def levels(self) -> "list[int]":
+        """The six 能力 as レベル rather than as stored: ``(値 >> 8) + 1``.
+
+        The shift is the display's own rule, measured off the screen on thirty
+        points (see the module docstring). It is a method here because the
+        恋愛 ability gate compares against 3, 4, 5 and 10, and those are only
+        numbers on this side of it.
+
+        ⚠️ 値 ≥ 32768 draws by a different rule altogether — the one the module
+        docstring brackets but does not explain. This returns the shift for
+        those too, because the gate is a comparison against a small integer and
+        every reading of a value that large clears every gate anyway.
+        """
+        return [(value >> 8) + 1 for value in self.params[: len(ABILITIES)]]
+
     def result_params(self, test_level: int = 0) -> bytes:
         """MsgSvResultCharaMenuAbility, field by field in wire order.
 

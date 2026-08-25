@@ -1709,7 +1709,15 @@ class MpsServer:
             # clicked reaches here as `choice`. See romance.talk_gain — without
             # a click it falls back to the floor of what the script could give.
             gain = romance.talk_gain(talking_about, choice)
-            changed, advanced = love.talk(name, gain=gain)
+            # The second gate her first メインイベント has to clear: 「能力が低い
+            # 間は見られない」. Read here rather than inside Romance because the
+            # 能力 sheet is a different record on the same character; passing
+            # None would quietly disarm the gate, so this asks for the sheet
+            # even when there is none to be had.
+            sheet = self._chars(session).ability(session.chara_id)
+            levels = sheet.levels() if sheet else None
+            changed, advanced = love.talk(name, gain=gain, levels=levels)
+            short = love.blocked_by_ability(name, levels)
             # ⚠️ Five outcomes, and only two of them are holes in the wiring:
             # answers this end knows about that never arrived, and a click it
             # cannot place. Both credit the floor instead of a reading, so the
@@ -1733,6 +1741,15 @@ class MpsServer:
                 how = f"選択肢{choice}・加値に影響しない"
             note = f"日常会話+{gain}（{how}）" + (
                 " -> メインイベント!" if advanced else "")
+            if short:
+                # 親密さ is at the rung and the event still did not play. Say
+                # which 能力 and by how much, because from the outside this is
+                # indistinguishable from the counter being broken — which is
+                # exactly the reading the manual warns about:「そこからさらに
+                # 仲良くなることはできません」.
+                note += " ⚠️ 能力不足 " + " ".join(
+                    f"{ability.ABILITIES[index]}{have}/{need}"
+                    for index, (have, need) in short.items())
             if gain == 0:
                 # Worth saying, unlike the daily-rule case below: silence there
                 # means "already had her best today", silence here would look

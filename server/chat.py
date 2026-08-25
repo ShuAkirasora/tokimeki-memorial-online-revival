@@ -637,7 +637,19 @@ def respond(
             return Reply([f"「{name}」は恋愛候補生にない: "
                           + " ".join(romance.CANDIDATES)])
         if len(words) == 1:
-            return Reply([love.line(name)])
+            # One name gets the ability gate spelled out as well as the line;
+            # the no-argument listing above does not, because four of the five
+            # have no such gate and the fifth would be noise in a roster.
+            short = love.blocked_by_ability(
+                name, sheet.levels() if sheet is not None else None)
+            gate = love.gate_of(name)
+            out = [love.line(name)]
+            if gate:
+                out.append("必要能力 " + " ".join(
+                    f"{ability.ABILITIES[index]}{need}" for index, need in gate.items())
+                    + ("" if not short else " ⚠️ 不足 " + " ".join(
+                        f"{ability.ABILITIES[index]}{have}" for index, (have, _) in short.items())))
+            return Reply(out)
         verb, args = words[1].lower(), words[2:]
         if verb == "debut":
             changed = love.debut(name)
@@ -650,12 +662,30 @@ def respond(
                        "plain": romance.GAIN_PLAIN}
             if args and args[0].lower() not in quality:
                 return Reply(["/rom <名前> talk [best|plain|worst]"])
+            levels = sheet.levels() if sheet is not None else None
             changed, advanced = love.talk(
-                name, gain=quality[args[0].lower()] if args else romance.GAIN_PLAIN)
+                name, gain=quality[args[0].lower()] if args else romance.GAIN_PLAIN,
+                levels=levels)
             if not changed:
                 # Not a failure: 「一日に何度も…あまり上がりません」 means a
                 # repeat that is no better than today's best is worth nothing.
+                # ⚠️ Ahead of the ability gate on purpose: both can be true at
+                # once, and the daily rule is what just happened, while the gate
+                # is a standing condition /rom <名前> reports any time.
                 return Reply([f"今日はもう十分話した {love.line(name)}"])
+            short = love.blocked_by_ability(name, levels)
+            if short:
+                # 親密さ has reached the rung and her first メインイベント still
+                # will not play. Naming the shortfall is the whole point of the
+                # line: /ab is right here, so this is one command away from being
+                # acted on.
+                return Reply(
+                    ["能力不足でメインイベントに進めない: " + " ".join(
+                        f"{ability.ABILITIES[index]} {have}/{need}"
+                        for index, (have, need) in short.items()),
+                     love.line(name)],
+                    romance_save=True,
+                )
             if advanced:
                 # Worth saying out loud: this is the moment she moves, and the
                 # whole point of the intimacy counter is that it eventually does
