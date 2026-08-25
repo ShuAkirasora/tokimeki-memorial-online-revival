@@ -168,11 +168,29 @@ INTIMACY_STEP = 72  # the ladder the original server's gates climb
 #
 # The 327th names a script that is not in the client archive, and is left out
 # rather than guessed at: absent is not the same as worth nothing.
+#
+# `byChoice` is the second table, and it says which answer is worth which of
+# those values — 96 conversations, 31 that ask two lines and 65 that ask three.
+# It exists because the client reports the line the player clicked and this end
+# now carries that number to the end of the script; before round 173 it did not,
+# and a table nobody could read would have been shipped for nothing.
+#
+# ⚠️ The two are not the same fact seen twice. `gains` is what the script can
+# grant by any route, `byChoice` only what a click leads to, and three rows have
+# a value that is reachable but not by clicking anything — ink_c091 and its two
+# neighbours offer three answers all worth 12 and keep their 10 behind a gate of
+# their own. Two more rows ask a question whose answers are all worth the same,
+# which `gains` alone cannot tell apart from a conversation that never asked.
 TALK_GAIN_PATH = Path(__file__).resolve().parent.parent / "reference" / "intimacy.json"
 
 
-def _load_talk_gains() -> dict[tuple[int, int], list[int]]:
-    """``{(category, id): [every gain that conversation can grant]}``.
+def _load_talk_gains() -> tuple[dict, dict]:
+    """``({key: every gain it can grant}, {key: the gain per answer})``.
+
+    Two tables side by side rather than one table of pairs: the first has a row
+    for all 326 conversations, the second only for the 96 that ask something,
+    and keeping them apart is what makes a re-export show up in a diff as the
+    lines that actually changed.
 
     Silent when the file is absent, the way script.py's branch loader is: with
     no table every conversation falls back to GAIN_PLAIN, which is exactly what
@@ -180,40 +198,64 @@ def _load_talk_gains() -> dict[tuple[int, int], list[int]]:
     """
     try:
         raw = json.loads(TALK_GAIN_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    out = {}
-    for key, gains in raw.items():
-        category, num = key.split(":")
-        out[(int(category), int(num))] = list(gains)
-    return out
+        blocks = (raw["gains"], raw["byChoice"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}, {}
+    out: list[dict] = []
+    for block in blocks:
+        rows = {}
+        for key, gains in block.items():
+            category, num = key.split(":")
+            rows[(int(category), int(num))] = list(gains)
+        out.append(rows)
+    return out[0], out[1]
 
 
-TALK_GAINS = _load_talk_gains()
+TALK_GAINS, TALK_BY_CHOICE = _load_talk_gains()
 
 
-def talk_gain(key: tuple[int, int] | None) -> int:
+def talk_gain(key: tuple[int, int] | None, choice: int | None = None) -> int:
     """What the 日常会話 behind a capture_npc_event key is worth, this end's best.
 
     Exact for the 232 conversations that can only grant one number, which is
-    most of them and includes the 22 worth nothing at all.
+    most of them and includes the 22 worth nothing at all — and, since round
+    173, exact for the 94 that offer a choice as well, provided the player made
+    one. ``choice`` is the line the client reported in
+    MsgClResultScriptCommandSelect, and the scripts number their answers the
+    same way the wire does: each spells its choice out as an ascending run of
+    `E == 0`, `E == 1`, … comparisons, 96 scripts with no exception, which is
+    also what lets script.py's OP_BR chain heuristic count positions instead.
 
-    ⚠️ For the 94 that offer a choice this returns the **smallest** of their
-    values, and that is a floor rather than a reading: the player picked an
-    answer and this end cannot yet tell which. The floor is chosen over the old
-    flat 12 for two reasons — for 32 of the 94, 12 is not among the possible
-    values at all, so the old answer was one the script could never have given;
-    and crediting too little is something tomorrow's conversation repairs while
-    crediting too much is not.
-    ⭐ The scripts do say which answer is worth what, and it reads out cleanly;
-    what is missing is the wire, not the number. When the choice the client
-    reports is carried through to the end of the script this becomes exact and
-    the table grows a second column.
+    ⚠️ With no choice to go on this returns the **smallest** of the values, and
+    that is a floor rather than a reading. It is what a conversation with
+    answers falls back to when the select never arrives — the player closed the
+    box, or the script asked in a way this end did not follow. The floor is
+    chosen over the old flat 12 for two reasons: for 32 of the 94, 12 is not
+    among the possible values at all, so the old answer was one the script could
+    never have given; and crediting too little is something tomorrow's
+    conversation repairs while crediting too much is not.
+
+    A choice for a conversation that has no answer table, or one past the end of
+    the answers it does have, falls back the same way rather than guessing —
+    which of the two is a diagnostic worth keeping, so the caller logs it.
 
     An unknown key — nothing started by hand has one — falls back to GAIN_PLAIN.
     """
     gains = TALK_GAINS.get(key) if key is not None else None
+    if choice is not None:
+        answers = TALK_BY_CHOICE.get(key) if key is not None else None
+        if answers and 0 <= choice < len(answers):
+            return answers[choice]
     return min(gains) if gains else GAIN_PLAIN
+
+
+def talk_answers(key: tuple[int, int] | None) -> int:
+    """How many answers that conversation offers; 0 for the ones that just play.
+
+    Only the log uses it, and only to say whether a missing select is a
+    conversation that never asked or an answer that did not arrive.
+    """
+    return len(TALK_BY_CHOICE.get(key, ())) if key is not None else 0
 
 
 def intimacy_needed(progress: int) -> int:
@@ -357,12 +399,11 @@ class Romance:
              gain: int = GAIN_PLAIN) -> tuple[bool, bool]:
         """One 日常会話 worth of 親密さ. Returns ``(changed, advanced)``.
 
-        ``gain`` is what the script that just played is worth — GAIN_PLAIN for
-        the 209 scripts with no choice, GAIN_BEST / GAIN_PLAIN / GAIN_WORST for
-        the answer the player picked in the rest. This end does not yet read the
-        branch the client reports, so callers pass nothing and get the flat 12
-        that two thirds of the scripts grant anyway; the parameter is here so
-        that wiring it later is a call-site change and not a rewrite.
+        ``gain`` is what the script that just played is worth, which the caller
+        gets from talk_gain(): a flat number for the 232 conversations that have
+        only one, and since round 173 the value of the answer the player clicked
+        for the 94 that offer several. Callers that pass nothing get GAIN_PLAIN,
+        the flat 12 that two thirds of the scripts grant anyway.
 
         The day is the server's own calendar day. The game surely had its own
         clock — 校内マップ has seasons — but this end does not model one yet, and

@@ -534,19 +534,22 @@ It holds 5125 of the game's 15586 branches, and the other two thirds are left ou
 their conditions are script variables this end will always answer no to, and a no needs no
 target. It carries no text, no option wording, no cast and no instruction stream.
 
-**`intimacy.json`** — under 6 KiB: what one conversation with a romance candidate is worth.
+**`intimacy.json`** — under 9 KiB: what one conversation with a romance candidate is worth.
 The game has 327 of them and this end has to keep the score, because intimacy never crosses
 the wire: the client asks for a conversation by number, plays it, and says only that it
-finished. Each entry is that number and the values that conversation can add — most add a
-flat 12, 22 of them add nothing at all, and the ones that offer the player an answer add 10,
-12 or 15 depending on which. One of the 327 names a script the client archive does not
-contain and is left out rather than guessed at, because absent and worthless are not the same
-thing. Without the file every conversation is credited 12, including the ones worth nothing.
-It carries no dialogue, no answer wording and no character names.
+finished. It holds two tables keyed the same way. `gains` is the values a conversation can
+add — most add a flat 12, 22 of them add nothing at all, and the ones that offer the player
+an answer add 10, 12 or 15 depending on which. `byChoice` is which answer adds which, for
+the 96 conversations where that is a question worth asking; the client reports the line the
+player clicked, numbered the way the script numbers it, so this end can credit the right one.
+One of the 327 names a script the client archive does not contain and is left out rather than
+guessed at, because absent and worthless are not the same thing. Without the file every
+conversation is credited 12, including the ones worth nothing. It carries no dialogue, no
+answer wording and no character names.
 
-⚠️ Which answer the player picked does not reach the end of a script yet, so a conversation
-that offers a choice is credited the smallest of its values rather than the right one. That
-is a floor, chosen because the old flat 12 was not even a possible value for a third of them.
+A conversation that asks a question this end has no row for is credited the smallest of its
+values instead — a floor rather than a reading. That happens when the answer never arrives,
+and for the five conversations that ask something and pay nothing whichever line is taken.
 
 **`quizkeys.json`** — about 6 KiB: how many questions each of the 80 lesson categories holds,
 and the answers to the true-or-false half of the bank. A lesson message carries three numbers
@@ -606,7 +609,7 @@ the grade it awards is this server's own curve over the running score.
 | `warps go unchecked` in the log | `reference/mapgraph.json` missing |
 | every branch logs `fall-through`, choices do nothing | `reference/branches.json` missing |
 | `no question bank, no questions`, a lesson asks nothing | `reference/quizkeys.json` missing |
-| every conversation credits the same 12 intimacy, whichever one played | `reference/intimacy.json` missing |
+| every conversation credits the same 12 intimacy, whichever one played and whichever answer | `reference/intimacy.json` missing |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`
 marks a message this server has seen but does not answer yet.

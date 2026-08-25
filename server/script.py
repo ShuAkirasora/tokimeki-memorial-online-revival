@@ -536,7 +536,13 @@ class Runner:
         self.begun: tuple[int, int] | None = None
 
     def chose(self, result: int) -> None:
-        """Remember a MsgClResultScriptCommandSelect and start counting."""
+        """Remember a MsgClResultScriptCommandSelect and start counting.
+
+        ⚠️ What is remembered here lasts until the OP_BR chain consumes it, and
+        no longer. 親密さ is settled at NotifyScriptEnd, by which time this
+        Runner is gone, so the copy that survives the script is
+        `_Session.talking_choice` — do not move it back here.
+        """
         self.choice = result
         self.since_choice = 0
 

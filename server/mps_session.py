@@ -949,6 +949,12 @@ class _Session:
         # the NPC_EVENT_START branch, so that /sc-ing a conversation script by
         # hand does not count as having talked to anybody.
         self.talking_about: tuple[int, int] | None = None
+        # Which line the player clicked in that conversation, or None if it
+        # never asked or never got an answer. Lives here rather than on the
+        # Runner because all four NotifyScriptEnd paths drop the Runner before
+        # crediting, and this is the number the credit needs; _script_start
+        # clears it so a click cannot carry into the next script.
+        self.talking_choice: int | None = None
         # Chat lines that must wait for the map to come back. A NotifyScriptEnd
         # is followed by the client tearing the event screen down and reloading
         # the lobby, and anything said in that window is simply gone — the packet
@@ -1595,6 +1601,7 @@ class MpsServer:
         if found.script_id is None:
             return b""
         session.script = script.Runner(found, ctrl, npc_infos)
+        session.talking_choice = None
         print(
             f"[{self.tag}] script start {found.file} id={found.script_id} "
             f"ctrl={ctrl} npcInfo={npc_infos} ({len(found)} instructions)"
@@ -1683,6 +1690,7 @@ class MpsServer:
         them. Anything started by hand (/sc) has no key and credits nobody.
         """
         talking_about, session.talking_about = session.talking_about, None
+        choice, session.talking_choice = session.talking_choice, None
         if talking_about is None:
             return b""
         found = romance.whose_event(talking_about[0])
@@ -1696,19 +1704,45 @@ class MpsServer:
             changed, note = love.see_main_event(name), "メインイベント"
         else:
             # What this particular conversation is worth, out of the table
-            # rather than out of a constant: 22 of them grant nothing and the
-            # ones that offer a choice do not all include 12. See
-            # romance.talk_gain — for a conversation with answers it is still a
-            # floor, because which answer was clicked does not reach here yet.
-            gain = romance.talk_gain(talking_about)
+            # rather than out of a constant: 22 of them grant nothing, the ones
+            # that offer a choice do not all include 12, and which answer was
+            # clicked reaches here as `choice`. See romance.talk_gain — without
+            # a click it falls back to the floor of what the script could give.
+            gain = romance.talk_gain(talking_about, choice)
             changed, advanced = love.talk(name, gain=gain)
-            note = f"日常会話+{gain}" + (" -> メインイベント!" if advanced else "")
+            # ⚠️ Five outcomes, and only two of them are holes in the wiring:
+            # answers this end knows about that never arrived, and a click it
+            # cannot place. Both credit the floor instead of a reading, so the
+            # log marks them and leaves the ordinary three unmarked.
+            #
+            # ⭐ The last one is not a hole and looked like one until round 173
+            # watched it happen: five of the 22 conversations that never touch
+            # 親密さ at all still put a choice on the screen, and 16:1 — the one
+            # this server starts by default — is one of them. A conversation
+            # whose gain does not depend on the answer has no byChoice row by
+            # construction, so an answer arriving for one is expected, not a
+            # miss.
+            answers = romance.talk_answers(talking_about)
+            if choice is None:
+                how = f"⚠️ {answers}行の選択肢が未着" if answers else "選択肢なし"
+            elif 0 <= choice < answers:
+                how = f"選択肢{choice}"
+            elif answers:
+                how = f"⚠️ 選択肢{choice} は {answers} 行の範囲外"
+            else:
+                how = f"選択肢{choice}・加値に影響しない"
+            note = f"日常会話+{gain}（{how}）" + (
+                " -> メインイベント!" if advanced else "")
             if gain == 0:
                 # Worth saying, unlike the daily-rule case below: silence there
                 # means "already had her best today", silence here would look
                 # like the handler never fired. It is a table entry, not a miss.
+                # ⭐ Carrying `how` matters here and not only for show: this is
+                # the one line that prints whatever the daily rule decides, so
+                # it is where a stale choice bleeding in from the conversation
+                # before would be visible.
                 print(f"[{self.tag}] romance {name} 日常会話 {talking_about[0]}:"
-                      f"{talking_about[1]} grants nothing")
+                      f"{talking_about[1]} grants nothing（{how}）")
         if not changed:
             return b""
         self._chars(session).set_romance(session.chara_id, love)
@@ -1973,6 +2007,12 @@ class MpsServer:
                 return None
             (result,) = struct.unpack_from(">H", params, 0)
             session.script.chose(result)
+            # ⭐ Kept past the OP_BR chain that consumes it: `chose` arms a
+            # counter that `resolve_branch` disarms the moment it fires, and by
+            # the time the script ends the Runner is gone as well. 親密さ is
+            # settled at the end, not at the branch, so the number has to
+            # outlive both.
+            session.talking_choice = result
             print(f"[{self.tag}] ⭐ 選択肢 {result} が選ばれた")
             # ⭐ …and the client is still stopped. Answering what the command
             # asked for does not end it; only the closing bracket does, carrying
