@@ -642,7 +642,20 @@ def respond(
         if verb == "debut":
             changed = love.debut(name)
         elif verb == "talk":
-            changed, advanced = love.talk(name)
+            # Optional third word picks the answer quality, because the restored
+            # 日常会話 grants differ by answer (15 / 12 / 10) and the daily rule
+            # keeps only the best one. Without it: the flat 12 that two thirds of
+            # the scripts grant anyway.
+            quality = {"best": romance.GAIN_BEST, "worst": romance.GAIN_WORST,
+                       "plain": romance.GAIN_PLAIN}
+            if args and args[0].lower() not in quality:
+                return Reply(["/rom <名前> talk [best|plain|worst]"])
+            changed, advanced = love.talk(
+                name, gain=quality[args[0].lower()] if args else romance.GAIN_PLAIN)
+            if not changed:
+                # Not a failure: 「一日に何度も…あまり上がりません」 means a
+                # repeat that is no better than today's best is worth nothing.
+                return Reply([f"今日はもう十分話した {love.line(name)}"])
             if advanced:
                 # Worth saying out loud: this is the moment she moves, and the
                 # whole point of the intimacy counter is that it eventually does
@@ -653,13 +666,15 @@ def respond(
                 )
         elif verb == "ev":
             changed = love.see_main_event(name)
-        elif verb == "p":
+        elif verb in ("p", "i"):
+            setter = love.set_progress if verb == "p" else love.set_intimacy
             try:
-                changed = love.set_progress(name, int(args[0], 0)) if args else False
+                changed = setter(name, int(args[0], 0)) if args else False
             except ValueError:
-                return Reply(["/rom <名前> p <数>"])
+                return Reply([f"/rom <名前> {verb} <数>"])
         else:
-            return Reply(["/rom [名前] [debut|talk|ev|p <n>]"])
+            return Reply(
+                ["/rom [名前] [debut|talk [best|plain|worst]|ev|p <n>|i <親密さ>]"])
         return Reply([love.line(name)], romance_save=changed)
 
     if word == "card":

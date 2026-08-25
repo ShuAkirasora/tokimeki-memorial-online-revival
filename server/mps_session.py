@@ -1673,6 +1673,10 @@ class MpsServer:
         for scripts this end is driving and the fourth is /sce. Round 41 wired
         the other three, watched a whole conversation play, and credited nothing.
 
+        ⚠️ ``changed`` comes back False for a 日常会話 that is not this player's
+        best of the day with her — the scripts' own daily rule, not a miss. It
+        credits nothing and says nothing, which is correct; do not "fix" it.
+
         Which candidate comes from the capture_npc_event category we handed back
         when the talk started — not from who is standing nearby, which the server
         does not know, and not from the chibi's npcId, which is 1:0 for all of

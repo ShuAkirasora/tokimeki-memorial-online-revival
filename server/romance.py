@@ -14,16 +14,35 @@ what it cannot:
     4. 校内マップで恋愛候補生が立っている位置は、
        メインイベントを一つ見るごとに変わるようになっています。
 
-(1), (2) and (4) are **recoverable**: the debut event is a field in the game's
-own `capture_npc` record and the placement rule is stated outright, so `debut`
-and `progress` below are reconstruction. (3) is **not**: the manual gives the
-mechanism but no numbers, and there are none to find — see INVENTED below.
+All four are **recoverable**, and as of round 171 all four have been recovered.
+(1), (2) and (4) were always easy: the debut event is a field in the game's own
+`capture_npc` record and the placement rule is stated outright. (3) — 親密さ —
+was the hard one, and for a long time this file carried three invented numbers
+for it under a banner saying so.
 
-⭐ The distinction matters more than it looks. Round 39 spent itself on a
-question the manual had already answered, and the lesson taken was to check the
-sources before reverse-engineering. The other half of that lesson is this one:
-when the sources genuinely stop, say so in the file rather than letting a
-plausible constant pass for a recovered one.
+⭐ They are gone. The numbers were never missing; they were in a place nothing
+searched. The manual gives no figures, `capture_npc` has no threshold field and
+親密さ never crosses the wire — all true, all checked — but the *scripts* have
+it twice over, on both sides of the old client/server line:
+
+  * the original server's GS3 scripts gate each メインイベント on
+    ``PC[0x3920+i] >= 72 * progress`` (the opcode table gates);
+  * the client's own SSC 日常会話 scripts **add to that very same slot**, and
+    implement the manual's 「一日に何度も…あまり上がりません」 themselves
+    (the script data reader intimacy).
+
+Same slot on both sides, so no unit conversion is needed or wanted. The
+numbers are under RESTORED below; how they were read out is written up on the
+reverse-engineering side, under 恋愛 in the protocol notes.
+
+⭐ The lesson kept from round 39 was «check the sources before reverse
+engineering». Its other half was «when the sources stop, say so in the file
+rather than letting a plausible constant pass for a recovered one» — and this
+file did say so, in the three places it had to. What round 171 adds is the
+third half: **a source that has stopped is not the same as a source that has
+been looked at.** The banner should name the places already searched, so the
+next reader can see which one is still missing. It did, and the missing one was
+the scripts.
 """
 from __future__ import annotations
 
@@ -93,34 +112,68 @@ def whose_event(category: int) -> tuple[str, str] | None:
             return names[category - base], kind
     return None
 
-# ── INVENTED ────────────────────────────────────────────────────────────────
-# Everything above is reconstruction. These three are not: the manual says
-# 親密さ rises with 日常会話 and rises less when the same day's are repeated, and
-# it never says by how much. The numbers were checked for in all three places
-# they could have been and are in none of them:
+# ── RESTORED (round 171) ────────────────────────────────────────────────────
+# 親密さ, end to end. Three slots carry it, and both sides of the old
+# client/server line read the same one, so everything below is in one unit:
 #
-#   capture_npc_event  394 records, 24-byte tails fully accounted for
-#                      (filename, scriptId LE at +18, constant 1 at +20,
-#                      owning capture_npc index at +22) — no threshold field
-#   capture_npc        12 u16 pairs fully accounted for (debut event, the two
-#                      confession events and their おまけ, four gallery
-#                      entries, a text id that splits by sex) — no threshold
-#   the wire           MsgSvResultCaptureNpcList (0x4401) is a counted list of
-#                      `captureNpcId[%d]={%d,}` and nothing else: four bytes
-#                      per candidate, so 親密さ never crossed the network and
-#                      cannot be in the client either
+#   PC[0x3920+i]     親密さ for candidate i. The original server's GS3 scripts
+#                    gate on it; the client's 日常会話 scripts add to it.
+#   PCEV[0x6040+i]   the day her last 日常会話 landed, packed as
+#                    (year-2000)*512 + month*32 + day
+#   PCEV[0x6060+i]   the largest single grant already made to her *that day*
 #
-# So this curve is a guess that satisfies the manual's shape and no more. Change
-# it freely; nothing is being contradicted. What must NOT happen is someone
-# later reading these as recovered values.
-TALK_FIRST_OF_DAY = 3   # 「毎日少しずつでも話しかけることが大切」
-TALK_AGAIN_TODAY = 1    # 「一日に何度も繰り返しても、あまり上がりません」
-INTIMACY_PER_EVENT = 10  # 親密さ needed before the next メインイベント opens
+# ⚠️ It is a running total: nothing in either script set ever subtracts from it
+# or resets it, and the gates are absolute (`>=`), not per-step.
+GAIN_BEST = 15    # the best answer in a 日常会話 that offers a choice
+GAIN_PLAIN = 12   # a 日常会話 with no choice at all, and the middle answer
+GAIN_WORST = 10   # the worst answer
 #
-# Not modelled at all: 「プレイヤーの能力が低い間は見られないメインイベントも
-# あります」. The six abilities exist (chara_ability_type: 文系 理系 芸術 雑学
-# 運動 スタミナ) but this server has no ability values to gate on yet, so the
-# gate is absent rather than guessed. When abilities land, it goes here.
+# Those three are every value that occurs: 304 client 日常会話 scripts, one
+# parameter register each, 463 immediates between them, all 10 / 12 / 15
+# (the script data reader intimacy). 209 of the scripts have no choice and grant a
+# flat 12; the rest offer two or three answers.
+#
+# The daily rule is NOT «less the second time». Each script ends with the same
+# routine, and what it does is keep the best single grant of the day:
+#
+#     if PCEV[day] != today:  PC[intimacy] += X;  PCEV[day] = today
+#                             PCEV[best] = X
+#     elif PCEV[best] < X:    PC[intimacy] += X - PCEV[best]
+#                             PCEV[best] = X
+#     else:                   nothing at all
+#
+# So a second conversation the same day is worth the difference and no more,
+# and a third worse one is worth nothing. 「一日に何度も日常会話を繰り返しても、
+# あまり親密さは上がりません」, implemented rather than approximated.
+INTIMACY_STEP = 72  # the ladder the original server's gates climb
+
+
+def intimacy_needed(progress: int) -> int:
+    """親密さ required before the メインイベント after `progress` will play.
+
+    ``c000[00d9] == progress + 2 AND PC[0x3920+i] >= 72 * (c000[00d9] - 2)``,
+    i.e. 0, 72, 144, … — a straight line, not a constant.
+
+    ⭐ The ``+2`` is not assumed. `<name>_s101` — the script that answers «where
+    does she stand» — is a table of `(c000[00d9], map id)` pairs, and lining
+    those up against the placement keys in `cibi_control_script` matches on all
+    48 rows across the five candidates, with `c000[00d9] - 2` as the index into
+    her spots. Two tables that share no bytes agree on the offset.
+    """
+    return INTIMACY_STEP * max(0, progress)
+
+
+# メインイベント scripts grant 親密さ too, 0 / 12 / 24 by answer — but which
+# answer the player picked is not something this end sees yet, so see_main_event
+# grants nothing. ⚠️ That is a gap, not a decision: it is the one number in this
+# file that is known and still unused.
+#
+# Also still not modelled: 「プレイヤーの能力が低い間は見られないメインイベント
+# もあります」. The gate is real and readable — `amm_s102` bails out unless five
+# PC[0x310x] slots clear 3/4/5, and it guards exactly one event, her first —
+# but which five stats those slots are has not been pinned down (the shape
+# matches the six of chara_ability_type minus one, which is a shape, not a
+# judgement). Until it is, the gate stays absent rather than guessed.
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -186,6 +239,10 @@ class Romance:
                 "intimacy": int(row.get("intimacy", 0)),
                 "progress": int(row.get("progress", 0)),
                 "lastTalk": str(row.get("lastTalk", "")),
+                # The best single grant already made today — PCEV[0x6060+i].
+                # Absent from saves written before round 171; 0 is the value a
+                # fresh day would have anyway, so no migration is needed.
+                "todayBest": int(row.get("todayBest", 0)),
             }
 
     # ── reading ────────────────────────────────────────────────────────────
@@ -209,7 +266,7 @@ class Romance:
             return f"{name}=未登場"
         return (
             f"{name}=進行{row['progress']}/{CANDIDATES[name].events}"
-            f" 親密{row['intimacy']}/{INTIMACY_PER_EVENT}"
+            f" 親密{row['intimacy']}/{intimacy_needed(row['progress'])}"
             f" 位置4:{cibi_key(name, row['progress'])}"
         )
 
@@ -228,30 +285,59 @@ class Romance:
         self.state[name]["debut"] = True
         return True
 
-    def talk(self, name: str, today: str | None = None) -> tuple[bool, bool]:
+    def talk(self, name: str, today: str | None = None,
+             gain: int = GAIN_PLAIN) -> tuple[bool, bool]:
         """One 日常会話 worth of 親密さ. Returns ``(changed, advanced)``.
+
+        ``gain`` is what the script that just played is worth — GAIN_PLAIN for
+        the 209 scripts with no choice, GAIN_BEST / GAIN_PLAIN / GAIN_WORST for
+        the answer the player picked in the rest. This end does not yet read the
+        branch the client reports, so callers pass nothing and get the flat 12
+        that two thirds of the scripts grant anyway; the parameter is here so
+        that wiring it later is a call-site change and not a rewrite.
 
         The day is the server's own calendar day. The game surely had its own
         clock — 校内マップ has seasons — but this end does not model one yet, and
         borrowing the real date keeps 「毎日少しずつ」 meaning something instead
         of nothing. Swap it when a game clock exists.
+
+        ⚠️ The daily rule is the scripts' own: keep the best single grant of the
+        day, so a repeat is worth the difference and a worse repeat is worth
+        nothing. Returning ``(False, False)`` for that case is not an error —
+        it is the manual's sentence happening.
         """
         row = self.state[name]
         if not row["debut"]:
             return False, False
         today = today or date.today().isoformat()
-        gain = TALK_FIRST_OF_DAY if row["lastTalk"] != today else TALK_AGAIN_TODAY
-        row["lastTalk"] = today
-        row["intimacy"] += gain
-        if row["intimacy"] < INTIMACY_PER_EVENT:
+        if row["lastTalk"] != today:
+            row["lastTalk"] = today
+            row["todayBest"] = 0
+        credit = max(0, gain - row["todayBest"])
+        if credit == 0:
+            return False, False
+        row["intimacy"] += credit
+        row["todayBest"] = gain
+        if row["intimacy"] < intimacy_needed(row["progress"]):
             return True, False
-        # Carrying the remainder over rather than zeroing it: a conversation that
-        # overshoots should not be worth less than one that lands exactly.
-        row["intimacy"] -= INTIMACY_PER_EVENT
+        # No subtraction: 親密さ is a running total and the next rung is higher,
+        # not the same one again. What the old model called "carrying the
+        # remainder over" was an artefact of the invented constant.
         return True, self.see_main_event(name)
 
     def see_main_event(self, name: str) -> bool:
-        """One メインイベント watched: she moves to the next spot."""
+        """One メインイベント watched: she moves to the next spot.
+
+        ⚠️ Open question, round 171, deliberately not acted on: her *debut*
+        event is itself a メインイベント (その１ = category 0, id 0 — which is
+        exactly what `capture_npc` +394 points at), so playing it lands here and
+        counts as a step. The placement tables say the spot index counts main
+        events **after** the debut, which makes that one step too many. It does
+        not bite today, because initial_cast() marks the two starters as debuted
+        without anyone playing その１ — so the only way in is /sc by hand. Fixing
+        it means deciding what `progress` counts, and that is a change to what
+        saves mean; it wants its own round, not a line squeezed in here.
+        """
         row = self.state[name]
         if not row["debut"] or row["progress"] >= CANDIDATES[name].events:
             return False
@@ -269,6 +355,17 @@ class Romance:
         if row["progress"] == want:
             return False
         row["progress"] = want
+        return True
+
+    def set_intimacy(self, name: str, value: int) -> bool:
+        """Put 親密さ at a number. The counterpart of set_progress, and needed
+        for the same reason plus one more: the restored daily rule caps a day at
+        one conversation's worth, so climbing a 72-step ladder by talking would
+        take a rung per real day. Debut first, as with set_progress."""
+        row = self.state[name]
+        if not row["debut"] or row["intimacy"] == max(0, value):
+            return False
+        row["intimacy"] = max(0, value)
         return True
 
     def to_json(self) -> dict:
