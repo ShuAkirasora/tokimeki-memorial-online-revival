@@ -46,7 +46,9 @@ the scripts.
 """
 from __future__ import annotations
 
+import json
 from datetime import date
+from pathlib import Path
 from typing import NamedTuple
 
 SEX_MALE, SEX_FEMALE = 0, 1  # chara_sex.bin: 0 男 / 1 女 / 2 不詳
@@ -129,9 +131,11 @@ GAIN_PLAIN = 12   # a 日常会話 with no choice at all, and the middle answer
 GAIN_WORST = 10   # the worst answer
 #
 # Those three are every value that occurs: 304 client 日常会話 scripts, one
-# parameter register each, 463 immediates between them, all 10 / 12 / 15
-# (the script data reader intimacy). 209 of the scripts have no choice and grant a
-# flat 12; the rest offer two or three answers.
+# parameter register each, 463 immediates between them, all 10 / 12 / 15, and
+# not one of those immediates comes from anywhere but a constant. Two thirds of
+# the scripts have no choice and grant a flat 12; the rest offer two or three
+# answers. Which conversation grants what is in reference/intimacy.json — see
+# TALK_GAINS below, and note that a fourth value, 0, lives only there.
 #
 # The daily rule is NOT «less the second time». Each script ends with the same
 # routine, and what it does is keep the best single grant of the day:
@@ -146,6 +150,70 @@ GAIN_WORST = 10   # the worst answer
 # and a third worse one is worth nothing. 「一日に何度も日常会話を繰り返しても、
 # あまり親密さは上がりません」, implemented rather than approximated.
 INTIMACY_STEP = 72  # the ladder the original server's gates climb
+
+# ── Which conversation is worth what ────────────────────────────────────────
+# The three constants above are the whole value range, but they are not a rule:
+# each 日常会話 script carries its own number, and this end knows which script
+# just played — the client asks for a conversation by its capture_npc_event key
+# and that key is what mps_session hands back at NotifyScriptEnd. So the table
+# is keyed the way the protocol is, `"category:id"`, and holds nothing else.
+#
+# 326 of the game's 327 日常会話, and four values between them:
+#
+#   [12]           two thirds of them: one answer, one number
+#   [10, 15]       … or [10, 12, 15]: the answers are worth different amounts
+#   [0]            22 conversations that never touch 親密さ at all: the opening
+#                  lines of the two candidates who are there from the first day,
+#                  and one trio (c301-c303) belonging to each of the five
+#
+# The 327th names a script that is not in the client archive, and is left out
+# rather than guessed at: absent is not the same as worth nothing.
+TALK_GAIN_PATH = Path(__file__).resolve().parent.parent / "reference" / "intimacy.json"
+
+
+def _load_talk_gains() -> dict[tuple[int, int], list[int]]:
+    """``{(category, id): [every gain that conversation can grant]}``.
+
+    Silent when the file is absent, the way script.py's branch loader is: with
+    no table every conversation falls back to GAIN_PLAIN, which is exactly what
+    this server credited before the table existed.
+    """
+    try:
+        raw = json.loads(TALK_GAIN_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    out = {}
+    for key, gains in raw.items():
+        category, num = key.split(":")
+        out[(int(category), int(num))] = list(gains)
+    return out
+
+
+TALK_GAINS = _load_talk_gains()
+
+
+def talk_gain(key: tuple[int, int] | None) -> int:
+    """What the 日常会話 behind a capture_npc_event key is worth, this end's best.
+
+    Exact for the 232 conversations that can only grant one number, which is
+    most of them and includes the 22 worth nothing at all.
+
+    ⚠️ For the 94 that offer a choice this returns the **smallest** of their
+    values, and that is a floor rather than a reading: the player picked an
+    answer and this end cannot yet tell which. The floor is chosen over the old
+    flat 12 for two reasons — for 32 of the 94, 12 is not among the possible
+    values at all, so the old answer was one the script could never have given;
+    and crediting too little is something tomorrow's conversation repairs while
+    crediting too much is not.
+    ⭐ The scripts do say which answer is worth what, and it reads out cleanly;
+    what is missing is the wire, not the number. When the choice the client
+    reports is carried through to the end of the script this becomes exact and
+    the table grows a second column.
+
+    An unknown key — nothing started by hand has one — falls back to GAIN_PLAIN.
+    """
+    gains = TALK_GAINS.get(key) if key is not None else None
+    return min(gains) if gains else GAIN_PLAIN
 
 
 def intimacy_needed(progress: int) -> int:

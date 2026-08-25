@@ -257,6 +257,12 @@ MENU_ITEM_TALK = 400
 # It is one constant rather than a table because a table would have to be
 # invented: what actually picks the event on a real server is progress state
 # this end does not model. /nev changes it without a restart.
+#
+# ⚠️ 16:1 is one of the 22 conversations that grant no 親密さ at all
+# (romance.TALK_GAINS), so the conversation this server starts by default is
+# worth nothing and the log says so when it ends. That is the conversation
+# being what it is, not the credit path being broken; /nev 16 12 for one that
+# pays. It stays the default because it is the one measured to play.
 DEFAULT_NPC_EVENT = (16, 1)
 
 

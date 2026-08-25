@@ -1695,8 +1695,20 @@ class MpsServer:
         if kind == "main":
             changed, note = love.see_main_event(name), "メインイベント"
         else:
-            changed, advanced = love.talk(name)
-            note = "日常会話" + (" -> メインイベント!" if advanced else "")
+            # What this particular conversation is worth, out of the table
+            # rather than out of a constant: 22 of them grant nothing and the
+            # ones that offer a choice do not all include 12. See
+            # romance.talk_gain — for a conversation with answers it is still a
+            # floor, because which answer was clicked does not reach here yet.
+            gain = romance.talk_gain(talking_about)
+            changed, advanced = love.talk(name, gain=gain)
+            note = f"日常会話+{gain}" + (" -> メインイベント!" if advanced else "")
+            if gain == 0:
+                # Worth saying, unlike the daily-rule case below: silence there
+                # means "already had her best today", silence here would look
+                # like the handler never fired. It is a table entry, not a miss.
+                print(f"[{self.tag}] romance {name} 日常会話 {talking_about[0]}:"
+                      f"{talking_about[1]} grants nothing")
         if not changed:
             return b""
         self._chars(session).set_romance(session.chara_id, love)

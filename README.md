@@ -54,7 +54,7 @@ how the client communicates, for the purpose of interoperability: letting an exi
 program reach a server again.
 
 It contains no code, artwork, audio or text taken from KONAMI's software. It does contain
-two small tables of integers, read mechanically out of the client's data files, because
+three small tables of integers, read mechanically out of the client's data files, because
 there are decisions this server is asked to make that it cannot make without them — see
 [Reference data](#reference-data). Message names, map names and structure offsets appear
 here because they are the identifiers the protocol itself uses; a client will not accept any
@@ -518,14 +518,14 @@ puts them on the wire, so those names are unavailable no matter what the server 
 
 ## Reference data
 
-`reference/` holds three tables of integers, and each is something this server has to know in
+`reference/` holds four tables of integers, and each is something this server has to know in
 order to decide something.
 
 **`mapgraph.json`** — grid size, collision and doorways for the 78 maps. Without it the map
 graph is empty, the log says `warps go unchecked`, and moving between maps stops working.
 
-The other two were read out of the client's own data files rather than off the wire, and are
-here because watching the protocol cannot recover what they hold:
+The other three were read out of the client's own data files rather than off the wire, and
+are here because watching the protocol cannot recover what they hold:
 
 **`branches.json`** — where a cut-scene goes when the player picks option k, for the 209
 scripts that ask. Branch targets sit in an instruction's operands, and operands never travel
@@ -533,6 +533,20 @@ on the wire. Without it every branch falls through: scenes still play, choices s
 It holds 5125 of the game's 15586 branches, and the other two thirds are left out on purpose:
 their conditions are script variables this end will always answer no to, and a no needs no
 target. It carries no text, no option wording, no cast and no instruction stream.
+
+**`intimacy.json`** — under 6 KiB: what one conversation with a romance candidate is worth.
+The game has 327 of them and this end has to keep the score, because intimacy never crosses
+the wire: the client asks for a conversation by number, plays it, and says only that it
+finished. Each entry is that number and the values that conversation can add — most add a
+flat 12, 22 of them add nothing at all, and the ones that offer the player an answer add 10,
+12 or 15 depending on which. One of the 327 names a script the client archive does not
+contain and is left out rather than guessed at, because absent and worthless are not the same
+thing. Without the file every conversation is credited 12, including the ones worth nothing.
+It carries no dialogue, no answer wording and no character names.
+
+⚠️ Which answer the player picked does not reach the end of a script yet, so a conversation
+that offers a choice is credited the smallest of its values rather than the right one. That
+is a floor, chosen because the old flat 12 was not even a possible value for a third of them.
 
 **`quizkeys.json`** — about 6 KiB: how many questions each of the 80 lesson categories holds,
 and the answers to the true-or-false half of the bank. A lesson message carries three numbers
@@ -542,8 +556,8 @@ shuffles those itself and already knows where it dealt the right one. Without th
 lesson draws the room and then asks nothing. It carries no question text, no choice wording
 and no subject names.
 
-Neither means anything without your own copy of the game. What is deliberately not here is
-the other half of each: script text, choice prompts, the cast, event keys. Those are the
+None of them means anything without your own copy of the game. What is deliberately not here
+is the other half of each: script text, choice prompts, the cast, event keys. Those are the
 game's content rather than a rule this server applies, so `/scl` and `/sc <name>` need an
 export you make yourself and say so when there is none, and `/de` cannot name an event without
 its file, though a key given directly as `<genre>:<index>` is still sent.
@@ -563,7 +577,7 @@ the grade it awards is this server's own curve over the running score.
 | `set_auth_address.py` | the four-byte address change described above |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services themselves; `run_all.py` binds them all in one asyncio loop and `mps_session.py`, the packet layer, is the bulk of it |
-| `reference/` | the three tables above |
+| `reference/` | the four tables above |
 | `runtime/` | created on the first run: the log, the certificate, your characters, and the answers `play.py` remembers |
 | `screenshots/` | the four pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
@@ -592,6 +606,7 @@ the grade it awards is this server's own curve over the running score.
 | `warps go unchecked` in the log | `reference/mapgraph.json` missing |
 | every branch logs `fall-through`, choices do nothing | `reference/branches.json` missing |
 | `no question bank, no questions`, a lesson asks nothing | `reference/quizkeys.json` missing |
+| every conversation credits the same 12 intimacy, whichever one played | `reference/intimacy.json` missing |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`
 marks a message this server has seen but does not answer yet.
