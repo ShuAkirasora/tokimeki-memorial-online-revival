@@ -633,16 +633,16 @@ class Romance:
     def to_json(self) -> dict:
         return {**self.state, "letterEvent": self.letter_event}
 
-    # ── the locker scripts' view of all this ──────────────────────────────
-    def locker_cells(self, menu_item: int) -> dict:
-        """Every data cell `lck_s103` / `lck_s102` reads, as `gs3vm` wants it.
+    # ── the scripts' view of all this ─────────────────────────────────────
+    def data_cells(self) -> dict:
+        """Every data cell this record can answer, as `gs3vm` wants them keyed.
 
-        ⚠️ Deliberately complete rather than lazy: `gs3vm` raises on a cell it
-        was not given, and a missing cell should surface as a log line and a
-        fallback, not as a branch quietly taken the wrong way.
+        ⭐ Everything here is a number the save already holds; nothing is
+        invented to fill a hole. A script that asks for a cell not in here gets
+        `UnknownCell` from `gs3vm.Machine` or ⊤ from `gs3vm.Follower`, and both
+        of those are better than a zero that reads like an answer.
         """
         cells: dict = {
-            ("CTX", (CTX_MENU_ITEM, 0)): menu_item,
             ("PC", PC_PLAYER_SEX): self.player_sex,
             ("PC", PC_LETTER_EVENT): self.letter_event,
         }
@@ -655,6 +655,15 @@ class Romance:
                 row["progress"] + PROGRESS_OFFSET
             )
         return cells
+
+    def locker_cells(self, menu_item: int) -> dict:
+        """`data_cells` plus the one thing the engine, not the save, supplies.
+
+        ⚠️ Deliberately complete rather than lazy: `gs3vm` raises on a cell it
+        was not given, and a missing cell should surface as a log line and a
+        fallback, not as a branch quietly taken the wrong way.
+        """
+        return {**self.data_cells(), ("CTX", (CTX_MENU_ITEM, 0)): menu_item}
 
     def absorb(self, writes: dict) -> bool:
         """Take a script run's cell writes back into the save. True if changed."""

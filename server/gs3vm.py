@@ -37,6 +37,7 @@ than no answer:
 from __future__ import annotations
 
 import json
+from collections import Counter
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent / "runtime" / "scripts"
@@ -52,6 +53,28 @@ class UnknownCell(Exception):
 
 class Runaway(Exception):
     """The step budget ran out -- a loop this machine cannot get out of."""
+
+
+class _Top:
+    """A value this machine cannot produce. Never a number, never falsy-by-luck.
+
+    ⭐ It exists so that "I do not know" can travel through an expression
+    instead of being rounded to zero somewhere in the middle of one. Anything
+    arithmetic touches it with comes out as TOP again, and a branch that ends up
+    testing it is a branch this end cannot answer -- which is a thing worth
+    saying out loud rather than a coin to flip.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "⊤"
+
+    def __bool__(self):
+        raise UnsupportedOp("the truth of an unknown value was asked for")
+
+
+TOP = _Top()
 
 
 # Register categories, as the client's own decoder splits a 16-bit operand
@@ -70,9 +93,37 @@ DECL_COUNT_SHIFT = 3
 OP_DECL_VARIABLE = 0x9000
 OP_STR = 0x9001
 OP_RAND = 0x9010
+OP_SYNC_VARIABLE = 0x903F
 OP_JP, OP_BR, OP_BA = 0x9080, 0x9081, 0x9082
 OP_RTN, OP_END, OP_JS = 0x9083, 0x9084, 0x9085
+OP_BA_END = 0x90C0
 OP_EVENT_CALL = 0x9180
+
+# The choice box. The client stops dead on it and asks (0x721c); the answer is
+# a bitmask, one bit per option, and the options' own on/off flags are the
+# `SELITEM_DISP_FLAG` registers the script writes just before it. See
+# `Follower.select`.
+OP_INPUT_SELECT = 0x7000
+
+# Two register categories this end has to name, out of the eight the operand
+# encoding allows. 5 is SELITEM_DISP_FLAG -- one register per option of the
+# next choice box, and the low five bits of the number are the option number
+# (round 175). 6 is SELECT, where the client's answer lands: every one of the
+# 683 scenarios uses E0 for it, and the 38 that also use E1 are all multi-player
+# events -- which is a hint about where E1 comes from and not a reading of it,
+# so nothing here writes E1.
+CAT_SELITEM = 5
+CAT_SELECT = 6
+
+# What the client reports as it plays, and what that does *not* include.
+#
+# ⭐ Four of the five control-flow opcodes are reported every time they are
+# passed. `OP_BA` is not: its slot (0x735d27) reports only on the branch it
+# takes, and the fall-through half sends nothing at all. `OP_BA_END` is the
+# same shape and is not a branch to begin with. So a walk that steps over an
+# unreported `OP_BA` is not out of step -- the silence *is* the answer, which
+# is why `Follower` needs no 役柄 ID (see there).
+ALWAYS_REPORTED = {OP_JP, OP_BR, OP_RTN, OP_JS}
 
 # The three that exist only in the 95 server-side scripts. 0xc000/0xc001 are a
 # read/write pair over a slot space that is not player data -- it is what the
@@ -102,10 +153,22 @@ DATA_READ = {
 }
 DATA_WRITE = {op + 1: family for op, family in DATA_READ.items()}
 
+
+def _quotient(a: int, b: int) -> int:
+    """C truncating division, which is not Python's floor division."""
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
 ARITHMETIC = {
     0x9002: lambda a, b: a + b,
     0x9003: lambda a, b: a - b,
     0x9004: lambda a, b: a * b,
+    # ⚠️ Division by zero is a value nobody can name, so it becomes TOP rather
+    # than an invented answer or an exception -- the same rule as a cell this
+    # machine was not given.
+    0x9005: lambda a, b: TOP if b == 0 else _quotient(a, b),
+    0x9006: lambda a, b: TOP if b == 0 else a - _quotient(a, b) * b,
     0x9007: lambda a, b: 1 if (a or b) else 0,
     0x9008: lambda a, b: 1 if (a and b) else 0,
     0x9009: lambda a, b: 1 if a == b else 0,
@@ -115,6 +178,9 @@ ARITHMETIC = {
     0x900D: lambda a, b: 1 if a < b else 0,
     0x900E: lambda a, b: 1 if a <= b else 0,
 }
+
+# OP_NOT is the one that reads a single operand out of the same block.
+OP_NOT = 0x900F
 
 
 def _register(field: int) -> tuple[int, int]:
@@ -144,6 +210,13 @@ def _refer_register(args: bytes):
     return None if field & 0x1E else _register(field >> 5)
 
 
+def cell_name(family: str, address) -> str:
+    """`PC[0x3a04]` / `CTX[0xd900@0x11]` -- how a data cell is named in a log."""
+    where = (f"{address[0]:#06x}@{address[1]:#04x}"
+             if isinstance(address, tuple) else f"{address:#06x}")
+    return f"{family}[{where}]"
+
+
 def _ctx_address(args: bytes) -> tuple[int, int]:
     """A 0xc000 / 0xc001 address: (slot, subject). See the OP_CTX_* comment."""
     return int.from_bytes(args[2:4], "little"), int.from_bytes(args[4:6], "little")
@@ -159,9 +232,26 @@ class Script:
 
     def __init__(self, doc: dict) -> None:
         self.name = doc["name"]
+        # ⭐ "GSC" is one of the original server's own 95 scripts, "SSC" one of
+        # the client's 683 scenarios. Same bytecode, opposite sides of the wire,
+        # and that difference is the whole of `_uninstructed` below.
+        self.container = doc.get("container", "GSC")
+        # The two fields the 0x72xx handshake needs and the bytecode does not:
+        # the client names a scenario by number and reports its cursor in file
+        # bytes, while everything in here counts u16 words from the code
+        # section. None/0 for a server script, which the client never names.
+        self.script_id = doc.get("scriptId")
+        self.code_base = doc.get("codeBase", 0)
         self.labels = list(doc["labels"])
         self.code = [(ip, op, bytes.fromhex(args)) for ip, op, args in doc["code"]]
         self.index = {ip: i for i, (ip, _, _) in enumerate(self.code)}
+
+    def local_ip(self, wire: int) -> int:
+        """The client's cursor (file bytes) in this module's unit (u16 words)."""
+        return (wire - self.code_base) // 2
+
+    def wire_ip(self, ip: int) -> int:
+        return self.code_base + ip * 2
 
 
 def load(name: str) -> Script | None:
@@ -178,6 +268,22 @@ def load(name: str) -> Script | None:
     return Script(doc)
 
 
+def by_script_id(script_id: int) -> Script | None:
+    """The exported scenario the client is asking for, by the only name it uses.
+
+    Linear over a directory of a handful of files, like `script.by_script_id`
+    next door, and for the same reason: exports exist only on a machine that
+    made them, and a machine that made them has a few.
+    """
+    if not SCRIPT_DIR.is_dir():
+        return None
+    for path in sorted(SCRIPT_DIR.glob("*.gs3.json")):
+        found = load(path.name[: -len(".gs3.json")])
+        if found is not None and found.script_id == script_id:
+            return found
+    return None
+
+
 class Result:
     """What one run produced: menu keys offered, events called, cells written."""
 
@@ -185,6 +291,11 @@ class Result:
         self.menus: list[int] = []
         self.events: list[tuple[int, int]] = []
         self.writes: dict[tuple[str, int], int] = {}
+        # Cells the script wrote a value this machine could not produce into.
+        # Kept out of `writes` on purpose -- see the DATA_WRITE case.
+        self.unknown_writes: set[tuple[str, int]] = set()
+        # {opcode: how often it was stepped over}. See `Machine._uninstructed`.
+        self.passed: Counter = Counter()
 
     @property
     def menu(self) -> int | None:
@@ -209,6 +320,16 @@ class Result:
             f"menus={[hex(m) for m in self.menus]} "
             f"events={self.events} writes={sorted(self.writes)}"
         )
+
+    def summary(self) -> str:
+        """One line for a log: what a run produced, unknowns included."""
+        parts = [f"{family}[{slot:#06x}]={value}"
+                 for (family, slot), value in sorted(self.writes.items())]
+        parts += [f"{family}[{slot:#06x}]=⊤"
+                  for family, slot in sorted(self.unknown_writes)]
+        return ("writes: " + (" ".join(parts) if parts else "none")
+                + f" · stepped over {sum(self.passed.values())} client commands"
+                + f" ({len(self.passed)} kinds)")
 
 
 class Machine:
@@ -248,9 +369,9 @@ class Machine:
         try:
             return self.cells[(family, address)]
         except KeyError:
-            where = (f"{address[0]:#06x}@{address[1]:#04x}"
-                     if isinstance(address, tuple) else f"{address:#06x}")
-            raise UnknownCell(f"{self.script.name}: {family}[{where}]") from None
+            raise UnknownCell(
+                f"{self.script.name}: {cell_name(family, address)}"
+            ) from None
 
     # ── one instruction ───────────────────────────────────────────────────
     def _step(self, i: int) -> int | None:
@@ -277,8 +398,44 @@ class Machine:
 
         if op in ARITHMETIC:
             result, left, right = _arith_registers(args)
-            self.registers[result] = ARITHMETIC[op](self._get(left), self._get(right))
+            a, b = self._get(left), self._get(right)
+            self.registers[result] = (
+                TOP if a is TOP or b is TOP else ARITHMETIC[op](a, b)
+            )
             return i + 1
+
+        if op == OP_NOT:
+            # The one arithmetic instruction with a single source, read out of
+            # the same operand block as the rest.
+            result, left, _ = _arith_registers(args)
+            a = self._get(left)
+            self.registers[result] = TOP if a is TOP else (1 if a == 0 else 0)
+            return i + 1
+
+        if op == OP_RAND:
+            # ⭐ Taught rather than left to `_uninstructed`, and taught as
+            # unknown. The die belongs to this end -- the client's slot for it
+            # is a log stub like the rest of the arithmetic family -- but a
+            # machine that is *watching* a conversation and rolls its own would
+            # be reasoning about a different conversation from the one on the
+            # screen. "I do not know what it rolled" is the true answer here,
+            # and the day this end drives instead of watches is the day it
+            # becomes the wrong one.
+            self.registers[_arith_registers(args)[0]] = TOP
+            return i + 1
+
+        if op == OP_SYNC_VARIABLE:
+            # Which registers it synchronises is not in the operands: it is a
+            # run of entries in the .ssb's auxiliary table, which the export
+            # deliberately does not carry (the export exists so that this end
+            # needs no .ssb parser at all). ⛔️ So it raises instead of passing:
+            # letting it by would leave whatever the other player wrote sitting
+            # in a register as though this end had computed it.
+            raise UnsupportedOp(
+                f"{self.script.name}: SYNC_VARIABLE at ip={ip} -- its register "
+                f"list lives in the .ssb's auxiliary table, which the export "
+                f"does not carry"
+            )
 
         if op in DATA_READ:
             reg = _refer_register(args)
@@ -294,7 +451,16 @@ class Machine:
                 key = (DATA_WRITE[op], slot)
                 value = self._get(reg)
                 self.cells[key] = value
-                self.result.writes[key] = value
+                # ⚠️ A write of an unknown value is recorded apart from the
+                # rest, never among them: `Result.writes` is what a caller
+                # persists, and "the script wrote something here and this end
+                # could not say what" must not reach a save file as a number.
+                if value is TOP:
+                    self.result.unknown_writes.add(key)
+                    self.result.writes.pop(key, None)
+                else:
+                    self.result.writes[key] = value
+                    self.result.unknown_writes.discard(key)
             return i + 1
 
         if op == OP_CTX_REFER:
@@ -326,9 +492,40 @@ class Machine:
 
         if op == OP_BR:
             condition = self._get(_register(int.from_bytes(args[0:2], "little")))
+            if condition is TOP:
+                raise UnknownCell(
+                    f"{self.script.name}: OP_BR at ip={ip} tests a value this "
+                    f"machine could not produce"
+                )
             if condition:
                 return self.script.index.get(_jump_target(args))
             return i + 1
+
+        if op == OP_BA:
+            # 役柄 -- which part in the scene this client is playing -- is a
+            # byte the client reads out of itself (slot 0x735d27) and never
+            # puts on the wire. A machine running a script on its own cannot
+            # take this branch and will not invent a part to play. `Follower`
+            # can take it, and not by guessing either: see there.
+            raise UnsupportedOp(
+                f"{self.script.name}: OP_BA at ip={ip} needs a 役柄 ID this end "
+                f"was never told"
+            )
+
+        if op == OP_BA_END:
+            # ⛔️ Not a branch, despite the family it prints with. Its slot
+            # (0x73633d) tests the same 役柄 condition as OP_BA and then adds 4
+            # to the cursor either way; all the condition changes is which log
+            # line it writes and whether it reports.
+            return i + 1
+
+        if op == OP_INPUT_SELECT:
+            # A question for a player. A machine running by itself has nobody
+            # to ask, so it stops rather than picking a line.
+            raise UnsupportedOp(
+                f"{self.script.name}: INPUT_SELECT at ip={ip} is a question for "
+                f"a player"
+            )
 
         if op == OP_JS:
             number = int.from_bytes(args[0:2], "little") & 0x3FF
@@ -343,7 +540,47 @@ class Machine:
         if op == OP_END:
             return None
 
-        raise UnsupportedOp(f"{self.script.name}: op {op:#06x} at ip={ip}")
+        return self._uninstructed(i, ip, op)
+
+    # ── the opcodes this machine does not implement ───────────────────────
+    def _uninstructed(self, i: int, ip: int, op: int) -> int:
+        """What to do about an instruction this module was never taught.
+
+        ⚠️ A rule, deliberately, and not a list of opcodes that are safe to
+        step over. A list would have to grow by hand every time a scenario used
+        a command no earlier one had, and the run it stopped would say nothing
+        about why.
+
+        The rule is *which side of the wire the script belongs to*, and the
+        container says which:
+
+        ``GSC``
+            One of the original server's own 95 scripts. There is no client
+            half. Every command in one of those was this end's work, so a
+            command this module has not been taught is a hole in this module --
+            and the answer it would otherwise produce would be wrong in a way
+            nothing downstream could detect. It raises.
+
+        ``SSC``
+            One of the client's 683 scenarios. The client plays these: it loads
+            the backgrounds, moves the waist-ups, plays the sound, prints the
+            line, fades the screen. What it does *not* do is the arithmetic --
+            round 175 measured that the whole ``OP_STR``/arithmetic and
+            ``*_DATA_REFER`` family decodes to a log-and-advance stub, which is
+            why the register file was ever this end's business at all. So a
+            command this module has not been taught is, by that same reading,
+            one the client is doing itself, and the whole of this end's part in
+            it is to move the cursor past it.
+
+        ⚠️ "By that same reading" is where this could be wrong, so it is not
+        silent: every skip is counted by opcode in ``Result.passed``. The first
+        time a scenario command turns out to touch a register or a data cell,
+        its number is already in the log next to how often it went by.
+        """
+        if self.script.container != "SSC":
+            raise UnsupportedOp(f"{self.script.name}: op {op:#06x} at ip={ip}")
+        self.result.passed[op] += 1
+        return i + 1
 
     def run(self) -> Result:
         i: int | None = 0
@@ -352,6 +589,220 @@ class Machine:
                 return self.result
             i = self._step(i)
         raise Runaway(f"{self.script.name}: {self.STEP_BUDGET} steps and still going")
+
+
+# The two instructions the client stops dead on and waits for this end.
+STOPS = {OP_END, OP_INPUT_SELECT}
+
+
+class Follower(Machine):
+    """The same machine, walking in step with a client that plays the script.
+
+    The client runs a scenario out of its own copy of the .ssb and calls home
+    only when it reaches something it may not decide (round 37): it reports
+    ``OP_JP`` / ``OP_BR`` / ``OP_RTN`` / ``OP_JS`` as it passes them, reports
+    ``OP_BA`` and ``OP_BA_END`` only when their 役柄 test hits, and stops on
+    ``OP_BR`` and on the choice box until it is answered. Between two reports it
+    has executed a run of straight-line commands, and this class executes that
+    same run -- which is how a register file appears on this end without the
+    client ever sending one.
+
+    ⭐ **The walk is not new here and was not fitted here.** ``the script evaluator
+    replay`` drove exactly it over 48 real traces out of this server's own logs,
+    2051 reported instructions, and 36 of the 48 matched the client's own ip
+    sequence from the first instruction to the last. (The other 12 are log
+    fragments that do not begin at the top of a script, not disagreements.)
+
+    ⭐⭐ **It needs no 役柄 ID, and not by assuming one.** ``OP_BA``'s
+    fall-through sends nothing at all, so silence and a report are the two
+    answers to that test, and the client supplies whichever one applies. Worth
+    saying, because the obvious alternative -- assume the player is part 0 --
+    is right for a solo cutscene and silently wrong for a multi-player event.
+
+    ⚠️⚠️ **It follows, it does not steer.** Every branch goes where the server
+    actually sent the client, never where this machine's own arithmetic would
+    have gone; ``branch()`` reports the difference and changes nothing. That is
+    what makes this a shadow rather than a second opinion nobody asked for.
+
+    ⚠️ A cell nobody supplied reads as ``TOP`` here and is counted in
+    ``missing``, which is the opposite of ``Machine``'s rule. Deliberate:
+    ``Machine`` answers one question and a hole invalidates the answer, while
+    this one walks a whole conversation and a hole invalidates one branch of
+    it. Finding out which holes there are is most of what this mode is for.
+    """
+
+    def __init__(self, script: Script, cells: dict | None = None) -> None:
+        super().__init__(script, cells or {})
+        self.pos = 0
+        # Why this end lost its place, once it has. A shadow that no longer
+        # knows where it is must stop talking rather than start guessing, so
+        # every entry point below returns early once this is set.
+        self.lost: str | None = None
+        self.missing: Counter = Counter()      # cell name -> times asked for
+        self.selects: list[tuple[int, int, int, int]] = []
+        self.reported = 0
+
+    # -- the two rules that differ from a machine running on its own -------
+    def _cell(self, family: str, address) -> int:
+        if (family, address) not in self.cells:
+            self.missing[cell_name(family, address)] += 1
+            return TOP
+        return self.cells[(family, address)]
+
+    def _step(self, i: int) -> int | None:
+        if self.script.code[i][1] == OP_BA:
+            # Stepped over rather than reported => its 役柄 test did not hit
+            # => it fell through. `flowed` has the other half.
+            return i + 1
+        return super()._step(i)
+
+    # -- being told where the client is -----------------------------------
+    def _lose(self, why: str) -> str:
+        self.lost = why
+        return why
+
+    def at(self, ip: int, op: int) -> str | None:
+        """Walk to the instruction the client says it has reached.
+
+        None when this end arrived there too; otherwise the reason it could
+        not, which is also the end of this follower.
+        """
+        if self.lost:
+            return self.lost
+        self.reported += 1
+        target = self.script.index.get(ip)
+        if target is None:
+            return self._lose(f"ip={ip} is not an instruction start")
+        while self.pos != target:
+            here_ip, here_op, _ = self.script.code[self.pos]
+            if here_op in ALWAYS_REPORTED or here_op in STOPS:
+                return self._lose(
+                    f"walked onto {here_op:#06x} at ip={here_ip} on the way to "
+                    f"ip={ip}, and the client never reported it"
+                )
+            try:
+                nxt = self._step(self.pos)
+            except (UnsupportedOp, UnknownCell, Runaway) as exc:
+                return self._lose(str(exc))
+            if nxt is None or not 0 <= nxt < len(self.script.code):
+                return self._lose(f"ran off the end on the way to ip={ip}")
+            self.pos = nxt
+        here_op = self.script.code[self.pos][1]
+        if here_op != op:
+            return self._lose(f"ip={ip}: the client says {op:#06x}, "
+                              f"the export says {here_op:#06x}")
+        return None
+
+    def flowed(self) -> str | None:
+        """Follow the control-flow instruction the client resolved by itself."""
+        if self.lost:
+            return self.lost
+        ip, op, args = self.script.code[self.pos]
+        if op == OP_BA:
+            # Reported at all means it hit, so this is the branch half. The
+            # client has just said what its 役柄 is, in the only way this end
+            # ever gets to hear it.
+            nxt = self.script.index.get(_jump_target(args))
+        else:
+            try:
+                nxt = self._step(self.pos)
+            except (UnsupportedOp, UnknownCell, Runaway) as exc:
+                return self._lose(str(exc))
+        if nxt is None or not 0 <= nxt < len(self.script.code):
+            return self._lose(f"{op:#06x} at ip={ip} led nowhere this end knows")
+        self.pos = nxt
+        return None
+
+    def resumed(self, ip: int) -> str | None:
+        """Where the server has just sent the client. The shadow goes there."""
+        if self.lost:
+            return self.lost
+        found = self.script.index.get(ip)
+        if found is None:
+            return self._lose(f"the server answered ip={ip}, which is not an "
+                              f"instruction start")
+        self.pos = found
+        return None
+
+    # -- the two things worth reporting -----------------------------------
+    def branch(self) -> tuple:
+        """`(condition, where it would go)` for the OP_BR the client is on.
+
+        The condition is a number, or ``TOP`` when this end could not work it
+        out. ⚠️ Reports only. `script.Runner.resolve_branch` still answers the
+        client, byte for byte what it answered before this class existed.
+        """
+        if self.lost or self.script.code[self.pos][1] != OP_BR:
+            return None, None
+        args = self.script.code[self.pos][2]
+        try:
+            condition = self._get(_register(int.from_bytes(args[0:2], "little")))
+        except UnsupportedOp as exc:
+            self._lose(str(exc))
+            return None, None
+        return condition, _jump_target(args)
+
+    def select(self) -> tuple[int, int, int]:
+        """The mask for the choice box the client is stopped on, right now.
+
+        `(mask, unknown, options)`, one bit per option in each of the first two;
+        `unknown` marks the options this end could not work out.
+
+        ⛔️ Computed at the moment the box goes up and never stored. The flags a
+        script writes in front of a choice box are mostly `F<n> == 0` over
+        registers the script itself sets as the conversation goes -- "has this
+        answer been used yet" -- so *the mask of this select* is not a quantity
+        that exists. A loop that redraws the same box gets a different answer
+        the second time round, which is the whole reason this class walks along
+        instead of a table having been built once.
+        """
+        if self.lost or self.script.code[self.pos][1] != OP_INPUT_SELECT:
+            return 0, 0, 0
+        ip, _, args = self.script.code[self.pos]
+        # `+16` in the instruction is `(auxiliary word offset << 12) | count`,
+        # the same packing SYNC_VARIABLE uses; the operands here begin at `+2`.
+        options = int.from_bytes(args[14:18], "little") & 0x3F
+        mask = unknown = 0
+        for k in range(options):
+            value = self.registers.get((CAT_SELITEM, k), TOP)
+            if value is TOP:
+                unknown |= 1 << k
+            elif value:
+                mask |= 1 << k
+        self.selects.append((ip, mask, unknown, options))
+        return mask, unknown, options
+
+    def chose(self, option: int) -> str | None:
+        """The player clicked a line: it lands in E0 and the box is over."""
+        if self.lost:
+            return self.lost
+        if self.script.code[self.pos][1] != OP_INPUT_SELECT:
+            return self._lose("a choice came back but this end is not on a box")
+        self.registers[(CAT_SELECT, 0)] = option
+        self.pos += 1
+        return None
+
+    def describe(self) -> str:
+        """One line for the log: what this shadow has and has not got."""
+        if self.lost:
+            return f"out of step: {self.lost}"
+        where = (self.script.code[self.pos][0]
+                 if self.pos < len(self.script.code) else "-")
+        missing = ", ".join(f"{name}x{n}" for name, n in self.missing.most_common(8))
+        return (f"{self.script.name} ip={where} · {self.reported} reports · "
+                + (f"cells nobody supplied: {missing}" if missing
+                   else "every cell it asked for was supplied"))
+
+
+def follow(script_id: int, cells: dict | None = None) -> Follower | None:
+    """A follower for the scenario the client just asked to play, or None.
+
+    None means this machine has no export for that id, which is the ordinary
+    case for every copy of this server but the one that made them -- the same
+    way `mapgraph`'s graph and the branch table are optional.
+    """
+    script = by_script_id(script_id)
+    return Follower(script, cells) if script is not None else None
 
 
 def run(name: str, cells: dict[tuple[str, int], int]) -> Result | None:

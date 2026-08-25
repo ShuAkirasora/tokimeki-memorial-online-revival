@@ -1584,6 +1584,50 @@ class MpsServer:
         lines, session.pending_say = session.pending_say, []
         return b"".join(self._say(session, 0, line) for line in lines)
 
+    # ── the shadow VM ────────────────────────────────────────────────────
+    #
+    # ⭐ What it is: a second machine running the same scenario the client is
+    # playing, one instruction run at a time, fed by the client's own progress
+    # reports. It exists because the register file the scripts compute over was
+    # this end's business all along (round 175) and this end has never had one:
+    # every OP_BR has been answered with a shrug and every choice box offered
+    # with every line on.
+    #
+    # ⚠️⚠️ What it is NOT, this round: an answer. Nothing below changes a byte
+    # that goes out. `resolve_branch` still falls through, `select_query` still
+    # sends every bit. All the shadow does is say, in the log, what it would
+    # have answered -- next to what was actually sent and next to what ends up
+    # on the screen.
+    def _shadow_start(self, session: "_Session", script_id: int) -> None:
+        """Arm a follower for the scenario about to play, if we have it.
+
+        The cells come from the player's own 恋愛 record and nowhere else --
+        every number in there is one the save already holds. Whatever a script
+        asks for beyond that reads as ⊤ and is counted, which is the point:
+        the log ends up naming the cells this end would have to be able to
+        answer before any of this could decide anything.
+        """
+        runner = session.script
+        if runner is None:
+            return
+        love = self._chars(session).romance(session.chara_id)
+        runner.shadow = gs3vm.follow(script_id, love.data_cells() if love else {})
+        if runner.shadow is None:
+            print(f"[{self.tag}] vm: id={script_id} is not in runtime/scripts "
+                  f"— no shadow for this one")
+
+    def _shadow_at(self, session: "_Session", local_ip: int, op: int):
+        """Walk the shadow to where the client says it is. None if it cannot."""
+        runner = session.script
+        shadow = runner.shadow if runner is not None else None
+        if shadow is None or shadow.lost:
+            return None
+        why = shadow.at(local_ip, op)
+        if why is None:
+            return shadow
+        print(f"[{self.tag}] ⚠️ vm out of step: {why}")
+        return None
+
     def _script_start(
         self,
         session: "_Session",
@@ -1607,6 +1651,7 @@ class MpsServer:
             f"[{self.tag}] script start {found.file} id={found.script_id} "
             f"ctrl={ctrl} npcInfo={npc_infos} ({len(found)} instructions)"
         )
+        self._shadow_start(session, found.script_id)
         return self._answer(
             session,
             seen,
@@ -2036,10 +2081,16 @@ class MpsServer:
                 return None
             wire_ip, op = struct.unpack_from(">IH", params, 0)
             found = session.script.script
-            here = found.at(found.local_ip(wire_ip))
-            where = f"ip={found.local_ip(wire_ip)} (wire {wire_ip})"
+            local = found.local_ip(wire_ip)
+            here = found.at(local)
+            where = f"ip={local} (wire {wire_ip})"
             print(f"[{self.tag}] script at {where} op=0x{op:04x} "
                   f"{here[2] + ' ' + here[3] if here else '<not an instruction start>'}")
+            shadow = self._shadow_at(session, local, op)
+            if shadow is not None and op not in (script.OP_BR, script.OP_END):
+                # Everything but the two the client waits on it resolved by
+                # itself, so the shadow resolves it the same way and moves on.
+                shadow.flowed()
             if op == script.OP_END:
                 # ⭐ The script says it is over, and until the server agrees the
                 # client holds the event screen up with nothing on it — a black
@@ -2047,6 +2098,12 @@ class MpsServer:
                 # this makes the client ask for the map back with 0x4000 of its
                 # own accord, which is how the player gets out of the cutscene.
                 print(f"[{self.tag}] script reached OP_END -> NotifyScriptEnd")
+                if shadow is not None:
+                    # ⭐ The whole point of a shadow, in one line: what a
+                    # register file on this end would have had to say, and
+                    # which cells it would have needed to say it.
+                    print(f"[{self.tag}] vm {shadow.describe()}")
+                    print(f"[{self.tag}] vm {shadow.result.summary()}")
                 session.script = None
                 # ⭐ This is the end that actually happens. The client runs the
                 # script itself (round 37) and reports OP_END here, so the two
@@ -2070,6 +2127,25 @@ class MpsServer:
             other = "" if taken is None else f" 分岐先は ip={found.local_ip(taken)}"
             print(f"[{self.tag}] script branch -> wire {target} "
                   f"(ip={found.local_ip(target)}, {why}){other}")
+            if shadow is not None:
+                # ⚠️ Reported, not obeyed. The answer that goes out is the one
+                # `resolve_branch` just produced; this line says what the
+                # script's own arithmetic makes of the same question, so that
+                # the two can be compared against a screen before either one is
+                # allowed to move.
+                condition, would = shadow.branch()
+                if condition is gs3vm.TOP:
+                    print(f"[{self.tag}] vm cond=⊤ — this branch is not answerable here")
+                elif condition is not None:
+                    # OP_BR_WIDTH is in the client's unit (file bytes) and this
+                    # line is in ours (u16 words), hence the halving.
+                    goes = would if condition else local + script.OP_BR_WIDTH // 2
+                    print(f"[{self.tag}] vm cond={condition} -> ip={goes}"
+                          + (" = what was sent" if goes == found.local_ip(target)
+                             else " ⚠️ NOT what was sent"))
+                # And then it goes where the client was actually sent, which is
+                # what keeps it in step with a screen it does not control.
+                shadow.resumed(found.local_ip(target))
             return self._answer(session, seen,
                                 script.MSG_SV_NOTIFY_SCRIPT_COMMAND_BRANCH,
                                 script.branch_params(target))
@@ -2105,6 +2181,8 @@ class MpsServer:
             # outlive both.
             session.talking_choice = result
             print(f"[{self.tag}] ⭐ 選択肢 {result} が選ばれた")
+            if session.script.shadow is not None:
+                session.script.shadow.chose(result)
             # ⭐ …and the client is still stopped. Answering what the command
             # asked for does not end it; only the closing bracket does, carrying
             # the Begin's own {ip, op} back. Without this the box vanishes and
@@ -2134,6 +2212,17 @@ class MpsServer:
         select, timer = script.select_query()
         if session.select_override is not None:
             select, timer = session.select_override
+        shadow = self._shadow_at(session, local_ip, gs3vm.OP_INPUT_SELECT)
+        if shadow is not None:
+            mask, unknown, options = shadow.select()
+            # ⚠️ Reported, not sent: `select` above is still SELECT_ALL. ⛔️ And
+            # not cached either -- a script that redraws the same box after an
+            # answer has been used gets a different mask the second time, which
+            # is why this is asked at the box rather than looked up.
+            print(f"[{self.tag}] vm select mask={mask:#x} of {options} options"
+                  + (f" ⊤={unknown:#x}" if unknown else " (no ⊤)")
+                  + (" = same as what is sent" if mask == (1 << options) - 1
+                     else " ⚠️ narrower than what is sent"))
         # The export no longer decides the answer, only what the log can say
         # the box is about to show. Having no entry is ordinary — a stub has
         # none — so it is reported as an absence rather than as a fault.

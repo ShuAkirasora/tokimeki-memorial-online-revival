@@ -547,6 +547,19 @@ class Runner:
         # because the release has to echo it back verbatim, and the client is
         # the only one who knows which instruction it stopped on.
         self.begun: tuple[int, int] | None = None
+        # ⭐ A `gs3vm.Follower` walking the same script alongside the client,
+        # or None when this machine has no export of it.
+        #
+        # ⚠️⚠️ **It decides nothing.** `resolve_branch` and `select_query`
+        # below answer exactly what they answered before it existed; this only
+        # watches, so that what a register file on this end would have said can
+        # be read off a log and compared against a screen before any of it is
+        # allowed to matter. The reason for doing it in that order is not
+        # caution: the first two things that were checked against the outside
+        # world (an arithmetic table, a walk over recorded ip traces) both leave
+        # "does it keep up with a real conversation" untested, and this is the
+        # cheapest way to test it.
+        self.shadow = None
 
     def chose(self, result: int) -> None:
         """Remember a MsgClResultScriptCommandSelect and start counting.
