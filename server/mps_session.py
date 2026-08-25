@@ -1635,6 +1635,7 @@ class MpsServer:
         found: "script.Script",
         ctrl: int,
         npc_infos: list[tuple[int, int]],
+        cast_players: bool = False,
     ) -> bytes:
         """Arm a script and offer it to the client with MsgSvRequestScriptReady.
 
@@ -1642,21 +1643,35 @@ class MpsServer:
         asked for and a script we pushed by hand go out identically — if they
         behave differently, that difference is about the state the client is in
         and not about which line of ours sent it.
+
+        ``cast_players`` fills ``pcInfo[]``, and only a ドラマイベント wants it:
+        those scripts name no actors of their own because their cast is the
+        players. Everything else leaves it empty, which is the byte-for-byte
+        message that has always gone out.
         """
         if found.script_id is None:
             return b""
+        pc_infos: list[tuple[int, bytes]] = []
+        if cast_players:
+            # ⭐ 役柄 1 is whoever started it. There is no second entry yet:
+            # the other player would come from the party the matching screen
+            # builds, and that screen cannot be opened on this server.
+            info = self._chars(session).find(session.chara_id)
+            if info is not None:
+                pc_infos.append((1, info))
         session.script = script.Runner(found, ctrl, npc_infos)
         session.talking_choice = None
         print(
             f"[{self.tag}] script start {found.file} id={found.script_id} "
-            f"ctrl={ctrl} npcInfo={npc_infos} ({len(found)} instructions)"
+            f"ctrl={ctrl} npcInfo={npc_infos} pcInfo={[a for a, _ in pc_infos]} "
+            f"({len(found)} instructions)"
         )
         self._shadow_start(session, found.script_id)
         return self._answer(
             session,
             seen,
             script.MSG_SV_REQUEST_SCRIPT_READY,
-            script.ready_params(found.script_id, npc_infos),
+            script.ready_params(found.script_id, npc_infos, pc_infos),
         )
 
     def _script_command(self, session: "_Session", seen: int, action) -> bytes:
@@ -1944,7 +1959,22 @@ class MpsServer:
             # back "受信ハンドラが設定されていません".
             npc_event_id = struct.unpack_from(">H", params, 0)[0] if params else 0
             reply = self._answer(session, seen, script.MSG_SV_OK_NPC_EVENT_START, b"")
-            found = script.by_script_id(npc_event_id)
+            found = None
+            if script.FORCED_NEXT_SCRIPT is not None:
+                # ⭐ `/sc next` armed a different script. This is the only place
+                # a ドラマイベント can be started from, because the ids the
+                # client can ask for never name one — see FORCED_NEXT_SCRIPT.
+                # It disarms itself here so a forced start never outlives the
+                # one right-click that was meant to carry it.
+                wanted, script.FORCED_NEXT_SCRIPT = script.FORCED_NEXT_SCRIPT, None
+                found = script.load(wanted)
+                # ⚠️ `is not None`, not truthiness: Script defines __len__, so
+                # an export with no instructions in it is falsy.
+                print(f"[{self.tag}] npc event {npc_event_id} -> forced {wanted}"
+                      + ("" if found is not None else " (no export; falling back)"))
+            forced = found is not None
+            if found is None:
+                found = script.by_script_id(npc_event_id)
             if found is None:
                 # ⭐ No export for this id, so push a stub instead of giving up.
                 # The client has already read the id out of its own table and
@@ -1963,7 +1993,8 @@ class MpsServer:
             # scripts can all say NPC#1 and still be 223 different people.
             infos = [(actor["actorId"], actor["id"]) for actor in found.actors]
             session.talking_about = session.npc_event
-            return reply + self._script_start(session, seen, found, 0, infos)
+            return reply + self._script_start(session, seen, found, 0, infos,
+                                              cast_players=forced)
 
         if msg_type == script.MSG_CL_REQUEST_NPC_EVENT_END:
             # ⚠️ The client only sends this after an event that started from a
@@ -2174,6 +2205,19 @@ class MpsServer:
             found = session.script.script
             local = found.local_ip(wire_ip)
             session.script.begun = (wire_ip, op)
+            if op == script.OP_PLAYER_WAIT_TIME and script.RELEASE_PLAYER_WAIT:
+                # ⭐ The wait a ドラマイベント is paced by. With one player in
+                # the script there is nobody to wait for, so the release goes
+                # out at once, as the same closing bracket a choice box gets.
+                shadow = self._shadow_at(session, local, op)
+                if shadow is not None:
+                    shadow.flowed()
+                session.script.begun = None
+                print(f"[{self.tag}] PLAYER_WAIT_TIME ip={local} — 参加者は 1 人、"
+                      f"その場で解除")
+                return self._answer(session, seen,
+                                    script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
+                                    script.command_end_params(wire_ip, op))
             if op != script.OP_INPUT_SELECT:
                 print(f"[{self.tag}] script begin ip={local} op=0x{op:04x} "
                       f"— 応答未実装、待たせたまま")

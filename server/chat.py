@@ -253,11 +253,13 @@ HELP = (
     "/smenu [<キー>] 0x6302 で返す sub_menu (既定 2 ロッカー・手紙メニュー)",
     "/evend [auto|manual] 0x5603 の返し方 (manual は返事なし、/raw で手動終了)",
     "/sc <名前|scriptId> [ctrl] [actor:npcId] 台本開始",
+    "/sc next <名前|off> 次の会話イベントをこの台本にすり替える",
     "/scn 次の命令へ  /sce 台本終了  /scl 一覧",
     "/scb [<scriptId> <ip> <分岐先>|clear] OP_BR を強制 (無引数で一覧、既定なし)",
     "/sel [<select> [timer]] 選択肢を問い直す (無引数で既定に戻す)",
     "/de [<genre>:<番号>|un007 …] ドラマ一覧通知",
     "/dms マッチング画面を開かせる (0xe002+0xe003+0xe004)",
+    "/pwt [on|off] PLAYER_WAIT_TIME に 0x721d を返すか (既定 off)",
 )
 
 # MsgSvNotifyNpcControl — the message that puts a chibi NPC on the map.
@@ -1973,6 +1975,20 @@ def respond(
         words = rest.split()
         if not words:
             return Reply([f"/sc <名前|scriptId> [ctrl] [actor:npcId]  例: /sc amm_s001"])
+        if words[0] == "next":
+            # Arm the swap instead of pushing now. An unprompted 0x7200 does
+            # nothing (round 35), so a script that no `*_npc_event` record names
+            # -- every ドラマイベント -- can only be started by answering the
+            # client's own 0x5600 with it. See script.FORCED_NEXT_SCRIPT.
+            if len(words) != 2:
+                return Reply(["/sc next <名前|off>  例: /sc next un111"])
+            if words[1] == "off":
+                script.FORCED_NEXT_SCRIPT = None
+                return Reply(["すり替えなし"])
+            if script.load(words[1]) is None:
+                return Reply([f"台本が見つからない: {words[1]}"])
+            script.FORCED_NEXT_SCRIPT = words[1]
+            return Reply([f"次の会話イベント -> {words[1]}"])
         if words[0].isdigit():
             # ⭐ A bare id starts a stub: no cast and no instruction list, but
             # the branches of the shipped table if the id is in it (see
@@ -2056,6 +2072,17 @@ def respond(
             sends=[(script.MSG_SV_QUERY_SCRIPT_COMMAND_SELECT,
                     script.select_params(select, timer))],
         )
+
+    if word == "pwt":
+        # ⭐ The knob that tells "the wait has not elapsed" apart from "nobody
+        # is going to end it". Off is the factory answer and the state the
+        # client was first measured in; on sends the closing bracket the moment
+        # the Begin arrives, which is what a one-player barrier means.
+        words = rest.split()
+        if words and words[0] in ("on", "off"):
+            script.RELEASE_PLAYER_WAIT = words[0] == "on"
+        return Reply([f"PLAYER_WAIT_TIME: "
+                      + ("解除する" if script.RELEASE_PLAYER_WAIT else "待たせたまま")])
 
     if word == "dms":
         # The whole opening bracket of the matching screen, unprompted. The

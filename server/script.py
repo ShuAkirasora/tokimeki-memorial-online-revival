@@ -102,6 +102,7 @@ from __future__ import annotations
 
 import json
 import struct
+from collections.abc import Sequence
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent / "runtime" / "scripts"
@@ -143,6 +144,24 @@ BRANCHES = _load_branches()
 # wrong answer, and the cheapest way to find out what the right one plays is to
 # force it once and watch.
 FORCED_BRANCHES: dict[int, dict[int, int]] = {}
+
+# The script pushed in place of the one the client just asked for, or None for
+# the factory behaviour, which is to answer 0x5600 with the id the client read
+# out of its own event record. Set from `/sc next`, cleared the moment it is
+# used, and None on every start.
+#
+# ⭐ Why it has to exist at all: a script only ever runs as the *answer* to the
+# client asking for one (round 35 measured what an unprompted 0x7200 does --
+# it strips the extension, opens `data/sound/se/<name>_sdlist.snl`, and stops:
+# no .arc, no Ok, no Ng). The ids the client can ask for come from the four
+# `*_npc_event` tables, whose records name scripts in the 0x2000/0x4000/0x6000/
+# 0x8000 ranges. The 22 ドラマイベント live in `drama_event.bin` with ids 2..68
+# and are reached through the matching screen, and that screen hangs off
+# `menu_item` 19 ドラママッチング, which sits only on the three 先生 menus --
+# and no 先生 can be put on a map (none of the 44 non-恋愛候補生 placement
+# scripts has a MAP_CHARA_DISP_ON). So there is no id the client can be made to
+# ask for that names a drama script; swapping the answer is the only way in.
+FORCED_NEXT_SCRIPT: str | None = None
 
 MSG_SV_REQUEST_SCRIPT_READY = 0x7200
 MSG_CL_OK_SCRIPT_READY = 0x7201
@@ -190,6 +209,25 @@ OP_JS = 0x9085
 # stops dead on it. `the script exporter` carries its prompt and its options
 # along in the JSON, so this end can name what it is answering.
 OP_INPUT_SELECT = 0x7000
+
+# The other command that stops the client dead, and the one that makes a
+# ドラマイベント playable at all. ⚠️ Its name is PLAYER_WAIT_TIME and not
+# PLAYER_SYNC: the two are neighbours (0x9100 is PLAYER_SYNC) and the one the
+# client actually stops on is this one. It carries a count -- un111 asks for
+# 0x32 twice in its opening -- and there is a PLAYER_WAIT_TIME_LOCAL beside it
+# in the same opcode table, which is the reason to read this one as "wait, and
+# let the server decide when the wait is over": the local variant is the one
+# that does not need anybody.
+#
+# It arrives as a 0x721c Begin exactly the way INPUT_SELECT does, so what
+# releases it is the same closing bracket, 0x721d carrying the Begin's {ip, op}.
+OP_PLAYER_WAIT_TIME = 0x9101
+
+# Whether to send that closing bracket at all. ⚠️ Off is the state the client
+# was measured in first: it sits on the Begin and nothing happens, which is
+# indistinguishable from "the wait has not elapsed yet" until somebody waits
+# longer than the count asks for.
+RELEASE_PLAYER_WAIT = False
 
 # How far past an OP_BR its fall-through lies. OP_BR is 8 bytes wide, and the
 # client counts ip in file bytes, so "condition not taken" is br + 8. Verified
@@ -432,15 +470,47 @@ def stub(script_id: int) -> Script:
                    "codeBase": 0, "actors": [], "instructions": []})
 
 
-def ready_params(script_id: int, npc_infos: list[tuple[int, int]]) -> bytes:
+def pc_info_entry(actor_id: int, info: bytes) -> bytes:
+    """One ``pcInfo[]`` entry: an actorId and the character behind it.
+
+    ⭐ It is the character-creation block minus its first byte, and that is not
+    a coincidence to be trimmed later -- it is what the reader asks for. From
+    0x8e8120, per entry and in order: u16 actorId, three fixed 11-byte names,
+    u16 sex, u16 bloodType, u8 birthMonth, u8 birthDay, sixteen u16 (the nine
+    ``looks`` then the seven ``accessory``), u16 charaType. That is 75 bytes,
+    and ``parse_create_info`` reads the same fields in the same order after
+    ``charaFrameId`` -- which is byte 0 and the only one not in this message.
+
+    ⚠️ Both counted arrays in 0x7200 are read into fixed room: pcInfo has four
+    entries' worth (0x136 - 6 over a 0x4c stride) and npcInfo four (0x148 -
+    0x138 over 4), and the reader tests neither count against them. Four is
+    also how many 役柄 the client has names for (``win_baloon_text`` 168-171),
+    so the ceiling is the game's, not a buffer that happens to be that size.
+    ⛔️ Never send more than four of either.
+    """
+    if len(info) != 74:
+        raise ValueError(f"create info is {len(info)}B, expected 74")
+    return struct.pack(">H", actor_id) + info[1:74]
+
+
+PC_INFO_MAX = 4
+
+
+def ready_params(script_id: int, npc_infos: list[tuple[int, int]],
+                 pc_infos: Sequence[tuple[int, bytes]] = ()) -> bytes:
     """A MsgSvRequestScriptReady body.
 
-    ``pcInfo[]`` goes out empty. Its entries carry a whole character-creation
-    block each and the player's own character is already in the scene, so there
-    is nothing this end could put there that the client does not have; if it
-    turns out to want one, that is what the Ng reason is for.
+    ``pcInfo[]`` is empty for everything a single player starts on his own: his
+    character is already in the scene and there is nothing this end could put
+    there that the client does not have. ⭐ A ドラマイベント is the case that
+    needs it -- the cast of one of those is the *players*, which is why all 22
+    of them name no actors in their own headers, and the other player is
+    somebody this client has never been sent.
     """
-    body = struct.pack(">HH", script_id, 0)
+    cast = list(pc_infos)[:PC_INFO_MAX]
+    body = struct.pack(">HH", script_id, len(cast))
+    for actor_id, info in cast:
+        body += pc_info_entry(actor_id, info)
     body += struct.pack(">H", len(npc_infos))
     for actor_id, npc_id in npc_infos:
         body += struct.pack(">HH", actor_id, npc_id)
