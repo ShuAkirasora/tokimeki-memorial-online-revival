@@ -2399,12 +2399,17 @@ class MpsServer:
                     # die there is not: the client's OP_RAND slot is a stub, so
                     # declining does not defer to the side that knows, it picks
                     # the fall-through arm every run (`gs3vm._Die`).
-                    # ⚠️ `decided_road` deliberately does NOT gate this one:
-                    # the six coin flips that matter hand out キーワード, which
-                    # is a persistent write and therefore forbidden there --
-                    # gating on it would refuse exactly the branches a die is
-                    # for. What still outranks it is the same thing that
-                    # outranks the case below: `why == STANDING_NO`.
+                    # ⚠️ `decided_road` deliberately does NOT gate this one,
+                    # and the reason is the question above, not the destination:
+                    # a die has no other side to defer to at all.
+                    # ⚠️⚠️ Round 193 gave a second reason -- 「the six coin flips
+                    # hand out キーワード, which that gate forbids」 -- and round
+                    # 195 retired it: the gate now admits a road that writes only
+                    # キーワード (`gs3vm._undecidable`), so these branches would
+                    # pass it too. ⛔️ The carve-out stays anyway; it is about
+                    # 「is there anybody else who could answer」 and always was.
+                    # What still outranks it is the same thing that outranks the
+                    # case below: `why == STANDING_NO`.
                     heads = self._script_die(session, wire_ip)
                     if heads:
                         target = found.wire_ip(goes_to)

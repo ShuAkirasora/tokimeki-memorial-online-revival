@@ -262,9 +262,12 @@ DATA_WRITE = {op + 1: family for op, family in DATA_READ.items()}
 
 # ⭐ The キーワード pair, named apart because `Machine` decodes their operands
 # by a layout of their own (see the KEYWORD_OPS case). ⚠️ They stay in
-# DATA_READ/DATA_WRITE as well, because for every *other* purpose -- above all
-# `_undecidable`, which has to keep refusing a branch that hands somebody a
-# キーワード -- 0x8185 is exactly what it looks like: a write that persists.
+# DATA_READ/DATA_WRITE as well: for every purpose but one, 0x8185 is exactly
+# what it looks like -- a write that persists, and `Result.keywords` is how it
+# reaches a save.
+# ⚠️⚠️ The one exception is `_undecidable`, which since round 195 lets a branch
+# through whose road writes ONLY this. ⛔️ That is argued there and nowhere
+# else; do not read it back into this comment as 「キーワード is not a write」.
 OP_KEYWORD_REFER, OP_KEYWORD_UPDATE = 0x8184, 0x8185
 KEYWORD_OPS = (OP_KEYWORD_REFER, OP_KEYWORD_UPDATE)
 
@@ -429,15 +432,51 @@ def _undecidable(op: int) -> bool:
     run the line was suppressed by a constant (2.150). ⇒ the choice is not
     「decide or leave it alone」, it is 「a computed answer or a fixed one」.
 
-    ⭐ Measured before it was changed, with `the road-gate study`, whose
-    variant E is exactly this set: 7966 branches admitted with 台詞 forbidden,
-    10455 with it allowed, out of 16313 in 778 scripts. ⚠️ Re-run, do not quote.
+    ⭐⭐⭐ Round 195 applied that same sentence to ONE opcode of the write half,
+    `PC_KEYWORD_UPDATE`, because the same tutorial turned out to be paying for
+    it in the save rather than on the screen (2.151):
 
-    ⭐ What stays forbidden is what it always was: anything that writes a cell
-    (`DATA_WRITE`, キーワード included), calls another event, puts a choice box
-    on the screen, or turns on 役柄 -- the four that reach the save, the story
-    ladder, or the other player.
+      * `amm_e001` ip=554 and `skr_e001` ip=640 guard 「`F1 == 0` ⇒ hand out the
+        six」 -- the tail fallback for a player the scenario has not already
+        given them to. The evaluator answers it exactly (`vm cond=1`), this gate
+        refused it because `PC_KEYWORD_UPDATE` sits on the road, and the client
+        was sent the other arm ⇒ a character who plays the long tutorial and
+        answers 「説明してもらわなくていい」 ended it with **none**. Round 194 saw
+        exactly that on a real client and read it as a scenario condition.
+      * ⛔️ There is no such condition. `<name>_e001` calls the granting
+        subroutine from THREE places -- the skip arm, the mid-scenario
+        explanation, and this fallback -- and between them they cover every
+        route the scenario can end on. The original granted on all of them.
+
+    ⭐⭐ Why this opcode and not the family it sits in, which stays forbidden:
+
+      * This end already hands out キーワード from a scenario (`_script_keywords`,
+        round 193), and the six `OP_RAND` branches INSIDE that very subroutine
+        have always been answered here, because `_Die` is deliberately not gated
+        by `_decided_road`. Deciding WHICH キーワード while refusing to decide
+        WHETHER any is handed over at all is one policy, not two.
+      * A キーワード is SET MEMBERSHIP and `Membership.owns_keyword` gates the
+        grant, so the worst a wrong answer does is add one the scenario itself
+        names on that road. The rest of `DATA_WRITE` is QUANTITY -- 親密さ,
+        進行度, the per-day gain ceiling -- where a wrong answer moves a number
+        and no idempotence catches it.
+      * ⭐ Measured, which is why the line is at one opcode: dropping the whole
+        family admits far more, and the overwhelming majority of those extra
+        roads write `PC[0x392x]` / `PCEV[0x606x]`, the 日常会話 好感度 machinery,
+        which is gameplay, and not this end's to decide.
+
+    ⭐ What protects a save here is not this test but the one before it:
+    `_decided_road` is consulted only when the shadow's verdict is definite, and
+    definite means computed over registers the scenario itself declared
+    (`OP_DECL_VARIABLE` zero-fills them, so `F1 == 0` is the scenario's own
+    starting value and not an assumption made here) plus cells this end actually
+    supplied -- an unsupplied cell reads ⊤ and refuses on its own.
+
+    ⭐ `the road-gate study` prints all of it: variant E is the set before
+    this change, F the whole family dropped, G this one. ⚠️ Re-run, do not quote.
     """
+    if op == OP_KEYWORD_UPDATE:
+        return False
     return op in DATA_WRITE or op in (OP_EVENT_CALL, OP_INPUT_SELECT, OP_BA)
 
 
