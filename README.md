@@ -103,9 +103,12 @@ the turn that caused them, a result screen, and a player who drops out halfway c
 the end rather than stranding everybody else.
 
 **Scripted events.** The client plays a cut-scene out of its own copy of the game and stops
-at every branch to ask this end which way to go — which is how the original worked, since
-the client's own arithmetic instructions are logging stubs that evaluate nothing. So the
-register file is here, and with it: right-click conversations with the candidates who have
+at every branch to ask this end which way to go — which is where that decision always
+belonged, since the client's own arithmetic instructions are logging stubs that compute
+nothing. Most of those answers come off the branch table; one narrow family of them — the
+switch that picks which backdrop a conversation opens on — comes from `server/gs3vm.py`,
+which runs the script's arithmetic alongside the client and so holds the register file the
+client never had. Between them: right-click conversations with the candidates who have
 appeared, the choice boxes inside them and the intimacy each answer is worth, the opening
 tutorial, the letter in the classroom lockers, the drama events, and the ending with its
 staff roll. Two of the scripts running here are the *original server's* own — the pair
