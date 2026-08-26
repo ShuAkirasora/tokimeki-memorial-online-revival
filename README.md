@@ -4,7 +4,8 @@ A from-scratch server for *Tokimeki Memorial ONLINE* (KONAMI, 2006–2007, servi
 written so that a surviving copy of the original client has something to connect to again.
 
 Run it on your own machine, point your own copy of the client at it, and you can log in,
-create a character, and walk around the school.
+create a character, go to school, sit through a lesson, and play a club match against
+somebody on a second machine.
 
 <!-- HTML rather than markdown for the width="50%": all four shots are 1280x960, and a
      markdown table would size its columns from the caption text instead. -->
@@ -54,7 +55,7 @@ how the client communicates, for the purpose of interoperability: letting an exi
 program reach a server again.
 
 It contains no code, artwork, audio or text taken from KONAMI's software. It does contain
-three small tables of integers, read mechanically out of the client's data files, because
+four small tables of integers, read mechanically out of the client's data files, because
 there are decisions this server is asked to make that it cannot make without them — see
 [Reference data](#reference-data). Message names, map names and structure offsets appear
 here because they are the identifiers the protocol itself uses; a client will not accept any
@@ -63,16 +64,65 @@ other wording for them.
 *Tokimeki Memorial* is a trademark of KONAMI. This project is not affiliated with, endorsed
 by, or connected to KONAMI in any way.
 
+## What works
+
+Every line below is something a client has been watched doing against this server. What
+they do *not* add up to is the first bullet of the next section.
+
+**Getting in.** The update check, the authentication step, the login-server lookup, and the
+login, game and school servers behind it. Registration codes are issued here and bound to a
+KONAMI ID; an account keeps its own characters and its own saves, and several accounts can
+be on the server at once. Choosing a school, making a character, deleting one, going to
+school, logging out from the options window, and coming back to the square you left.
+
+**The campus.** Walking, the doorways and staircases between the 78 maps, and both your
+position and your map kept across a logout. Two players standing on the same map see each
+other and share the chat bar along the bottom, and either can right-click the other for the
+six-slot interaction menu behind it: the address book (ask, accept, decline, remove), the
+friendly group (found one, invite, accept, expel, leave, disband, hand the leadership on,
+set its catchphrase and whether it is listed), a name card, the career card with an
+achievement list under it, and a report card that opens only if the person it belongs to
+ticked the box for it.
+
+**School.** The timetable is the client's own, and the bells ring off it without being
+asked — a warning bell, a start bell, and if you are sitting in your own classroom when the
+second one goes, you are in the lesson. Ten questions, true-or-false and multiple choice,
+the eight help skills, the separate chat bar a lesson has of its own, and a result screen at
+the end. An exam period puts a twenty-question paper with a ten-minute clock through the
+same doorway, and the marks land on the report card. Behind all of it: the six ability
+parameters, stress and condition, and the injury that comes of training while carrying too
+much of both.
+
+**Clubs.** Joining one of the eight and leaving it, the club-deck window's three lists —
+keywords, club skills with the level each has reached, and the three decks they go into —
+and the item window's six tabs, where a thing can be worn, used, thrown away, or put in the
+locker the whole account shares. A training room goes up on the noticeboard, other players
+join it, and the match that follows runs its full eight turns: the cards each side plays,
+the order they resolve in, the effects and reactions they draw, status ailments that outlast
+the turn that caused them, a result screen, and a player who drops out halfway carried to
+the end rather than stranding everybody else.
+
+**Scripted events.** The client plays a cut-scene out of its own copy of the game and stops
+at every branch to ask this end which way to go — which is how the original worked, since
+the client's own arithmetic instructions are logging stubs that evaluate nothing. So the
+register file is here, and with it: right-click conversations with the candidates who have
+appeared, the choice boxes inside them and the intimacy each answer is worth, the opening
+tutorial, the letter in the classroom lockers, the drama events, and the ending with its
+staff roll. Two of the scripts running here are the *original server's* own — the pair
+behind the row of lockers that decides whether a letter is waiting — read out of the game's
+data and run on this side, which is the side they always ran on.
+
 ## What this is not
 
-- **Not a restored game.** What works today: logging in, creating a character, walking
-  around, moving between maps, position persistence, chat, putting NPCs on the map, a report
-  card and a timetable, the class bells, and a romance state stored per character. Nearly all
-  of it is driven by hand from the chat console; there is no game loop tying it together. The
-  original server's own logic — how NPCs behaved, when events fired, what advanced the
-  dating-sim progression — did not survive alongside the client, and none of it is
-  reimplemented here. What you get is a campus you can walk into and a set of levers, not a
-  game you can play through.
+- **Not a restored game.** [What works](#what-works) is a list of subsystems, and a list of
+  subsystems is not a game. A good deal of it now happens through the client's own windows —
+  the bells ring by themselves, a lesson runs from the seat to the result screen, a whole
+  club match is played without touching the console — but the campus is still populated by
+  hand, every scripted event is still started by hand, and whatever decided *when* a story
+  happened has no counterpart here. The original server's own logic — how NPCs moved, what
+  fired an event, what advanced the dating-sim progression — did not survive alongside the
+  client, and none of it is reimplemented here. What you get is a school you can walk into
+  and spend an afternoon in, not a game you can play through.
 - **Not a service.** This repository is the software, and nothing here is or will be sold.
   It does not hand out a server to join: running one is something you do on your own
   machine, which is what the whole of *Connecting a client* is about.
@@ -344,10 +394,14 @@ Coming back to that page with the same id and key shows the same code again rath
 issuing a second one, so a lost code is not a lost account, and a reloaded page is not an
 error.
 
-Plain HTTP, and it has to be: the certificate the game insists on is 1024-bit RSA signed
-with SHA-1, which no current browser will open. So the personal key crosses that connection
-in the clear — nothing when the browser is on the server's own machine, a password in
-plaintext when it is not. **Pick one you do not use anywhere else.**
+Plain HTTP unless you give it something better, and the certificate the game insists on is
+no help: 1024-bit RSA signed with SHA-1, which no current browser will open. So by default
+the personal key crosses that connection in the clear — nothing when the browser is on the
+server's own machine, a password in plaintext when it is not. **Pick one you do not use
+anywhere else.** A server people reach over the internet can put an ordinary modern
+certificate in front of that one page with `--registration-cert fullchain.pem
+--registration-key privkey.pem`; it is a separate certificate from the one the game speaks
+to, and it changes nothing about the game's own connection.
 
 Originally the code came printed in the box and the player bound it to their KONAMI ID on
 KONAMI's website, and both halves are still here separately: `issue_code.py` is the
@@ -490,28 +544,73 @@ carries on.
 
 Typed into the game's own chat bar and handled by this server. They are a console for driving
 the protocol rather than gameplay: most of them exist because sending a message by hand was
-the only way to find out what the client would do with it.
+the only way to find out what the client would do with it. `/cmds` prints the whole list
+inside the game, which is the copy that cannot go stale; the tables below are the same list,
+grouped.
+
+**Where you are.**
 
 | Command | Effect |
 |---|---|
-| `/cmds` | list them in the game |
 | `/go <map name or id> [x y]` | move to a map |
 | `/pos` | print where you are |
 | `/maps <name>` | search the map table |
 | `/dirs` | drop a marker for each of the sixteen direction values |
+| `/act [<first>]` | the same ruler for the `action` field, sixteen values at a time |
+
+**What a character has.** Each of these reads a sheet the client draws somewhere and writes
+it back to the save.
+
+| Command | Effect |
+|---|---|
+| `/rom [name] [debut\|talk\|ev\|p <n>]` | read and move the romance state |
+| `/couple [<charaId>\|clear]` | the couple flag, and who the partner is |
+| `/card [ruler\|clear\|<subject> …]` | the report card |
+| `/ab [ruler\|clear\|p <six values>\|<ability> <n>]` | ability parameters, stress, condition, days |
+| `/opt [<row> on\|off\|clear]` | the four options rows, per character |
+| `/career [title\|visits\|hours\|add\|del\|probe …]` | the career card and the achievements under it |
+| `/post [class <key>\|club <n>\|clear]` | the two posts printed on the name card |
+| `/buka [<1-8>\|part\|clear]` | join a club, or leave one |
+| `/kw [n <count>\|add\|del\|deck <0-2> …]` | keywords owned, and what sits in each deck |
+| `/cs [n <count>\|add\|del\|deck <0-2> …]` | club skills owned, and how complete each one is |
+| `/item [sample\|n <count>\|add\|del\|probe]` | the inventory, by tab |
+| `/locker [n <count>\|add\|del\|clear]` | the locker the whole account shares |
+| `/group [create\|join\|leave\|disband\|hand\|qual]` | the friendly-group store |
+
+**School.**
+
+| Command | Effect |
+|---|---|
+| `/jikan [day]` | the timetable |
+| `/bell [<subject>\|ready\|force\|ng <n>\|imp <n>]` | ring the warning and start bells by hand |
+| `/lopt [seats\|speech\|words\|lunch] <n>` | knobs on the lesson message |
+| `/quiz [sec <n>\|wait <n>\|ab …]` | the question in progress and which choice is right; timers |
+| `/skill [<refusal> <reason>\|clear]` | what a refused help skill puts on screen |
+| `/exam [on\|off\|ready\|force\|ans\|sec <n>]` | the exam period, its bell, the answers, the clock |
+
+**NPCs, scripts and events.**
+
+| Command | Effect |
+|---|---|
 | `/npc <cat>:<id> [<cat>:<id>]` | put an NPC on the map; a second key names a script |
 | `/npca [<first> <last> [category]]` | place every romance candidate who has appeared |
 | `/npcx` | stop replacing them |
-| `/rom [name] [debut\|talk\|ev\|p <n>]` | read and move the romance state |
 | `/nev [<cat>:<id>]` | set the conversation-event key |
-| `/card [...]` | the report card |
-| `/jikan [day]` | the timetable |
-| `/bell [<subject>\|ready]` | ring the warning and start bells by hand |
-| `/lopt [seats\|speech\|words] <n>` | knobs on the lesson message |
-| `/quiz [sec <n>\|wait <n>]` | the question in progress and which choice is right; timers |
-| `/sc`, `/scn`, `/sce`, `/scl`, `/sel` | script playback |
+| `/smenu [<key>]` | which sub-menu a map object opens |
+| `/evend [auto\|manual]` | how the end of an NPC event is answered |
+| `/sc <name or id> [ctrl] [actor:npcId]` | start a script |
+| `/sc next <name\|off>` | swap the script the next conversation asks for |
+| `/scn`, `/sce`, `/scl` | step it on, end it, list what has been exported |
+| `/scb [<scriptId> <ip> <target>\|clear]` | force a branch to go somewhere |
+| `/sel [<select> [timer]]` | ask a choice box again |
+| `/pwt [on\|off]` | whether the wait-for-players instruction is released |
 | `/de [<genre>:<index>]` | the drama-event list |
 | `/dms` | open the matching screen |
+| `/raw <msgid16> [hex]` | send one message by hand, by number |
+
+**Probes.** These are for reading the client rather than for playing: `/cb` drives a club
+battle a piece at a time, and `/seq` replies with a sequence number that goes backwards, to
+find out what the client makes of it.
 
 The client intercepts a number of words itself — `/help` and `/where` among them — and never
 puts them on the wire, so those names are unavailable no matter what the server does.
@@ -524,8 +623,10 @@ order to decide something.
 **`mapgraph.json`** — grid size, collision and doorways for the 78 maps. Without it the map
 graph is empty, the log says `warps go unchecked`, and moving between maps stops working.
 
-The other three were read out of the client's own data files rather than off the wire, and
-are here because watching the protocol cannot recover what they hold:
+All four come out of the client's own data files. `mapgraph.json` is the one the wire can
+confirm — the client decides where a door leads and this end only agrees, so the graph is a
+check on that agreement rather than the source of it. The other three are here because
+watching the protocol cannot recover what they hold at all:
 
 **`branches.json`** — where a cut-scene goes when the player picks option k, for the 209
 scripts that ask. Branch targets sit in an instruction's operands, and operands never travel
@@ -565,7 +666,16 @@ game's content rather than a rule this server applies, so `/scl` and `/sc <name>
 export you make yourself and say so when there is none, and `/de` cannot name an event without
 its file, though a key given directly as `<genre>:<index>` is still sent.
 
-Two gaps are worth naming rather than leaving to be found. What is missing from a cut-scene is
+There is a second kind of export, for the same reason. `branches.json` answers a branch out
+of a table; `server/gs3vm.py` answers one by running the script's own arithmetic alongside
+the client, which is where that arithmetic always ran — the client's instructions for it are
+logging stubs that evaluate nothing. Running it needs the instruction stream rather than a
+lookup, so it is an export too, and optional in the same way: without one, every branch of
+that kind falls through and the scene keeps whichever backdrop it opened with — and a scene
+that opens with none stays black. What the interpreter cannot work out it declines to answer
+rather than guessing at.
+
+Two gaps are worth naming rather than leaving to be found. What `branches.json` leaves out is
 nothing you can see. What is missing from a lesson is: the six ability parameters it should
 move, stress and the breakdown that follows it, the reward items, and the hint skills. The
 result screen reports no change to any of them because there is nothing there to change, and
@@ -581,7 +691,7 @@ the grade it awards is this server's own curve over the running score.
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services themselves; `run_all.py` binds them all in one asyncio loop and `mps_session.py`, the packet layer, is the bulk of it |
 | `reference/` | the four tables above |
-| `runtime/` | created on the first run: the log, the certificate, your characters, and the answers `play.py` remembers |
+| `runtime/` | created on the first run: the log, the certificate, your characters, any script exports you make, and the answers `play.py` remembers |
 | `screenshots/` | the four pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
 
@@ -610,6 +720,7 @@ the grade it awards is this server's own curve over the running score.
 | every branch logs `fall-through`, choices do nothing | `reference/branches.json` missing |
 | `no question bank, no questions`, a lesson asks nothing | `reference/quizkeys.json` missing |
 | every conversation credits the same 12 intimacy, whichever one played and whichever answer | `reference/intimacy.json` missing |
+| a scene plays on a black screen, or never changes its backdrop | that script has no export under `runtime/scripts/`, so every background branch falls through |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`
 marks a message this server has seen but does not answer yet.
