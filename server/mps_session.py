@@ -1635,11 +1635,12 @@ class MpsServer:
         # walk the player to, and the select screen has already told the client
         # which 組 it is. Two ends answering the same question differently is
         # the failure this closes.
-        # ⚠️ Reported, not obeyed: `Follower.scenery_road` refuses any road with
-        # an `OP_BR` on it, and the dispatch tree this cell feeds is nothing but
-        # OP_BR, so the branch itself still gets the standing 「no」 (2.137). What
-        # changes is that the log says `vm cond=…` instead of ⊤, i.e. this end
-        # now knows the answer it is declining to give.
+        # ⭐ Round 192 this became load-bearing rather than diagnostic: with the
+        # road bounded properly (`gs3vm._decided_road`) the dispatch tree this
+        # cell feeds is answerable, so the value here is what decides which
+        # classroom door the tutorial walks the player to. Supply it wrong and
+        # the walk goes to the wrong floor -- which is exactly what happened
+        # while nobody supplied it at all.
         cells[("PC", script.PC_IN_CLASS)] = IN_CLASS
         runner.shadow = gs3vm.follow(script_id, cells)
         if runner.shadow is None:
@@ -2248,17 +2249,21 @@ class MpsServer:
                 # ⭐⭐ The one place the shadow decides instead of reporting,
                 # and it is fenced twice over: the answer it replaces must be
                 # the standing "no" (a forced branch or a choice chain outranks
-                # it), and taking the branch must change nothing but the
-                # background and the ambient loop. That family is the 進行度
-                # switch every 日常会話 opens with -- 「恋愛候補生が立っている
-                # 位置は、メインイベントを体験するごとに変わります」 -- and
-                # until this existed every arm of it fell through, so a
-                # candidate's daily conversations never changed their setting.
+                # it), and everything the branch decides must be invisible to
+                # the save and to the story -- see `gs3vm._decided_road`.
+                #
+                # It started (round 185) as the 進行度 switch every 日常会話
+                # opens with -- 「恋愛候補生が立っている位置は、メインイベント
+                # を体験するごとに変わります」 -- and until it existed every arm
+                # of that fell through, so a candidate's daily conversations
+                # never changed their setting. ⭐ Round 192 fixed how the road is
+                # bounded, which brought in the other family that needed it: the
+                # 自分のクラス dispatch the tutorial walks you home on.
                 verdict, goes_to = shadow.branch()
                 if (verdict is not None and verdict is not gs3vm.TOP and verdict
-                        and shadow.scenery_road()):
+                        and shadow.decided_road()):
                     target = found.wire_ip(goes_to)
-                    why = f"背景/環境音 (vm cond={verdict})"
+                    why = f"表現のみ (vm cond={verdict})"
             other = "" if taken is None else f" 分岐先は ip={found.local_ip(taken)}"
             print(f"[{self.tag}] script branch -> wire {target} "
                   f"(ip={found.local_ip(target)}, {why}){other}")

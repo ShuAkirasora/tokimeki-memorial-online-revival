@@ -817,10 +817,10 @@ class Runner:
         ⭐ One family of branches is now answered rather than defaulted, and
         the caller does it, not this method: `mps_session` overrules exactly
         the `STANDING_NO` answer, and only when the shadow VM has a definite
-        condition *and* taking the branch would change nothing but the
-        background and the ambient loop (`gs3vm.Follower.scenery_road`). A
-        forced branch and a choice chain both outrank it, which is why the
-        override keys off this one reason string and not off the target.
+        condition *and* everything the branch decides is invisible to the save
+        and to the story (`gs3vm.Follower.decided_road`). A forced branch and a
+        choice chain both outrank it, which is why the override keys off this
+        one reason string and not off the target.
 
         ⚠️ `FORCED_BRANCHES` outranks it and looks at nothing at all. That is
         what it is for -- finding out what an unanswered branch plays, before

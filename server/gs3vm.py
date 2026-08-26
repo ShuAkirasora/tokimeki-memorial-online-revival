@@ -111,10 +111,17 @@ OP_INPUT_SELECT = 0x7000
 
 # ⭐⭐ The three commands that make a 日常会話's setting: which background is
 # loaded, which ambient loop plays over it, and the fade-in. They are the whole
-# of what a 進行度 switch's taken road contains -- see `Follower.scenery_road`,
-# which is the one place this end is allowed to answer a branch out of the
-# script's own arithmetic.
+# of what a 進行度 switch's taken road contains, which is why `_scenery_road`
+# recognises that switch by asking for a background. ⚠️ Since round 192 that is
+# its only job: the gate deciding whether this end may answer a branch out of
+# the script's own arithmetic is `_decided_road`, and it asks a different
+# question.
 OP_EVENT_BG_LOAD = 0x5100
+# ⭐⭐ 台詞. Not needed until round 192: the road `_scenery_road` walks is three
+# instructions long and could never contain one. `_decided_road` walks the whole
+# of what a branch decides, and there a spoken line is the difference between
+# 「this branch picks the scenery」 and 「this branch picks what is said」.
+OP_TALK_ON_EVENT = 0x5380
 OP_EVENT_BG_DISP_ON = 0x5101
 OP_SD_ENV_PLAY = 0x6080
 
@@ -342,6 +349,113 @@ def _scenery_road(script: "Script", index: int) -> bool:
             pending.append(script.index.get(script.labels[number - 1]))
         pending.append(i + 1)
     return loads_background
+
+
+#: One of these on the road and this end must not answer the branch. Three
+#: separate reasons, deliberately named apart: the save can see it
+#: (`DATA_WRITE`); the story can see it (`OP_EVENT_CALL` starts another event,
+#: `OP_TALK_ON_EVENT` says a line); or this end simply does not know
+#: (`OP_INPUT_SELECT` is the player's answer, `OP_BA` is a 役柄 test whose
+#: result only the client holds).
+def _undecidable(op: int) -> bool:
+    return (op in DATA_WRITE or op in (OP_EVENT_CALL, OP_INPUT_SELECT, OP_BA,
+                                       OP_TALK_ON_EVENT))
+
+
+def _successors(script: "Script", i: int) -> list:
+    """Where control can go from `i`.
+
+    ⚠️ Both arms of an `OP_BR`, and an `OP_JS` counts as 「into the subroutine
+    *and* on to the next instruction」 -- a caller that only followed one of the
+    two would certify a road it had half walked.
+    """
+    op, args = script.code[i][1], script.code[i][2]
+    if op in (OP_RTN, OP_END):
+        return []
+    if op == OP_JP:
+        return [script.index.get(_jump_target(args))]
+    out = [i + 1]
+    if op == OP_BR:
+        out.append(script.index.get(_jump_target(args)))
+    elif op == OP_JS:
+        number = int.from_bytes(args[0:2], "little") & 0x3FF
+        out.append(script.index.get(script.labels[number - 1])
+                   if 1 <= number <= len(script.labels) else None)
+    return out
+
+
+def _reachable(script: "Script", start: int) -> set:
+    seen, pending = set(), [start]
+    while pending:
+        i = pending.pop()
+        if i is None or i in seen or not 0 <= i < len(script.code):
+            continue
+        seen.add(i)
+        pending.extend(_successors(script, i))
+    return seen
+
+
+def _decided_road(script: "Script", index: int):
+    """What taking the `OP_BR` at `index` decides, or None if this end may not.
+
+    ⭐⭐⭐ The gate `_scenery_road` used to be, done properly. Same principle --
+    judge the *destination*, not the condition -- and two fixes to how the
+    destination is bounded, both measured in round 192 (2.147 八, and
+    `the road-gate study` reproduces the numbers):
+
+    ⚠️ **`OP_JP` used to end the walk**, on the reading 「that is where the
+    switch arm rejoins the scenario」. True for the 進行度 switch and false in
+    both directions elsewhere:
+
+      * **Under-reach.** In a dispatch tree the `OP_JP`s are the tree's own
+        plumbing, so the walk stopped after ONE instruction and then refused for
+        lack of a background. That is what kept 自分のクラス falling through and
+        the tutorial walking the player to the wrong floor.
+      * **Over-reach.** When an arm's `OP_JP` went somewhere the fall-through
+        cannot reach, the old walk ran on into the rest of the scenario -- 74
+        instructions on average where the real road is 68, and in 17 branches of
+        `un043`/`un066` it sailed past an `OP_BA` it should have seen. ⛔️ Those
+        were being admitted, which is exactly what 2.137 五 warned about.
+
+    ⭐ The bound that is right for both: **stop where the fall-through can also
+    get to.** That is the branch's merge point, and it costs one extra
+    reachability walk rather than a dominator tree. It provably cannot shorten
+    the 進行度 switch's road, because that arm's rejoin *is* reachable from the
+    fall-through.
+
+    ⚠️ The other change is that 「the road must load a background」 is gone. It
+    was a shape filter, not a safety one -- and a leaky filter, since the
+    over-reaching walk would find a background 200 instructions downstream that
+    the branch had nothing to do with. What replaces it is `_undecidable`.
+
+    ⭐ Corpus (778 scripts, 16313 `OP_BR`; ⚠️ re-run rather than quoting):
+    `_scenery_road` admits 2861, this admits 7966, and the 199 the old one
+    admitted that this one does not are **all** in `unNNN` (183) and `_eNNN`
+    (16) -- **not one is in the `_cNNN` 日常会話 family**, which is the only one
+    2.137 ever ran on a screen. So the feature that exists keeps every branch it
+    had.
+
+    ⚠️⚠️ `_scenery_road` is deliberately left standing: `Script.season_register`
+    uses it as a *shape* recogniser, and its 「the arms only swap backgrounds」
+    half is what keeps that from matching the 24 scripts where a four-armed
+    0..3 switch is 曜日 or 学年 instead.
+    """
+    start = script.index.get(_jump_target(script.code[index][2]))
+    if start is None:
+        return None
+    merge = _reachable(script, index + 1)
+    pending, seen = [start], set()
+    while pending:
+        i = pending.pop()
+        if i is None or i in seen or not 0 <= i < len(script.code):
+            continue
+        if i in merge:
+            continue  # the two arms have rejoined; past here is not this branch
+        seen.add(i)
+        if _undecidable(script.code[i][1]):
+            return None
+        pending.extend(_successors(script, i))
+    return seen
 
 
 class Script:
@@ -1013,15 +1127,17 @@ class Follower(Machine):
             return None, None
         return condition, _jump_target(args)
 
-    def scenery_road(self) -> bool:
-        """Does taking the OP_BR the client is on change nothing but scenery?
+    def decided_road(self) -> bool:
+        """May this end answer the `OP_BR` the client is stopped on?
 
-        The walk itself is `_scenery_road`; this half only refuses to answer
-        once this end has lost its place.
+        The walk itself is `_decided_road`; this half only refuses once this end
+        has lost its place -- a shadow that does not know where it is must not
+        be steering anything.
         """
         if self.lost:
             return False
-        return _scenery_road(self.script, self.pos)
+        return _decided_road(self.script, self.pos) is not None
+
     def select(self) -> tuple[int, int, int]:
         """The mask for the choice box the client is stopped on, right now.
 
