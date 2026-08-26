@@ -4688,6 +4688,81 @@ class MpsServer:
             return None
         return (kind, payload)
 
+    def _battle_mastery(
+        self, fighter: "clubbattle.Fighter", kind: int, payload: bytes
+    ) -> None:
+        """Say what playing this card would do to its 習熟度. Writes NOTHING.
+
+        ⭐⭐ This walks the whole path 習熟度 has to travel — from a card that
+        is going out in 0x5C0E right now, back to the row 0x4305 sends for it —
+        and prints the arithmetic instead of storing it. p07_02 says the number
+        rises 「クラブ活動でキーワードを使用すると」 and a card in the action
+        stream is that use, so this is the moment; what comes out on the log is
+        exactly what club.use_count_after_use would have written.
+
+        ⚠️⚠️ Printing is the whole reason this half can stand on its own. The
+        step is INVENTED (club.USE_COUNT_PER_USE, argued where it is defined)
+        and 習熟度 is 攻撃/防御 power as well as the gate on new キーワード, so
+        the day something stores this number, gameplay moves. A log line does
+        not, and it separates 「the path is right」 from 「the number is right」
+        while nothing is yet at stake.
+
+        ⚠️ At the ACTION rather than at the 0x5C0A that asked for it, which is
+        a narrower moment than it sounds: a fighter whose card cannot be
+        resolved is dropped from the turn, and a command that arrives after the
+        turn was played is refused — neither of those used a card. Everyone in
+        this stream did, on both sides, 自主トレ being PC-against-PC.
+
+        ⚠️ The owner's own store, not the handling session's and not the deck's
+        copy of the row (the same rule _battle_deck is under). Those six bytes
+        are the client's struct as it stood when 0x5B03 registered the card and
+        nothing refreshes them, so the two readings can disagree — and the
+        disagreement is worth seeing: the day useCount moves, every deck holding
+        that card keeps handing the old value back out in 0x5B01 until
+        something rewrites the payload.
+
+        ⚠️ /cb replay re-runs a turn that already resolved, so it prints these
+        lines twice for one play. Harmless while they only print; whatever
+        stores the number will need a guard the probe cannot walk through.
+
+        ⛔️ kind 1 is a 部活奥義 and has no 習熟度 — its `completeness` is a
+        different field, and an unread one.
+        """
+        if kind != club.DECK_ITEM_KEYWORD or len(payload) != club.DECK_ITEM_BYTES:
+            return
+        # ⚠️ Little-endian, the one field group in this protocol that is; the
+        # measurement is at club.DECK_ITEM_KEYWORD.
+        keyword_id, deck_use_count, _club_source = struct.unpack("<HHH", payload)
+        store = self.accounts.owner_of(fighter.chara_id)
+        state = store.club(fighter.chara_id) if store else None
+        row = None
+        if state is not None:
+            row = next((r for r in state.keywords if r[0] == keyword_id), None)
+        if row is None:
+            # ⚠️ Worth a line rather than a silent return: the card came out of
+            # this character's own deck, so the row it names ought to be in the
+            # same character's 所持 list. A fighter no account claims is the
+            # ordinary case for a stand-in and says nothing about the path.
+            missing = "no account claims them" if store is None else "they do not own it"
+            print(f"[{self.tag}] 習熟度 (not stored): charaId={fighter.chara_id:#x} "
+                  f"played keyword {keyword_id} and {missing} — nothing to raise")
+            return
+        use_count = row[1]
+        full = club.keyword_full_scale(keyword_id)
+        stale = ("" if deck_use_count == use_count
+                 else f" ⚠️ the deck's copy still says {deck_use_count}")
+        if club.keyword_is_mastered(use_count, keyword_id):
+            print(f"[{self.tag}] 習熟度 (not stored): charaId={fighter.chara_id:#x} "
+                  f"keyword={keyword_id} useCount {use_count} of {full} — already "
+                  f"満, nothing to raise and no second 0x5C17{stale}")
+            return
+        after = club.use_count_after_use(use_count, keyword_id)
+        note = (" — reaches 満: 0x5C17 would be due here"
+                if club.keyword_is_mastered(after, keyword_id) else "")
+        print(f"[{self.tag}] 習熟度 (not stored): charaId={fighter.chara_id:#x} "
+              f"keyword={keyword_id} useCount {use_count}->{after} of {full}"
+              f"{note}{stale}")
+
     def _battle_resolve(
         self, session: "_Session", battle: "clubbattle.Battle",
         demo_first: bool = False, order_override: "list[int] | None" = None,
@@ -4774,6 +4849,10 @@ class MpsServer:
         for fighter, kind, payload in plays:
             assert fighter.command is not None
             _item_num, is_attck, target_id = fighter.command
+            # ⭐ Ahead of the probe, because this is about the card that was
+            # actually played rather than the one /cb card swapped in. Prints
+            # and stores nothing — see _battle_mastery.
+            self._battle_mastery(fighter, kind, payload)
             # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb card armed it — see
             # Battle.card_probe. It swaps the deckItem this ActionBegin names,
             # which is the only way to make the client resolve a kind no deck
