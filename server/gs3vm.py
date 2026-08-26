@@ -77,6 +77,54 @@ class _Top:
 TOP = _Top()
 
 
+class _Die(_Top):
+    """A `_Top` this end is *allowed* to settle: what an `OP_RAND` produced.
+
+    ⭐⭐ The distinction is not a shade of confidence, it is about ownership.
+    An ordinary TOP stands for a value that exists somewhere this end cannot
+    see, so answering a branch over it would be guessing at somebody else's
+    fact. A die has no owner at all: the client's slot for `OP_RAND` -- like
+    every other arithmetic slot -- is a stub that pushes the cursor and logs
+    (`reference/ssc_fields.tsv`), so *nobody* rolls it. Refusing is therefore
+    not「leave it to the side that knows」, it is「answer fall-through, every
+    time, forever」, which is what made the tutorial hand every player the same
+    six キーワード (2.150).
+
+    ⚠️⚠️ It settles the **branch**, never the register: the range `OP_RAND`
+    draws from is still unread (its 143 sites dispatch on constants that a
+    corpus scan cannot separate from register reuse), and inventing one would
+    put a made-up number where a measured one belongs. A two-armed `OP_BR` is a
+    two-way choice whatever the range is, so a coin at the branch needs no range.
+    ⚠️ The cost, written down rather than hidden: an n-way ladder built out of
+    two-armed branches comes out 1/2, 1/4, 1/4 … instead of uniform.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "\u22a4(die)"
+
+
+DIE = _Die()
+
+
+def _unknown(value) -> bool:
+    """Is this one of the two things that are not a number?"""
+    return isinstance(value, _Top)
+
+
+def _merge_unknown(*values):
+    """None if every value is a number; else DIE if every unknown is a die.
+
+    ⭐ A die mixed with an ordinary unknown is an ordinary unknown: knowing what
+    was rolled would still not settle the expression.
+    """
+    unknowns = [v for v in values if isinstance(v, _Top)]
+    if not unknowns:
+        return None
+    return DIE if all(v is DIE for v in unknowns) else TOP
+
+
 # Register categories, as the client's own decoder splits a 16-bit operand
 # field: bits 0-6 are the number and bits 7-9 the category. 7 is not a category
 # at all, it is "the number *is* the value".
@@ -117,10 +165,12 @@ OP_INPUT_SELECT = 0x7000
 # the script's own arithmetic is `_decided_road`, and it asks a different
 # question.
 OP_EVENT_BG_LOAD = 0x5100
-# ⭐⭐ 台詞. Not needed until round 192: the road `_scenery_road` walks is three
-# instructions long and could never contain one. `_decided_road` walks the whole
-# of what a branch decides, and there a spoken line is the difference between
-# 「this branch picks the scenery」 and 「this branch picks what is said」.
+# ⭐⭐ 台詞. Round 192 put it in `_undecidable`, round 193 took it back out
+# (there: refusing a branch is not abstaining from it). ⚠️ Kept as a name
+# because `the road-gate study` imports it from here (round 193 -- it had
+# copied the literal) and its variants C/D still measure the set that forbids
+# it. ⛔️ Deleting it would leave the tool that audits this decision unable to
+# state the alternative it was weighed against.
 OP_TALK_ON_EVENT = 0x5380
 OP_EVENT_BG_DISP_ON = 0x5101
 OP_SD_ENV_PLAY = 0x6080
@@ -209,6 +259,14 @@ DATA_READ = {
     0x8182: "PCITEM", 0x8184: "PCKEY", 0x8201: "PCEV", 0x8203: "PCEV32",
 }
 DATA_WRITE = {op + 1: family for op, family in DATA_READ.items()}
+
+# ⭐ The キーワード pair, named apart because `Machine` decodes their operands
+# by a layout of their own (see the KEYWORD_OPS case). ⚠️ They stay in
+# DATA_READ/DATA_WRITE as well, because for every *other* purpose -- above all
+# `_undecidable`, which has to keep refusing a branch that hands somebody a
+# キーワード -- 0x8185 is exactly what it looks like: a write that persists.
+OP_KEYWORD_REFER, OP_KEYWORD_UPDATE = 0x8184, 0x8185
+KEYWORD_OPS = (OP_KEYWORD_REFER, OP_KEYWORD_UPDATE)
 
 
 def _quotient(a: int, b: int) -> int:
@@ -353,13 +411,34 @@ def _scenery_road(script: "Script", index: int) -> bool:
 
 #: One of these on the road and this end must not answer the branch. Three
 #: separate reasons, deliberately named apart: the save can see it
-#: (`DATA_WRITE`); the story can see it (`OP_EVENT_CALL` starts another event,
-#: `OP_TALK_ON_EVENT` says a line); or this end simply does not know
-#: (`OP_INPUT_SELECT` is the player's answer, `OP_BA` is a 役柄 test whose
-#: result only the client holds).
+#: (`DATA_WRITE`); another event can start from it (`OP_EVENT_CALL`); or this
+#: end simply does not know (`OP_INPUT_SELECT` is the player's answer, `OP_BA`
+#: is a 役柄 test whose result only the client holds).
+#: ⚠️ 台詞 used to be a fourth reason and is not one any more -- see the
+#: docstring, and `the road-gate study` for what that cost and bought.
 def _undecidable(op: int) -> bool:
-    return (op in DATA_WRITE or op in (OP_EVENT_CALL, OP_INPUT_SELECT, OP_BA,
-                                       OP_TALK_ON_EVENT))
+    """Does this instruction put the branch that reaches it out of reach here?
+
+    ⚠️⚠️ `OP_TALK_ON_EVENT` was in this set until round 193, on the reading
+    「a branch that decides who says what decides the *story*」. ⛔️ What that
+    reading leaves out is that refusing is not abstaining: nothing else answers
+    an `OP_BR` this end declines, so the client is sent fall-through -- the same
+    arm, every run, forever. The tutorial is the case that made the cost
+    visible: `amm_e001` ip=1676 guards 「キーワード【$s02】を手に入れた。」, the
+    evaluator works its condition out exactly (`vm cond=1`), and six times per
+    run the line was suppressed by a constant (2.150). ⇒ the choice is not
+    「decide or leave it alone」, it is 「a computed answer or a fixed one」.
+
+    ⭐ Measured before it was changed, with `the road-gate study`, whose
+    variant E is exactly this set: 7966 branches admitted with 台詞 forbidden,
+    10455 with it allowed, out of 16313 in 778 scripts. ⚠️ Re-run, do not quote.
+
+    ⭐ What stays forbidden is what it always was: anything that writes a cell
+    (`DATA_WRITE`, キーワード included), calls another event, puts a choice box
+    on the screen, or turns on 役柄 -- the four that reach the save, the story
+    ladder, or the other player.
+    """
+    return op in DATA_WRITE or op in (OP_EVENT_CALL, OP_INPUT_SELECT, OP_BA)
 
 
 def _successors(script: "Script", i: int) -> list:
@@ -597,6 +676,12 @@ class Result:
         # Cells the script wrote a value this machine could not produce into.
         # Kept out of `writes` on purpose -- see the DATA_WRITE case.
         self.unknown_writes: set[tuple[str, int]] = set()
+        # ⭐ `(actorIndex, keywordId)` per PC_KEYWORD_UPDATE, in script order.
+        # Apart from `writes` because it is not a cell with a value -- the
+        # instruction carries no value operand at all, it hands somebody a
+        # キーワード -- and because the caller persists it through a different
+        # record (`club.Membership.grant_keyword`) than the 恋愛 cells.
+        self.keywords: list[tuple[int, int]] = []
         # {opcode: how often it was stepped over}. See `Machine._uninstructed`.
         self.passed: Counter = Counter()
 
@@ -630,7 +715,9 @@ class Result:
                  for (family, slot), value in sorted(self.writes.items())]
         parts += [f"{family}[{slot:#06x}]=⊤"
                   for family, slot in sorted(self.unknown_writes)]
+        got = " ".join(f"{actor}:{keyword_id}" for actor, keyword_id in self.keywords)
         return ("writes: " + (" ".join(parts) if parts else "none")
+                + (f" · keywords (actor:id) {got}" if got else "")
                 + f" · stepped over {sum(self.passed.values())} client commands"
                 + f" ({len(self.passed)} kinds)")
 
@@ -702,8 +789,9 @@ class Machine:
         if op in ARITHMETIC:
             result, left, right = _arith_registers(args)
             a, b = self._get(left), self._get(right)
+            unknown = _merge_unknown(a, b)
             self.registers[result] = (
-                TOP if a is TOP or b is TOP else ARITHMETIC[op](a, b)
+                unknown if unknown is not None else ARITHMETIC[op](a, b)
             )
             return i + 1
 
@@ -712,19 +800,22 @@ class Machine:
             # the same operand block as the rest.
             result, left, _ = _arith_registers(args)
             a = self._get(left)
-            self.registers[result] = TOP if a is TOP else (1 if a == 0 else 0)
+            unknown = _merge_unknown(a)
+            self.registers[result] = (
+                unknown if unknown is not None else (1 if a == 0 else 0))
             return i + 1
 
         if op == OP_RAND:
-            # ⭐ Taught rather than left to `_uninstructed`, and taught as
-            # unknown. The die belongs to this end -- the client's slot for it
-            # is a log stub like the rest of the arithmetic family -- but a
-            # machine that is *watching* a conversation and rolls its own would
-            # be reasoning about a different conversation from the one on the
-            # screen. "I do not know what it rolled" is the true answer here,
-            # and the day this end drives instead of watches is the day it
-            # becomes the wrong one.
-            self.registers[_arith_registers(args)[0]] = TOP
+            # ⭐ Taught rather than left to `_uninstructed`, and still taught
+            # as unknown: this machine does not produce the number, because the
+            # range the operand names has never been read (see `_Die`). What
+            # changed in round 193 is only that the unknown says *whose* it is.
+            # ⚠️ A `Machine` -- which runs a script on its own -- is unchanged
+            # by that: `OP_BR` over a die still raises, because nothing there is
+            # watching a screen that a coin would have to agree with. Only
+            # `Follower`, which is in step with a client stopped on the branch,
+            # may settle one.
+            self.registers[_arith_registers(args)[0]] = DIE
             return i + 1
 
         if op == OP_SYNC_VARIABLE:
@@ -754,6 +845,30 @@ class Machine:
                 )
             return i + 1
 
+        if op in KEYWORD_OPS:
+            # ⭐⭐⭐ The one data family whose operands are *not* the shifted
+            # register block the rest of 0x81xx uses, and the corpus says so:
+            # across all 778 scripts `PC_KEYWORD_REFER` is always `80 c3` and
+            # `PC_KEYWORD_UPDATE` is `80 80` or `81 80` -- a fixed second byte
+            # and a first byte that runs 0x80, 0x81. `un081` grants the same
+            # slot twice in a row, once with each, which is what names them:
+            # **which player**, not which register. (2.150)
+            #
+            # ⭐⭐ And the slot is `keywordId << 5`: all 58 distinct slots in
+            # the corpus are multiples of 32 and every `slot >> 5` is an id
+            # `keyword.bin` actually has -- 58 of 58, against a file that holds
+            # 261 of the 792 ids in range, so a wrong reading would have missed.
+            #
+            # ⚠️ REFER is a no-op here rather than a read, and that is a
+            # statement about the corpus, not a shortcut: its 24 occurrences are
+            # all in the two tutorials, each one immediately before an UPDATE of
+            # the same slot, and not one of them is ever read back.
+            if op == OP_KEYWORD_UPDATE:
+                self.result.keywords.append(
+                    (args[0] & 0x7F,
+                     int.from_bytes(args[2:4], "little") >> 5))
+            return i + 1
+
         if op in DATA_READ:
             reg = _refer_register(args)
             if reg is not None:
@@ -772,7 +887,7 @@ class Machine:
                 # rest, never among them: `Result.writes` is what a caller
                 # persists, and "the script wrote something here and this end
                 # could not say what" must not reach a save file as a number.
-                if value is TOP:
+                if _unknown(value):
                     self.result.unknown_writes.add(key)
                     self.result.writes.pop(key, None)
                 else:
@@ -809,7 +924,7 @@ class Machine:
 
         if op == OP_BR:
             condition = self._get(_register(int.from_bytes(args[0:2], "little")))
-            if condition is TOP:
+            if _unknown(condition):
                 raise UnknownCell(
                     f"{self.script.name}: OP_BR at ip={ip} tests a value this "
                     f"machine could not produce"
@@ -1104,8 +1219,8 @@ class Follower(Machine):
             except UnsupportedOp:
                 value = TOP
             if category in STRING_CATEGORIES:
-                value = None if value is TOP else self.script.strings.get(value)
-            elif value is TOP:
+                value = None if _unknown(value) else self.script.strings.get(value)
+            elif _unknown(value):
                 value = None
             out.append((category, number, value))
         return out
@@ -1161,7 +1276,7 @@ class Follower(Machine):
         mask = unknown = 0
         for k in range(options):
             value = self.registers.get((CAT_SELITEM, k), TOP)
-            if value is TOP:
+            if _unknown(value):
                 unknown |= 1 << k
             elif value:
                 mask |= 1 << k

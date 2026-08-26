@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 import secrets
 import struct
 import time
@@ -121,6 +122,11 @@ from message_names import MESSAGE_NAMES
 #: ⚠️ Unset is the shipping 300, so an interrupted measuring session leaves
 #: nothing behind. ⚠️ Do not leave it set while testing reconnect behaviour.
 IDLE_TIMEOUT_S = float(os.environ.get("TMO_IDLE_S") or 300.0)
+
+#: Seed for the coin `_script_die` flips at an `OP_RAND` branch. ⚠️ None is the
+#: factory value and means a real coin; an int makes one server run repeatable,
+#: which is for reproducing a report and nothing else -- see `gs3vm._Die`.
+SCRIPT_DIE_SEED: int | None = None
 
 TAG_TIMESYNC = 0x08
 TAG_MESSAGE = 0x30
@@ -1129,6 +1135,13 @@ class MpsServer:
         # The out-of-band console; see _drain_console.
         self.console_path = runtime / "console.txt"
         self.tag = f"{name}{config.port}"
+        # ⭐ The coin `_script_die` flips. A generator of its own rather than
+        # the module one so that seeding it for a reproducible run cannot
+        # reach anything else on this server.
+        # ⚠️ Factory value is None -- a real coin. Set SCRIPT_DIE_SEED to an
+        # int only to make one session repeatable, and note that it makes every
+        # OP_RAND branch in that session fall the same way twice.
+        self._script_dice = random.Random(SCRIPT_DIE_SEED)
 
     def _bind(self, session: "_Session", account_id: int, how: str) -> None:
         """Say which account this connection is, once it has named itself."""
@@ -1813,6 +1826,59 @@ class MpsServer:
             print(f"[{self.tag}] {name}: 書き戻せませんでした")
         return result
 
+    def _script_die(self, session: "_Session", wire_ip: int) -> bool:
+        """Flip the coin an `OP_RAND` branch needs. True means「成立」.
+
+        ⭐ A coin and not a roll: what `OP_RAND` draws from has never been read,
+        and a two-armed `OP_BR` is a two-way choice whatever the range is. The
+        reasoning, and the cost of it for an n-way ladder, are in `gs3vm._Die`.
+        """
+        heads = self._script_dice.getrandbits(1) == 1
+        print(f"[{self.tag}] script die at wire {wire_ip}: "
+              f"{'成立' if heads else '不成立'}")
+        return heads
+
+    def _script_keywords(self, session: "_Session", result) -> None:
+        """Hand over the キーワード a finished script granted, if any.
+
+        ⭐⭐ This is the original's own grant path, and finding it retires an
+        invention: `club.Membership.grant_keyword` says in its docstring that
+        「it is INVENTED that this happens at all」, because until round 193 the
+        only way a character got one here was a `/kw` typed by hand. It happens
+        in `PC_KEYWORD_UPDATE`, 127 of them across 38 scripts -- the two
+        tutorials carry twelve apiece, six coin flips that grant one キーワード
+        per **category** (`club.KEYWORD_BLOCKS`, six of them), and the 36
+        ドラマイベント carry two to six each (2.150).
+
+        ⚠️⚠️ NOT one per 能力パラメータ, though there are six of those as well
+        (文系 理系 芸術 雑学 運動 スタミナ). The two sixes are a coincidence and
+        the tutorials never touch an ability at all -- see 2.150 三. ⚠️ And
+        「how many `UPDATE`s a script carries」 is not 「how many the player ends
+        up with」: the tutorial's twelve pay out six.
+
+        ⚠️ Only the local player's actor slot is applied. In a two-player
+        ドラマイベント both PCs are named and each client runs the script for
+        itself, so taking the other one here would grant it twice -- once from
+        each side -- to somebody this session does not own.
+        """
+        wanted = [keyword_id for actor, keyword_id in result.keywords
+                  if actor == script.CAST_LOCAL_PLAYER]
+        if not wanted:
+            return
+        state = self._chars(session).club(session.chara_id)
+        if state is None:
+            print(f"[{self.tag}] キーワード {wanted}: 部活の記録が無く、記帳できません")
+            return
+        got = [keyword_id for keyword_id in wanted
+               if not state.owns_keyword(keyword_id)
+               and state.grant_keyword(keyword_id)]
+        if got and not self._chars(session).set_club(session.chara_id, state):
+            print(f"[{self.tag}] キーワード {got}: 書き戻せませんでした")
+            return
+        print(f"[{self.tag}] キーワード: {len(got)} 件記帳 {got}"
+              + (f" · 既に所持 {sorted(set(wanted) - set(got))}"
+                 if len(got) != len(wanted) else ""))
+
     def _romance_credit(self, session: "_Session", seen: int) -> bytes:
         """A finished conversation counts towards 親密さ; a main event moves her.
 
@@ -2225,6 +2291,33 @@ class MpsServer:
                     # which cells it would have needed to say it.
                     print(f"[{self.tag}] vm {shadow.describe()}")
                     print(f"[{self.tag}] vm {shadow.result.summary()}")
+                    # ⚠️⚠️ A `Result` is what a run *would* have written, and
+                    # only the keyword rows below are taken out of it. The two
+                    # 恋愛 cells `amm_e001` sets at ip=444/452 (登場フラグ and
+                    # 進行度, before the first stage direction and with no branch
+                    # above them) are NOT persisted, and that is deliberate at
+                    # both ends of the wire:
+                    #
+                    #   * The client cannot have written them either. `PC_DATA_
+                    #     UPDATE`, both キーワード ops and `PC_EVENT_VARIABLE_
+                    #     UPDATE` all share one stub slot (0x73150b/0x7314eb in
+                    #     `reference/ssc_fields.tsv`) -- so nothing happens over
+                    #     there, and the register file only exists here. ⇒ there
+                    #     is no observable difference to reproduce, and 「when
+                    #     did the original server flush」 is not something this
+                    #     project has ever observed. ⛔️ Do not reason from it.
+                    #   * This end owns those two by another road on purpose:
+                    #     `romance.absorb` takes the five letters and nothing
+                    #     else, 進行度 is read-only (`see_main_event` owns it)
+                    #     and 登場 comes from `initial_cast`, which has 天宮 and
+                    #     桜井 on stage from day one without anybody playing
+                    #     their その１.
+                    #
+                    # ⛔️ So do not 「wire up the missing half」: the tutorial IS
+                    # その１, and letting it drive `progress` counts a rung twice
+                    # (the spot table counts events *after* the debut). Changing
+                    # that changes what a save means -- see `see_main_event`.
+                    self._script_keywords(session, shadow.result)
                 session.script = None
                 # ⭐ This is the end that actually happens. The client runs the
                 # script itself (round 37) and reports OP_END here, so the two
@@ -2260,7 +2353,25 @@ class MpsServer:
                 # bounded, which brought in the other family that needed it: the
                 # 自分のクラス dispatch the tutorial walks you home on.
                 verdict, goes_to = shadow.branch()
-                if (verdict is not None and verdict is not gs3vm.TOP and verdict
+                if verdict is gs3vm.DIE:
+                    # ⭐⭐⭐ The other thing this end may settle, and it is
+                    # fenced by a different question from the one above. There
+                    # the test is 「does the destination matter」; here it is
+                    # 「is there anybody else who could answer」 -- and for a
+                    # die there is not: the client's OP_RAND slot is a stub, so
+                    # declining does not defer to the side that knows, it picks
+                    # the fall-through arm every run (`gs3vm._Die`).
+                    # ⚠️ `decided_road` deliberately does NOT gate this one:
+                    # the six coin flips that matter hand out キーワード, which
+                    # is a persistent write and therefore forbidden there --
+                    # gating on it would refuse exactly the branches a die is
+                    # for. What still outranks it is the same thing that
+                    # outranks the case below: `why == STANDING_NO`.
+                    heads = self._script_die(session, wire_ip)
+                    if heads:
+                        target = found.wire_ip(goes_to)
+                    why = f"サイコロ (OP_RAND -> {'成立' if heads else '不成立'})"
+                elif (verdict is not None and not gs3vm._unknown(verdict) and verdict
                         and shadow.decided_road()):
                     target = found.wire_ip(goes_to)
                     why = f"表現のみ (vm cond={verdict})"
@@ -2273,7 +2384,9 @@ class MpsServer:
                 # same question, so that the two can be compared against a
                 # screen before any more of it is allowed to move.
                 condition, would = shadow.branch()
-                if condition is gs3vm.TOP:
+                if condition is gs3vm.DIE:
+                    pass  # already said, and said with which way the coin fell
+                elif condition is gs3vm.TOP:
                     print(f"[{self.tag}] vm cond=⊤ — this branch is not answerable here")
                 elif condition is not None:
                     # OP_BR_WIDTH is in the client's unit (file bytes) and this

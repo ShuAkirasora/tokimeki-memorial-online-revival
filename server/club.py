@@ -176,14 +176,26 @@ the synthesis item that keyword can yield, which the window hides behind ？？�
 until it has been obtained once, and which therefore has to be per-character.
 ⚠️ THAT IS A GUESS. It goes out as 0 unless /kw is told otherwise.
 
-INVENTED: that a character can own a キーワード at all
-------------------------------------------------------
-The ids, the wire layout and the field meanings above are restored. What is
-invented is the grant: in the original a キーワード arrives by using one in
-クラブ活動 until 習熟度 fills, and there is no クラブ活動 here to use one in. So
-/kw is a knob in the same family as /ab and /card — it puts the character into a
-state the original would have reached by playing, so that the screens which read
-that state can be checked. Nothing on the wire is invented by it.
+RESTORED in round 193: how a キーワード is granted
+--------------------------------------------------
+⭐⭐⭐ This heading used to read 「INVENTED: that a character can own a
+キーワード at all」. It does not any more, because the original's own grant is
+in the scripts: `PC_KEYWORD_UPDATE` (0x8185), 127 of them across 38 scenarios,
+whose slot operand is `keywordId << 5`. Both チュートリアル open a character's
+account with six of them — one per category below, each chosen by a coin flip
+between two — and 36 ドラマイベント hand out two to six more. The wiring is
+`mps_session._script_keywords`; the reading and its evidence are 2.150.
+
+⚠️ **What is still invented is 習熟度**, and only that: `use_count` is filled in
+the original by using a キーワード in クラブ活動 until it rises, and there is no
+クラブ活動 here to use one in. Every grant this server makes therefore lands at
+`use_count = 0`, which is the honest value rather than a flattering one.
+
+⭐ /kw stays, and its job is unchanged: it is a knob in the same family as /ab
+and /card — it puts a character into a state the original would have reached by
+playing, so that the screens which read that state can be checked. ⚠️ It is no
+longer the *only* way in, so 「this character has キーワード」 is no longer
+evidence that somebody typed one.
 """
 from __future__ import annotations
 
@@ -609,9 +621,14 @@ class Membership:
                       club_source: int = 0) -> bool:
         """Give this character a キーワード, or update the one it already has.
 
-        Returns False for a key `keyword.bin` does not have. INVENTED that this
-        happens at all — see the module docstring; the original fills 習熟度 by
-        playing クラブ活動, which does not exist here.
+        Returns False for a key `keyword.bin` does not have.
+
+        ⭐ Round 193: the *grant* is no longer invented — the scripts do it
+        themselves through `PC_KEYWORD_UPDATE`, and this is the method they
+        reach (`mps_session._script_keywords`, 2.150). ⚠️ 習熟度 still is: the
+        original raises `use_count` by using a キーワード in クラブ活動, which
+        does not exist here, so a granted row starts and stays at 0 until /kw
+        is told otherwise. See the module docstring.
         """
         if not keyword_exists(keyword_id):
             return False
