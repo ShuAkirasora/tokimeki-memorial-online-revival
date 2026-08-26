@@ -7,8 +7,9 @@ Run it on your own machine, point your own copy of the client at it, and you can
 create a character, go to school, sit through a lesson, and play a club match against
 somebody on a second machine.
 
-<!-- HTML rather than markdown for the width="50%": all four shots are 1280x960, and a
-     markdown table would size its columns from the caption text instead. -->
+<!-- HTML rather than markdown for the width="50%": a markdown table would size its columns
+     from the caption text instead. The shots are 800x600, which is what the client draws
+     at; the four oldest were kept at the 1280x960 they were captured at. -->
 <table>
 <tr>
 <td width="50%" valign="top">
@@ -34,13 +35,45 @@ somebody on a second machine.
 </td>
 <td valign="top">
 
-![A conversation](screenshots/conversation.jpg)
+![Another player and the menu behind them](screenshots/interaction-menu.jpg)
 
 </td>
 </tr>
 <tr>
 <td valign="top"><b>Standing in the courtyard.</b> The player is put into the scene by the server, the NPC by one of the <code>/npc</code> commands.</td>
+<td valign="top"><b>Somebody else on the same map.</b> Two clients, one server; right-clicking the other player opens the six slots, and the card underneath is filled in from their save.</td>
+</tr>
+<tr>
+<td valign="top">
+
+![A lesson under way](screenshots/lesson.jpg)
+
+</td>
+<td valign="top">
+
+![A conversation](screenshots/conversation.jpg)
+
+</td>
+</tr>
+<tr>
+<td valign="top"><b>A lesson under way.</b> The message that opened it carried three numbers and no text: the client holds the questions, and this end picks which one and marks the answer.</td>
 <td valign="top"><b>A scripted scene.</b> The client plays the cut-scene out of its own copy of the game; this end only answers the questions it stops on.</td>
+</tr>
+<tr>
+<td valign="top">
+
+![The club-deck window](screenshots/club-deck.jpg)
+
+</td>
+<td valign="top">
+
+![A club match](screenshots/club-match.jpg)
+
+</td>
+</tr>
+<tr>
+<td valign="top"><b>The club deck.</b> The keywords a character owns, and the deck they are dealt into — both lists read back out of the save.</td>
+<td valign="top"><b>A club match.</b> Eight turns, and this is the sixty seconds a side gets to choose a card; the order they resolve in is settled at this end.</td>
 </tr>
 </table>
 
@@ -695,7 +728,7 @@ the grade it awards is this server's own curve over the running score.
 | `server/` | the services themselves; `run_all.py` binds them all in one asyncio loop and `mps_session.py`, the packet layer, is the bulk of it |
 | `reference/` | the four tables above |
 | `runtime/` | created on the first run: the log, the certificate, your characters, any script exports you make, and the answers `play.py` remembers |
-| `screenshots/` | the four pictures above; captures of a running client, not game files |
+| `screenshots/` | the eight pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
 
 ## Troubleshooting
