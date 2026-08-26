@@ -305,8 +305,18 @@ NO_LETTER_EVENT = -1       # what sys_s000 -- the new-game reset -- writes there
 # Both map to the same `c000[0xd900] == 2`, so the ladder cannot tell them
 # apart, but the 日常会話 can: that `== 1` arm of 桜井's is what it selects.
 #
-# ⚠️⚠️ Read-only, deliberately. `absorb` does not take this cell back out of a
-# script run, so nothing here can move 進行度 -- `see_main_event` still owns it.
+# ⚠️⚠️ Read-only, deliberately -- and round 193 makes the pairing worth stating,
+# because the cell right next to it stopped being so. `absorb` now takes
+# `PC[0x3900+i]` (登場) out of a script run and refuses `PCEV[0x6020+i]` (進行度),
+# which is not an oversight but the whole shape of the split:
+#
+#   * **登場 is a fact the script owns.** `<name>_e001` is her 初登校 and there
+#     is nothing for this end to decide -- it either played or it did not.
+#   * **進行度 is a count this end owns.** `see_main_event` advances it, and
+#     the spot table counts main events *after* the debut, so letting `_e001`
+#     write it too would count that rung twice. ⇒ the value the script writes
+#     here (1) is already exactly what `progress_cell(name, 0, True)` returns,
+#     so taking it would gain nothing and risk double counting.
 PCEV_PROGRESS_BASE = 0x6020
 
 # ⚠️ Which of the two groups the locker scripts check is `PC[0x3013]`, and the
@@ -716,13 +726,29 @@ class Romance:
         return {**self.data_cells(), ("CTX", (CTX_MENU_ITEM, 0)): menu_item}
 
     def absorb(self, writes: dict) -> bool:
-        """Take a script run's cell writes back into the save. True if changed."""
+        """Take a script run's cell writes back into the save. True if changed.
+
+        ⚠️ `PC` only, and only the two ranges below. What is deliberately left
+        out -- above all `PCEV[0x6020+i]` -- is argued where those constants
+        are defined, not here.
+        """
         names = list(CANDIDATES)
         changed = False
         for (family, address), value in writes.items():
             if family != "PC" or isinstance(address, tuple):
                 continue
-            if PC_LETTER_BASE <= address < PC_LETTER_BASE + len(names):
+            if PC_DEBUT_BASE <= address < PC_DEBUT_BASE + len(names):
+                # ⭐ Round 193: 初登校 drives this. Five scripts write it and
+                # they are the five debuts (2.121 三) -- 天宮←amm_e001,
+                # 桜井←skr_e001, the other three from a ドラマイベント.
+                # ⚠️ Taken faithfully, including a 0: `sys_s000`, the original's
+                # own new-game reset, is what clears them, and this end must not
+                # decide that a debut is irreversible when the corpus says
+                # otherwise. ⛔️ No script that reaches this path writes 0 today.
+                row = self.state[names[address - PC_DEBUT_BASE]]
+                changed |= row["debut"] != bool(value)
+                row["debut"] = bool(value)
+            elif PC_LETTER_BASE <= address < PC_LETTER_BASE + len(names):
                 row = self.state[names[address - PC_LETTER_BASE]]
                 changed |= row["letter"] != value
                 row["letter"] = value

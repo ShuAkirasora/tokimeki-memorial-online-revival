@@ -1879,6 +1879,44 @@ class MpsServer:
               + (f" · 既に所持 {sorted(set(wanted) - set(got))}"
                  if len(got) != len(wanted) else ""))
 
+    def _script_debut(self, session: "_Session", result) -> None:
+        """Let a finished script's own cell writes drive 登場, if any.
+
+        ⭐⭐ Round 193, and it is the first time a scenario's writes reach a
+        save at all: `<name>_e001` -- 初登校 -- sets `PC[0x3900+i]`, and until
+        now this end collected that in `Result.writes` and dropped it.
+
+        ⚠️ `Romance.absorb` decides *which* cells count, not this method; in
+        particular it takes 登場 and refuses 進行度, argued next to those
+        constants. So a run that writes nothing absorbable is silent here.
+
+        ⚠️⚠️ Zero behaviour change on its own, and that is the point rather
+        than a shortcoming: `initial_cast()` still puts 天宮/桜井 on stage from
+        day one, so the value written is the value already there and `changed`
+        comes back False. ⇒ what this block buys is a **live path** -- the log
+        line below says the write arrived -- and the day `initial_cast` stops
+        pre-marking them, the tutorial is already the thing that does it.
+        """
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return
+        touched = sorted(
+            f"{address:#06x}={value}"
+            for (family, address), value in result.writes.items()
+            if family == "PC" and not isinstance(address, tuple)
+            and romance.PC_DEBUT_BASE <= address
+            < romance.PC_DEBUT_BASE + len(romance.CANDIDATES)
+        )
+        if not touched:
+            return
+        changed = love.absorb(result.writes)
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] 登場フラグ {touched}: 書き戻せませんでした")
+            return
+        print(f"[{self.tag}] 登場フラグ {' '.join(touched)} -> "
+              + ("記帳" if changed else "既に同じ値（記帳なし）")
+              + f" · 現在の登場: {love.on_stage()}")
+
     def _romance_credit(self, session: "_Session", seen: int) -> bytes:
         """A finished conversation counts towards 親密さ; a main event moves her.
 
@@ -2291,33 +2329,24 @@ class MpsServer:
                     # which cells it would have needed to say it.
                     print(f"[{self.tag}] vm {shadow.describe()}")
                     print(f"[{self.tag}] vm {shadow.result.summary()}")
-                    # ⚠️⚠️ A `Result` is what a run *would* have written, and
-                    # only the keyword rows below are taken out of it. The two
-                    # 恋愛 cells `amm_e001` sets at ip=444/452 (登場フラグ and
-                    # 進行度, before the first stage direction and with no branch
-                    # above them) are NOT persisted, and that is deliberate at
-                    # both ends of the wire:
+                    # ⚠️ A `Result` is what the run would have written; each
+                    # helper below decides what it is willing to take out of it.
+                    # `amm_e001` sets two 恋愛 cells at ip=444/452 and they are
+                    # treated differently on purpose: 登場 is absorbed (round
+                    # 193), 進行度 is not -- argued next to those constants in
+                    # `romance.py`. ⛔️ Do not "finish the job" by taking 進行度
+                    # too; the tutorial IS その１ and the spot table counts main
+                    # events *after* the debut, so it would count a rung twice.
                     #
-                    #   * The client cannot have written them either. `PC_DATA_
-                    #     UPDATE`, both キーワード ops and `PC_EVENT_VARIABLE_
-                    #     UPDATE` all share one stub slot (0x73150b/0x7314eb in
-                    #     `reference/ssc_fields.tsv`) -- so nothing happens over
-                    #     there, and the register file only exists here. ⇒ there
-                    #     is no observable difference to reproduce, and 「when
-                    #     did the original server flush」 is not something this
-                    #     project has ever observed. ⛔️ Do not reason from it.
-                    #   * This end owns those two by another road on purpose:
-                    #     `romance.absorb` takes the five letters and nothing
-                    #     else, 進行度 is read-only (`see_main_event` owns it)
-                    #     and 登場 comes from `initial_cast`, which has 天宮 and
-                    #     桜井 on stage from day one without anybody playing
-                    #     their その１.
-                    #
-                    # ⛔️ So do not 「wire up the missing half」: the tutorial IS
-                    # その１, and letting it drive `progress` counts a rung twice
-                    # (the spot table counts events *after* the debut). Changing
-                    # that changes what a save means -- see `see_main_event`.
+                    # ⚠️⚠️ And do not reason about *when* the original wrote
+                    # them. `PC_DATA_UPDATE`, both キーワード ops and
+                    # `PC_EVENT_VARIABLE_UPDATE` share one stub slot in the
+                    # client (`reference/ssc_fields.tsv`) ⇒ nothing happens over
+                    # there, the register file only exists here, and there is no
+                    # observable difference to reproduce. ⛔️ 「when did the
+                    # original server flush」 has never been observed here.
                     self._script_keywords(session, shadow.result)
+                    self._script_debut(session, shadow.result)
                 session.script = None
                 # ⭐ This is the end that actually happens. The client runs the
                 # script itself (round 37) and reports OP_END here, so the two
