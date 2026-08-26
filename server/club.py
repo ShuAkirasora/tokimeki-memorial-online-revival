@@ -433,6 +433,41 @@ KEYWORD_FULL_SCALE = {
     791: 90,  # マウス・トゥ・マウス
 }
 
+# ⚠️⚠️ INVENTED (the smallest-invention rule), and it is the ONLY invented number in this
+# loop — everything else around it is restored. How much one use of a
+# キーワード in クラブ活動 adds to its 習熟度.
+#
+# ⭐ WHERE IT WAS LOOKED FOR AND NOT FOUND, so nobody repeats the search:
+#   - the client: every offset it reads out of `keyword.bin` was enumerated in
+#     round 196 (+0x00 +0x02 +0x2c +0x2e +0x30 +0x6c +0x78) and none is a step;
+#     習熟 is decided server-side, so the client cannot know this number;
+#   - the manual: p07_02 and p08_01 say 「使用するとアップする」 and 「何度も
+#     使い」 — that it counts USES rather than battles, but never how much;
+#   - the operator-era player material mirrored here (fansites, press, video):
+#     zero hits for 習熟 of any kind.
+#
+# ⭐ WHY 1 RATHER THAN ANYTHING ELSE — the choice that invents least:
+#   1 makes KEYWORD_FULL_SCALE mean exactly what it reads like, a number of
+#   uses; any other step adds a second made-up number on top of a restored
+#   table. It also lands on every scale exactly (a step of 3 would overshoot
+#   64, 80 and 100), and the default 64 comes out as 8 uses × 8 battles, where
+#   8 is the RESTORED turn limit (clubbattle.TURN_LIMIT). Pacing, for the
+#   record: 8 battles to master one keyword if it is played every single turn,
+#   about 22 at three plays a battle.
+#
+# ⭐ WHAT WOULD OVERTURN IT (the invention rule asks for this in writing): any operator-era
+# source that counts plays or battles to a 習熟度 MAX; a surviving server-side
+# table; or a client build that displays 習熟度 as a number instead of a gauge.
+USE_COUNT_PER_USE = 1
+
+# ⚠️ INVENTED alongside it, and a separate decision: 習熟度 stops at the full
+# scale rather than counting on past it. It is not only a gate — p07_02 says
+# 「『習熟度』が高いと、キーワードによる攻撃や防御のパワーがアップします」 —
+# so a count that kept climbing would keep raising a keyword's power with
+# nothing on screen to show it. 「習熟度がＭＡＸになると」 reads as a finished
+# state, and this makes it one.
+USE_COUNT_CLAMPS_AT_FULL_SCALE = True
+
 # `clubskill.bin`'s 57 keys. The key is the pair (categoryId, id) and the
 # category is the club, so this is simply "how many 部活奥義 each club has":
 # seven each, except 野球部 which has eight. Indexed by categoryId, and
@@ -536,6 +571,24 @@ def keyword_full_scale(keyword_id: int) -> int:
     ⚠️ Nothing sends 0x5C17 on reaching it yet -- see the module docstring.
     """
     return KEYWORD_FULL_SCALE.get(keyword_id, KEYWORD_FULL_SCALE_DEFAULT)
+
+
+def use_count_after_use(use_count: int, keyword_id: int) -> int:
+    """What one play of this キーワード in クラブ活動 leaves 習熟度 at.
+
+    ⚠️ The step is INVENTED and the clamp is a second decision -- both are
+    argued where they are defined, USE_COUNT_PER_USE just above.
+    ⚠️ NOT WIRED UP YET: no caller raises 習熟度, because no クラブ活動 on this
+    server finishes a turn that way. This is the shape the day it does.
+    """
+    full = keyword_full_scale(keyword_id)
+    raised = use_count + USE_COUNT_PER_USE
+    return min(raised, full) if USE_COUNT_CLAMPS_AT_FULL_SCALE else raised
+
+
+def keyword_is_mastered(use_count: int, keyword_id: int) -> bool:
+    """Has this キーワード reached 習熟度 MAX -- the gauge full, 0x5C17 due?"""
+    return use_count >= keyword_full_scale(keyword_id)
 
 
 def club_skill_exists(category: int, skill_id: int) -> bool:
