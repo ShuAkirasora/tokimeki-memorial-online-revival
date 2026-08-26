@@ -164,9 +164,14 @@ real deck against the day 練習 is implemented.
 
 ⭐ ``useCount`` is 習熟度 and the manual says how it moves: 「クラブ活動で
 キーワードを使用するとアップする」, and it is drawn as a gauge rather than a
-number, which is why the field is a count rather than a level. ⚠️ ITS FULL-SCALE
-VALUE IS NOT MEASURED — nothing says what fills the gauge, so /kw takes it as an
-argument instead of the server picking.
+number, which is why the field is a count rather than a level.
+
+⭐⭐⭐ ROUND 196: its full scale IS measured now, and it is per-keyword —
+`keyword.bin` record +0x78, the byte the client divides `useCount` by. Four
+values across the 261 rows (64 for 251 of them, then 80/90/100), and the gauge
+fills exactly at it. See KEYWORD_FULL_SCALE. ⚠️ What one *use* adds is still
+unknown, so /kw goes on taking `useCount` as an argument rather than the server
+picking; a number that has no source is not one to invent.
 
 ⚠️ ``clubSource`` is NOT a restriction. `p07_02` is explicit that キーワード do
 not depend on a club (「キーワードはクラブに依存しないため、どちらの用途でも
@@ -190,6 +195,8 @@ between two — and 36 ドラマイベント hand out two to six more. The wirin
 the original by using a キーワード in クラブ活動 until it rises, and there is no
 クラブ活動 here to use one in. Every grant this server makes therefore lands at
 `use_count = 0`, which is the honest value rather than a flattering one.
+⭐ Round 196 took the ceiling off that: where the count STOPS is restored now
+(KEYWORD_FULL_SCALE), so what is left invented is the step, not the scale.
 
 ⭐ /kw stays, and its job is unchanged: it is a knob in the same family as /ab
 and /card — it puts a character into a state the original would have reached by
@@ -396,6 +403,36 @@ KEYWORD_BLOCKS = (
 )
 KEYWORD_COUNT = sum(last - first + 1 for first, last in KEYWORD_BLOCKS)  # 261
 
+# ⭐⭐⭐ 習熟度's full scale, MEASURED in round 196. It is per-keyword and it
+# lives in the client's own table: `keyword.bin` record +0x78, one byte, which
+# the client divides `useCount` by to get the gauge's fill ratio:
+#
+#     0x0049fdf2  movzx eax, word ptr [eax + 2]      ; useCount, from 0x4305
+#     0x0049fdf9  movzx eax, byte ptr [ebx + 0x78]   ; this keyword's full scale
+#     0x0049fdfd  fild  dword ptr [ebp - 0x18]       ; float(useCount)
+#     0x0049fe08  fidiv dword ptr [ebp - 0x18]       ; useCount / full scale
+#     0x0049fe0b  fstp  dword ptr [ecx + 0x14]       ; -> the gauge widget
+#
+# The column takes four values across all 261 rows, 64 being the default, and
+# the ten exceptions below are the ones the original made harder to master.
+# ⭐ The boundary is on the screen, not inferred: at 満 − 1 the bar stops short
+# and at 満 it jumps to full, checked at all four values (see 2.152).
+# ⚠️ This says what fills the gauge. It does NOT say how much one use adds --
+# that number is the server's and nothing here knows it yet.
+KEYWORD_FULL_SCALE_DEFAULT = 64
+KEYWORD_FULL_SCALE = {
+    0: 80,    # ベストエンドは二人の秘密
+    38: 90,   # 嘘からでた真
+    183: 90,  # 人生のワイルドカード
+    345: 90,  # ラテンの心
+    502: 80,  # ジャーナリズムの血
+    624: 80,  # チームワークの勝利
+    633: 80,  # 好敵手と書いて『とも』と読む
+    645: 100,  # ワンフォアオール
+    762: 80,  # 悪への怒りは爆発寸前
+    791: 90,  # マウス・トゥ・マウス
+}
+
 # `clubskill.bin`'s 57 keys. The key is the pair (categoryId, id) and the
 # category is the club, so this is simply "how many 部活奥義 each club has":
 # seven each, except 野球部 which has eight. Indexed by categoryId, and
@@ -489,6 +526,16 @@ def keyword_exists(keyword_id: int) -> bool:
 def keyword_ids() -> "list[int]":
     """Every legal キーワード id, in order."""
     return [i for first, last in KEYWORD_BLOCKS for i in range(first, last + 1)]
+
+
+def keyword_full_scale(keyword_id: int) -> int:
+    """`useCount` at which this キーワード's 習熟度 gauge reads full.
+
+    See KEYWORD_FULL_SCALE: the value is the client's own, read out of
+    `keyword.bin` and confirmed on the screen at all four of its values.
+    ⚠️ Nothing sends 0x5C17 on reaching it yet -- see the module docstring.
+    """
+    return KEYWORD_FULL_SCALE.get(keyword_id, KEYWORD_FULL_SCALE_DEFAULT)
 
 
 def club_skill_exists(category: int, skill_id: int) -> bool:
