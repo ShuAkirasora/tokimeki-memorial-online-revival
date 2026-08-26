@@ -2118,10 +2118,14 @@ class MpsServer:
             print(f"[{self.tag}] script at {where} op=0x{op:04x} "
                   f"{here[2] + ' ' + here[3] if here else '<not an instruction start>'}")
             shadow = self._shadow_at(session, local, op)
-            if shadow is not None and op not in (script.OP_BR, script.OP_END):
-                # Everything but the two the client waits on it resolved by
+            if shadow is not None and op not in (
+                script.OP_BR, script.OP_END, script.OP_SYNC_VARIABLE
+            ):
+                # Everything but the three the client waits on it resolved by
                 # itself, so the shadow resolves it the same way and moves on.
                 shadow.flowed()
+            if op == script.OP_SYNC_VARIABLE:
+                return self._script_variable(session, seen, local, shadow)
             if op == script.OP_END:
                 # ⭐ The script says it is over, and until the server agrees the
                 # client holds the event screen up with nothing on it — a black
@@ -2264,6 +2268,46 @@ class MpsServer:
         # Variables, errors, and the rest: logged, not answered. What the client
         # asks for unprompted is exactly what this run is here to find.
         return None
+
+    def _script_variable(self, session: "_Session", seen: int, local_ip: int,
+                         shadow) -> bytes:
+        """Answer a stopped SYNC_VARIABLE with MsgSvNotifyScriptCommandVariable.
+
+        ⭐⭐⭐ The client asks because it cannot answer: its OP_STR and its whole
+        arithmetic family are logging stubs, so the register a line of dialogue
+        is about to interpolate exists only on this side. In amm_e001 that is
+        「確か$s00組だったかな……」 — the class name S0 was written a few dozen
+        ips earlier by the branch chain over 自分のクラス, and until this
+        existed the client sat on the finished page of dialogue forever.
+
+        ⭐ **An empty list still releases it**, and that is the fallback here
+        rather than silence: 0x9f0048 skips its apply loop when the count is
+        zero and goes straight to the wait-flag clear at the bottom. So a script
+        with no shadow — nobody ran `the script exporter` for it — plays on
+        with an unfilled placeholder instead of stopping dead. ⚠️ Which is worth
+        seeing in the log, because "the text has a hole in it" and "the script
+        hung" look nothing alike on screen and identical from here.
+        """
+        entries = shadow.sync_values() if shadow is not None else []
+        if shadow is None:
+            print(f"[{self.tag}] ⚠️ SYNC_VARIABLE ip={local_ip} — no shadow, "
+                  f"sending an empty list to release the client")
+        elif not entries:
+            print(f"[{self.tag}] ⚠️ SYNC_VARIABLE ip={local_ip} — the export "
+                  f"names no registers here, sending an empty list")
+        else:
+            told = ", ".join(
+                f"{gs3vm.register_name((category, number))}="
+                + ("?" if value is None else repr(value))
+                for category, number, value in entries
+            )
+            unknown = sum(1 for _, _, value in entries if value is None)
+            print(f"[{self.tag}] SYNC_VARIABLE ip={local_ip} -> {told}"
+                  + (f"  ⚠️ {unknown} of them this end could not say" if unknown else ""))
+            shadow.flowed()
+        return self._answer(session, seen,
+                            script.MSG_SV_NOTIFY_SCRIPT_COMMAND_VARIABLE,
+                            script.command_variable_params(entries))
 
     def _script_select(self, session: "_Session", seen: int, local_ip: int) -> bytes:
         """Answer a stopped INPUT_SELECT with MsgSvQueryScriptCommandSelect."""

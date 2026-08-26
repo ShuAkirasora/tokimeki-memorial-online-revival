@@ -193,6 +193,45 @@ MSG_CL_NOTIFY_SCRIPT_COMMAND_SELECT_DEFAULT = 0x7223
 # which is the tell — it is the closing bracket, not a new instruction.
 MSG_SV_NOTIFY_SCRIPT_COMMAND_END = 0x721D
 
+# ⭐⭐⭐ The third command that stops the client dead, and the only one it stops
+# on through the ordinary 0x721b rather than a 0x721c Begin. Round 189 hit it
+# twice in one run of the tutorial and read the second one as the proof: the
+# page of dialogue was fully drawn, two clicks and three seconds changed not one
+# pixel, and the last report was still this ip.
+#
+# ⭐ What it wants is 0x721E below. The client cannot fill in a `$s00` by
+# itself -- its OP_STR and arithmetic slots are logging stubs (round 169) -- so
+# a script about to interpolate a register asks this end for it first.
+OP_SYNC_VARIABLE = 0x903F
+
+# ⭐⭐⭐ The answer to a SYNC_VARIABLE: the registers it named, with the values
+# this end computed. Round 189 found the handler is real (0x784b1f, on the very
+# listener this server's conversations already go through) while three of its
+# neighbours are the `mov al,1; ret 4` stub; round 190 read the wire format out
+# of the deserialiser. Sending it is also what releases the client -- 0x9f0048
+# ends by clearing the interpreter's wait flag through 0x9f002c, the same call
+# 0x721d makes.
+MSG_SV_NOTIFY_SCRIPT_COMMAND_VARIABLE = 0x721E
+
+# One entry's value block, per register category, at the widths the client's own
+# write slots use (0x9f1e17): a FLAG is a byte at +0x60, 16BIT a u16 at +0xc4,
+# 32BIT a u32 at +0x18c, and the two string categories are a `rep movsd` into
+# fixed-width buffers -- 52 bytes at +0x31c for SSTRING, 148 at +0x99c for
+# LSTRING. ⭐ Sending exactly that many bytes is what keeps the tail of a short
+# string from being whatever the receiving buffer happened to hold: the client
+# copies its full width regardless of how few bytes arrived.
+VARIABLE_WIDTHS = {0: 1, 1: 2, 2: 4, 3: 52, 4: 148}
+
+# The two of those whose block is text rather than a little-endian number.
+VARIABLE_STRING_CATEGORIES = (3, 4)
+
+# ⚠️ The client deserialises into a fixed array of 64 entries -- the count field
+# sits at +0x2604, which is 4 + 64*152 -- and neither the read loop (0x8e9da0)
+# nor the apply loop (0x9f0048) checks the count against it. Nothing in the 683
+# scenarios synchronises more than four registers at once, so this cap has never
+# been near; it is here because the consequence of passing it is not an error.
+VARIABLE_MAX = 64
+
 # Where a script stops of its own accord. Anything past it is not ours to send.
 OP_END = 0x9084
 
@@ -572,6 +611,62 @@ def select_params(select: int, timer_count: int) -> bytes:
 def command_end_params(wire_ip: int, op: int) -> bytes:
     """A MsgSvNotifyScriptCommandEnd body: the Begin's own {ip, op}, echoed."""
     return struct.pack(">IH", wire_ip, op)
+
+
+def variable_entry(category: int, number: int, value) -> bytes:
+    """One `{category, number, byteLen, value}` of a 0x721E body.
+
+    `value` is an int for a numeric category, a str for a string one, or None
+    for "this end could not say" -- which goes out as the category's zero (0,
+    or the empty string) rather than being dropped, because the client is
+    waiting on the entry count and a short list leaves a register holding
+    whatever was in it.
+
+    ⚠️⚠️ **Two byte orders in one record, and they are not a mistake.** The
+    length goes through the stream's own u16 reader and is big-endian like every
+    other field on this wire; the value block is `memcpy`d out of the stream
+    (0xa49610) and then read back with plain x86 loads -- `mov cx, [esi]` for a
+    16BIT, `mov ecx, [esi]` for a 32BIT -- so numbers inside it are
+    **little-endian**. Both halves are packed here, in one function, so that the
+    mixture is impossible to read past.
+    """
+    width = VARIABLE_WIDTHS.get(category)
+    if width is None:
+        raise ValueError(f"category {category} has no value block on the wire")
+    if category in VARIABLE_STRING_CATEGORIES:
+        raw = ("" if value is None else str(value)).encode("cp932", "replace")
+        # NUL-terminated and no longer than the buffer it is copied into: the
+        # client reads it back as a C string out of a fixed-width field.
+        block = raw[: width - 1].ljust(width, b"\x00")
+    else:
+        block = int(value or 0).to_bytes(width, "little", signed=False)
+    return struct.pack(">BBH", category & 0xFF, number & 0xFF, width) + block
+
+
+def command_variable_params(entries: Sequence[tuple[int, int, object]]) -> bytes:
+    """A MsgSvNotifyScriptCommandVariable body: `[(category, number, value)]`.
+
+    Shape, read straight out of the client's own deserialiser (0x8e9da0, the
+    vtable[0] of `Input_MsgSvNotifyScriptCommandVariable`) in round 190::
+
+        u16 count
+        count x { u8 category, u8 number, u16 byteLen, byteLen bytes }
+
+    ⭐ The category numbers are the *same seven* the bytecode's operand encoding
+    uses (round 169: 0 FLAG, 1 16BIT, 2 32BIT, 3 SSTRING, 4 LSTRING, 5
+    SELITEM_DISP_FLAG, 6 SELECT). That is not an assumption carried over -- the
+    handler's own dispatch at 0x9f0048 splits on the first byte into exactly
+    those seven cases, with 0 and 5 reading a bool, 1 and 6 a u16, 2 a u32, and
+    3 and 4 taking the block as a buffer. Two independent readings, one table.
+
+    ⚠️ Only categories 1 and 3 have ever been on this wire, because those are
+    the only two the 683 scenarios ever synchronise (473 and 604 of 1077
+    entries, and not one of any other kind).
+    """
+    kept = list(entries)[:VARIABLE_MAX]
+    return struct.pack(">H", len(kept)) + b"".join(
+        variable_entry(category, number, value) for category, number, value in kept
+    )
 
 
 # `timerCount` is a duration in units unknown, and stayed unknown: the box does

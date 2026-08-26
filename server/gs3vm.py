@@ -124,6 +124,15 @@ OP_SD_ENV_PLAY = 0x6080
 CAT_SELITEM = 5
 CAT_SELECT = 6
 
+# The two string categories. The client keeps them as fixed-width buffers --
+# 52 bytes for SSTRING and 148 for LSTRING, read straight off the write slots
+# at 0x9f1e17 -- while this end keeps a reference into the .ssb's string pool,
+# which `Script.strings` turns back into text. Nothing in the 683 scenarios
+# ever synchronises an LSTRING; it is here because the client's own dispatch
+# has it, not because it has been seen.
+CAT_SSTRING, CAT_LSTRING = 3, 4
+STRING_CATEGORIES = (CAT_SSTRING, CAT_LSTRING)
+
 # What the client reports as it plays, and what that does *not* include.
 #
 # ⭐ Four of the five control-flow opcodes are reported every time they are
@@ -219,6 +228,20 @@ def _refer_register(args: bytes):
     return None if field & 0x1E else _register(field >> 5)
 
 
+# The letters the client's own debug strings use for the eight operand
+# categories, so that a log line here reads the same as one out of
+# `the opcode table` next door: F0 is a flag, B2 a 16-bit, S0 a short string.
+REGISTER_LETTERS = {0: "F", 1: "B", 2: "D", 3: "S", 4: "L", 5: "P", 6: "E"}
+
+
+def register_name(reg: tuple[int, int]) -> str:
+    """`(category, number)` as `B2` / `S0`, or `#n` for an immediate."""
+    category, number = reg
+    if category == CAT_IMMEDIATE:
+        return f"#{number}"
+    return f"{REGISTER_LETTERS.get(category, '?')}{number}"
+
+
 def cell_name(family: str, address) -> str:
     """`PC[0x3a04]` / `CTX[0xd900@0x11]` -- how a data cell is named in a log."""
     where = (f"{address[0]:#06x}@{address[1]:#04x}"
@@ -254,6 +277,16 @@ class Script:
         self.labels = list(doc["labels"])
         self.code = [(ip, op, bytes.fromhex(args)) for ip, op, args in doc["code"]]
         self.index = {ip: i for i, (ip, _, _) in enumerate(self.code)}
+        # The two things a SYNC_VARIABLE needs and the instruction stream does
+        # not carry. Which registers it synchronises lives in the .ssb's
+        # auxiliary table, and a string register's value is a reference into
+        # the .ssb's string pool -- neither of which this end has, or wants to
+        # have (the export exists so that no .ssb parser lives here). Both are
+        # optional: an export made before round 190 has neither, and a script
+        # with no SYNC_VARIABLE in it needs neither.
+        self.sync = {int(ip): [tuple(r) for r in regs]
+                     for ip, regs in doc.get("sync", {}).items()}
+        self.strings = {int(v): text for v, text in doc.get("strings", {}).items()}
 
     def local_ip(self, wire: int) -> int:
         """The client's cursor (file bytes) in this module's unit (u16 words)."""
@@ -434,17 +467,31 @@ class Machine:
             return i + 1
 
         if op == OP_SYNC_VARIABLE:
-            # Which registers it synchronises is not in the operands: it is a
-            # run of entries in the .ssb's auxiliary table, which the export
-            # deliberately does not carry (the export exists so that this end
-            # needs no .ssb parser at all). ⛔️ So it raises instead of passing:
-            # letting it by would leave whatever the other player wrote sitting
-            # in a register as though this end had computed it.
-            raise UnsupportedOp(
-                f"{self.script.name}: SYNC_VARIABLE at ip={ip} -- its register "
-                f"list lives in the .ssb's auxiliary table, which the export "
-                f"does not carry"
-            )
+            # ⭐⭐⭐ It sends, it does not receive -- and that is the whole
+            # reason this instruction exists. The client's slots for OP_STR and
+            # for the whole arithmetic family are stubs that push the cursor and
+            # log (round 169), so a register file only ever exists on *this*
+            # side; SYNC_VARIABLE is where the script hands the client the few
+            # registers its next line of dialogue is about to interpolate.
+            # Measured end to end in amm_e001: ip=3791..3819 write S0/S1 to a
+            # class name and a floor, ip=3845/3865 synchronise them, and
+            # ip=3849/3869 say 「確か$s00組」/「$s01階ね」. So passing it through
+            # with the values this end computed is not a guess about what the
+            # other player wrote -- there is nothing to receive.
+            #
+            # ⚠️ Which registers, though, is not in the operands: it is a run of
+            # entries in the .ssb's auxiliary table, carried by the export as
+            # `Script.sync` since round 190. An export without it cannot say,
+            # and says so rather than passing silently -- the client is stopped
+            # on this instruction waiting to be told, and answering with the
+            # wrong registers is worse than not answering.
+            if ip not in self.script.sync:
+                raise UnsupportedOp(
+                    f"{self.script.name}: SYNC_VARIABLE at ip={ip} -- its "
+                    f"register list lives in the .ssb's auxiliary table, which "
+                    f"this export does not carry (re-run the script exporter)"
+                )
+            return i + 1
 
         if op in DATA_READ:
             reg = _refer_register(args)
@@ -601,7 +648,12 @@ class Machine:
 
 
 # The two instructions the client stops dead on and waits for this end.
-STOPS = {OP_END, OP_INPUT_SELECT}
+# ⭐ SYNC_VARIABLE joins these two as of round 190. It is reported through the
+# ordinary 0x721b and then the client sits on it -- measured twice in one run of
+# amm_e001, once on a black screen and once on a fully drawn page of dialogue
+# that would not turn (round 189). So a walk that steps over an unreported one
+# has gone somewhere the client did not.
+STOPS = {OP_END, OP_INPUT_SELECT, OP_SYNC_VARIABLE}
 
 
 class Follower(Machine):
@@ -734,6 +786,38 @@ class Follower(Machine):
         return None
 
     # -- the two things worth reporting -----------------------------------
+    def sync_values(self) -> list[tuple[int, int, object]]:
+        """`[(category, number, value)]` for the SYNC_VARIABLE the client is on.
+
+        ⭐⭐ The one place this shadow *speaks*, and the reason it is allowed to:
+        every other stop asks the server to decide something, while this one
+        asks it to report what it already computed. The client cannot compute
+        it -- its OP_STR and arithmetic slots are logging stubs -- so a register
+        this end does not know is a register nobody knows.
+
+        A value of ``None`` is exactly that case: TOP, or a string reference the
+        export cannot resolve. The caller sends it as an empty value rather than
+        dropping the entry, because the entry count is what releases the client
+        and a short list would leave a register holding whatever was in it.
+        """
+        if self.lost:
+            return []
+        ip, op, _ = self.script.code[self.pos]
+        if op != OP_SYNC_VARIABLE:
+            return []
+        out: list[tuple[int, int, object]] = []
+        for category, number in self.script.sync.get(ip, ()):
+            try:
+                value = self._get((category, number))
+            except UnsupportedOp:
+                value = TOP
+            if category in STRING_CATEGORIES:
+                value = None if value is TOP else self.script.strings.get(value)
+            elif value is TOP:
+                value = None
+            out.append((category, number, value))
+        return out
+
     def branch(self) -> tuple:
         """`(condition, where it would go)` for the OP_BR the client is on.
 
