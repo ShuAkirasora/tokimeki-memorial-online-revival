@@ -261,6 +261,7 @@ HELP = (
     "/dms マッチング画面を開かせる (0xe002+0xe003+0xe004)",
     "/pwt [on|off] PLAYER_WAIT_TIME に 0x721d を返すか (既定 off)",
     "/pcinfo [0|1|off] pcInfo[] に自分をどの役柄で載せるか (既定 0)",
+    "/tutorial on|off 初登校フラグ (0x0319 の tutorialFlag) を張り直す",
     "/season [clock|script|0-3] 立ち絵背景の季節 (既定 clock)",
 )
 
@@ -430,6 +431,10 @@ class Reply(NamedTuple):
     club_save: bool = False
     # Same, for the アイテム inventory; see /item.
     item_save: bool = False
+    # Arm (True) or clear (False) this character's 初登校; see /tutorial. Not a
+    # save flag like the ones above -- there is no object being mutated in
+    # place, just one bit on the record -- so it carries the value itself.
+    debut: bool | None = None
     # Same, for the account's ロッカー; see /locker. ⚠️ A separate flag rather
     # than a second use of item_save because the two live in different files and
     # belong to different owners — the inventory to a character, the locker to
@@ -2107,6 +2112,28 @@ def respond(
             + ("台本の定数のまま" if source == "script"
                else f"{now} {names[now]} (校内時計)" if source == "clock"
                else f"{source} {names[source]} に固定")
+        ])
+
+    if word == "tutorial":
+        # ⭐⭐ 初登校 の再武装. The flag this sets rides in the character list
+        # (characters.list_entry's tutorialFlag), which goes out at the select
+        # screen -- so it does nothing to the session typing it. ⚠️⚠️ It takes a
+        # 下校 and a second 登校 to see, and that is not a limitation to work
+        # around: the whole question is what the client does with the flag when
+        # it draws that screen.
+        #
+        # A knob only in the sense that a save is: the value is the record's,
+        # not a module global, so nothing here has to be restored afterwards.
+        words = rest.split()
+        if words and words[0] in ("on", "off"):
+            return Reply(
+                ["初登校: " + ("次の登校でチュートリアル" if words[0] == "on"
+                              else "済み扱い")
+                 + "（⚠️ 反映は次のキャラクター選択画面から）"],
+                debut=words[0] == "on",
+            )
+        return Reply([
+            "/tutorial on|off  ⚠️ 一度下校してから登校し直すこと",
         ])
 
     if word == "pcinfo":

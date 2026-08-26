@@ -127,6 +127,107 @@ SPAWN_MAP_ID = 1
 # ground a character is allowed to be on.
 SPAWN_POS = (106, 84)
 
+# ⭐⭐⭐ 初登校: where a character stands the very first time [登校] is pressed,
+# one cell per 自分のクラス. RESTORED, and not from a table of positions -- there
+# is no such table. It is read out of the tutorial's own walk.
+#
+# The manual (`manual/p02_06`) says 初登校 plays the tutorial and then enters
+# マップモード, and that every later 登校 puts the character back where it logged
+# out. So the only 登校 this server has to answer for itself is the first one,
+# and the honest answer is wherever the tutorial leaves the player standing --
+# which is a thing the script says out loud.
+#
+# `amm_e001`/`skr_e001`'s second-to-last block (label 21, ip=3898) is 「and this
+# is your own classroom」: it reads PC[0x301c] (自分のクラス, see the protocol notes
+# 2.143), dispatches on it through a binary comparison tree, walks PC#0 along one
+# MAP_ROUTE per class, and every arm merges into the same three instructions --
+# MAP_CHARA_MOVE_WAIT PC#0, MAP_CHARA_DIRECTION PC#0 dir=9, SCREEN_BLACK_OUT.
+# So the last waypoint of that route is where the event ends, and dir 9 (右上,
+# facing.UP|facing.RIGHT) is which way it leaves the player turned.
+#
+# The routes are declared in the script's first 32 instructions. `MAP_ROUTE`'s
+# operand is the same `(aux word offset << 12) | count` packing SYNC_VARIABLE and
+# OP_STR's immediates use (2.144 四), and each waypoint is two little-endian i32,
+# x then y. `MAP_CHARA_MOVE_MAP`'s route number is a 0-based index into those
+# declarations -- measured, not assumed: PC#0 stands on 屋外 at (88,59) when it is
+# told to walk route 1, and declaration 1's first waypoint is (88,66); it stands
+# in the 1F corridor at (85,23) when A組 is told to walk route 2, and declaration
+# 2's first waypoint is (85,15). Read as 1-based, neither lines up with anything.
+#
+# Walking all 26 values of PC[0x301c] through the dispatch tree with the
+# evaluator (`the script evaluator`'s Eval, so the tree is executed rather than eyed)
+# gives the table below, with no exceptions and nothing left over:
+#
+#   0-9   A-J組  map  2 一般教室校舎1F  y=12  x = 22 34 46 58 70 111 123 135 147 159
+#   10-19 K-T組  map 15 一般教室校舎2F  y= 3  x = 21 33 45 57 69 110 122 134 146 158
+#   20-25 U-Z組  map 28 一般教室校舎3F  y= 3  x = 21 33 45 57 69 110
+#
+# ⭐ Four things agree with it and none of them is this reading again:
+#   * 26 cells for the 26 classrooms `map.bin` has, which is what pinned
+#     PC[0x301c]'s value range in the first place (2.143 四) -- 10 + 10 + 6, the
+#     same split as that table's 3–12 / 16–25 / 29–34.
+#   * The doors are 12 cells apart, all of them, on all three floors.
+#   * 1F's gap between x=70 and x=111 is where the two staircases are: routes 7
+#     and 8, the arms that carry 2F and 3F classes upstairs, end at x=74 and x=98.
+#   * The β1 tester's diary (`lib/diary01_01`): 「チュートリアル終了後…なんか人が
+#     たまっていると思ったら自分の教室前でした。（Ａ組）」. A組 is class 0, and
+#     class 0 lands at 一般教室校舎1F (22,12) -- 自分の教室前. ⚠️ 2.143 二 is right
+#     that this sentence cannot say where a tutorial *starts*; it is being used
+#     here for where one *ends*, which is what it actually reports.
+#
+# ⚠️ INVENTED, and it is one decision rather than a number (the smallest-invention rule):
+# that a character who has not had its 初登校 yet is placed at the end of the walk
+# rather than at the start. Nothing says what the original sent in the 0x480F that
+# precedes the tutorial. Placing them at the end is what makes the two versions of
+# the tutorial agree: the long one walks there and stops, and the short one --
+# 「ひとりで行ける」, which never touches a map at all (2.143 五) -- leaves the
+# player wherever this server put them.
+
+#: どの組に在籍しているか, for every character this server has. Ａ組 until
+#: something assigns one -- the same 0 `MsgSvResultScoreCard`, `0x0319` and
+#: `0x6501` have all been sending since long before this constant existed, and
+#: the same one `_Session.in_class` starts at. It is named here because 初登校
+#: now reads it too: the wire says Ａ組 and the tutorial has to walk to Ａ組's
+#: door, and a literal 0 in two files is two places for that to drift apart.
+IN_CLASS = 0
+
+DEBUT_FACING = facing.UP | facing.RIGHT  # dir 9, the way the walk's last leg goes
+DEBUT_CELLS: tuple[tuple[int, int, int], ...] = (
+    (2, 22, 12), (2, 34, 12), (2, 46, 12), (2, 58, 12), (2, 70, 12),
+    (2, 111, 12), (2, 123, 12), (2, 135, 12), (2, 147, 12), (2, 159, 12),
+    (15, 21, 3), (15, 33, 3), (15, 45, 3), (15, 57, 3), (15, 69, 3),
+    (15, 110, 3), (15, 122, 3), (15, 134, 3), (15, 146, 3), (15, 158, 3),
+    (28, 21, 3), (28, 33, 3), (28, 45, 3), (28, 57, 3), (28, 69, 3),
+    (28, 110, 3),
+)
+
+
+# ⭐ One more agreement, and from a table decoded somewhere else entirely: the
+# three corridors are the map right in front of each floor's first classroom in
+# `curriculum.CLASSROOM` (3-1 = 2, 16-1 = 15, 29-1 = 28), which comes out of
+# `class.bin` and `map.bin`. Asserted rather than remarked on, because the two
+# tables have to keep the same 26 rows in the same three runs or a lesson and a
+# 初登校 would disagree about which floor somebody's 組 is on.
+if len(DEBUT_CELLS) != len(curriculum.CLASSROOM):
+    raise AssertionError(
+        f"{len(DEBUT_CELLS)} 初登校 cells for "
+        f"{len(curriculum.CLASSROOM)} classrooms")
+
+
+def debut_cell(in_class: int = 0) -> tuple[int, int, int]:
+    """``(mapId, posX, posY)`` for a character who has never been to school.
+
+    ⚠️ Out-of-range falls back to A組 rather than raising: 自分のクラス is a
+    stored number and a save written by hand can hold anything, while the client
+    has 26 classrooms and no 27th to draw.
+    """
+    if not 0 <= in_class < len(DEBUT_CELLS):
+        print(f"[characters] 自分のクラス {in_class} is not one of the "
+              f"{len(DEBUT_CELLS)} classrooms; 初登校 falls back to A組")
+        in_class = 0
+    return DEBUT_CELLS[in_class]
+
+
 # Standing the player on ex_map_object's numbers put it on flat blue with no
 # scenery at all, and the client never emitted a move for any click — it only
 # turned to face one. Blue is the map's out-of-bounds colour: 屋外's artwork is a
@@ -474,6 +575,7 @@ def list_entry(
     title: int = 0,
     class_post: int = 0,
     club_post: int = posts.NO_CLUB_POST,
+    tutorial_flag: int = 0,
 ) -> bytes:
     """Build one 238-byte MsgSvResultCharacterListFromAccount entry.
 
@@ -506,7 +608,7 @@ def list_entry(
         out += struct.pack(">H", f[key])
     out += struct.pack(">H", 1)  # period
     out += group_name.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]  # friendGroupName
-    out += struct.pack(">HH", 0, in_club)  # inClass (0 = A組), inClub
+    out += struct.pack(">HH", IN_CLASS, in_club)  # inClass (0 = A組), inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
     out += struct.pack(">BB", couple_flag, 1)  # coupleFlag, newbieFlag
     # ⭐ Three hard zeros until round 156. ``title`` is the 称号 out of the 経歴
@@ -526,7 +628,13 @@ def list_entry(
     out += struct.pack(">HHH", map_id, *(pos or SPAWN_POS))  # posInfo: mapId, posX, posY
     out += struct.pack(">B", 0)  # direction
     out += struct.pack(">H", captured_npc_id)  # capturedNpcId
-    out += struct.pack(">B", 0)  # tutorialFlag
+    # ⭐⭐⭐ 初登校. `manual/p02_06`: 「選択したキャラクターが初登校の場合には
+    # チュートリアルイベントを行った後、マップモードに入ります」 -- so the screen
+    # this entry draws is where 「is this one's first day」 is decided, and this
+    # is the only field on the wire that could say it. Hard 0 until round 192,
+    # and nothing this end sends is read anywhere else, which is what made it the
+    # cheapest thing to try. See CharacterStore.debut_pending.
+    out += struct.pack(">B", 1 if tutorial_flag else 0)  # tutorialFlag
     if len(out) != ENTRY_SIZE:
         raise AssertionError(f"entry is {len(out)}B, reader wants {ENTRY_SIZE}")
     return bytes(out)
@@ -676,7 +784,7 @@ def chara_info(
     for key in LOOKS + ACCESSORY:
         out += struct.pack(">H", f[key])
     out += struct.pack(">H", f["charaType"])
-    out += struct.pack(">HHH", 1, 0, in_club)  # period (1 期生), inClass (A組), inClub
+    out += struct.pack(">HHH", 1, IN_CLASS, in_club)  # period (1 期生), inClass, inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
     # ⚠️ coupleFlag is derived, never stored: one field cannot say 「恋人あり」
     # while the other says who, so the flag is 1 exactly when there is an id.
@@ -756,9 +864,59 @@ class CharacterStore:
             chara_id = max(
                 (int(r["charaId"]) for r in self.records), default=CHARA_ID_BASE - 1
             ) + 1
-        self.records.append({"charaId": chara_id, "info": info.hex()})
+        # ⭐ "debut": this character has not had its 初登校 yet. Written at
+        # creation rather than inferred later, so that the day this file is read
+        # by something that has never seen the migration rule below, the answer
+        # is in the record instead of in a heuristic.
+        self.records.append({"charaId": chara_id, "info": info.hex(),
+                             "debut": True})
         self._save()
         return chara_id
+
+    # ── 初登校 ──────────────────────────────────────────────────────────────
+    def debut_pending(self, chara_id: int) -> bool:
+        """Has this character never been to school? (the ``tutorialFlag``)
+
+        ⚠️⚠️ The obvious test -- ``career.visits == 0`` -- is wrong on this
+        server's own saves and would have gone unnoticed for a round: the three
+        characters on account 1 predate career.py entirely and have no "career"
+        key at all, and account 10's has ``visits: 0`` beside ``seconds: 36``.
+        Every one of them would have been called a first-timer and handed the
+        tutorial again. So the count is not the evidence.
+
+        The migration rule for a record written before "debut" existed is the
+        one thing that is safe: a character that has never been in the world has
+        never had anything written about it. Every path out of 登校 leaves a
+        mark -- ``set_position`` writes "pos"/"map" on the first step taken and
+        ``career`` on the first 登校 answered -- so a record holding nothing but
+        the two keys ``add`` creates has never been played.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            if "debut" in record:
+                return bool(record["debut"])
+            return set(record) <= {"charaId", "info"}
+        return False
+
+    def set_debut_pending(self, chara_id: int, pending: bool) -> bool:
+        """Arm or clear one character's 初登校; False if the id is not ours.
+
+        Cleared by 登校 itself, because that is the moment the flag was read:
+        the client has the answer and the select screen is gone. ⚠️ That means a
+        client which died mid-tutorial does not get a second one -- which is the
+        client's own rule as much as ours, since it is the one deciding what to
+        do with the flag. /tutorial re-arms it.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            if "debut" in record and bool(record["debut"]) == pending:
+                return False  # already says that; no write, no file churn
+            record["debut"] = pending
+            self._save()
+            return True
+        return False
 
     def position(self, chara_id: int) -> tuple[int, int]:
         """Where this character last stood, or the spawn point if it never has."""
@@ -779,6 +937,14 @@ class CharacterStore:
             map_id = int(record.get("map", SPAWN_MAP_ID))
             if isinstance(pos, list) and len(pos) == 2:
                 return map_id, int(pos[0]), int(pos[1])
+            if "map" not in record and self.debut_pending(chara_id):
+                # ⭐ Never been to school: stand where the tutorial ends, in
+                # front of this character's own classroom. See DEBUT_CELLS.
+                # ⚠️ Guarded on "map" as well as on the flag, so that /tutorial
+                # re-arming an established character replays the event without
+                # also teleporting them: a record that has been anywhere keeps
+                # saying where.
+                return debut_cell(IN_CLASS)
             return map_id, *SPAWN_POS
         return SPAWN_MAP_ID, *SPAWN_POS
 
@@ -834,6 +1000,29 @@ class CharacterStore:
             return b""
         return book.fields(chara_id)[0]
 
+    def reload(self) -> None:
+        """Re-read the file, in case another connection wrote it.
+
+        ⚠️⚠️ A store belongs to one connection, and a player has more than one:
+        the select screen is served on the school connection while everything
+        said in chat arrives on the game connection, each with its own snapshot
+        of the same file. Every mutator here is write-through, so the file is
+        always the newer of the two -- but a snapshot taken at bind time is not,
+        and 初登校 is the first field where that shows: /tutorial writes the bit
+        from the game connection and the select screen has to see it.
+
+        ⚠️ Called from `entries` and nowhere else on purpose. It is safe there
+        because the select screen is drawn before anything on this connection
+        has changed a record, and it would not be safe everywhere: this replaces
+        `self.records` wholesale.
+        """
+        if self.path is None or not self.path.exists():
+            return
+        try:
+            self.records = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"[characters] keeping the loaded copy of {self.path}: {exc}")
+
     def entries(self) -> bytes:
         """``u16 count`` followed by one entry per character.
 
@@ -843,6 +1032,7 @@ class CharacterStore:
         the first real character, which is also why they are skipped when the
         account is empty: there would be nothing to clone.
         """
+        self.reload()
         parts = []
         for record in self.records:
             chara_id = int(record["charaId"])
@@ -860,6 +1050,7 @@ class CharacterStore:
                     title=self.title(chara_id),
                     class_post=held.class_post,
                     club_post=held.club_post,
+                    tutorial_flag=1 if self.debut_pending(chara_id) else 0,
                 )
             )
         if self.records and LIST_PROBES:

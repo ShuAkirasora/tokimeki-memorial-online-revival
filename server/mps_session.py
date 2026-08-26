@@ -52,6 +52,8 @@ from typing import Callable
 from characters import (
     LOOKS,
     ACCESSORY,
+    DEBUT_FACING,
+    IN_CLASS,
     MARK_DOORS,
     MAX_CHARACTERS,
     SPAWN_POS,
@@ -455,6 +457,8 @@ DRAMA_DOORS = {
     script.MSG_CL_REQUEST_NPC_MAP_OBJECT_MENU,
     script.MSG_CL_REQUEST_NPC_EVENT_START,
     script.MSG_CL_REQUEST_NPC_EVENT_END,
+    script.MSG_CL_REQUEST_TITLE_EVENT_START,
+    script.MSG_CL_REQUEST_TITLE_EVENT_END,
     script.MSG_CL_REQUEST_DRAMA_EVENT_START,
 }
 
@@ -1624,7 +1628,20 @@ class MpsServer:
         if runner is None:
             return
         love = self._chars(session).romance(session.chara_id)
-        runner.shadow = gs3vm.follow(script_id, love.data_cells() if love else {})
+        cells = dict(love.data_cells()) if love else {}
+        # ⭐ 自分のクラス. Not out of the 恋愛 record -- out of the same constant
+        # the character list and 0x6501 put on the wire, which is the whole
+        # point: the tutorial reads this cell to decide which classroom door to
+        # walk the player to, and the select screen has already told the client
+        # which 組 it is. Two ends answering the same question differently is
+        # the failure this closes.
+        # ⚠️ Reported, not obeyed: `Follower.scenery_road` refuses any road with
+        # an `OP_BR` on it, and the dispatch tree this cell feeds is nothing but
+        # OP_BR, so the branch itself still gets the standing 「no」 (2.137). What
+        # changes is that the log says `vm cond=…` instead of ⊤, i.e. this end
+        # now knows the answer it is declining to give.
+        cells[("PC", script.PC_IN_CLASS)] = IN_CLASS
+        runner.shadow = gs3vm.follow(script_id, cells)
         if runner.shadow is None:
             print(f"[{self.tag}] vm: id={script_id} is not in runtime/scripts "
                   f"— no shadow for this one")
@@ -1978,6 +1995,45 @@ class MpsServer:
                 session, seen, script.MSG_SV_OK_NPC_MAP_OBJECT_MENU,
                 struct.pack(">H", answer),
             )
+
+        if msg_type == script.MSG_CL_REQUEST_TITLE_EVENT_START:
+            # ⭐⭐⭐ 初登校. The client picked this scriptId out of its own table
+            # after the character list said tutorialFlag = 1, and it is sitting
+            # on 「登校処理を行っています」 until this is answered -- so an
+            # unanswered 0x6C00 is a 登校 that never finishes, not a cosmetic
+            # gap. See script.MSG_CL_REQUEST_TITLE_EVENT_START for the whole
+            # bracket and how it was measured.
+            #
+            # Answered exactly like the 0x5600 door below, and for the same
+            # reason: the Ok is empty, so the script has to be pushed behind it
+            # or the client reaches the load with no id and says スクリプト
+            # エラー ID:65535 (round 37).
+            script_id = struct.unpack_from(">H", params, 0)[0] if params else 0
+            found = script.by_script_id(script_id)
+            if found is None:
+                # ⚠️ The other half of the pair, `skr_e001`, is the one a female
+                # character asks for and this machine has no export with an id
+                # for it. A stub still gets the client out of the 登校 rather
+                # than leaving it on the dialog for ever.
+                print(f"[{self.tag}] title event {script_id} has no exported "
+                      f"script — starting a stub (cast empty)")
+                found = script.stub(script_id)
+            print(f"[{self.tag}] ⭐ title event {script_id:#06x} -> {found.file}")
+            infos = [(actor["actorId"], actor["id"]) for actor in found.actors]
+            return (
+                self._answer(session, seen, script.MSG_SV_OK_TITLE_EVENT_START, b"")
+                + self._script_start(session, seen, found, 0, infos)
+            )
+
+        if msg_type == script.MSG_CL_REQUEST_TITLE_EVENT_END:
+            # The closing half. Empty both ways (`the shape reader`), and
+            # unlike the NPC-event end there is no ClearCharacterInfo to send
+            # after it: this event was never started off a map object, so the
+            # client is not waiting to be given a field back -- it is waiting to
+            # be let into one, which is the 登校 it suspended.
+            print(f"[{self.tag}] title event end")
+            return self._answer(
+                session, seen, script.MSG_SV_OK_TITLE_EVENT_END, b"")
 
         if msg_type == script.MSG_CL_REQUEST_NPC_EVENT_START:
             # The client has read the event record we pointed it at and is
@@ -2795,6 +2851,25 @@ class MpsServer:
                 session.chara_id = chara_id
                 session.map_id, *pos = self._chars(session).location(chara_id)
                 session.pos = (pos[0], pos[1])
+                # ⭐⭐⭐ 初登校. The flag went out with the character list this
+                # 登校 was picked off (characters.list_entry's tutorialFlag), so
+                # by the time this message arrives the client already has the
+                # answer and the select screen is gone -- which makes this the
+                # moment it stops being true. `location` above has already put
+                # the character where the tutorial ends; from here on it is
+                # 「前回ログアウトした場所」 like everybody else.
+                #
+                # ⚠️ Cleared whether or not the client actually played the
+                # tutorial. Nothing on this wire says it did, and the alternative
+                # -- keep the flag until something confirms it -- would replay
+                # the tutorial on every 登校 for as long as that confirmation
+                # never comes. /tutorial re-arms it.
+                if self._chars(session).debut_pending(chara_id):
+                    session.direction = DEBUT_FACING
+                    print(f"[{self.tag}] ⭐ 初登校 for charaId={chara_id}: "
+                          f"tutorialFlag was 1, standing at map {session.map_id} "
+                          f"{session.pos} facing {facing.NAMES.get(session.direction, '?')}")
+                    self._chars(session).set_debut_pending(chara_id, False)
                 # Swallow the bells for the lesson already under way, so that
                 # 登校 at 14:53 does not ring the 14:45 本鈴 at someone who
                 # could not have attended it anyway.
@@ -6718,6 +6793,8 @@ class MpsServer:
             self._chars(session).set_career(session.chara_id, cv)
         if answer.posts_save and held is not None:
             self._chars(session).set_posts(session.chara_id, held)
+        if answer.debut is not None:
+            self._chars(session).set_debut_pending(session.chara_id, answer.debut)
         if answer.locker_save:
             self.accounts.save_locker(session.account_id)
         if answer.npc_event is not None:

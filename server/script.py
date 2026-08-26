@@ -928,6 +928,44 @@ MSG_SV_OK_NPC_EVENT_START = 0x5601
 # messages -- Ok/Ng Start, Ok/Ng End, and NotifyNpcEventClearCharacterInfo --
 # so whatever the client is waiting for after an event that came off a map
 # object is one of these three and nothing else in the 0x56xx range.
+# ⭐⭐⭐ タイトルイベント: the door 初登校 comes through, and it is the client
+# that knocks. Measured in round 192, on the first 登校 this server ever
+# answered with `tutorialFlag = 1` in the character list (characters.py): the
+# client stopped mid-登校 on 「登校処理を行っています」 and sent 0x6C00 carrying
+# `npcEventId = 0x2000`, which is `amm_e001` -- the tutorial. ⚠️ Single variable:
+# 0x6C00 appears in exactly one of this server's logs, the one where the flag
+# was 1, and in none of the ~200 rounds before it.
+#
+# ⇒ 2.143 六's hypothesis, confirmed: the client has its own table of which
+# event 初登校 plays and needs to be told nothing but 「this is a first day」.
+# What it does NOT do is come through the map-object door -- this is a channel
+# of its own, with its own procedure class (TitleEventMessageProcedure.cpp) and
+# its own Ok/Ng pair. Nothing in the 0x56xx range is involved.
+#
+#   0x6C00 RequestTitleEventStart  npcEventId u16   -> 0x6C01 Ok (empty)
+#                                                   -> 0x6C02 Ng (u8 reason)
+#   0x6C03 RequestTitleEventEnd    (empty)          -> 0x6C04 Ok (empty)
+#                                                   -> 0x6C05 Ng (u8 reason)
+#
+# Field names from the client's own dumps (`the field-name extractor TitleEvent`),
+# shapes from `the shape reader`. ⭐ `npcEventId` is the same u16 0x5600
+# carries and it means the same thing there: a scriptId, resolved through
+# `by_script_id`.
+MSG_CL_REQUEST_TITLE_EVENT_START = 0x6C00
+MSG_SV_OK_TITLE_EVENT_START = 0x6C01
+MSG_SV_NG_TITLE_EVENT_START = 0x6C02
+MSG_CL_REQUEST_TITLE_EVENT_END = 0x6C03
+MSG_SV_OK_TITLE_EVENT_END = 0x6C04
+MSG_SV_NG_TITLE_EVENT_END = 0x6C05
+
+#: 自分のクラス, 0 = Ａ組 .. 25 = Ｚ組. Pinned by value range in 2.143 四 (26
+#: constants in the tutorial's dispatch tree, 26 classrooms in `map.bin`) and
+#: read by both `<キャラ>_e011` and the tutorial. ⭐ The tutorial dispatches on it
+#: to pick which classroom door to walk the player to; characters.DEBUT_CELLS is
+#: that walk's 26 endpoints, and this end feeds the same value to the shadow VM
+#: that it puts on the wire as `inClass`.
+PC_IN_CLASS = 0x301C
+
 MSG_CL_REQUEST_NPC_EVENT_END = 0x5603
 MSG_SV_OK_NPC_EVENT_END = 0x5604
 MSG_SV_NG_NPC_EVENT_END = 0x5605
