@@ -110,9 +110,12 @@ MSG_CL_NOTIFY_BATTLE_TURN_END = 0x5C16
 #: than a gap — what earns a keyword, an item or a 部活奥義 is not restored, so
 #: the honest count is none, and 「ことがあります」 says none is a legal round.
 #: ⭐ 0x5C17's share of that gap is down to one number as of round 196: which
-#: キーワード 習熟 yields is in `keyword.bin` (+46..+52) and where the gauge
-#: fills is too (`club.keyword_full_scale`); what one *use* adds is not, and it
-#: is the last thing between here and sending this message.
+#: キーワード 習熟 yields is in `keyword.bin` (+46..+52), which of those a
+#: character is eligible for is next to it (+54..+60, one per slot: 0 male,
+#: 1 female, 2 either), and where the gauge fills is `club.keyword_full_scale`.
+#: ⚠️ What one *use* adds is not, and it is the last thing between here and
+#: sending this message. ⚠️ 習熟度 is not only the gate: `p07_02` says it also
+#: raises a キーワード's attack and defence, so raising it moves more than this.
 MSG_SV_NOTIFY_BATTLE_GET_KEYWORD = 0x5C17
 MSG_SV_NOTIFY_BATTLE_GET_ITEM = 0x5C18
 MSG_SV_NOTIFY_BATTLE_GET_CLUB_SKILL = 0x5C19
