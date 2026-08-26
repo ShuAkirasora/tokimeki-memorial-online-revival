@@ -260,6 +260,8 @@ HELP = (
     "/de [<genre>:<番号>|un007 …] ドラマ一覧通知",
     "/dms マッチング画面を開かせる (0xe002+0xe003+0xe004)",
     "/pwt [on|off] PLAYER_WAIT_TIME に 0x721d を返すか (既定 off)",
+    "/pcinfo [0|1|off] pcInfo[] に自分をどの役柄で載せるか (既定 0)",
+    "/season [clock|script|0-3] 立ち絵背景の季節 (既定 clock)",
 )
 
 # MsgSvNotifyNpcControl — the message that puts a chibi NPC on the map.
@@ -2083,6 +2085,47 @@ def respond(
             script.RELEASE_PLAYER_WAIT = words[0] == "on"
         return Reply([f"PLAYER_WAIT_TIME: "
                       + ("解除する" if script.RELEASE_PLAYER_WAIT else "待たせたまま")])
+
+    if word == "season":
+        # `script` leaves the shipped constant standing (the tutorial's is 冬),
+        # `clock` is this server's own answer, and a number forces one arm --
+        # the only way to look at 春 in August. ⚠️ The season itself is
+        # restored, not invented; only the mechanism and the quarter boundaries
+        # are ours. See `script.SEASON_SOURCE`.
+        names = ("春", "夏", "秋", "冬")
+        words = rest.split()
+        if words and words[0] in ("clock", "script"):
+            script.SEASON_SOURCE = words[0]
+        elif words and words[0].isdigit() and int(words[0]) < len(names):
+            script.SEASON_SOURCE = int(words[0])
+        elif words:
+            return Reply([f"clock / script / 0..{len(names) - 1}"])
+        source = script.SEASON_SOURCE
+        now = curriculum.season()
+        return Reply([
+            "季節: "
+            + ("台本の定数のまま" if source == "script"
+               else f"{now} {names[now]} (校内時計)" if source == "clock"
+               else f"{source} {names[source]} に固定")
+        ])
+
+    if word == "pcinfo":
+        # ⭐ Which 役柄 slot the local player is announced in, or none at all.
+        # A knob because the claim behind the factory value -- that `$m00` reads
+        # PC#0 -- is one screen away from being checked, and this asks all three
+        # questions of a client that is already logged in.
+        words = rest.split()
+        if words and words[0] == "off":
+            script.CAST_LOCAL_PLAYER = None
+        elif words and words[0].isdigit() and int(words[0]) < script.PC_INFO_MAX:
+            script.CAST_LOCAL_PLAYER = int(words[0])
+        elif words:
+            return Reply([f"0..{script.PC_INFO_MAX - 1} か off"])
+        return Reply([
+            "pcInfo[]: "
+            + ("載せない" if script.CAST_LOCAL_PLAYER is None
+               else f"自分を PC#{script.CAST_LOCAL_PLAYER} として載せる")
+        ])
 
     if word == "dms":
         # The whole opening bracket of the matching screen, unprompted. The

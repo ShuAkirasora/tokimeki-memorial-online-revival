@@ -556,6 +556,19 @@ def _is_loopback(host: str | None) -> bool:
     return bool(host) and (host.startswith("127.") or host in ("::1", "localhost"))
 
 
+def _season() -> int | None:
+    """`script.SEASON_SOURCE` resolved to a season, or None to leave it alone.
+
+    ⚠️ None is the shipped behaviour and it is not the same as 冬: it means the
+    shadow never touches the register, so whichever constant the script writes
+    into itself is the one the switch sees.
+    """
+    source = script.SEASON_SOURCE
+    if isinstance(source, int):
+        return source
+    return curriculum.season() if source == "clock" else None
+
+
 def ok_login_params(
     host_be: int = 0x0100007F,
     port: int = GAME_PORT,
@@ -1615,6 +1628,19 @@ class MpsServer:
         if runner.shadow is None:
             print(f"[{self.tag}] vm: id={script_id} is not in runtime/scripts "
                   f"— no shadow for this one")
+            return
+        runner.shadow.season = _season()
+        register = runner.shadow.script.season_register
+        if register is not None:
+            # ⭐ Said out loud whenever the script has the switch at all, so
+            # that "the background did not change" can be told apart from "this
+            # end never had a say in it".
+            chosen = runner.shadow.season
+            print(f"[{self.tag}] vm season: "
+                  f"{gs3vm.register_name(register)} <- "
+                  + ("台本のまま" if chosen is None
+                     else f"{chosen} {gs3vm.SEASON_NAMES[chosen]} "
+                          f"({script.SEASON_SOURCE})"))
 
     def _shadow_at(self, session: "_Session", local_ip: int, op: int):
         """Walk the shadow to where the client says it is. None if it cannot."""
@@ -1635,7 +1661,7 @@ class MpsServer:
         found: "script.Script",
         ctrl: int,
         npc_infos: list[tuple[int, int]],
-        cast_players: bool = False,
+        cast_players: bool = True,
     ) -> bytes:
         """Arm a script and offer it to the client with MsgSvRequestScriptReady.
 
@@ -1644,21 +1670,26 @@ class MpsServer:
         behave differently, that difference is about the state the client is in
         and not about which line of ours sent it.
 
-        ``cast_players`` fills ``pcInfo[]``, and only a ドラマイベント wants it:
-        those scripts name no actors of their own because their cast is the
-        players. Everything else leaves it empty, which is the byte-for-byte
-        message that has always gone out.
+        ``cast_players`` fills ``pcInfo[]`` -- ⚠️ **on by default since round
+        191**, where it used to be a ドラマイベント-only extra. What changed is
+        not the reading of those scripts (their cast really is the players) but
+        the discovery that a *solo* script needs the array too: `$m00`/`$n00`
+        are the player's family and given names and they come from here, so
+        leaving it empty is why the tutorial says 「くん、あなたの……」 with a
+        hole where the name goes. See `script.CAST_LOCAL_PLAYER`.
         """
         if found.script_id is None:
             return b""
         pc_infos: list[tuple[int, bytes]] = []
-        if cast_players:
-            # ⭐ 役柄 1 is whoever started it. There is no second entry yet:
-            # the other player would come from the party the matching screen
-            # builds, and that screen cannot be opened on this server.
+        actor = script.CAST_LOCAL_PLAYER
+        if cast_players and actor is not None:
+            # ⭐ Whoever started it is PC#0 -- the slot `$m00` reads. There is
+            # no second entry yet: the other player would come from the party
+            # the matching screen builds, and that screen cannot be opened on
+            # this server.
             info = self._chars(session).find(session.chara_id)
             if info is not None:
-                pc_infos.append((1, info))
+                pc_infos.append((actor, info))
         session.script = script.Runner(found, ctrl, npc_infos)
         session.talking_choice = None
         print(
@@ -1972,7 +2003,6 @@ class MpsServer:
                 # an export with no instructions in it is falsy.
                 print(f"[{self.tag}] npc event {npc_event_id} -> forced {wanted}"
                       + ("" if found is not None else " (no export; falling back)"))
-            forced = found is not None
             if found is None:
                 found = script.by_script_id(npc_event_id)
             if found is None:
@@ -1993,8 +2023,7 @@ class MpsServer:
             # scripts can all say NPC#1 and still be 223 different people.
             infos = [(actor["actorId"], actor["id"]) for actor in found.actors]
             session.talking_about = session.npc_event
-            return reply + self._script_start(session, seen, found, 0, infos,
-                                              cast_players=forced)
+            return reply + self._script_start(session, seen, found, 0, infos)
 
         if msg_type == script.MSG_CL_REQUEST_NPC_EVENT_END:
             # ⚠️ The client only sends this after an event that started from a

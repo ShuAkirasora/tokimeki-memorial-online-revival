@@ -95,6 +95,10 @@ OP_STR = 0x9001
 OP_RAND = 0x9010
 OP_SYNC_VARIABLE = 0x903F
 OP_JP, OP_BR, OP_BA = 0x9080, 0x9081, 0x9082
+# ⭐ `ARITHMETIC` already knows what it does; it is named here because the
+# 季節 switch is recognised by its shape and this is one of the three opcodes
+# that shape is made of. See `Script.season_register`.
+OP_EQ = 0x9009
 OP_RTN, OP_END, OP_JS = 0x9083, 0x9084, 0x9085
 OP_BA_END = 0x90C0
 OP_EVENT_CALL = 0x9180
@@ -113,6 +117,34 @@ OP_INPUT_SELECT = 0x7000
 OP_EVENT_BG_LOAD = 0x5100
 OP_EVENT_BG_DISP_ON = 0x5101
 OP_SD_ENV_PLAY = 0x6080
+
+# ⭐⭐ 春夏秋冬, numbered the way the game numbers them: `season.bin` is a real
+# table with exactly four rows, 0=春 1=夏 2=秋 3=冬, and that is the numbering
+# five of the 683 scenarios compare a 16-bit register against to pick which
+# picture of one place to open with.
+#
+# ⭐⭐⭐ **The season was a live quantity in the original, not a constant.** Two
+# official statements and one client-side reading say so: the manual's date-chat
+# page notes 「※現在、学校外の背景に関しては、季節に対応しておりません」 -- a
+# caveat with no meaning unless the *school* backgrounds did correspond -- the
+# beta-2 report says 「β２テストは雪の中行われました。この季節しか体験できない
+# 雪」, and the client reads `season.bin` through one accessor whose season key
+# comes from a property named `SeasonName`, sitting in the string table beside
+# `sakura` / `leaf` / `snow` / `fog` / `lobby_sakura`, a whole set of seasonal
+# effects.
+#
+# ⚠️⚠️ **What is missing is only how that value reached the register.** The
+# register file lives on this side of the wire (2.144, round 190), so the
+# *original* server executed the scripts' own `OP_STR B0 = #<k>` and answered
+# the four branches itself; whatever overrode `B0` lived in its code, which
+# nobody has.
+# ⛔️ So the constant in the .ssb is a development-time default, not the way the
+# game looked: within one build the two tutorials pin 冬 and three daily
+# conversations pin 夏, and the switch's default arm -- reachable only when `B0`
+# is *not* 0..3 -- carries a `SYNC_VARIABLE B0` and the line 「季節＝＝$v00」.
+# See `Script.season_register` and `Follower.season`.
+SEASONS = 4
+SEASON_NAMES = ("春", "夏", "秋", "冬")
 
 # Two register categories this end has to name, out of the eight the operand
 # encoding allows. 5 is SELITEM_DISP_FLAG -- one register per option of the
@@ -259,6 +291,59 @@ def _jump_target(args: bytes) -> int:
     return int.from_bytes(args[3:6], "little") >> 4
 
 
+def _scenery_road(script: "Script", index: int) -> bool:
+    """Does taking the OP_BR at `index` change nothing but the scenery?
+
+    ⭐⭐ This is the whole of what lets one branch family be answered out of the
+    script's own arithmetic while every other branch keeps the standing "no"
+    (`script.Runner.resolve_branch`). The test is on the *road*, not on the
+    condition: walk where the branch would go and ask whether anything on it can
+    be seen by the save or by the story. Concretely it must load a background
+    and it must not contain a data-cell write, an `EVENT_CALL`, a choice box, or
+    an `OP_BA`.
+
+    ⚠️ Measured over the whole corpus before it was wired to anything: of the
+    2756 `OP_BR` whose condition reads nothing but `PCEV[0x6020+i]`, 2589 are
+    this shape and **4** reach a `PCEV` write (`ink_c511`/`c513`/`c515`,
+    `ksg_c511`). ⛔️ So "the condition is 進行度" is *not* a safe test on its
+    own, which is why this one looks at the destination.
+
+    ⚠️ `OP_JP` ends the walk rather than being followed: it is where the switch
+    arm rejoins the scenario, and everything past that point is the conversation
+    itself, which this branch did not decide.
+
+    ⭐ Module-level rather than a method because `Script.season_register` asks
+    the same question of a branch nobody is standing on yet.
+    """
+    if not 0 <= index < len(script.code) or script.code[index][1] != OP_BR:
+        return False
+    start = script.index.get(_jump_target(script.code[index][2]))
+    if start is None:
+        return False
+    forbidden = set(DATA_WRITE) | {OP_EVENT_CALL, OP_INPUT_SELECT, OP_BA, OP_BR}
+    loads_background = False
+    pending, seen = [start], set()
+    while pending:
+        i = pending.pop()
+        if i is None or i in seen or not 0 <= i < len(script.code):
+            continue
+        seen.add(i)
+        op = script.code[i][1]
+        if op in forbidden:
+            return False
+        if op == OP_EVENT_BG_LOAD:
+            loads_background = True
+        if op in (OP_RTN, OP_END, OP_JP):
+            continue
+        if op == OP_JS:
+            number = int.from_bytes(script.code[i][2][0:2], "little") & 0x3FF
+            if not 1 <= number <= len(script.labels):
+                return False
+            pending.append(script.index.get(script.labels[number - 1]))
+        pending.append(i + 1)
+    return loads_background
+
+
 class Script:
     """One exported script: its instructions and its label table."""
 
@@ -287,6 +372,68 @@ class Script:
         self.sync = {int(ip): [tuple(r) for r in regs]
                      for ip, regs in doc.get("sync", {}).items()}
         self.strings = {int(v): text for v, text in doc.get("strings", {}).items()}
+        # ⭐ Which register, if any, this script picks its backgrounds' season
+        # out of. Computed here because it is a property of the instruction
+        # stream and nothing else, and asked for at most once per script.
+        self.season_register = self._season_register()
+
+    def _season_register(self) -> tuple[int, int] | None:
+        """The register a four-armed 春夏秋冬 switch tests here, or None.
+
+        ⭐⭐ Recognised by shape, ⛔️ not by a table of script names, because a
+        table would have to be trusted and this can be re-derived:
+
+            OP_STR  Fx = #k            k = 0, then 1, then 2, then 3
+            OP_EQ   Fy = (R == Fx)     the same R every time
+            OP_JP   -> the OP_BR that tests Fy
+            OP_BR   Fy, and its taken road is `_scenery_road`
+
+        ⭐ Run over all 683 scenarios it answers exactly five of them, and the
+        register is `B0` in all five: `amm_e001` and `skr_e001` (the two
+        tutorials, four switches each -- one per scene, all on the same
+        register) and `isu_c002`/`kmn_c002`/`tik_c002`. That is the same five
+        that a completely different criterion found -- the only places where one
+        location has more than one seasonal background in `bg.bin` -- which is
+        what makes this a reading rather than a pattern that happened to fit.
+
+        ⚠️ Without the `_scenery_road` half the same shape answers 24 scripts:
+        a four-armed switch on 0..3 is also how 曜日 and 学年 are tested. ⛔️ So
+        the shape alone is not the criterion; where the arms *go* is.
+        """
+        by_register: dict[tuple[int, int], list[tuple[int, int, int]]] = {}
+        for i, (_, op, args) in enumerate(self.code):
+            if op != OP_STR or i + 2 >= len(self.code):
+                continue
+            field = int.from_bytes(args[0:2], "little")
+            if (field >> 10) & 7 != CAT_IMMEDIATE:
+                continue
+            value = int.from_bytes(args[2:6], "little")
+            if value >= SEASONS:
+                continue
+            constant = _register(field)
+            if self.code[i + 1][1] != OP_EQ:
+                continue
+            result, left, right = _arith_registers(self.code[i + 1][2])
+            if right != constant or left[0] == CAT_IMMEDIATE:
+                continue
+            if self.code[i + 2][1] != OP_JP:
+                continue
+            branch = self.index.get(_jump_target(self.code[i + 2][2]))
+            if branch is None or self.code[branch][1] != OP_BR:
+                continue
+            tested = _register(int.from_bytes(self.code[branch][2][0:2], "little"))
+            if tested != result:
+                continue
+            by_register.setdefault(left, []).append((i, value, branch))
+        for register, arms in by_register.items():
+            arms.sort()
+            for n in range(len(arms) - SEASONS + 1):
+                run = arms[n:n + SEASONS]
+                if [value for _, value, _ in run] != list(range(SEASONS)):
+                    continue
+                if all(_scenery_road(self, branch) for _, _, branch in run):
+                    return register
+        return None
 
     def local_ip(self, wire: int) -> int:
         """The client's cursor (file bytes) in this module's unit (u16 words)."""
@@ -702,6 +849,17 @@ class Follower(Machine):
         self.missing: Counter = Counter()      # cell name -> times asked for
         self.selects: list[tuple[int, int, int, int]] = []
         self.reported = 0
+        # ⭐ Which season the four-armed switch should see, or None to let the
+        # script's own constant stand. ⚠️ None is not "the original": it is what
+        # a server that only evaluates the bytecode would do, and the original
+        # did more than that (see `SEASONS`). Overriding at the write is the
+        # only place anything outside the script can reach that register -- the
+        # write sits after the script starts and before the switch, so a value
+        # pushed down the wire ahead of it would be overwritten.
+        # ⚠️ *That* this end overrides at all, and where the year is cut into
+        # four, are inventions (the smallest-invention rule); that the switch moves with the
+        # calendar is not. See `Script.season_register`.
+        self.season: int | None = None
 
     # -- the two rules that differ from a machine running on its own -------
     def _cell(self, family: str, address) -> int:
@@ -715,7 +873,27 @@ class Follower(Machine):
             # Stepped over rather than reported => its 役柄 test did not hit
             # => it fell through. `flowed` has the other half.
             return i + 1
-        return super()._step(i)
+        nxt = super()._step(i)
+        if self.season is not None:
+            self._reseason(i)
+        return nxt
+
+    def _reseason(self, i: int) -> None:
+        """Overwrite the season constant this instruction just wrote, if it did.
+
+        ⚠️ Guarded three ways, because `B0` is a general-purpose register that
+        most of the 683 scenarios use for something else: the script has to have
+        a four-armed scenery switch at all (`Script.season_register`), the
+        instruction has to write *that* register, and it has to be writing an
+        immediate rather than copying another register.
+        """
+        register = self.script.season_register
+        if register is None or self.script.code[i][1] != OP_STR:
+            return
+        field = int.from_bytes(self.script.code[i][2][0:2], "little")
+        if _register(field) != register or (field >> 10) & 7 != CAT_IMMEDIATE:
+            return
+        self.registers[register] = self.season
 
     # -- being told where the client is -----------------------------------
     def _lose(self, why: str) -> str:
@@ -838,53 +1016,12 @@ class Follower(Machine):
     def scenery_road(self) -> bool:
         """Does taking the OP_BR the client is on change nothing but scenery?
 
-        ⭐⭐ This is the whole of what lets one branch family be answered out of
-        the script's own arithmetic while every other branch keeps the standing
-        "no" (`script.Runner.resolve_branch`). The test is on the *road*, not on
-        the condition: walk where the branch would go and ask whether anything
-        on it can be seen by the save or by the story. Concretely it must load a
-        background and it must not contain a data-cell write, an `EVENT_CALL`,
-        a choice box, or an `OP_BA`.
-
-        ⚠️ Measured over the whole corpus before it was wired to anything: of
-        the 2756 `OP_BR` whose condition reads nothing but `PCEV[0x6020+i]`,
-        2589 are this shape and **4** reach a `PCEV` write (`ink_c511`/`c513`/
-        `c515`, `ksg_c511`). ⛔️ So "the condition is 進行度" is *not* a safe
-        test on its own, which is why this one looks at the destination.
-
-        ⚠️ `OP_JP` ends the walk rather than being followed: it is where the
-        switch arm rejoins the scenario, and everything past that point is the
-        conversation itself, which this branch did not decide.
+        The walk itself is `_scenery_road`; this half only refuses to answer
+        once this end has lost its place.
         """
-        if self.lost or self.script.code[self.pos][1] != OP_BR:
+        if self.lost:
             return False
-        start = self.script.index.get(_jump_target(self.script.code[self.pos][2]))
-        if start is None:
-            return False
-        forbidden = set(DATA_WRITE) | {OP_EVENT_CALL, OP_INPUT_SELECT,
-                                       OP_BA, OP_BR}
-        loads_background = False
-        pending, seen = [start], set()
-        while pending:
-            i = pending.pop()
-            if i is None or i in seen or not 0 <= i < len(self.script.code):
-                continue
-            seen.add(i)
-            op = self.script.code[i][1]
-            if op in forbidden:
-                return False
-            if op == OP_EVENT_BG_LOAD:
-                loads_background = True
-            if op in (OP_RTN, OP_END, OP_JP):
-                continue
-            if op == OP_JS:
-                number = int.from_bytes(self.script.code[i][2][0:2], "little") & 0x3FF
-                if not 1 <= number <= len(self.script.labels):
-                    return False
-                pending.append(self.script.index.get(self.script.labels[number - 1]))
-            pending.append(i + 1)
-        return loads_background
-
+        return _scenery_road(self.script, self.pos)
     def select(self) -> tuple[int, int, int]:
         """The mask for the choice box the client is stopped on, right now.
 

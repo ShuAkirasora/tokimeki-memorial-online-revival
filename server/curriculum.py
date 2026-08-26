@@ -301,6 +301,26 @@ def clock(when: datetime | None = None, *, exam_period: bool = False
     return (kind, (now.weekday() + 1) % 7, now.hour, now.minute)
 
 
+def season(when: datetime | None = None) -> int:
+    """Which quarter of the year the school clock is in: 0=春 1=夏 2=秋 3=冬.
+
+    The order and the numbering are the game's own: `season.bin` has exactly
+    four rows, 0=春 1=夏 2=秋 3=冬, and that is what the scripts' background
+    switches compare against.
+
+    ⚠️ **The boundaries are this server's choice**: the meteorological quarters
+    (3-5, 6-8, 9-11, 12-2). The original had a season and moved with it -- the
+    manual says the school backgrounds correspond to it and the beta-2 report
+    was written in snow -- but *where it cut the year* is not in any table on
+    this disk, so that much is an invention (the smallest-invention rule). ⛔️ Do not read
+    the invention as covering the season itself.
+
+    Off the same wall clock as `clock()`, for the same reason: one clock or the
+    calendar contradicts the timetable.
+    """
+    return ((when or datetime.now()).month - 3) // 3 % 4
+
+
 def day_of_week(when: datetime | None = None) -> int:
     """`class_schedule.bin` key: 0=日, 1=月 … 6=土."""
     return ((when or datetime.now()).weekday() + 1) % 7

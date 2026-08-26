@@ -268,6 +268,25 @@ OP_PLAYER_WAIT_TIME = 0x9101
 # longer than the count asks for.
 RELEASE_PLAYER_WAIT = False
 
+# ⭐⭐ Where the season of a background comes from. `"clock"` is the factory
+# answer here: the school clock's own quarter (`curriculum.season`). `"script"`
+# leaves the scripts' own constant standing, which is what a server that only
+# evaluates the bytecode does and why the tutorial used to snow in August; an
+# int 0..3 forces one arm, which is how all four get looked at without waiting
+# a year.
+#
+# ⚠️ **Booked carefully** (the smallest-invention rule): that the switch moves with the
+# calendar is *restored* -- the manual, the beta-2 report and the client's own
+# `SeasonName` property all say the original had a live season (`gs3vm.SEASONS`
+# has the citations). **The inventions are the mechanism and the boundaries**:
+# the original server overrode that register from code nobody has, and where it
+# cut the year is in no table on this disk.
+#
+# ⚠️ It reaches the client through `gs3vm.Follower.season` and therefore only
+# where the shadow already decides -- a four-armed switch whose every arm is
+# scenery. ⛔️ Nothing else in a script moves because of this.
+SEASON_SOURCE: str | int = "clock"
+
 # How far past an OP_BR its fall-through lies. OP_BR is 8 bytes wide, and the
 # client counts ip in file bytes, so "condition not taken" is br + 8. Verified
 # live: the client sat on the OP_BR at file 1148, was told 1156, and moved on.
@@ -534,17 +553,41 @@ def pc_info_entry(actor_id: int, info: bytes) -> bytes:
 
 PC_INFO_MAX = 4
 
+# ⭐⭐ Which 役柄 slot the player who started the script goes into, or None to
+# send no pcInfo[] at all (which is what every solo script got until round 191).
+#
+# ⭐ The evidence that it is 0 and not 1 is in the scripts themselves, and it is
+# a pair rather than a guess: `TALK_ON_EVENT` names its speaker as `PC#n`, the
+# dialogue writes the players' names as `$m0n` (family) and `$n0n` (given), and
+# the two indices move together. `un111`, a two-player ドラマイベント, speaks as
+# `PC#0`/`PC#1` and writes `$m00`/`$m01`; `amm_e001`, the tutorial, speaks only
+# as `PC#0` and writes only `$m00`. ⇒ the slot the local player belongs in is
+# `PC#0`, and round 186 filling it as actorId 1 left `$m00` with nothing behind
+# it -- which is exactly what the screen showed (2.144, round 190).
+#
+# ⚠️ A knob rather than a literal because the whole claim is one screen away
+# from being checked, and `/pcinfo 0|1|off` asks all three questions of one
+# running client. Factory value is the answer this end believes.
+CAST_LOCAL_PLAYER: int | None = 0
+
 
 def ready_params(script_id: int, npc_infos: list[tuple[int, int]],
                  pc_infos: Sequence[tuple[int, bytes]] = ()) -> bytes:
     """A MsgSvRequestScriptReady body.
 
-    ``pcInfo[]`` is empty for everything a single player starts on his own: his
-    character is already in the scene and there is nothing this end could put
-    there that the client does not have. ⭐ A ドラマイベント is the case that
-    needs it -- the cast of one of those is the *players*, which is why all 22
-    of them name no actors in their own headers, and the other player is
-    somebody this client has never been sent.
+    ⚠️⚠️ **`pcInfo[]` used to be empty for everything a single player starts on
+    his own**, on the reasoning that his character is already in the scene and
+    there is nothing this end could put there that the client does not have.
+    ⛔️ That reasoning is wrong, and the screen said so: the tutorial draws
+    「**くん、あなたのクラスを教えてくれる？**」 with the name missing and the
+    LOG window's speaker as 【】, because `$m00`/`$n00` are read out of *this*
+    array and out of nothing else. The client knowing who it is playing and the
+    script being able to *say* his name are two different tables.
+
+    ⭐ A ドラマイベント is the case that made the array visible in the first
+    place -- the cast of one of those is the *players*, which is why all 22 of
+    them name no actors in their own headers -- but it is not the only case
+    that needs it.
     """
     cast = list(pc_infos)[:PC_INFO_MAX]
     body = struct.pack(">HH", script_id, len(cast))
