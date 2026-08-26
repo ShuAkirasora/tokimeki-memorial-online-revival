@@ -460,12 +460,26 @@ def ability_short(name: str, progress: int, levels: "list[int] | None") -> dict:
 
 
 def initial_cast(player_sex: int) -> set[str]:
-    """Who is already on campus the day a character of this sex starts.
+    """Who a save that predates 初登校 has to be *assumed* to have met.
 
     Derived, not listed: a candidate is there from the start iff she has a debut
     event at all, and she is *this* player's iff her sex is the other one. That
     reproduces the manual's parenthesis (天宮 for a male character, 桜井 for a
     female one) without stating it a second time in a place that could drift.
+
+    ⚠️⚠️ Round 194 demoted this from *the* answer to the *fallback* answer, and
+    that is the whole of what round 194 changed. Until then every character
+    started with this set on stage, so the 初登校 that actually introduces her
+    changed nothing — she was there before it played. Now `<name>_e001` writes
+    `PC[0x3900+i]`, `absorb()` takes it, and a character created from here on
+    starts with an empty campus that the tutorial fills.
+
+    ⇒ this rule now applies to exactly one thing: a record written before that
+    path existed, which is to say one with no ``romance`` key at all. Deciding
+    which those are is `CharacterStore.romance()`'s job, not this module's —
+    and two writers over there (``add`` at creation, ``declare_empty_cast`` at
+    登校) keep «no key» a fact about *when* the record was written rather than a
+    guess about what happened to its owner.
     """
     return {
         name
@@ -510,9 +524,15 @@ class Romance:
     changed, so the caller knows whether to write the file.
     """
 
-    def __init__(self, player_sex: int, saved: dict | None = None) -> None:
+    def __init__(self, player_sex: int, saved: dict | None = None,
+                 assume_initial_cast: bool = False) -> None:
         self.player_sex = player_sex
-        started = initial_cast(player_sex)
+        # ⚠️ Empty by default, since round 194: 登場 belongs to the script that
+        # writes it (see `absorb`), and a character who has not had her 初登校
+        # has met nobody. ``assume_initial_cast`` is the one exception and it is
+        # for old records only — see `initial_cast`. It cannot override a
+        # ``saved`` row, which carries its own "debut" either way.
+        started = initial_cast(player_sex) if assume_initial_cast else set()
         self.state: dict[str, dict] = {}
         for name in CANDIDATES:
             row = (saved or {}).get(name, {})
@@ -651,11 +671,22 @@ class Romance:
         event is itself a メインイベント (その１ = category 0, id 0 — which is
         exactly what `capture_npc` +394 points at), so playing it lands here and
         counts as a step. The placement tables say the spot index counts main
-        events **after** the debut, which makes that one step too many. It does
-        not bite today, because initial_cast() marks the two starters as debuted
-        without anyone playing その１ — so the only way in is /sc by hand. Fixing
-        it means deciding what `progress` counts, and that is a change to what
-        saves mean; it wants its own round, not a line squeezed in here.
+        events **after** the debut, which makes that one step too many.
+
+        ⚠️⚠️ It still does not bite, but round 194 changed *why*, so do not read
+        the old reason back in. It used to be «その１ never plays, because
+        initial_cast() marks the two starters as debuted without it». Now it
+        does play — that is the whole of round 194 — and the reason is the path
+        instead: this method is only ever reached through
+        `session.talking_about`, which `mps_session` assigns in exactly one
+        place, the NPC-event door. 初登校 comes through `TitleEvent`, which
+        assigns nothing, so `_romance_credit` returns before it gets here.
+        ⇒ the only other way in is still /sc by hand.
+
+        ⛔️ Which is also why `_script_debut` takes 登場 and refuses 進行度: the
+        script's own `PCEV[0x6020+i]` write would be the second count of the
+        same rung. Fixing the underlying question means deciding what `progress`
+        counts, and that is a change to what saves mean; it wants its own round.
         """
         row = self.state[name]
         if not row["debut"] or row["progress"] >= CANDIDATES[name].events:

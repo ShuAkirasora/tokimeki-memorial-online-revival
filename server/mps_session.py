@@ -1890,12 +1890,17 @@ class MpsServer:
         particular it takes 登場 and refuses 進行度, argued next to those
         constants. So a run that writes nothing absorbable is silent here.
 
-        ⚠️⚠️ Zero behaviour change on its own, and that is the point rather
-        than a shortcoming: `initial_cast()` still puts 天宮/桜井 on stage from
-        day one, so the value written is the value already there and `changed`
-        comes back False. ⇒ what this block buys is a **live path** -- the log
-        line below says the write arrived -- and the day `initial_cast` stops
-        pre-marking them, the tutorial is already the thing that does it.
+        ⭐⭐⭐ Round 194 is the half that makes it mean something. Round 193 was
+        deliberately a no-op -- `initial_cast()` put 天宮/桜井 on stage from day
+        one, so the value written was the value already there and `changed` came
+        back False every time. Now a character starts with an empty campus and
+        this method is **the** way anyone gets on it: no 初登校, no 天宮.
+
+        ⚠️ Which makes the log line below the thing to read when a candidate is
+        missing from a map push. 「記帳」 means this ran and took the write;
+        「既に同じ値」 means the save already said so; silence means the script
+        never wrote the cell, and then the question is the script or the gate,
+        not this end's bookkeeping.
         """
         love = self._chars(session).romance(session.chara_id)
         if love is None:
@@ -2116,10 +2121,14 @@ class MpsServer:
             script_id = struct.unpack_from(">H", params, 0)[0] if params else 0
             found = script.by_script_id(script_id)
             if found is None:
-                # ⚠️ The other half of the pair, `skr_e001`, is the one a female
-                # character asks for and this machine has no export with an id
-                # for it. A stub still gets the client out of the 登校 rather
-                # than leaving it on the dialog for ever.
+                # ⚠️ Both halves of the pair are exported now -- `amm_e001` at
+                # 0x2000 for a male character and `skr_e001` at 0x20f3 for a
+                # female one (round 193 supplied the second) -- so this arm is
+                # for a title event nobody has met yet. A stub still gets the
+                # client out of the 登校 rather than leaving it on the dialog
+                # for ever. ⚠️⚠️ But a stub writes no cells, so a character who
+                # lands here gets no 登場 either (`_script_debut`): an empty
+                # campus after 初登校 means read this line, not the save.
                 print(f"[{self.tag}] title event {script_id} has no exported "
                       f"script — starting a stub (cast empty)")
                 found = script.stub(script_id)
@@ -3016,6 +3025,17 @@ class MpsServer:
                     print(f"[{self.tag}] ⭐ 初登校 for charaId={chara_id}: "
                           f"tutorialFlag was 1, standing at map {session.map_id} "
                           f"{session.pos} facing {facing.NAMES.get(session.direction, '?')}")
+                    # ⭐⭐ Round 194: say so in the save before the flag goes.
+                    # The 初登校 about to play is what puts 天宮/桜井 on stage
+                    # (romance.absorb), and `characters.romance()` can only tell
+                    # an un-recorded old debut from a pending one while this flag
+                    # still stands. So an old record gets its empty cast written
+                    # down here, in the one moment both facts are true at once;
+                    # see CharacterStore.declare_empty_cast for the run that
+                    # measured what happens without it.
+                    if self._chars(session).declare_empty_cast(chara_id):
+                        print(f"[{self.tag}]   恋愛の記録が無いので「未登場」を記帳"
+                              f"（初登校がこれから書き込む）")
                     self._chars(session).set_debut_pending(chara_id, False)
                 # Swallow the bells for the lesson already under way, so that
                 # 登校 at 14:53 does not ring the 14:45 本鈴 at someone who

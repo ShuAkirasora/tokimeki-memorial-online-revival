@@ -868,8 +868,24 @@ class CharacterStore:
         # creation rather than inferred later, so that the day this file is read
         # by something that has never seen the migration rule below, the answer
         # is in the record instead of in a heuristic.
+        #
+        # ⭐⭐ "romance", round 194, and it is there for that same reason: an
+        # empty cast — nobody met — is what a new character now starts with, and
+        # 初登校 is what puts the first name on stage (romance.absorb). A record
+        # written before that has to be given the old assumption instead, and
+        # the only thing that tells the two apart is whether this key is there
+        # at all ⇒ writing it here keeps `romance()`'s fallback a statement
+        # about the record's age rather than a guess about its owner.
+        #
+        # ⚠️ `declare_empty_cast` would supply it at 登校 anyway, so this is the
+        # belt and not the braces. Keep both: a character is readable — /rom,
+        # a tool, a future caller — before it has ever been to school, and the
+        # honest answer for one this end created itself should not depend on a
+        # migration rule meant for records it did not.
         self.records.append({"charaId": chara_id, "info": info.hex(),
-                             "debut": True})
+                             "debut": True,
+                             "romance": romance.Romance(
+                                 int(parse_create_info(info)["sex"])).to_json()})
         self._save()
         return chara_id
 
@@ -914,6 +930,37 @@ class CharacterStore:
             if "debut" in record and bool(record["debut"]) == pending:
                 return False  # already says that; no write, no file churn
             record["debut"] = pending
+            self._save()
+            return True
+        return False
+
+    def declare_empty_cast(self, chara_id: int) -> bool:
+        """Write 「nobody met yet」 into a record that has no 恋愛 row at all.
+
+        ⭐⭐ Round 194, and it closes the one hole in `romance()`'s migration.
+        That method has to guess for a record written before 初登校 could put
+        anyone on stage, and it guesses from ``debut_pending`` — but 登校 clears
+        that flag *before* the tutorial script runs, so between those two moments
+        the guess flips to 「already debuted」 and the script's own write lands on
+        a save that says 天宮 is there already. Measured, not feared: round 194's
+        first real run replayed 初登校 on an old record and logged 「既に同じ値」.
+
+        ⇒ the caller is 登校 itself, in the same breath as clearing the flag:
+        having just told the client to play its 初登校, this end writes down that
+        the campus is empty, and the tutorial fills it. Records that already
+        carry a 恋愛 row are left alone — this only ever supplies a missing one.
+
+        ⛔️ Not a reset. It cannot blank a cast that is already written, which is
+        why re-arming an established character with /tutorial leaves that
+        character's 恋愛 state exactly as it was.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            if isinstance(record.get("romance"), dict):
+                return False
+            fields = parse_create_info(bytes.fromhex(str(record["info"])))
+            record["romance"] = romance.Romance(int(fields["sex"])).to_json()
             self._save()
             return True
         return False
@@ -1091,14 +1138,42 @@ class CharacterStore:
         the create block, so a Romance is only meaningful next to the character
         it belongs to, and the file is small enough that reconstructing beats
         keeping a second copy in sync.
+
+        ⚠️⚠️ The one migration, round 194, and it is two questions and not one.
+        Since round 194 nobody is on stage until 初登校 writes her there, so a
+        record carrying no "romance" key has to be asked whether that debut is
+        still ahead of it:
+
+        * **still ahead** (``debut_pending``) — leave the campus empty. The
+          tutorial is about to fill it, and pre-marking would take that away.
+        * **already behind it** — its owner's debut played in a round where
+          this end was not watching, so the old assumption (天宮 for a male
+          character, 桜井 for a female one) is the only honest answer.
+
+        ⚠️⚠️ The flag alone is not enough, because 登校 clears it *before* the
+        tutorial script runs: between those two moments a character in the
+        middle of its 初登校 reads as one that already had it, and the script's
+        own write then lands on a save that already says 天宮 is on stage.
+        ⭐ Measured, not feared — round 194's first real run hit exactly that and
+        logged 「既に同じ値（記帳なし）」. Two writers close it, and neither is
+        optional: ``add()`` stamps every new record, and ``declare_empty_cast``
+        stamps an old one at 登校 while the flag still stands. ⇒ a record still
+        reaching the guess below has never been through either.
+
+        ⭐ Self-sealing rather than a permanent branch: the first `set_romance`
+        for such a character writes the assumed cast out explicitly, and from
+        then on the saved row answers and none of this runs again.
         """
         for record in self.records:
             if int(record["charaId"]) != chara_id:
                 continue
             fields = parse_create_info(bytes.fromhex(str(record["info"])))
             saved = record.get("romance")
+            if isinstance(saved, dict):
+                return romance.Romance(int(fields["sex"]), saved)
             return romance.Romance(
-                int(fields["sex"]), saved if isinstance(saved, dict) else None
+                int(fields["sex"]), None,
+                assume_initial_cast=not self.debut_pending(chara_id),
             )
         return None
 
