@@ -508,7 +508,11 @@ def stub(script_id: int) -> Script:
 
     Every field a stub lacks degrades into a path that already exists: ``at()``
     returns None and the log says ``<not an instruction start>``, ``selects``
-    is empty and the query goes out as ``SELECT_ALL`` regardless.
+    is empty and the log says the box's text is in the script only. ⭐ The
+    choice mask degrades the same way and by the same route: no export is also
+    no shadow (``gs3vm.follow`` returns None), so ``select_query`` is asked
+    nothing and answers ``SELECT_ALL`` — which is what this end sent to every
+    box there has ever been until round 211.
 
     ⭐ **Two of those fields a stub no longer lacks.** ``branches`` and
     ``codeBase`` come from ``reference/branches.json`` when the id is in it
@@ -632,8 +636,10 @@ def select_params(select: int, timer_count: int) -> bytes:
     against a three-option box drew *two* lines, which is what makes this a
     mask rather than a count, and 0xFFFFFFFF against the same box on a first
     query drew *three* — the script's own number, not thirty-two. The client
-    caps to what the ``.ssb`` declares, so this end never has to know how many
-    options there are, and ``select_query`` does not try to.
+    caps to what the ``.ssb`` declares, so a mask this end cannot compute can
+    still go out as every bit without knowing how many options there are — and
+    when it *can* compute one, the count comes from the instruction rather than
+    from here (``select_query``).
 
     ⭐ **The scripts number their options the same way, and that is a separate
     source.** Every ``INPUT_SELECT`` in the game's 683 client scripts is
@@ -644,9 +650,12 @@ def select_params(select: int, timer_count: int) -> bytes:
     the six option texts read correctly. So "bit k is option k" holds on the
     wire *and* in the bytecode, established once from each end.
 
-    ⚠️ Knowing that does **not** let this end compute the mask: the flags are
-    written from expressions over the player's own stats, and nothing here
-    evaluates script arithmetic. ``select_query`` still sends every bit.
+    ⭐ **Knowing that is what makes a computed mask usable at all.** The flags
+    are written from expressions over registers the conversation itself keeps,
+    and round 211 stopped sending every bit and started sending what the shadow
+    VM works out of them (``select_query``). Bit k being option k in both the
+    bytecode and the wire is the join between the two halves: without it a
+    computed mask would be a number with nowhere to put it.
     """
     return struct.pack(">IQ", select & 0xFFFFFFFF, timer_count)
 
@@ -722,20 +731,65 @@ DEFAULT_SELECT_TIMER = 60000
 SELECT_ALL = 0xFFFFFFFF
 
 
-def select_query() -> tuple[int, int]:
-    """`(select, timerCount)` for any INPUT_SELECT.
+# The widest mask this end will build out of a computed one. The instruction
+# carries its option count in six bits, so 63 is what it can say; the field on
+# the wire is 32 bits wide. A count in between is not a box this end knows how
+# to answer, and it says so rather than sending a silently truncated mask.
+SELECT_BITS = 32
 
-    Every option on, and no arithmetic to get there: the client caps the mask
-    to the number of lines the script declares (`select_params`), and the
-    script itself decides which of them a player may take, through the
-    `OP_STR 0x1e80+k = 1` run it puts in front of the command. This end has no
-    state with which to second-guess either, and now no need to count.
 
-    ⚠️ This used to derive the mask from the exported option list, which made a
-    choice box the one thing a stub could not answer — with nothing exported it
-    computed `(1 << 0) - 1`, a box offering no lines at all.
+def select_query(computed: tuple[int, int, int] | None = None
+                 ) -> tuple[int, int, str]:
+    """`(select, timerCount, why)` for the INPUT_SELECT the client stopped on.
+
+    `computed` is `gs3vm.Follower.select()` for *this* box — `(mask, unknown,
+    options)`, one bit per option in each of the first two — or None when there
+    is no shadow to ask, which is the ordinary case for a stub and for every
+    copy of this server that has exported nothing.
+
+    ⭐⭐ **The mask is the script's own, and this end can finally read it.**
+    Which lines a player may take is decided by the run of `OP_STR 0x1e80+k`
+    the script puts in front of the command, and until round 211 nothing here
+    evaluated script arithmetic, so every bit went out set and the client drew
+    every line the `.ssb` declares. The shadow evaluates that run, walking the
+    same scenario the client is playing, so "which lines, right now" is a
+    question this end can answer. It is a restoration, not a new rule: the
+    original server is the only place those flags could ever have been read.
+
+    ⚠️⚠️ **Asked at the box, never stored.** Those flags are mostly `F<n> == 0`
+    over registers the conversation itself writes — "has this answer been used
+    yet" — so a script that loops back and redraws the same box gets a
+    different mask the second time (`amm_e002` does exactly that). There is no
+    such quantity as *the* mask of a select, which is why this takes a value
+    computed at the stop instead of looking one up.
+
+    ⭐ **A bit this end could not work out goes out set.** `unknown` is the
+    shadow's ⊤ — a cell nobody supplied, an operation it does not implement.
+    The two ways to be wrong are not symmetric: offering a line the script
+    meant to hide lets a player take one answer twice, while hiding a line it
+    meant to offer can leave a box with no way out of it and a conversation
+    with no way to end. So ⊤ degrades into the behaviour this end had when it
+    could compute nothing at all.
+
+    ⚠️ **Never an empty box.** A mask of 0 with nothing unknown is a reading
+    this end will not act on. The client draws exactly the lines the mask names
+    and no others (`select_params`), so 0 is a box with no lines — the same
+    dead end the old exported-option-list mask fell into on a stub, where it
+    computed `(1 << 0) - 1`. Whatever produced the 0 is a bug on this end long
+    before it is a script that offers nothing, so it falls back and says so.
     """
-    return SELECT_ALL, DEFAULT_SELECT_TIMER
+    if computed is None:
+        return SELECT_ALL, DEFAULT_SELECT_TIMER, "no shadow"
+    mask, unknown, options = computed
+    if not 0 < options <= SELECT_BITS:
+        return SELECT_ALL, DEFAULT_SELECT_TIMER, f"{options} options declared"
+    offered = (mask | unknown) & ((1 << options) - 1)
+    if offered == 0:
+        return SELECT_ALL, DEFAULT_SELECT_TIMER, "⚠️ the shadow offers nothing"
+    if offered == (1 << options) - 1:
+        return offered, DEFAULT_SELECT_TIMER, "the shadow, every line on"
+    return offered, DEFAULT_SELECT_TIMER, (
+        f"the shadow, {bin(offered).count('1')} of {options} lines")
 
 
 class Runner:
@@ -765,15 +819,20 @@ class Runner:
         # ⭐ A `gs3vm.Follower` walking the same script alongside the client,
         # or None when this machine has no export of it.
         #
-        # ⚠️⚠️ **It decides nothing.** `resolve_branch` and `select_query`
-        # below answer exactly what they answered before it existed; this only
-        # watches, so that what a register file on this end would have said can
-        # be read off a log and compared against a screen before any of it is
-        # allowed to matter. The reason for doing it in that order is not
-        # caution: the first two things that were checked against the outside
-        # world (an arithmetic table, a walk over recorded ip traces) both leave
-        # "does it keep up with a real conversation" untested, and this is the
-        # cheapest way to test it.
+        # ⚠️ **It arrived deciding nothing**, and for a round it changed no byte
+        # that went out: it only said in the log what a register file on this
+        # end would have answered, so that it could be read off a log and
+        # compared against a screen before any of it was allowed to matter. The
+        # reason for that order was not caution — the first two things checked
+        # against the outside world (an arithmetic table, a walk over recorded
+        # ip traces) both leave "does it keep up with a real conversation"
+        # untested, and this was the cheapest way to test it.
+        #
+        # ⭐⭐ **Two answers are its now**, both after that wait: the branches
+        # whose road decides nothing visible (`mps_session`, over exactly the
+        # `STANDING_NO` of `resolve_branch`), and the choice-box mask
+        # (`select_query`). ⚠️ Everything else here still answers what it
+        # answered before this existed.
         self.shadow = None
 
     def chose(self, result: int) -> None:

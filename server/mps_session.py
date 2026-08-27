@@ -1735,11 +1735,14 @@ class MpsServer:
     # every OP_BR has been answered with a shrug and every choice box offered
     # with every line on.
     #
-    # ⚠️⚠️ What it is NOT, this round: an answer. Nothing below changes a byte
-    # that goes out. `resolve_branch` still falls through, `select_query` still
-    # sends every bit. All the shadow does is say, in the log, what it would
-    # have answered -- next to what was actually sent and next to what ends up
-    # on the screen.
+    # ⚠️ It arrived as a reporter and it did not stay one. Round 190 it changed
+    # no byte that went out; round 192 it began overruling exactly the
+    # `STANDING_NO` branches whose road decides nothing anyone can see
+    # (`_decided_road`), and round 211 the choice-box mask became its own
+    # (`script.select_query`). What has not changed is the order: each of those
+    # was read off a log against a screen for rounds before it was allowed to
+    # matter, which is the only reason a machine that follows is trusted to
+    # answer anything at all.
     def _shadow_start(self, session: "_Session", script_id: int) -> None:
         """Arm a follower for the scenario about to play, if we have it.
 
@@ -2668,21 +2671,32 @@ class MpsServer:
                             script.command_variable_params(entries))
 
     def _script_select(self, session: "_Session", seen: int, local_ip: int) -> bytes:
-        """Answer a stopped INPUT_SELECT with MsgSvQueryScriptCommandSelect."""
-        select, timer = script.select_query()
-        if session.select_override is not None:
-            select, timer = session.select_override
+        """Answer a stopped INPUT_SELECT with MsgSvQueryScriptCommandSelect.
+
+        ⭐⭐ Round 211: the mask that goes out is the shadow's, not every bit.
+        ⛔️ It is asked here and not cached — a script that redraws the same box
+        after one of its answers has been used gets a different mask the second
+        time round, so there is no *the* mask of a select to look up
+        (`script.select_query`).
+
+        ⚠️⚠️ **A shadow that is not there or has lost its place sends every bit
+        again**, which is the answer this end gave for two hundred rounds and
+        not a failure — but it is also the only way this can quietly stop
+        working, so the log says which of the two produced the number every
+        time, rather than only when something looks wrong.
+        """
         shadow = self._shadow_at(session, local_ip, gs3vm.OP_INPUT_SELECT)
+        computed = None
         if shadow is not None:
             mask, unknown, options = shadow.select()
-            # ⚠️ Reported, not sent: `select` above is still SELECT_ALL. ⛔️ And
-            # not cached either -- a script that redraws the same box after an
-            # answer has been used gets a different mask the second time, which
-            # is why this is asked at the box rather than looked up.
+            computed = (mask, unknown, options)
             print(f"[{self.tag}] vm select mask={mask:#x} of {options} options"
-                  + (f" ⊤={unknown:#x}" if unknown else " (no ⊤)")
-                  + (" = same as what is sent" if mask == (1 << options) - 1
-                     else " ⚠️ narrower than what is sent"))
+                  + (f" ⊤={unknown:#x} (⊤ goes out set)" if unknown
+                     else " (no ⊤)"))
+        select, timer, why = script.select_query(computed)
+        if session.select_override is not None:
+            select, timer = session.select_override
+            why = "/sc select override"
         # The export no longer decides the answer, only what the log can say
         # the box is about to show. Having no entry is ordinary — a stub has
         # none — so it is reported as an absence rather than as a fault.
@@ -2692,7 +2706,8 @@ class MpsServer:
                   + " / ".join(entry["options"]))
         else:
             print(f"[{self.tag}] 選択肢 ip={local_ip}（文面は台本にしかない）")
-        print(f"[{self.tag}] -> QueryScriptCommandSelect select={select} timer={timer}")
+        print(f"[{self.tag}] -> QueryScriptCommandSelect select={select:#x} "
+              f"timer={timer} ({why})")
         return self._answer(session, seen,
                             script.MSG_SV_QUERY_SCRIPT_COMMAND_SELECT,
                             script.select_params(select, timer))
