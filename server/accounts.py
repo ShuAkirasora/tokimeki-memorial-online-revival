@@ -102,6 +102,7 @@ import friends
 import groups
 import item
 import konami_id
+import naming
 from characters import CharacterStore
 
 # The two fixed-length fields of MsgClRequestLoginServerLogin, in the order the
@@ -224,6 +225,10 @@ class AccountStore:
         # holding one holds the same one; run_all.py reaches the other two
         # through this object rather than making its own.
         self.konami_ids = konami_id.Directory(self.dir)
+        # ⭐ One level up from the account directories on purpose: the two tables
+        # it holds are the same for every account on the server, and they are
+        # the operator's file rather than one this server writes. See naming.py.
+        self.reserved = naming.ReservedNames(root / "runtime" / naming.RESERVED_FILE)
         self._seed_codes()
         if adopt_code is not None:
             self.adopt(adopt_code.encode("ascii", "replace"))
@@ -422,6 +427,55 @@ class AccountStore:
                 found[int(child.name)] = [
                     int(r["charaId"]) for r in records if isinstance(r, dict) and "charaId" in r
                 ]
+        return found
+
+    def names_in_use(self) -> "set[bytes]":
+        """Every 氏名 on this server, as naming.full_name() builds them.
+
+        ⭐⭐ EVERY ACCOUNT, not the one asking. 「同じ氏名のキャラクターが既に
+        存在しています」 is about the school, not about a notebook: the manual's
+        worked examples talk about 既存のキャラクター with no owner attached, and
+        a name is what one player types to reach another -- 「宛先入力欄に、相手
+        の氏名を入れてください」 (manual/p05_05). Two students answering to one
+        name would make that undeliverable.
+
+        Read off disk rather than out of the store cache, for the same reason
+        _saved_chara_ids does: the cache holds only the accounts somebody has
+        logged into since the server started, and the name of a character
+        belonging to an account that is currently offline is taken just the same.
+        A loaded store is preferred where there is one, because it is the copy
+        that is up to date.
+        """
+        found: "set[bytes]" = set()
+        if not self.dir.exists():
+            return found
+        for child in sorted(self.dir.iterdir()):
+            if not (child.is_dir() and child.name.isdigit()):
+                continue
+            cached = self._stores.get(int(child.name))
+            if cached is not None:
+                records = cached.records
+            else:
+                path = child / "characters.json"
+                if not path.exists():
+                    continue
+                try:
+                    records = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    print(f"[accounts] ignoring unreadable {path}: {exc}")
+                    continue
+            if not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict) or "info" not in record:
+                    continue
+                try:
+                    info = bytes.fromhex(str(record["info"]))
+                except ValueError:
+                    continue
+                name = naming.name_in(info)
+                if name:
+                    found.add(name)
         return found
 
     def _reserved(self) -> set[int]:

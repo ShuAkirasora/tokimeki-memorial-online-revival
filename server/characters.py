@@ -852,6 +852,30 @@ class CharacterStore:
         """
         return len(self.records) >= MAX_CHARACTERS
 
+    def notebook_taken(self, frame_id: int) -> bool:
+        """True when one of this account's characters is already in that 手帳.
+
+        ⭐ 「その生徒手帳には、既にキャラクターが登録されています」 is the
+        client's own sentence for this and it says 生徒手帳, not account -- so
+        the rule the reason names is per-notebook, and full() is the same fact
+        seen from the other side once all three are occupied.
+
+        A well-behaved client never asks for an occupied one: the player clicks
+        a notebook that is drawn empty. What it protects against is measured
+        rather than imagined -- three entries sharing charaFrameId 0 draw as ONE
+        filled notebook carrying the last one's あだな, so a collision does not
+        look like a collision on screen, it looks like a character that
+        vanished. See LIST_PROBES.
+        """
+        for record in self.records:
+            try:
+                fields = parse_create_info(bytes.fromhex(str(record["info"])))
+            except (ValueError, KeyError):
+                continue
+            if fields["charaFrameId"] == frame_id:
+                return True
+        return False
+
     def add(self, info: bytes) -> int:
         if self.ids is not None:
             chara_id = self.ids.mint(self.account_id)

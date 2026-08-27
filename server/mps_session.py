@@ -92,6 +92,7 @@ import lesson
 import lesson_skill
 import mapgraph
 import mps_cipher
+import naming
 import options
 import posts
 import quiz
@@ -2885,22 +2886,49 @@ class MpsServer:
             if msg_type == 0x0300:
                 return self._answer(session, sequence, 0x0301, school_list_params())
             if msg_type == MSG_CL_REQUEST_CHARACTER_CREATE:
-                # Three per account, and the cap belongs here because the client
-                # has no defence of its own: see characters.MAX_CHARACTERS for
-                # what a fourth entry does to its list buffer. KONAMI's server
-                # would never have sent one, so refusing is what the client was
-                # built to meet.
-                if self._chars(session).full():
-                    print(
-                        f"[{self.tag}] create refused: account already has "
-                        f"{MAX_CHARACTERS}; {self._chars(session).summary()}"
-                    )
+                # ⭐⭐ Four ways to be refused, and every one of them selects a
+                # sentence the client already carries -- naming.py holds the
+                # list and the argument. What used to happen here was that the
+                # only refusal on this path went out with reason 0, which is one
+                # of the two rows the developers marked 「未使用」: the original
+                # never sent it, so nothing was ever written to display it.
+                store = self._chars(session)
+                # The request first, then the school, then this account. Both of
+                # the first two are naming.py's; the third is the store's,
+                # because only it knows which 生徒手帳 are occupied.
+                refused = naming.refusal(
+                    params, self.accounts.reserved, self.accounts.names_in_use()
+                )
+                if refused is None:
+                    frame = params[0]
+                    # Three per account, and the cap belongs here because the
+                    # client has no defence of its own: see
+                    # characters.MAX_CHARACTERS for what a fourth entry does to
+                    # its list buffer. KONAMI's server would never have sent
+                    # one, so refusing is what the client was built to meet --
+                    # and with three notebooks and three characters, "the
+                    # account is full" and "that notebook is taken" are one fact.
+                    if store.notebook_taken(frame):
+                        refused = (naming.REASON_NOTEBOOK_TAKEN,
+                                   f"生徒手帳 {frame} already holds a character")
+                    elif store.full():
+                        refused = (naming.REASON_NOTEBOOK_TAKEN,
+                                   f"account already has {MAX_CHARACTERS}")
+                if refused is not None:
+                    reason, why = refused
+                    # The store's own summary only when the store is what
+                    # refused: for a name, whose characters are already here
+                    # says nothing about why this one may not be made.
+                    where = (f"; {store.summary()}"
+                             if reason == naming.REASON_NOTEBOOK_TAKEN else "")
+                    print(f"[{self.tag}] create refused, reason={reason}: {why}{where}")
                     return self._answer(
-                        session, sequence, MSG_SV_NG_CHARACTER_CREATE, NG_REASON
+                        session, sequence, MSG_SV_NG_CHARACTER_CREATE,
+                        struct.pack(">B", reason),
                     )
                 # Output_MsgSvOkCharacterCreate::serialize (0x8DCD80) writes one
                 # u32 through the stream's write-u32 slot, and nothing else.
-                chara_id = self._chars(session).add(params)
+                chara_id = store.add(params)
                 print(f"[{self.tag}] character #{chara_id}: {describe(params)}")
                 return self._answer(
                     session, sequence, MSG_SV_OK_CHARACTER_CREATE, struct.pack(">I", chara_id)
