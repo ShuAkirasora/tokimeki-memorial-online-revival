@@ -979,6 +979,15 @@ class _Session:
         # chibi. Per-session rather than global so that /nev can be tried
         # against a running client without a restart; see script.py.
         self.npc_event: tuple[int, int] = script.DEFAULT_NPC_EVENT
+        # What npcId to put in that same 0x6305 body, or None to echo the four
+        # bytes the client sent -- which is the factory behaviour and what every
+        # round before this one did. It is a knob at all because the npcId is
+        # what picks the event *table* (script.event_table_for): with every
+        # chibi on this server spawned as 1:0, the client can only ever be
+        # pointed at capture_npc_event, and the other two tables have never been
+        # reachable. ⚠️ Default None so forgetting to put it back cannot leave a
+        # changed server behind. See /nev.
+        self.npc_event_npc: int | None = None
         # Which sub_menu.bin key we hand back when a type 1 menu item is picked
         # off a map object. Per-session for the same reason npc_event is: the
         # whole point of the knob is to try one key against a running client and
@@ -2188,9 +2197,20 @@ class MpsServer:
             if result is not None and result.event is not None:
                 event = result.event
                 print(f"[{self.tag}] lck_s102 → event {event[0]}:{event[1]}")
+            answer_npc = npc_id if session.npc_event_npc is None else session.npc_event_npc
+            # ⭐ Which table the client is about to read `event` out of, said
+            # before it goes rather than guessed from what comes back: the whole
+            # question this pair answers is which of the four it consults, and
+            # the only thing that decides it is the npcId in this very body.
+            print(
+                f"[{self.tag}] npc event {event[0]}:{event[1]} → "
+                f"{script.event_table_for(answer_npc)} "
+                f"(npcId {answer_npc >> 16}:{answer_npc & 0xFFFF}"
+                + ("" if session.npc_event_npc is None else ", /nev override") + ")"
+            )
             return self._answer(
                 session, seen, script.MSG_SV_OK_NPC_MAP_OBJECT_EVENT,
-                script.npc_map_object_event_params(event, npc_id),
+                script.npc_map_object_event_params(event, answer_npc),
             )
 
         if msg_type == script.MSG_CL_REQUEST_NPC_MAP_OBJECT_MENU:
@@ -7409,6 +7429,11 @@ class MpsServer:
             self.accounts.save_locker(session.account_id)
         if answer.npc_event is not None:
             session.npc_event = answer.npc_event
+        if answer.npc_event_npc is not None:
+            # -1 is /nev's "go back to echoing", the same shape /sel uses.
+            session.npc_event_npc = (
+                None if answer.npc_event_npc < 0 else answer.npc_event_npc
+            )
         if answer.sub_menu is not None:
             session.sub_menu = answer.sub_menu
         if answer.npc_event_end is not None:

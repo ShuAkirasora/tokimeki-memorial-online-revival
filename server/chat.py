@@ -251,7 +251,7 @@ HELP = (
     "/exam [on|off|ready|force|ans|sec <秒>|<科目番号>] 試験期間・鐘・正解・制限時間",
     "/quiz [sec <秒>|wait <秒>|ab [before|after] <値×6>|ab off] 出題の状態と正解 (採点の検証用)",
     "/npcx 補充をやめる (画面上の分は地図を跨ぐまで残る)",
-    "/nev [<cat>:<id>] 会話イベントキー (既定 16:1)",
+    "/nev [<cat>:<id>] [<npcCat>:<npcId>|echo] 会話イベントキー (既定 16:1 + echo)",
     "/smenu [<キー>] 0x6302 で返す sub_menu (既定 2 ロッカー・手紙メニュー)",
     "/evend [auto|manual] 0x5603 の返し方 (manual は返事なし、/raw で手動終了)",
     "/sc <名前|scriptId> [ctrl] [actor:npcId] 台本開始",
@@ -401,6 +401,10 @@ class Reply(NamedTuple):
     script: ScriptAction | None = None
     # A new capture_npc_event key for this session; see /nev.
     npc_event: tuple[int, int] | None = None
+    # The npcId to answer 0x6304 with, or -1 to go back to echoing the client's;
+    # see /nev. It is a separate field because it is a separate question: the
+    # pair above says which record, this says which table.
+    npc_event_npc: int | None = None
     # A new sub_menu.bin key to answer 0x6301 with; see /smenu.
     sub_menu: int | None = None
     # "auto" or "manual": how 0x5603 MsgClRequestNpcEventEnd is answered; see
@@ -1946,15 +1950,39 @@ def respond(
 
     if word == "nev":
         # Which conversation the speech balloon starts. The client turns this
-        # pair into a capture_npc_event record and asks for the script id in
-        # it, so changing it here changes what the NPC says — no restart, and
-        # no need to walk back to her.
-        if not rest.strip():
-            return Reply(["/nev <cat>:<id>  例: /nev 16:1 (天宮日常会話c011)"])
-        event = parse_id_pair(rest.split()[0])
+        # pair into an event record and asks for the script id in it, so
+        # changing it here changes what the NPC says — no restart, and no need
+        # to walk back to her.
+        #
+        # ⭐ The second argument says *which of the four event tables* the pair
+        # is read out of, because that is decided by the npcId this end sends
+        # back and by nothing else — see script.event_table_for. Left off, the
+        # client's own npcId is echoed, which is the factory behaviour; with
+        # every chibi spawned 1:0 that is always capture_npc_event.
+        #   /nev 0:0 2:0    石打野球部入退部c001 out of common_npc_event
+        #   /nev 64:1 3:0   担任（女）リーダー試験c002 out of general_npc_event
+        #   /nev 16:1 echo  back to echoing
+        words = rest.split()
+        if not words:
+            return Reply(["/nev <cat>:<id> [<npcCat>:<npcId>|echo]"
+                          "  例: /nev 16:1 (天宮日常会話c011)"])
+        event = parse_id_pair(words[0])
         if event is None:
-            return Reply([f"イベントidが読めない: {rest}"])
-        return Reply([f"会話イベント = {event[0]}:{event[1]}"], npc_event=event)
+            return Reply([f"イベントidが読めない: {words[0]}"])
+        lines = [f"会話イベント = {event[0]}:{event[1]}"]
+        npc = None
+        if len(words) > 1:
+            if words[1] == "echo":
+                npc = -1
+                lines.append("npcId はクライアントが送ってきたものをそのまま返す (既定)")
+            else:
+                pair = parse_id_pair(words[1])
+                if pair is None:
+                    return Reply([f"npcIdが読めない: {words[1]}"])
+                npc = (pair[0] << 16) | pair[1]
+                lines.append(f"npcId = {pair[0]}:{pair[1]} → "
+                             f"{script.event_table_for(npc)}")
+        return Reply(lines, npc_event=event, npc_event_npc=npc)
 
     if word == "smenu":
         # Which sub_menu.bin key 0x6301 is answered with. The request says

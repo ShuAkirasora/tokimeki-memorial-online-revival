@@ -398,12 +398,63 @@ def by_script_id(script_id: int) -> Script | None:
     return stub(script_id) if script_id in BRANCHES else None
 
 
+# ⭐⭐⭐ Which of the four event tables the client reads our eventId out of, and
+# it is decided by the *npcId we send back*, not by the eventId itself.
+#
+# The client's 0x6305 handler (FUN_0077d69c) is a three-way switch on
+# `npcId >> 16`, and each arm calls a different keyed table accessor:
+#
+#     kind = npcId >> 16                       (0x00404ff9 / 0x00404fdf)
+#     kind == 2 -> 0x7e7b2a   manager +0x488 = common_npc_event
+#     kind == 3 -> 0x7e7b88   manager +0x498 = general_npc_event
+#     else      -> 0x7e6e97   manager +0x038 = capture_npc_event
+#
+# All three then read the same field out of the record they found — `+0x36`, the
+# u16 scriptId — and hand it straight to the event starter. So the categoryId /
+# id pair is meaningless on its own: `0:0` is 天宮イベントその１ in one table and
+# 石打野球部入退部c001 in another, and this number is what says which.
+#
+# ⭐ The four roster tables key on exactly these numbers, with no gaps and no
+# overlap: capture_npc is 1:0-1:9, common_npc 2:0-2:17, general_npc 3:0-3:31,
+# extra_npc 4:0. So the "kind" is not a protocol enum invented for this message,
+# it is which cast list the NPC belongs to, and the spawn message carries the
+# same pair.
+#
+# ⚠️ extra_npc_event is not one of the arms, and the table manager never loads
+# it either — so 4:0 生徒Ａ falls through to capture_npc_event and its one
+# script (sta_c001.ssb, scriptId 0x8000) is unreachable on this build.
+NPC_KIND_CAPTURE = 1
+NPC_KIND_COMMON = 2
+NPC_KIND_GENERAL = 3
+
+_EVENT_TABLE_BY_KIND = {
+    NPC_KIND_CAPTURE: "capture_npc_event",
+    NPC_KIND_COMMON: "common_npc_event",
+    NPC_KIND_GENERAL: "general_npc_event",
+}
+
+
+def event_table_for(npc_id: int) -> str:
+    """Which table the client will look the eventId up in, given this npcId.
+
+    ⚠️ The fallback is the same table as kind 1 rather than an error, because
+    that is what the client does: only 2 and 3 have an arm, and everything else
+    — 4, 0, 17, anything — lands in the capture_npc_event one.
+    """
+    return _EVENT_TABLE_BY_KIND.get(npc_id >> 16, "capture_npc_event")
+
+
 def npc_map_object_event_params(event: tuple[int, int], npc_id: int) -> bytes:
     """A MsgSvOkNpcMapObjectEvent body: eventId{categoryId, id} then npcId.
 
-    Widths are the client's own (`reads=2+2+4`), and the npcId goes back as the
-    four bytes it arrived in — the request prints it as one number, so this end
-    does not need to know where the split inside it is.
+    Widths are the client's own (`reads=2+2+4`); the npcId is one u32 here
+    because the request prints it as one number, so this end does not need to
+    know where the split inside it is.
+
+    ⚠️ The caller normally passes back the four bytes that arrived, but that is
+    a choice and not a formality: see `event_table_for` above — the npcId in
+    *this* body is what picks the event table. Echoing keeps whatever the NPC
+    was spawned as, which is the behaviour to keep by default.
     """
     return struct.pack(">HH", event[0], event[1]) + struct.pack(">I", npc_id)
 
