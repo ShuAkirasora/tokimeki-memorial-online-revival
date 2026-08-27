@@ -65,11 +65,28 @@ values below are therefore this server's invention, not a restoration. They
 are placeholders that let the battle be drawn; the game they would belong to
 (what raises them, what spends them) is not implemented.
 
-⚠️ The u16/u8/u8 width split is itself only inferred, from the order the
-reader calls its accessors in — the pairing of *name* to *width* has no second
-witness. So ``energy`` and ``speed`` deliberately get DIFFERENT default values
-here: whichever number 気力 shows on screen names which of the two u8 it is,
-and that reading is free the first time a battle draws.
+⚠️ The u16/u8/u8 width split used to be inferred here, from the order the
+reader calls its accessors in, and this paragraph said the pairing of *name*
+to *width* had no second witness — so ``energy`` and ``speed`` were given
+DIFFERENT defaults on purpose, to be read off the screen the first time a
+battle drew. That experiment was tried twice and failed twice.
+
+⭐⭐ IT NOW HAS ITS SECOND WITNESS, and the client handed it over. The NPC
+opponent table the original 練習 mode draws its fighters from carries the same
+three values per row, and the client reads them at three fixed offsets with
+exactly these widths — ``mov ax, word ptr [esi+0x44]`` for 体力, then
+``mov al, byte ptr [esi+0x46]`` and ``mov al, byte ptr [esi+0x47]``. Same
+order, same widths, an independent reader. ⭐ The table also separates the two
+u8: one of them is the SAME value on every row while the other rises
+monotonically with 部活レベル, and a quantity that never varies cannot be the
+one that orders 行動順 (p07_03 「キャラクターの行動順」) — so the constant one
+is 気力 and the rising one is 素早さ.
+
+⚠️ THE THREE DEFAULTS BELOW ARE STILL THIS SERVER'S INVENTION. What the
+finding retires is the width/name question and the probe that was waiting on
+it, not the numbers: the real ones live in the client's club data tables, and
+whether this server should carry those tables is a separate decision that has
+not been taken. Nothing here reads them.
 """
 from __future__ import annotations
 
@@ -132,8 +149,12 @@ BASE_SIZE = 71
 #: charaBodyType u16.
 MEMBER_SIZE = 83
 
-#: ⚠️ INVENTED (see the module docstring). Distinct on purpose so that the
-#: first battle to reach the screen says which u8 is which.
+#: ⚠️ INVENTED (see the module docstring). They used to be distinct on purpose,
+#: so that the first battle to reach the screen would say which u8 is which;
+#: that question is answered now (the docstring says how) and the difference no
+#: longer carries a job. ⚠️ Left exactly as they were: changing them would
+#: move gameplay for no reading, and the values a restoration would use come
+#: from a table this server does not carry.
 DEFAULT_VITALITY = 100
 DEFAULT_ENERGY = 80
 DEFAULT_SPEED = 40
