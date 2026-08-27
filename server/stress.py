@@ -239,13 +239,31 @@ def barred_from_club(condition: int) -> bool:
     return condition in (INJURY, DOCTOR_STOP)
 
 
+def relieve(sheet, amount: int) -> int:
+    """Take `amount` of ストレス off. Returns the 値 actually removed.
+
+    ⭐ 「ストレスを0にすることで、体調が「健康」に戻ります」 is a sentence about
+    the value reaching zero and not about how it got there, so everything that
+    takes ストレス off closes the loop the same way — sitting through recover
+    below, and 消費アイテム through item.ITEM_EFFECTS. Having one function for
+    it is what keeps a second way of getting to zero from quietly growing a
+    second rule.
+    """
+    removed = max(0, min(sheet.stress, amount))
+    sheet.stress -= removed
+    if sheet.stress == 0:
+        sheet.condition = HEALTHY
+    return removed
+
+
 def recover(sheet, seconds: float, map_id: int) -> int:
     """Sit still for `seconds` on `map_id`. Returns the 値 actually removed.
 
     「体調が「健康」の場合」 and 「体調不良の場合、座っているだけではストレスは
     減りません。癒しスペース…で座り」 — so a 体調不良 character recovers in the
     保健室 and nowhere else, while a healthy one recovers anywhere and faster
-    there. 「ストレスを0にすることで、体調が「健康」に戻ります」 closes the loop.
+    there. 「ストレスを0にすることで、体調が「健康」に戻ります」 closes the loop,
+    and relieve is where that last clause lives.
     """
     if sheet.stress <= 0:
         return 0
@@ -253,8 +271,4 @@ def recover(sheet, seconds: float, map_id: int) -> int:
     if sheet.condition != HEALTHY and not at_healing:
         return 0
     rate = HEALING_SECONDS_PER_POINT if at_healing else SIT_SECONDS_PER_POINT
-    removed = min(sheet.stress, int(seconds / rate))
-    sheet.stress -= removed
-    if sheet.stress == 0:
-        sheet.condition = HEALTHY
-    return removed
+    return relieve(sheet, int(seconds / rate))

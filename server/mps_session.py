@@ -1280,7 +1280,7 @@ class MpsServer:
         return out
 
     def _item_effect(self, session: "_Session", params: bytes) -> bytes:
-        """What 使用 does past taking one off the count. ⚠️ NOT WIRED UP YET.
+        """What 使用 does past taking one off the count: `item.bin`'s own numbers.
 
         ⭐⭐⭐ THE CONSEQUENCE IS THIS END'S TO APPLY, and that is settled
         rather than assumed: `item.bin` carries the three effect columns
@@ -1296,12 +1296,21 @@ class MpsServer:
         sheet is re-read the next time the キャラメニュー is opened. There is
         no third possibility to test for.
 
-        ⚠️ THIS IS HALF THE STEP ON PURPOSE. It reads the effect and says so on
-        the console; it moves nothing and writes nothing, so a save is a byte
-        for byte match either side of it. Applying the numbers is the next
-        piece, and keeping the two apart is what makes the first one testable:
-        the log line proves the lookup fires on a real 使用 with the right
-        numbers before anything can be spent on the arithmetic being wrong.
+        ⭐ Both halves go through the function that already owns the rule rather
+        than a second copy of it: stress.relieve, which is also what sitting
+        uses and which is where 「ストレスを0にすることで、体調が「健康」に
+        戻ります」 lives, and the same u16 clamp _file_ability puts on 授業's
+        能力増減. An item that raises an ability the sheet does not have is
+        dropped rather than clamped -- ITEM_EFFECTS only holds keys 0..5, so
+        that would be a table read gone wrong and not a value to round off.
+
+        ⚠️ AN ITEM THAT CAN DO NOTHING IS STILL SPENT -- お弁当 at ストレス 0
+        comes off the count and relieves nothing. Refusing it would need a
+        sentence, and 0x4D08's four usable reasons are all about the item
+        rather than about the state it was used in; inventing 「ストレスが
+        たまっていません」 to save the player from a wasted lunch would be
+        writing a rule the game does not have. The console still says what
+        happened.
         """
         key = item.parse_use(params)
         if key is None:
@@ -1310,15 +1319,31 @@ class MpsServer:
         if ability_id is None and not amount and not relief:
             print(f"[{self.tag}] item 使用: {key[0]}:{key[1]} は効果なし")
             return b""
-        gain = (f"{ability.ABILITIES[ability_id]} +{amount}"
-                if ability_id is not None and ability_id < len(ability.ABILITIES)
-                else "")
+        sheet = self._chars(session).ability(session.chara_id)
+        if sheet is None:
+            return b""
+        moved = []
+        if ability_id is not None and ability_id < len(sheet.params):
+            was = sheet.params[ability_id]
+            sheet.params[ability_id] = max(0, min(0xFFFF, was + amount))
+            moved.append(f"{ability.ABILITIES[ability_id]} "
+                         f"{was}→{sheet.params[ability_id]}")
+        if relief:
+            condition = sheet.condition
+            removed = stress.relieve(sheet, relief)
+            moved.append(f"ストレス -{removed} → {sheet.stress} "
+                         f"({stress.screen(sheet.stress)}/100)"
+                         if removed else "ストレスは既に 0（効果なし）")
+            if sheet.condition != condition:
+                moved.append(f"体調 {stress.name(condition)}→"
+                             f"{stress.name(sheet.condition)}")
+        self._chars(session).set_ability(session.chara_id, sheet)
         print(f"[{self.tag}] item 使用: {key[0]}:{key[1]} → "
-              + " ".join(part for part in (gain,
-                                           f"ストレス -{relief}" if relief else "")
-                         if part)
-              + "（まだ適用しない）")
-        return b""
+              + ", ".join(moved))
+        # ⭐ The ストレス bar under the character was told its value by 0x4811 and
+        # by nothing else, so it has to be told again. The six 能力 are pulled
+        # by the キャラメニュー's own query and need nothing here.
+        return self._push_vitals(session, sheet)
 
     def _locker(self, session: "_Session") -> "item.Locker | None":
         """This connection's account's ロッカー, or None if it has no account.

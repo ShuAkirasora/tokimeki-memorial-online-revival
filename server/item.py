@@ -72,8 +72,9 @@ do not have.
 
 RESTORED and INVENTED
 ---------------------
-Restored: the ids, the field layout, the tab mapping, the page size, and the two
-refusal reasons -- `error_message.bin` gives 0x4D02 exactly two sentences,
+Restored: the ids, the field layout, the tab mapping, the page size, what 使用
+does to the character who uses it (ITEM_EFFECTS), and the two refusal reasons
+-- `error_message.bin` gives 0x4D02 exactly two sentences,
 「キャラクター情報の取得に失敗しました。」 (reason 0) and 「アイテム一覧の取得に
 失敗しました。」 (reason 1), so an unknown character answers the first and
 nothing else can currently answer the second.
@@ -175,11 +176,15 @@ INVENTED, beyond the grant itself
     both changes. ⚠️ Not measured; what IS settled is the equip flag's meaning,
     since 0x4D05 spends two of its ten sentences on 「既に身に付けています」 and
     「身に付けていません」, which only make sense for a toggle.
-  * USING AN ITEM DOES NOTHING BUT DECREMENT -- ⚠️ AND THIS IS NO LONGER AN
-    INVENTION, it is a piece not yet fitted. The effects 消費 items plainly had
-    (お弁当 against ストレス, 文学の種 against an ability) are three columns of
-    `item.bin` and both are decoded; see ITEM_EFFECTS, which this end now reads
-    on every 使用 and prints. What it does not yet do is apply them.
+
+⭐⭐ WHAT 使用 DOES IS NOT ON THAT LIST, and used to be. This section read
+「the wire is complete; the consequence is absent」 for as long as `item.bin`'s
+tail was undecoded, and both halves of it are decoded now: which 能力 a 種
+raises and by how much, and how much ストレス a meal takes off. ITEM_EFFECTS
+holds them and mps_session._item_effect applies them, so 使用 is restoration
+down to the numbers. ⚠️ The one thing in it that is a reading rather than a
+measurement is the *unit* of the ability figure -- see ITEM_EFFECTS, which
+takes it literally on purpose.
 """
 
 from __future__ import annotations
@@ -913,10 +918,12 @@ def use_replies(
     the family that does not -- so using is not spinner-driven the way throwing
     out and putting away are, and the count that comes back is what is left.
 
-    ⚠️ NOTHING HAPPENS BEYOND THE DECREMENT -- the numbers are read (see
-    ITEM_EFFECTS) and printed, and applying them is the next piece. This
-    function returns the same replies either way: the decrement and the
-    remainder are the whole of what 0x4D07 puts on the wire.
+    ⚠️ WHAT THE ITEM DOES IS NOT DECIDED HERE and does not show up in these
+    replies: the decrement and the remainder are the whole of what 0x4D07 puts
+    on the wire, and the ストレス or 能力 the item is worth (ITEM_EFFECTS) is
+    applied against the character sheet by mps_session._item_effect, which is
+    where the sheet is. ⭐ So a refusal above is also a refusal of the effect --
+    there is one door and the count is what goes through it.
 
     ⭐⭐ AND THE QUESTION THIS DOCSTRING USED TO PARK THE WORK BEHIND IS
     ANSWERED WITHOUT A CLIENT. It used to read 「nobody has watched a live
