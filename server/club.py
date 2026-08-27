@@ -163,12 +163,35 @@ through ``keyword_exists`` for the same reason ``inClub`` is range-checked.
 
 ⭐ Independent confirmation that these ids are what a deck holds:
 `npc_clubdeck.bin` (200 rows, 「野球部初級攻撃系デッキ」 and friends) ends in a
-58-byte tail that reads as 25 × u16 with 0xFFFF for an empty slot, and across
-all 200 rows every one of the 2418 non-0xFFFF values in those 25 slots is a
-legal keyword id — 25/25 slots at 100%. The four u16 after them are something
-else (about half land outside the id set), and 25 is a deck's capacity as the
-original filled it. NOT USED by anything here yet; it is the sample to check a
-real deck against the day 練習 is implemented.
+58-byte tail, and part of it is キーワード ids.
+
+⚠️⚠️ THIS PARAGRAPH USED TO READ 「25 × u16, and all 2418 non-0xFFFF values
+across the 200 rows are legal keyword ids — 25/25 slots at 100%」. That was
+WRONG, and it is worth recording HOW it was wrong, because the number looked
+perfect. A 部活奥義 is keyed by a PAIR, `categoryId` 1..8 then `id` 0..7, and
+BOTH of those land inside the keyword block 0..39 — so 「is it a legal keyword
+id」 is a ruler that cannot fail on this tail no matter what is in it. Checking
+against a second ruler (the 57 keys of `clubskill.bin`) is what took it apart.
+Corrected in round 200.
+
+The tail is three runs, each of which does check out with no exceptions:
+
+    +0x00  u16          always 0
+    +0x02  u16 × 8      キーワード id, 0xFFFF for an empty slot
+    +0x12  (u16,u16)×8  部活奥義 key, 0xFFFFFFFF for an empty slot;
+                        the categoryId is always this deck's own club
+    +0x32  u8  × 8      完成度 (percent) of the 部活奥義 in that slot, 0 if empty
+
+So a deck as the original filled it is 8 キーワード + 8 部活奥義, not 25 of
+anything. ⚠️ That is what the NPC table holds; it is NOT a measurement of what
+the CLIENT will accept, so it is not a reason to move DECK_CAPACITY.
+
+⭐ The 完成度 run is also a second witness for the deck item's fifth byte: see
+DECK_ITEM_CLUB_SKILL below, where every probe so far has sent 0x64 without
+knowing what it was. 0x64 is 100, and 100 is this field's full value.
+
+NOT USED by anything here yet; it is the sample to check a real deck against
+the day 練習 is implemented.
 
     0x4303 -> 0x4304 nNum u32
            -> 0x4305 list[count] × { keywordId u16, useCount u16,
@@ -528,8 +551,12 @@ CLUB_SKILL_RULER = (1, 2, 5, 9, 10, 0, 11, 50, 100, 255)
 DECK_ITEM_BYTES = 6
 DECK_ITEM_KEYWORD = 0
 DECK_ITEM_CLUB_SKILL = 1
-# 25 slots is what `npc_clubdeck.bin` uses; see the module docstring. ⚠️ Used
-# only to refuse an absurd count, not as a rule the client is known to obey.
+# ⚠️ Used only to refuse an absurd count, not as a rule the client is known to
+# obey. It was originally read off `npc_clubdeck.bin` as 「25 slots」, and round
+# 200 took that reading apart (see the module docstring: the NPC decks are
+# 8 + 8). The number is LEFT AS IT WAS ON PURPOSE — nothing measured what the
+# client's own deck window will accept, so lowering the sanity limit to 16
+# would be inventing a restriction, not restoring one.
 DECK_CAPACITY = 25
 
 # error_message.bin 462: the sentence counts 日.
