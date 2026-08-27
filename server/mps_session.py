@@ -885,6 +885,12 @@ class _Session:
         # outlived a disconnect would refuse the next 0x4F00 with 「既に商品交換
         # モードを開始しています」 -- a sentence the original marks 未使用.
         self.shop_open = False
+        # Whether the ロッカー window is open on this connection, which is the
+        # 行動中アイコン 「ロッカー開き中」 (p05_08: 「ロッカーを開いているプレイヤーの
+        # マップキャラに表示されます」). The 0x0400/0x0403 pair is a bracket and
+        # nothing else -- both halves read nothing off the wire -- so it carries
+        # no state worth keeping past the connection, exactly like shop_open.
+        self.locker_open = False
         # The period actually in progress, once 0x6100 has gone out. Not saved,
         # for the same reason: ten questions half answered are not owed to
         # anybody, and the original ends a lesson you walk out of too.
@@ -1507,7 +1513,7 @@ class MpsServer:
         """The icon to draw over this character's head.
 
         Which byte draws which picture is recovered (see the constants). What
-        this server puts up is three of them:
+        this server puts up is four of them:
 
         * 授業中 while a period is running. `p05_08`: 「授業中のマップキャラの
           頭上に表示されます」 -- the character keeps standing on the map while
@@ -1521,18 +1527,36 @@ class MpsServer:
           the ruler draws a figure lifting weights, and the client offers 参加
           only when this byte is set.
 
+        * ロッカー開き中 while the 0x0400/0x0403 bracket is open. `p05_08`:
+          「ロッカーを開いているプレイヤーのマップキャラに表示されます」 -- the
+          player is standing at the classroom lockers with a window up, and the
+          map character stood there idle until round 210.
+
         ⚠️ INVENTED: the order. Nothing says which icon wins when two apply, and
-        as written a lesson beats a fight beats a room. Nobody can be in two of
-        these at once today, so the ordering has never been exercised; what
-        would overturn it is a manual line or a capture showing a different one
-        on a character who qualifies for two.
+        as written a lesson beats a fight beats a room beats a locker. Two of
+        these can now genuinely coincide -- a room leader can open a locker --
+        and the room wins on purpose: 「自主トレ募集中」 is the only door into
+        somebody else's room (p05_08 again), so replacing it with a purely
+        informational icon would take a working affordance off the screen. The
+        other pairs still cannot happen. What would overturn any of it is a
+        manual line or a capture showing a different icon on a character who
+        qualifies for two.
+
+        ⚠️ Six of the ten icons p05_08 names still cannot be sent, and none of
+        them is wiring: 会話中 / トレード中 / ドラマイベント中 / 校内新聞閲覧中 /
+        看板 / チャット募集中 each want a subsystem that is not here. The last
+        three have a message family apiece (0x0A00 newspaper, 0x4B00 billboard,
+        0x4C80 chatroom) and this server answers none of them, so the client has
+        never been seen sending one either.
         """
         if other.lesson is not None:
             return ACTION_LESSON
         if self.battles.battle_of(other.chara_id) is not None:
             return ACTION_CLUB_ACTIVITY
         room = self.trainingrooms.rooms.get(other.chara_id)
-        return ACTION_TRAINING_ROOM if room is not None else ACTION_NONE
+        if room is not None:
+            return ACTION_TRAINING_ROOM
+        return ACTION_LOCKER_OPEN if other.locker_open else ACTION_NONE
 
     def _presence_blocked(
         self, session: "_Session", also: "set[int] | None" = None
@@ -3792,11 +3816,20 @@ class MpsServer:
                 # and their Oks read nothing off the wire (the shape reader: empty), so
                 # there is nothing to decide -- but they still have to be sent,
                 # for the same serialisation reason as the four above.
+                started = msg_type == item.MSG_CL_REQUEST_LOCKER_ACCESS_START
                 reply_type = (item.MSG_SV_OK_LOCKER_ACCESS_START
-                              if msg_type == item.MSG_CL_REQUEST_LOCKER_ACCESS_START
+                              if started
                               else item.MSG_SV_OK_LOCKER_ACCESS_END)
+                # ⭐ The bracket is also the only thing that knows this player is
+                # standing at an open locker, and p05_08 draws an icon over them
+                # while they are. Nothing else on the wire says it: 0x0406 (the
+                # list) is sent again on every tab, and 0x040A/0x040D happen
+                # inside a window that may stay open afterwards.
+                session.locker_open = started
                 print(f"[{self.tag}] locker {name}")
-                return self._answer(session, sequence, reply_type, b"")
+                out = self._answer(session, sequence, reply_type, b"")
+                self._presence_refresh_onlookers(session)
+                return out
             if msg_type == item.MSG_CL_QUERY_LOCKER_LIST:
                 # ⭐ The account's store, not the character's -- item.Locker has
                 # the client's own sentences that say which. Answered exactly
