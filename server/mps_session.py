@@ -101,6 +101,7 @@ import romance
 import script
 import shop
 import stress
+import trade
 import trainingroom
 from common import ServiceConfig, ensure_runtime_dirs, inet_u32, write_packet_log
 
@@ -283,15 +284,27 @@ FIXED_REPLIES = {
     # which would take the row out is building the card, at which point 経歴公開
     # becomes its gate the way 通知表公開 is 0x430D's. That is what career.py
     # did; 0x4315 is handled below and the flag is read there.
-    # The two that are left are: ツーショット and トレード are whole subsystems
-    # (0x5000..0x5203 and 0x5100..0x5118) and a refusal is a rule nobody has read
-    # off the client. ⚠️ INVENTED, and what overturns it is implementing either
-    # family -- at which point these two rows come out.
+    # ⭐ トレード IS NO LONGER ONE OF THEM. Its row said, like 経歴's before it,
+    # that a refusal was honest because the subsystem behind the icon did not
+    # exist -- and that the thing which takes the row out is building it. That
+    # is what server/trade.py does; 0x5100 and the other seven MsgCl of the
+    # family are handled below, and the refusals it does send now carry a real
+    # reason out of error_message.bin's 0xFF09 list instead of this placeholder.
+    #
+    # The one that is left is ツーショット: 0x5000..0x500A, 0x5200..0x5203 and
+    # 0x5400..0x5405 are a whole subsystem and a refusal is a rule nobody has
+    # read off the client. ⚠️ INVENTED, and what overturns it is implementing
+    # the family -- at which point this row comes out too.
+    # ⭐ When it does, the reason byte has a real list of its own waiting:
+    # error_message.bin files ツーショット's sentences under the pseudo id
+    # 0xFF05, the same way it files トレード's under 0xFF09. 0xFF05 reason 11,
+    # 「指定されたキャラクターがいる場所ではツーショットチャットを行うことは
+    # できません」, is also the first hint anyone has had about where
+    # MsgSvNotifyTwoshotStart's placeId comes from: the target's whereabouts.
     #
     # Reason byte is the NG_REASON placeholder defined below; the table is built
     # before that name exists, hence the literal.
     0x5000: (0x5002, b"\x00"),  # MsgClRequestTwoshotRequest -> MsgSvNgTwoshotRequest
-    0x5100: (0x5102, b"\x00"),  # MsgClRequestTradeRequest   -> MsgSvNgTradeRequest
 }
 
 MSG_CL_QUERY_CHARACTER_LIST = 0x0318
@@ -960,6 +973,21 @@ class _Session:
         # to, ``group_handover_from`` is the leader who offered it.
         self.group_handover_to: int | None = None
         self.group_handover_from: int | None = None
+        # アイテムトレード, the third handshake of the same shape and the only
+        # one that opens a session of its own afterwards. ``trade_asked`` is
+        # whom this session has applied to and ``trade_asking`` is who applied
+        # to it -- one each way, for the reason 勧誘 gives above: 0x5104/0x5105
+        # carry no charaId, so a second open application would leave the client
+        # no way to say which one its answer meant.
+        #
+        # ``trade_with`` is the partner once both sides are in the window, and
+        # ``trade_table`` is what this side has put on it. Nothing here is
+        # saved: a trade is two people standing in front of each other, and the
+        # only thing that outlives it is the item move. See server/trade.py.
+        self.trade_asked: int | None = None
+        self.trade_asking: int | None = None
+        self.trade_with: int | None = None
+        self.trade_table = trade.Table()
         # The client's own clock, as of the last tag-8 probe, plus when that
         # arrived by our monotonic clock. MsgSvNotifyCharaMove has to state an
         # arrivalTime on the client's timebase, and the tag-8 exchange is the
@@ -2833,6 +2861,11 @@ class MpsServer:
             # the logout path may already have closed the span, in which case
             # this is a no-op.
             self._career_depart(session)
+            # ⚠️ A trade partner cannot see this socket close, and an open trade
+            # window that will never do anything is the same failure the room's
+            # 0x580D and the fight's 0x5C1B exist to prevent. Ahead of the
+            # removal below because it looks the partner up by charaId.
+            self._trade_partner_gone(session)
             # Who was watching this character, worked out before the removal for
             # the same reason: after it, _peers can no longer see the session at
             # all, and the answer would be the wrong map's crowd.
@@ -3269,6 +3302,9 @@ class MpsServer:
                     f"({MAP_NAMES.get(session.map_id, '?')}) at {session.pos}"
                 )
                 self._career_depart(session)
+                # Same treatment as the disconnect path, and for the same
+                # reason: a partner left in front of a dead trade window.
+                self._trade_partner_gone(session)
                 # Same treatment as the disconnect path: 「中断」 takes this
                 # player out of the fight, and the fight carries on for whoever
                 # is left rather than being taken off the board (Fighter.gone).
@@ -4142,6 +4178,12 @@ class MpsServer:
                 # 仲良しグループ: 「グループ情報」 and the 勧誘 handshake behind
                 # the PC 交流メニュー's 「グループ登録申込み」; see _groups.
                 return self._groups(session, sequence, msg_type, params)
+            if msg_type in trade.HANDLED:
+                # アイテムトレード: the PC 交流メニュー's sixth icon and the
+                # window behind it. One piece for the reason item.py gives for
+                # its own family -- a window with one live button and three dead
+                # ones wedges on the first wrong click. See server/trade.py.
+                return self._trade(session, sequence, msg_type, params)
             if msg_type in gmcall.HANDLED:
                 # ＧＭコール: the システムメニュー row that calls for a 風紀委員.
                 # Only the player's two messages are here -- the GM's own
@@ -8444,6 +8486,487 @@ class MpsServer:
         print(f"[{self.tag}] 勧誘: charaId={me} withdrew the application to {target}")
         return self._answer(
             session, seen, groups.MSG_SV_OK_CHARA_GROUP_INVITE_CANCEL, b"",
+        )
+
+    # ------------------------------------------------------------------
+    # アイテムトレード (0x5100..0x5118). See server/trade.py for the handshake,
+    # for the manual sentences that are its rule, and for where the reason
+    # bytes come from.
+    # ------------------------------------------------------------------
+
+    def _forget_stale_trade(self, session: "_Session") -> None:
+        """Drop what the other end can no longer answer for.
+
+        Same treatment, and the same argument, as _forget_stale_group: an
+        application is open exactly while both ends are connected, so clearing
+        it when it is next looked at keeps the rule in one place instead of
+        spreading it over every path that ends a connection.
+
+        ⚠️ An open trade is the one part of this that cannot be cleaned up
+        quietly. A player whose partner has gone is sitting in front of a trade
+        window that will never do anything, so the survivor is told -- see
+        _trade_partner_gone, which is what the disconnect path calls.
+        """
+        if session.trade_asked is not None:
+            other = self._session_of(session.trade_asked)
+            if other is None:
+                session.trade_asked = None
+            elif other.trade_asking != session.chara_id:
+                session.trade_asked = None
+        if session.trade_asking is not None:
+            other = self._session_of(session.trade_asking)
+            if other is None:
+                session.trade_asking = None
+            elif other.trade_asked != session.chara_id:
+                session.trade_asking = None
+
+    def _trade_clear(self, session: "_Session") -> None:
+        """Put one session back to having no trade and no application."""
+        session.trade_asked = None
+        session.trade_asking = None
+        session.trade_with = None
+        session.trade_table.clear()
+
+    def _trade_partner_gone(self, session: "_Session") -> None:
+        """Tell whoever was trading with this session that it is over.
+
+        Called from the disconnect and 下校 paths, next to the 0x580D that takes
+        a leaver out of a 看板 room and the 0x5C1B that takes a fighter out of a
+        fight, and for the same reason: the client cannot see the socket close.
+
+        ⚠️ A JUDGEMENT CALL ON THE REASON BYTE, not a reading. 0xFF09 has no
+        「切断による」 the way the room family's 0x580D reason 2 does, so the
+        nearest true sentence in the list is 24 「アイテムトレードに失敗しました。
+        （トレード情報が不正）」 -- the trade information really has stopped being
+        valid. A capture of the original doing this some other way replaces it.
+        """
+        partner = session.trade_with
+        if partner is None:
+            return
+        other = self._session_of(partner)
+        self._trade_clear(session)
+        if other is None or other.trade_with != session.chara_id:
+            return
+        self._trade_clear(other)
+        print(f"[{self.tag}] トレード: charaId={session.chara_id} went away, "
+              f"telling {partner}")
+        self._push(other, self._answer(
+            other, 0, trade.MSG_SV_NOTIFY_TRADE_CANCEL,
+            trade.reason(trade.REASON_BAD_TRADE_INFO),
+        ))
+
+    def _trade_peer(self, session: "_Session") -> "_Session | None":
+        """The other end of an open trade, if it is still there and agrees.
+
+        Both sessions have to name each other: a one-sided ``trade_with`` is a
+        bug this end would otherwise act on, and acting on it means moving
+        somebody's items.
+        """
+        partner = session.trade_with
+        if partner is None:
+            return None
+        other = self._session_of(partner)
+        if other is None or other.trade_with != session.chara_id:
+            return None
+        return other
+
+    def _trade_notify_both(self, session: "_Session", other: "_Session",
+                           seen: int, msg_type: int, params: bytes) -> bytes:
+        """One notification to both ends of a trade, the pushed one first.
+
+        ⚠️ ORDER IS LOAD-BEARING, and round 151 paid for the rule: _answer
+        takes its sequence number the moment it is called while _push writes
+        immediately, so
+        building this session's reply before pushing the peer's would hand out a
+        number that is already behind the wire. Push first, build second.
+        """
+        self._push(other, self._answer(other, 0, msg_type, params))
+        return self._answer(session, seen, msg_type, params)
+
+    def _trade(self, session: "_Session", seen: int,
+               msg_type: int, params: bytes) -> bytes:
+        """The whole 0x5100..0x5118 family. See server/trade.py.
+
+        The application half is the third of the same shape this server has --
+        友達登録, 勧誘, and now this -- and is refused on the same grounds when
+        the other side is offline, for the same reason: nothing in the family
+        can carry an application across a logout, so writing one down would be
+        writing down a question nobody can ever be asked.
+
+        What is new is everything after 承諾: this is the first family where the
+        two players hold a shared piece of state that outlives the exchange that
+        opened it, and the first where finishing it writes to two accounts.
+        """
+        me = session.chara_id
+        self._forget_stale_trade(session)
+
+        if msg_type == trade.MSG_CL_REQUEST_TRADE_REQUEST:
+            target = trade.parse_target(params)
+            other = self._session_of(target) if target else None
+            if other is not None:
+                self._forget_stale_trade(other)
+            why = None
+            code = trade.REASON_REQUEST_FAILED
+            if target == me and me:
+                why, code = "oneself", trade.REASON_SELF
+            elif target == 0 or other is None:
+                why, code = "not online", trade.REASON_BAD_CHARA
+            elif session.trade_with is not None:
+                why, code = "already trading", trade.REASON_ALREADY_TRADING
+            elif session.trade_asked is not None:
+                why, code = "already asked somebody", trade.REASON_ALREADY_ASKED
+            elif (other.trade_with is not None
+                  or other.trade_asking is not None
+                  or other.trade_asked is not None
+                  or session.trade_asking is not None):
+                # ⚠️ FOUR conditions and the last one is about US, which the
+                # first draft missed. 0x5104/0x5105 carry no charaId, so a
+                # session can be one end of at most one application -- and a
+                # session that is already BEING asked cannot become an asker
+                # without leaving the client two open questions and one answer.
+                # A crossed pair (A asks B, B asks A back) is exactly that, and
+                # the smoke caught it. reason 1 is true of the target either
+                # way: 「現在申し込みを受けられる状態ではありません」.
+                why, code = "the target is busy", trade.REASON_TARGET_BUSY
+            if why is not None:
+                print(f"[{self.tag}] トレード from charaId={me} to {target} "
+                      f"refused: {why} (reason={code})")
+                return self._answer(
+                    session, seen, trade.MSG_SV_NG_TRADE_REQUEST, trade.reason(code),
+                )
+            assert other is not None
+            session.trade_asked = target
+            other.trade_asking = me
+            print(f"[{self.tag}] トレード: charaId={me} is asking {target}")
+            reply = self._answer(session, seen, trade.MSG_SV_OK_TRADE_REQUEST, b"")
+            self._push(other, self._answer(
+                other, 0, trade.MSG_SV_REQUEST_TRADE_RESPONSE,
+                trade.response_params(me),
+            ))
+            return reply
+
+        if msg_type in (trade.MSG_CL_OK_TRADE_RESPONSE,
+                        trade.MSG_CL_NG_TRADE_RESPONSE):
+            answer = trade.parse_answer(params)
+            # ⚠️⚠️ The 勧誘 lesson, applied ahead of the same bug rather than
+            # after it: both buttons of a 確認 box can send the Ok message and
+            # put the real answer in the byte. Round 143 built that handshake
+            # against a script that always accepted and spent three rounds with
+            # a refusal that joined the group. Reading the byte first costs
+            # nothing if this family turns out to send 0x5105 honestly.
+            if (msg_type == trade.MSG_CL_OK_TRADE_RESPONSE
+                    and answer != trade.ANSWER_YES):
+                msg_type = trade.MSG_CL_NG_TRADE_RESPONSE
+            asker = session.trade_asking
+            other = self._session_of(asker) if asker is not None else None
+            if asker is None or other is None or other.trade_asked != me:
+                print(f"[{self.tag}] トレード answer from charaId={me}: "
+                      "nobody is asking, ignoring")
+                session.trade_asking = None
+                return b""
+            session.trade_asking = None
+            other.trade_asked = None
+            if msg_type == trade.MSG_CL_NG_TRADE_RESPONSE:
+                # The same judgement call _friends makes for 0x640D and _groups
+                # for 0x6222: the family has no 「they said no」 of its own, and
+                # 0x510E is the only message that tells somebody an application
+                # they were part of has ended.
+                print(f"[{self.tag}] トレード: charaId={me} declined {asker} "
+                      f"(answer={answer})")
+                self._push(other, self._answer(
+                    other, 0, trade.MSG_SV_NOTIFY_TRADE_CANCEL,
+                    trade.reason(trade.REASON_NONE),
+                ))
+                return b""
+            session.trade_with = asker
+            other.trade_with = me
+            session.trade_table.clear()
+            other.trade_table.clear()
+            print(f"[{self.tag}] トレード: charaId={me} accepted {asker} "
+                  f"(answer={answer}); the table is open")
+            return self._trade_notify_both(
+                session, other, seen, trade.MSG_SV_NOTIFY_TRADE_START, b"",
+            )
+
+        if msg_type in (trade.MSG_CL_REQUEST_TRADE_CANCEL,
+                        trade.MSG_CL_REQUEST_TRADE_END):
+            closing = msg_type == trade.MSG_CL_REQUEST_TRADE_END
+            ok_type = (trade.MSG_SV_OK_TRADE_END if closing
+                       else trade.MSG_SV_OK_TRADE_CANCEL)
+            ng_type = (trade.MSG_SV_NG_TRADE_END if closing
+                       else trade.MSG_SV_NG_TRADE_CANCEL)
+            notify_type = (trade.MSG_SV_NOTIFY_TRADE_END if closing
+                           else trade.MSG_SV_NOTIFY_TRADE_CANCEL)
+            other = self._trade_peer(session)
+            if other is None:
+                # ⚠️ Also the honest answer for a session that thinks it is in a
+                # trade whose other end has gone: there is nothing to end.
+                self._trade_clear(session)
+                print(f"[{self.tag}] トレード close from charaId={me}: "
+                      "not in a trade")
+                return self._answer(
+                    session, seen, ng_type, trade.reason(trade.REASON_NOT_TRADING),
+                )
+            print(f"[{self.tag}] トレード: charaId={me} "
+                  f"{'ended' if closing else 'cancelled'} the trade with "
+                  f"{other.chara_id}")
+            self._trade_clear(session)
+            self._trade_clear(other)
+            # ⭐ reason 0 on a clean close, and that is not the placeholder this
+            # server used to send everywhere: in the 0xFF09 list slot 0 is
+            # 「未使用：：：エラーなし」 -- the developers' own name for "nothing
+            # went wrong", marked 未使用 because a sentence saying so is never
+            # meant to reach the screen. A refusal below carries a real code; a
+            # normal ending carries this.
+            self._push(other, self._answer(
+                other, 0, notify_type, trade.reason(trade.REASON_NONE),
+            ))
+            return self._answer(session, seen, ok_type, b"")
+
+        # Everything left needs an open trade.
+        error_type = {
+            trade.MSG_CL_CAST_TRADE_ITEM_PUSH: trade.MSG_SV_ERROR_TRADE_ITEM_PUSH,
+            trade.MSG_CL_CAST_TRADE_ITEM_RECALL: trade.MSG_SV_ERROR_TRADE_ITEM_RECALL,
+            trade.MSG_CL_CAST_TRADE_READY: trade.MSG_SV_ERROR_TRADE_READY,
+        }[msg_type]
+        other = self._trade_peer(session)
+        if other is None:
+            print(f"[{self.tag}] トレード 0x{msg_type:04x} from charaId={me}: "
+                  "not in a trade")
+            return self._answer(
+                session, seen, error_type, trade.reason(trade.REASON_NOT_TRADING),
+            )
+        if session.trade_table.settled or other.trade_table.settled:
+            print(f"[{self.tag}] トレード 0x{msg_type:04x} from charaId={me}: "
+                  "already settled")
+            return self._answer(
+                session, seen, error_type, trade.reason(trade.REASON_ALREADY_SETTLED),
+            )
+
+        if msg_type == trade.MSG_CL_CAST_TRADE_READY:
+            return self._trade_ready(session, other, seen, params)
+        return self._trade_item(session, other, seen, msg_type, params)
+
+    def _trade_item(self, session: "_Session", other: "_Session", seen: int,
+                    msg_type: int, params: bytes) -> bytes:
+        """0x510F 出品 and 0x5112 取り下げ, which are the same message twice.
+
+        ⭐⭐ THE NOTIFY'S ``count`` IS THE DELTA, MEASURED. It started as a
+        reading -- item.py's rule says an answer whose field list is a verbatim
+        copy of the request's is an echo of what was done rather than a report
+        of what is left, and 0x5111 does carry the request's own two fields with
+        a charaId in front -- but the request names it nNum and the notify names
+        it count, so the naming argument alone did not settle it.
+
+        The experiment did, and it is two clicks: push the same key twice. The
+        server sent count=1 both times and the trade table drew 2, so the client
+        accumulates. ⛔️ Do not "fix" this into sending the row total.
+        """
+        me = session.chara_id
+        recalling = msg_type == trade.MSG_CL_CAST_TRADE_ITEM_RECALL
+        error_type = (trade.MSG_SV_ERROR_TRADE_ITEM_RECALL if recalling
+                      else trade.MSG_SV_ERROR_TRADE_ITEM_PUSH)
+        notify_type = (trade.MSG_SV_NOTIFY_TRADE_ITEM_RECALL if recalling
+                       else trade.MSG_SV_NOTIFY_TRADE_ITEM_PUSH)
+
+        def refuse(code: int, why: str) -> bytes:
+            print(f"[{self.tag}] トレード {'取り下げ' if recalling else '出品'} "
+                  f"from charaId={me} refused: {why} (reason={code})")
+            return self._answer(session, seen, error_type, trade.reason(code))
+
+        parsed = trade.parse_item(params)
+        if parsed is None:
+            return refuse(trade.REASON_BAD_ITEM_INFO, "body too short")
+        category, item_id, count = parsed
+        if count <= 0:
+            return refuse(trade.REASON_BAD_QUANTITY, f"nNum={count}")
+        table = session.trade_table
+
+        if recalling:
+            left = table.recall(category, item_id, count)
+            if left is None:
+                return refuse(trade.REASON_ITEM_NOT_OFFERED,
+                              f"{category}:{item_id}×{count} is not on the table")
+        else:
+            inv = self._chars(session).items(me)
+            if inv is None:
+                return refuse(trade.REASON_NO_CHARA_DATA, "no inventory")
+            code = trade.may_offer(inv, category, item_id)
+            if code is not None:
+                return refuse(code, f"{category}:{item_id} may not be traded")
+            # ⚠️ Against what is HELD MINUS WHAT IS ALREADY ON THE TABLE. The
+            # items do not leave the inventory when they are offered -- nothing
+            # has been agreed yet -- so a player holding one could otherwise
+            # offer it twice and hand over two.
+            spare = inv.held(category, item_id) - table.offered(category, item_id)
+            if spare < count:
+                return refuse(trade.REASON_NOT_ENOUGH_HELD,
+                              f"{category}:{item_id} holds {spare} spare, "
+                              f"wants {count}")
+            table.push(category, item_id, count)
+
+        print(f"[{self.tag}] トレード: charaId={me} "
+              f"{'took back' if recalling else 'offered'} "
+              f"{category}:{item_id}×{count}; table = {table.summary()}")
+        out = self._trade_notify_both(
+            session, other, seen, notify_type,
+            trade.item_params(me, category, item_id, count),
+        )
+        return out + self._trade_unready(session, other)
+
+    def _trade_unready(self, session: "_Session", other: "_Session") -> bytes:
+        """Take both 確定 flags down because the table changed.
+
+        ⚠️ A READING, and the manual is what forces it. 「両者が交換するアイテム
+        を出し合った後、両者が了承することで成立します」 is a promise that what
+        each side agreed to is what moves; without this a player could confirm,
+        wait for the other to add something, and have it go through unseen. The
+        0xFF09 list has no sentence for 「the table changed, confirm again」,
+        which is consistent with the flag simply going down rather than the
+        change being refused.
+
+        ⭐ The alternative -- refuse a change from a side that has confirmed --
+        is what REASON_ALREADY_SETTLED would say, and that sentence puts itself
+        after 成立, not after one side's 確定. So it is used for the settled
+        state and not for this one.
+
+        ⚠️⚠️ EVERY BYTE FOR THIS SESSION GOES IN THE RETURN VALUE and every byte
+        for the peer goes out through _push -- never the other way round. _push
+        writes at once while a returned reply waits for the packet loop, so a
+        push aimed at this session would land ahead of bytes that already hold a
+        lower sequence number, and the client hangs up on a sequence that goes
+        backwards. Round 151 hit exactly that with the group presence refresh
+        and it cost a whole afternoon; the first draft of this method had it too.
+        """
+        out = b""
+        for who in (session, other):
+            if who.trade_table.state == trade.READY_OFF:
+                continue
+            who.trade_table.state = trade.READY_OFF
+            params = trade.ready_params(who.chara_id, trade.READY_OFF)
+            self._push(other, self._answer(
+                other, 0, trade.MSG_SV_NOTIFY_TRADE_READY, params,
+            ))
+            out += self._answer(
+                session, 0, trade.MSG_SV_NOTIFY_TRADE_READY, params,
+            )
+        return out
+
+    def _trade_ready(self, session: "_Session", other: "_Session",
+                     seen: int, params: bytes) -> bytes:
+        """0x5115 確定, and 成立 when both sides have pressed it.
+
+        ⭐⭐ THE RULE IS THE MANUAL'S, down to the parenthesis: 「両者が了承する
+        ことで成立します。（一方がＯＫしただけでは成立しません）」 -- so both flags
+        and nothing else. 「どちらか一方がアイテムを出さなくても、両者が了承すれば
+        交換が成立しますので、他の生徒にアイテムをプレゼントすることもできます」
+        is the other half, and it is why an empty table is not refused here.
+        """
+        me = session.chara_id
+        state = trade.parse_answer(params)
+        # ⚠️ A 成立 from a side that never 確定'd is what reason 20 is for --
+        # 「交換するアイテムを確定していませんので、アイテムトレードは成立しません」.
+        # An honest client cannot send it: it only puts the second box up once
+        # both sides are at 1. The refusal is here for the one that does.
+        if (state == trade.READY_EXECUTE
+                and session.trade_table.state != trade.READY_CONFIRMED):
+            print(f"[{self.tag}] トレード 成立 from charaId={me} refused: "
+                  f"its own state is {session.trade_table.state}, not 確定")
+            return self._answer(
+                session, seen, trade.MSG_SV_ERROR_TRADE_READY,
+                trade.reason(trade.REASON_NOT_CONFIRMED),
+            )
+        session.trade_table.state = state
+        print(f"[{self.tag}] トレード: charaId={me} readyState={state}; "
+              f"{me} offers {session.trade_table.summary()}, "
+              f"{other.chara_id} offers {other.trade_table.summary()}")
+        out = self._trade_notify_both(
+            session, other, seen, trade.MSG_SV_NOTIFY_TRADE_READY,
+            trade.ready_params(me, state),
+        )
+        # ⭐⭐⭐ BOTH AT 2, not both at 1. Round 213 shipped this as "both at 1"
+        # for one afternoon and the client said so on screen: settling early
+        # left its own 「この内容で取引しますか？」 box standing, and the ［は い］
+        # underneath it then arrived as a readyState=2 into a settled trade,
+        # which this end refused with reason 21 -- and the client printed that
+        # sentence, verbatim, in a box. See trade.READY_EXECUTE.
+        if not (session.trade_table.state == trade.READY_EXECUTE
+                and other.trade_table.state == trade.READY_EXECUTE):
+            return out
+        return out + self._trade_execute(session, other)
+
+    def _trade_execute(self, session: "_Session", other: "_Session") -> bytes:
+        """成立: the items change hands and both sides get 0x5118.
+
+        ⚠️⚠️ CHECKED AGAIN HERE, on both sides, before anything moves. An offer
+        does not take the item out of the inventory, and the two sides confirm at
+        two different moments -- 使用 or 捨てる in between is enough to make an
+        offer a promise nobody can keep. Nothing is written until every row on
+        both tables has been checked.
+
+        ⭐ The move goes through the ordinary character store, and through BOTH
+        stores: the two players need not share an account, and _chars is
+        per session for exactly this reason.
+        """
+        mine = self._chars(session).items(session.chara_id)
+        theirs = self._chars(other).items(other.chara_id)
+        if mine is None or theirs is None:
+            return self._trade_settle_failed(
+                session, other, trade.REASON_NO_CHARA_DATA, "no inventory")
+        for who, inv in ((session, mine), (other, theirs)):
+            for category, item_id, count in who.trade_table.rows:
+                if inv.held(category, item_id) < count:
+                    return self._trade_settle_failed(
+                        session, other, trade.REASON_NOT_ENOUGH_HELD,
+                        f"charaId={who.chara_id} no longer holds "
+                        f"{category}:{item_id}×{count}")
+        # ⚠️ Take from both before giving to either. A row that will not fit in
+        # the receiver -- ROW_MAX is a u8, see Inventory.receive -- has to be
+        # found before anything has been handed over, or one side has paid.
+        for who, inv in ((session, mine), (other, theirs)):
+            for category, item_id, count in who.trade_table.rows:
+                inv.take(category, item_id, count)
+        for giver, receiver in ((session, theirs), (other, mine)):
+            for category, item_id, count in giver.trade_table.rows:
+                if not receiver.receive(category, item_id, count):
+                    return self._trade_settle_failed(
+                        session, other, trade.REASON_ITEM_UPDATE_FAILED,
+                        f"{category}:{item_id}×{count} will not fit")
+        self._chars(session).set_items(session.chara_id, mine)
+        self._chars(other).set_items(other.chara_id, theirs)
+        print(f"[{self.tag}] トレード 成立: charaId={session.chara_id} gave "
+              f"{session.trade_table.summary()}, {other.chara_id} gave "
+              f"{other.trade_table.summary()}")
+        session.trade_table.settled = True
+        other.trade_table.settled = True
+        # ⭐ The trade stays open. 0x5118 is a Notify with no payload and no Sv
+        # message ends the trade by itself; REASON_ALREADY_SETTLED exists to be
+        # said to somebody who is still in the window afterwards. The player
+        # closes it, which is 0x5109.
+        self._push(other, self._answer(
+            other, 0, trade.MSG_SV_NOTIFY_TRADE_EXECUTE, b"",
+        ))
+        return self._answer(
+            session, 0, trade.MSG_SV_NOTIFY_TRADE_EXECUTE, b"",
+        )
+
+    def _trade_settle_failed(self, session: "_Session", other: "_Session",
+                             code: int, why: str) -> bytes:
+        """成立 could not happen. Both sides are told and both flags go down.
+
+        ⚠️ Nothing has been written when this runs: every check that can fail
+        runs before the first store write, and the two Inventory objects are
+        rebuilt from the record each time they are asked for, so an abandoned
+        one takes its half-applied edits with it.
+        """
+        print(f"[{self.tag}] トレード 成立 refused: {why} (reason={code})")
+        session.trade_table.state = trade.READY_OFF
+        other.trade_table.state = trade.READY_OFF
+        self._push(other, self._answer(
+            other, 0, trade.MSG_SV_ERROR_TRADE_READY, trade.reason(code),
+        ))
+        return self._answer(
+            session, 0, trade.MSG_SV_ERROR_TRADE_READY, trade.reason(code),
         )
 
     def _friends(self, session: "_Session", seen: int,
