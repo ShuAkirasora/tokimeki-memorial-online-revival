@@ -225,10 +225,13 @@ class AccountStore:
         # holding one holds the same one; run_all.py reaches the other two
         # through this object rather than making its own.
         self.konami_ids = konami_id.Directory(self.dir)
-        # ⭐ One level up from the account directories on purpose: the two tables
-        # it holds are the same for every account on the server, and they are
-        # the operator's file rather than one this server writes. See naming.py.
-        self.reserved = naming.ReservedNames(root / "runtime" / naming.RESERVED_FILE)
+        # ⭐ One level up from the account directories on purpose: the names it
+        # holds are the same for every account on the server. Two files, the
+        # shipped digests and whatever the operator added, merged. See naming.py.
+        self.reserved = naming.ReservedNames(
+            root / "reference" / naming.RESERVED_FILE,
+            root / "runtime" / naming.RESERVED_FILE,
+        )
         self._seed_codes()
         if adopt_code is not None:
             self.adopt(adopt_code.encode("ascii", "replace"))

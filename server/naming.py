@@ -44,9 +44,7 @@ THE TWO TABLES
 --------------
 The names that are refused outright (reason 2) come from two tables in the
 game's own data, 219 rows between them. Both hold the same shape -- a 苗字 and a
-名前 whose concatenation is the row -- and neither is a list this repository
-carries: they are names, they belong to the game's own files, and this module
-reads them from `runtime/reserved_names.json` if the operator put one there.
+名前 whose concatenation is the row.
 
 ⭐ The client never loads either table. Neither has an accessor on the table
 manager that installs the other 82, which is the same thing the shop's goods
@@ -54,13 +52,30 @@ table does, and it is why this rule is the server's to enforce: the client
 cannot check what it was never given, and the sentence it shows arrives from
 here. See the reverse-engineering notes for the table shapes.
 
-WITHOUT THAT FILE
------------------
+WHAT SHIPS IS DIGESTS, AND THE NAMES ARE NOT IN THIS REPOSITORY
+---------------------------------------------------------------
+⭐⭐⭐ `reference/reserved_names.json` holds 219 SHA-256 hashes and no text.
+That is the whole of what a server needs to enforce this rule: the rule is an
+equality test on a complete 氏名, and a hash answers an equality test exactly and
+answers nothing else. The names themselves are the game's, and a list of real
+people's names is not this repository's to publish; a set of opaque values is.
+
+⚠️ This does not generalise into a trick for shipping other lists. It works here
+because the rule compares WHOLE STRINGS -- hash the input, look it up, done. A
+rule that has to ask whether some substring occurs, which is what a chat word
+filter is, cannot be built out of hashes at all. So nothing follows from this
+file about any other table.
+
+An operator may put a second file at `runtime/reserved_names.json` to reserve
+names of their own. It is read the same way and merged on top, and it may be
+written in plain text: it is theirs and it never leaves their machine.
+
+WITHOUT EITHER FILE
+-------------------
 The duplicate rule (reason 4) still runs -- it compares against the characters
 this server itself is holding and needs no table at all. The reserved-name rule
-simply has nothing to match, and the loader says so once at startup rather
-than failing: an operator who has not supplied the list gets a server that enforces
-the half it can, not one that refuses to start.
+simply has nothing to match, and the loader says so at startup rather than
+failing.
 
 RESTORED and INVENTED
 ---------------------
@@ -92,8 +107,10 @@ REASON_BAD_NAME = 2        # 不正もしくは使用不可能なキャラクタ
 REASON_NOTEBOOK_TAKEN = 3  # その生徒手帳には、既にキャラクターが登録されています。
 REASON_DUPLICATE = 4       # 同じ氏名のキャラクターが既に存在しています。
 
-#: Where the operator's copy of the two tables goes. Under runtime/ rather than
-#: reference/ because it is not this repository's to ship -- see the docstring.
+#: The shipped list and the operator's optional additions carry the same name in
+#: two directories. Two files rather than one so that an operator's own
+#: reservations survive a pull: the shipped one is generated and must not be
+#: hand-edited, and merging is what makes editing it unnecessary.
 RESERVED_FILE = "reserved_names.json"
 
 
@@ -142,15 +159,16 @@ class ReservedNames:
     secret.
     """
 
-    def __init__(self, path: "Path | None" = None) -> None:
-        self.path = path
+    def __init__(self, *paths: "Path | None") -> None:
+        self.paths = [p for p in paths if p is not None]
         self.tables: "dict[str, set[str]]" = {}
-        if path is not None:
+        for path in self.paths:
             self._load(path)
+        if not self.tables and self.paths:
+            print("[naming] nothing reserved; 氏名 are checked for duplicates only")
 
     def _load(self, path: Path) -> None:
         if not path.exists():
-            print(f"[naming] no {path.name}; 氏名 are checked for duplicates only")
             return
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -160,6 +178,7 @@ class ReservedNames:
         if not isinstance(raw, dict):
             print(f"[naming] ignoring {path}: expected a JSON object")
             return
+        loaded: "dict[str, int]" = {}
         for table, entries in raw.items():
             if not isinstance(entries, list):
                 continue
@@ -173,11 +192,14 @@ class ReservedNames:
                 else:
                     digests.add(self.digest(text.encode("shift_jis", "replace")))
             if digests:
-                self.tables[table] = digests
-        if self.tables:
-            print("[naming] " + ", ".join(
-                f"{len(v)} {k}" for k, v in sorted(self.tables.items())
-            ) + " name(s) reserved")
+                # Merged, not replaced: the operator's file adds to the shipped
+                # one, and a table name they reuse extends it.
+                self.tables.setdefault(table, set()).update(digests)
+                loaded[table] = len(digests)
+        if loaded:
+            print(f"[naming] {path.parent.name}/{path.name}: " + ", ".join(
+                f"{n} {k}" for k, n in sorted(loaded.items())
+            ))
 
     @staticmethod
     def digest(full: bytes) -> str:
@@ -187,7 +209,7 @@ class ReservedNames:
         return sum(len(v) for v in self.tables.values())
 
     def holds(self, full: bytes) -> "str | None":
-        """Which table reserves this 氏名, or None if neither does."""
+        """Which table reserves this 氏名, or None if none does."""
         if not full:
             return None
         wanted = self.digest(full)
