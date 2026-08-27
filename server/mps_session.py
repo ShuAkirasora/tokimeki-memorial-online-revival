@@ -516,8 +516,22 @@ NOTIFICATIONS = {
 # flips exactly where the table says and the field is the count.
 #
 # The probe values that proved it are gone now; every school sits at zero, which
-# is both honest for a one-player server and the safe bucket. Parking a school on
-# 定員入学済 was never tested against whether it can still be picked.
+# is both honest for a one-player server and the safe bucket.
+#
+# Parking a school on 定員入学済 would not stop it being picked, and that took a
+# reading rather than a test. The client reaches this table through exactly one
+# path — two accessors (0x7D5582 table head, 0x7D558E record count) with a single
+# call site each, both feeding one std::find_if whose predicate is the closed
+# range min <= students <= max at record +0x12 and +0x14, stride 22 — and the
+# only thing that whole chain produces is a std::string. Nothing along it
+# disables an entry or sets a flag, so the bucket is a label and nothing more.
+# The server cannot refuse on those grounds either: MsgSvNgSchoolSelect (0x0305)
+# carries exactly two reasons and both are plain server errors, so "this school
+# is full" is not a sentence this protocol can say.
+#
+# School id 0 is the empty-slot sentinel, not a school: the school-name getter
+# and the crowding getter both return "" when the id is zero. That is why the
+# ids below start at 1, and why they must not be renumbered from 0.
 SCHOOLS = tuple((school_id, 0) for school_id in range(1, 11))
 
 
