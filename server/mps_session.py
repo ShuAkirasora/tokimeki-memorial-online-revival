@@ -1279,6 +1279,47 @@ class MpsServer:
                   f"shown " + " ".join(dressed))
         return out
 
+    def _item_effect(self, session: "_Session", params: bytes) -> bytes:
+        """What 使用 does past taking one off the count. ⚠️ NOT WIRED UP YET.
+
+        ⭐⭐⭐ THE CONSEQUENCE IS THIS END'S TO APPLY, and that is settled
+        rather than assumed: `item.bin` carries the three effect columns
+        (item.ITEM_EFFECTS) and the client reads none of them, while 0x4D09
+        carries a charaId, an itemId and a remainder and has no room for one.
+        So an item's effect cannot happen on the far end at all.
+
+        ⭐⭐ WHAT HAS TO GO BACK ON THE WIRE FOLLOWS FROM THE SAME PLACE, and it
+        is not the experiment item.py's docstring used to ask for. ストレス has
+        a push -- 0x4811, which _push_vitals already sends whenever the value
+        moves -- and the six 能力 have none: the whole 0x43xx menu family is
+        query/result, so 0x4310 is an answer to the client's own 0x430F and the
+        sheet is re-read the next time the キャラメニュー is opened. There is
+        no third possibility to test for.
+
+        ⚠️ THIS IS HALF THE STEP ON PURPOSE. It reads the effect and says so on
+        the console; it moves nothing and writes nothing, so a save is a byte
+        for byte match either side of it. Applying the numbers is the next
+        piece, and keeping the two apart is what makes the first one testable:
+        the log line proves the lookup fires on a real 使用 with the right
+        numbers before anything can be spent on the arithmetic being wrong.
+        """
+        key = item.parse_use(params)
+        if key is None:
+            return b""
+        ability_id, amount, relief = item.effect_of(*key)
+        if ability_id is None and not amount and not relief:
+            print(f"[{self.tag}] item 使用: {key[0]}:{key[1]} は効果なし")
+            return b""
+        gain = (f"{ability.ABILITIES[ability_id]} +{amount}"
+                if ability_id is not None and ability_id < len(ability.ABILITIES)
+                else "")
+        print(f"[{self.tag}] item 使用: {key[0]}:{key[1]} → "
+              + " ".join(part for part in (gain,
+                                           f"ストレス -{relief}" if relief else "")
+                         if part)
+              + "（まだ適用しない）")
+        return b""
+
     def _locker(self, session: "_Session") -> "item.Locker | None":
         """This connection's account's ロッカー, or None if it has no account.
 
@@ -3717,6 +3758,8 @@ class MpsServer:
                     if reply_type in item.RELAYED:
                         self._presence_relay(session, reply_type, reply_params)
                     out += self._answer(session, sequence, reply_type, reply_params)
+                if changed and msg_type == item.MSG_CL_CAST_ITEM_USE:
+                    out += self._item_effect(session, params)
                 return out
             if msg_type in (item.MSG_CL_REQUEST_LOCKER_ACCESS_START,
                             item.MSG_CL_REQUEST_LOCKER_ACCESS_END):

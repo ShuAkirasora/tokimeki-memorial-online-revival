@@ -175,9 +175,11 @@ INVENTED, beyond the grant itself
     both changes. ⚠️ Not measured; what IS settled is the equip flag's meaning,
     since 0x4D05 spends two of its ten sentences on 「既に身に付けています」 and
     「身に付けていません」, which only make sense for a toggle.
-  * USING AN ITEM DOES NOTHING BUT DECREMENT. 消費 items plainly had effects --
-    お弁当 against ストレス, 文学の種 against an ability -- and those effects are
-    in the same undecoded tail. The wire is complete; the consequence is absent.
+  * USING AN ITEM DOES NOTHING BUT DECREMENT -- ⚠️ AND THIS IS NO LONGER AN
+    INVENTION, it is a piece not yet fitted. The effects 消費 items plainly had
+    (お弁当 against ストレス, 文学の種 against an ability) are three columns of
+    `item.bin` and both are decoded; see ITEM_EFFECTS, which this end now reads
+    on every 使用 and prints. What it does not yet do is apply them.
 """
 
 from __future__ import annotations
@@ -377,6 +379,62 @@ ITEM_KEYS = {
 ITEM_COUNT = sum(last - first + 1
                  for runs in ITEM_KEYS.values() for first, last in runs)
 
+# What 使用 does, as `item.bin`'s own three columns:
+#
+#     {(categoryId, id): (ability, amount, stress)}
+#
+#     ability   which 能力 goes up: a `chara_ability_type.bin` key, 0 文系 …
+#               5 スタミナ, from +0xA8 -- None where that column is 0xFFFF
+#     amount    how far it goes up, from +0xAE
+#     stress    how much ストレス comes off, from +0xB0
+#
+# Fourteen of the 223 records carry one; a key that is not here has all three
+# columns at zero, and using it takes it off the list and does nothing else.
+#
+# ⭐⭐⭐ RESTORED, AND MACHINE-CHECKED RATHER THAN TRUSTED. Every number below
+# is transcribed out of the game's own table, and a transcription drifts --
+# silently, and while still reading perfectly. `the item-effect check check` in
+# the other tree re-reads `item.bin` and compares this dict to it key by key,
+# the same drift check `shop.GOODS` has for `store_item.bin`.
+#
+# ⭐⭐ THE CLIENT READS NONE OF THE THREE. Of this record's 212 bytes the
+# client touches five offsets in total -- +0x00 and +0x02 (the key), +0xAA (the
+# 合成 group), +0xB6 (the 装備部位) and +0xBB (the name it draws) -- and no
+# effect column is among them. So the consequence of 使用 cannot happen on that
+# end. It is this end's arithmetic, exactly as 授業's 能力増減 is, which is
+# also what settles what has to go back on the wire: see use_replies.
+#
+# ⚠️ THE UNIT OF `amount` IS THE LITERAL ONE, and that is a reading. abilityParam
+# is 8.8 fixed point (lesson.ABILITY_STEP), so a 種's 5 is 5/256 of a level --
+# it moves the bar by 2% and fifty of them make a レベル. Reading the 5 as
+# levels, or as a percentage, would multiply it by a factor no table carries,
+# and inventing a factor is the one thing this row of the roadmap is not.
+#
+# ⚠️ 9:5 本命チョコ's 255 is the odd one: a 消費 item whose description is about
+# giving it away, carrying a stress figure that empties any bar 0x4811 can draw
+# (that notify is a u8, so 255 is every value it can report). It is applied as
+# the number it is rather than as a 「全快」 special case -- the only visible
+# difference is a sheet sitting at stress.FULL (257), which 255 leaves at 2.
+ITEM_EFFECTS: "dict[tuple[int, int], tuple[int | None, int, int]]" = {
+    (8, 0): (None, 0, 10),              # お弁当
+    (8, 1): (None, 0, 10),              # 焼きそばパン
+    (8, 2): (None, 0, 20),              # ゲンコツおにぎり
+    (8, 3): (None, 0, 20),              # トレビアンサンド
+    (8, 4): (None, 0, 20),              # 新鮮茶葉使用お茶
+    (8, 5): (None, 0, 20),              # 濃厚牛乳
+    (8, 6): (None, 0, 5),               # オレンジバニラマロン
+    (9, 5): (None, 0, 255),             # 本命チョコ
+    (10, 0): (0, 5, 0),                 # 文学の種        → 文系
+    (10, 1): (1, 5, 0),                 # 科学の種        → 理系
+    (10, 2): (3, 5, 0),                 # 雑学の種        → 雑学
+    (10, 3): (2, 5, 0),                 # 感性の種        → 芸術
+    (10, 4): (4, 5, 0),                 # スポーツ万能薬  → 運動
+    (10, 5): (5, 5, 0),                 # パワフルプロテイン → スタミナ
+}
+
+# What a key with no row in ITEM_EFFECTS is worth.
+NO_EFFECT: "tuple[int | None, int, int]" = (None, 0, 0)
+
 # ⚠️⚠️ AN EXPERIMENT'S KNOB, AND IT IS OFF. With this on, every tab is answered
 # with the whole inventory instead of that tab's share, which turns the client's
 # own filter into the oracle for the mapping in TABS: grant one item per
@@ -403,6 +461,16 @@ def _in_runs(runs: "dict[int, tuple[tuple[int, int], ...]]",
 def can_discard(category: int, item_id: int) -> bool:
     """May a player throw this away? See NO_DISCARD."""
     return not _in_runs(NO_DISCARD, category, item_id)
+
+
+def effect_of(category: int, item_id: int) -> "tuple[int | None, int, int]":
+    """What using this item does: ``(ability, amount, stress)``. See ITEM_EFFECTS.
+
+    Every key answers, including one that has no effect and one the tables do
+    not have at all -- the caller has already decided whether the item may be
+    used, and this only says what happens when it is.
+    """
+    return ITEM_EFFECTS.get((category, item_id), NO_EFFECT)
 
 
 def can_unequip(category: int, item_id: int) -> bool:
@@ -845,16 +913,20 @@ def use_replies(
     the family that does not -- so using is not spinner-driven the way throwing
     out and putting away are, and the count that comes back is what is left.
 
-    ⚠️ NOTHING HAPPENS BEYOND THE DECREMENT, and that is now a missing WIRE
-    rather than a missing READING: `item.bin`'s tail has been decoded since, and
-    the numbers are in it -- +0xB0 is a ストレス recovery amount (10 and 20 for
-    the 消費 tab's food, 255 for the one that reads 全快), while +0xA8 names one
-    of the six 能力 and +0xAE is how much it raises. So the consequence is not
-    invented and not unknown; it is simply not connected here yet, because
-    connecting it moves `ability` and `stress` and rewrites saves, and because
-    nobody has watched a live client to see whether 使用 has to be followed by
-    0x4811 / 0x4310 for the change to show. The wire is complete and the
-    consequence is one deliberate step behind it.
+    ⚠️ NOTHING HAPPENS BEYOND THE DECREMENT -- the numbers are read (see
+    ITEM_EFFECTS) and printed, and applying them is the next piece. This
+    function returns the same replies either way: the decrement and the
+    remainder are the whole of what 0x4D07 puts on the wire.
+
+    ⭐⭐ AND THE QUESTION THIS DOCSTRING USED TO PARK THE WORK BEHIND IS
+    ANSWERED WITHOUT A CLIENT. It used to read 「nobody has watched a live
+    client to see whether 使用 has to be followed by 0x4811 / 0x4310」, which is
+    an experiment; the same thing is settled by asking what code could carry
+    the change instead. 0x4310 is the *answer* to the client's own 0x430F and
+    the 0x43xx menu family has no notify at all, so an ability is re-read when
+    the sheet is next opened and there is nothing to push; ストレス does have a
+    push, and _push_vitals already sends it whenever the value moves. Two
+    lookups, no server, no VM.
     """
     fields = parse_use(params)
     if inv is None:
