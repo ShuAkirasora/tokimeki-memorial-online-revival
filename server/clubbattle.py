@@ -1114,6 +1114,19 @@ class Battle:
         #: that arrives while the timeout drain is running would otherwise
         #: play the round a second time.
         self.resolved = False
+        #: The turn number whose 習熟度 has already been credited, or None.
+        #:
+        #: ⚠️⚠️ It exists because ``resolved`` could not be the guard. /cb replay
+        #: CLEARS ``resolved`` on purpose — that is how it runs a finished turn's
+        #: stream a second time — so a probe walks straight through it, and from
+        #: round 198 a resolve RAISES 習熟度 in the save. One replay would then
+        #: be a free point per card played, and the smoke suite alone replays a
+        #: dozen times. A probe may re-send a turn; it may not re-earn one.
+        #:
+        #: ⭐ Keyed on ``turn`` rather than being a bool for the same reason:
+        #: the next real turn carries a number of its own and credits itself,
+        #: while every replay of this one carries this one's number.
+        self.mastery_turn: "int | None" = None
         #: ⚠️⚠️ A PROBE, not gameplay: ``(type, value, value2, reaction)`` to
         #: splice into the NEXT turn's action stream as 0x5C11/0x5C10, or None.
         #: Set by ``/cb fxnext``, cleared as soon as it fires.

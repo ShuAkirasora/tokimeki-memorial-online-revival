@@ -142,11 +142,24 @@ They arrive in six contiguous blocks on a stride of 150:
 
     0-39   150-183   300-345   450-502   600-645   750-791
 
-Six blocks, and `drama_event_genre.bin` has exactly six rows (非部活系,
-校舎外非部活系, 屋外運動部系, 屋内運動部・総演部系, 文化部系, 校外系), so the
-stride is one block per genre with room to grow into. ⚠️ Anything outside the
-blocks is not a key the client can look up; grants go through ``keyword_exists``
-for the same reason ``inClub`` is range-checked.
+⭐⭐⭐ Six blocks, one per 能力属性 -- the field the client draws in the
+キーワード detail window as 「能力属性」 and the manual defines (p07_02) as
+「クラブ活動中に使用した場合に、アップする能力パラメータの種類」. The block a
+key falls in is also written in the record at `+0x2c`, and the client feeds
+that byte to `chara_ability_type.bin`'s accessor (0x7b26b1 -> 0x7b2e82 ->
+0x7e6f91, which reads manager member +0x68 = that table). Its six rows are
+文系 / 理系 / 芸術 / 雑学 / 運動 / スタミナ, and the contents agree throughout:
+0-39 is 文芸部・新聞部, 150-183 科学部・ＰＣ, 300-345 総合演劇部・軽音,
+450-502 家庭科・料理・放送, 600-645 the four sports clubs, 750-791 合宿・食.
+
+⚠️⚠️ This paragraph used to read 「one block per `drama_event_genre.bin` row」.
+That was wrong and only ever rested on both tables having six rows: a drama
+event's genre and its keyword's block are not in step (`un032`, genre 1
+校舎外非部活系, hands out 600 心眼キャッチ, which is block 4). Corrected in
+round 198.
+
+⚠️ Anything outside the blocks is not a key the client can look up; grants go
+through ``keyword_exists`` for the same reason ``inClub`` is range-checked.
 
 ⭐ Independent confirmation that these ids are what a deck holds:
 `npc_clubdeck.bin` (200 rows, 「野球部初級攻撃系デッキ」 and friends) ends in a
@@ -169,9 +182,11 @@ number, which is why the field is a count rather than a level.
 ⭐⭐⭐ ROUND 196: its full scale IS measured now, and it is per-keyword —
 `keyword.bin` record +0x78, the byte the client divides `useCount` by. Four
 values across the 261 rows (64 for 251 of them, then 80/90/100), and the gauge
-fills exactly at it. See KEYWORD_FULL_SCALE. ⚠️ What one *use* adds is still
-unknown, so /kw goes on taking `useCount` as an argument rather than the server
-picking; a number that has no source is not one to invent.
+fills exactly at it. See KEYWORD_FULL_SCALE. ⚠️ What one *use* adds is NOT
+measured and never will be from this side -- round 198 put a decided number
+there instead (USE_COUNT_PER_USE), framed as the invention it is. /kw goes on
+taking `useCount` as an argument: a probe that can only add 1 at a time cannot
+put a row at 満 to look at.
 
 ⚠️ ``clubSource`` is NOT a restriction. `p07_02` is explicit that キーワード do
 not depend on a club (「キーワードはクラブに依存しないため、どちらの用途でも
@@ -191,12 +206,13 @@ account with six of them — one per category below, each chosen by a coin flip
 between two — and 36 ドラマイベント hand out two to six more. The wiring is
 `mps_session._script_keywords`; the reading and its evidence are 2.150.
 
-⚠️ **What is still invented is 習熟度**, and only that: `use_count` is filled in
-the original by using a キーワード in クラブ活動 until it rises, and there is no
-クラブ活動 here to use one in. Every grant this server makes therefore lands at
-`use_count = 0`, which is the honest value rather than a flattering one.
-⭐ Round 196 took the ceiling off that: where the count STOPS is restored now
-(KEYWORD_FULL_SCALE), so what is left invented is the step, not the scale.
+⚠️ **What is still invented is 習熟度**, and only that: in the original
+`use_count` is filled by using a キーワード in クラブ活動 until it rises.
+⭐ Round 196 took the ceiling off that (KEYWORD_FULL_SCALE is measured), and
+round 198 wired the rest of it up: 自主トレ now raises the count for every card
+it plays (mps_session._battle_mastery). So what is left invented is the STEP and
+nothing else -- see USE_COUNT_PER_USE. A grant still lands at `use_count = 0`,
+which is the honest value rather than a flattering one.
 
 ⭐ /kw stays, and its job is unchanged: it is a knob in the same family as /ab
 and /card — it puts a character into a state the original would have reached by
@@ -578,8 +594,9 @@ def use_count_after_use(use_count: int, keyword_id: int) -> int:
 
     ⚠️ The step is INVENTED and the clamp is a second decision -- both are
     argued where they are defined, USE_COUNT_PER_USE just above.
-    ⚠️ NOT WIRED UP YET: no caller raises 習熟度, because no クラブ活動 on this
-    server finishes a turn that way. This is the shape the day it does.
+    ⭐ WIRED UP in round 198: mps_session._battle_mastery calls this for every
+    card in a 0x5C0E action stream and stores what comes back. ⚠️ Once per
+    turn -- a replayed stream is not a second use (clubbattle.Battle.mastery_turn).
     """
     full = keyword_full_scale(keyword_id)
     raised = use_count + USE_COUNT_PER_USE
@@ -725,10 +742,10 @@ class Membership:
 
         ⭐ Round 193: the *grant* is no longer invented — the scripts do it
         themselves through `PC_KEYWORD_UPDATE`, and this is the method they
-        reach (`mps_session._script_keywords`, 2.150). ⚠️ 習熟度 still is: the
-        original raises `use_count` by using a キーワード in クラブ活動, which
-        does not exist here, so a granted row starts and stays at 0 until /kw
-        is told otherwise. See the module docstring.
+        reach (`mps_session._script_keywords`, 2.150). ⭐ Round 198: a granted
+        row no longer stays at 0 either — playing the card in 自主トレ raises it
+        (`mps_session._battle_mastery`). ⚠️ What one use adds is still the one
+        invented number in that loop; see the module docstring.
         """
         if not keyword_exists(keyword_id):
             return False

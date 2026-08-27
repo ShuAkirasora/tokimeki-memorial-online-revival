@@ -4689,23 +4689,22 @@ class MpsServer:
         return (kind, payload)
 
     def _battle_mastery(
-        self, fighter: "clubbattle.Fighter", kind: int, payload: bytes
+        self, fighter: "clubbattle.Fighter", kind: int, payload: bytes,
+        credit: bool,
     ) -> None:
-        """Say what playing this card would do to its 習熟度. Writes NOTHING.
+        """Raise this card's 習熟度 for having been played. WRITES THE SAVE.
 
-        ⭐⭐ This walks the whole path 習熟度 has to travel — from a card that
-        is going out in 0x5C0E right now, back to the row 0x4305 sends for it —
-        and prints the arithmetic instead of storing it. p07_02 says the number
-        rises 「クラブ活動でキーワードを使用すると」 and a card in the action
-        stream is that use, so this is the moment; what comes out on the log is
-        exactly what club.use_count_after_use would have written.
+        ⭐⭐ p07_02: 「クラブ活動でキーワードを使用するとアップする熟練度です」.
+        A card in the action stream IS that use, so this is the moment. Round
+        197 walked this whole path with the write left out and printed the
+        arithmetic instead (2.153); this stores it.
 
-        ⚠️⚠️ Printing is the whole reason this half can stand on its own. The
-        step is INVENTED (club.USE_COUNT_PER_USE, argued where it is defined)
-        and 習熟度 is 攻撃/防御 power as well as the gate on new キーワード, so
-        the day something stores this number, gameplay moves. A log line does
-        not, and it separates 「the path is right」 from 「the number is right」
-        while nothing is yet at stake.
+        ⚠️⚠️ THIS MOVES GAMEPLAY, and one number in it is INVENTED: the step
+        (club.USE_COUNT_PER_USE, argued where it is defined). Everything around
+        that number is restored — that it rises on use at all, that using means
+        playing rather than holding or registering, and where it stops
+        (club.KEYWORD_FULL_SCALE). ⚠️ 習熟度 is also 攻撃/防御 power (p07_02),
+        so what this raises is not only the gate onto a new キーワード.
 
         ⚠️ At the ACTION rather than at the 0x5C0A that asked for it, which is
         a narrower moment than it sounds: a fighter whose card cannot be
@@ -4716,14 +4715,19 @@ class MpsServer:
         ⚠️ The owner's own store, not the handling session's and not the deck's
         copy of the row (the same rule _battle_deck is under). Those six bytes
         are the client's struct as it stood when 0x5B03 registered the card and
-        nothing refreshes them, so the two readings can disagree — and the
-        disagreement is worth seeing: the day useCount moves, every deck holding
-        that card keeps handing the old value back out in 0x5B01 until
-        something rewrites the payload.
+        NOTHING REFRESHES THEM, so from this round on the two readings really do
+        drift: every deck holding this card goes on handing the old useCount
+        back out in 0x5B01, and the デッキ window's gauge stands still while the
+        キーワード window's moves. ⛔️ Do NOT "fix" that by rewriting the stored
+        payload — those bytes are an echo of what the client sent, and whether a
+        real client re-registers its cards when that window opens has not been
+        measured. Every line below says which of the two it read.
 
-        ⚠️ /cb replay re-runs a turn that already resolved, so it prints these
-        lines twice for one play. Harmless while they only print; whatever
-        stores the number will need a guard the probe cannot walk through.
+        ⚠️⚠️ ``credit=False`` is what /cb replay gets. It clears battle.resolved
+        on purpose so a finished turn's stream can go out again, and re-sending
+        a turn must not re-earn anything — see Battle.mastery_turn for why the
+        guard could not be battle.resolved itself. The arithmetic still prints,
+        marked, because the replay is worth reading either way.
 
         ⛔️ kind 1 is a 部活奥義 and has no 習熟度 — its `completeness` is a
         different field, and an unread one.
@@ -4744,7 +4748,7 @@ class MpsServer:
             # same character's 所持 list. A fighter no account claims is the
             # ordinary case for a stand-in and says nothing about the path.
             missing = "no account claims them" if store is None else "they do not own it"
-            print(f"[{self.tag}] 習熟度 (not stored): charaId={fighter.chara_id:#x} "
+            print(f"[{self.tag}] 習熟度: charaId={fighter.chara_id:#x} "
                   f"played keyword {keyword_id} and {missing} — nothing to raise")
             return
         use_count = row[1]
@@ -4752,14 +4756,21 @@ class MpsServer:
         stale = ("" if deck_use_count == use_count
                  else f" ⚠️ the deck's copy still says {deck_use_count}")
         if club.keyword_is_mastered(use_count, keyword_id):
-            print(f"[{self.tag}] 習熟度 (not stored): charaId={fighter.chara_id:#x} "
+            print(f"[{self.tag}] 習熟度: charaId={fighter.chara_id:#x} "
                   f"keyword={keyword_id} useCount {use_count} of {full} — already "
                   f"満, nothing to raise and no second 0x5C17{stale}")
             return
         after = club.use_count_after_use(use_count, keyword_id)
         note = (" — reaches 満: 0x5C17 would be due here"
                 if club.keyword_is_mastered(after, keyword_id) else "")
-        print(f"[{self.tag}] 習熟度 (not stored): charaId={fighter.chara_id:#x} "
+        if not credit:
+            print(f"[{self.tag}] 習熟度 (replay, NOT stored): "
+                  f"charaId={fighter.chara_id:#x} keyword={keyword_id} useCount "
+                  f"{use_count} would go to {after} of {full}{note}{stale}")
+            return
+        row[1] = after
+        store.set_club(fighter.chara_id, state)
+        print(f"[{self.tag}] 習熟度: charaId={fighter.chara_id:#x} "
               f"keyword={keyword_id} useCount {use_count}->{after} of {full}"
               f"{note}{stale}")
 
@@ -4800,6 +4811,12 @@ class MpsServer:
         not answer it (the 0x5C0C that does has already gone out).
         """
         battle.resolved = True
+        # ⭐⭐ Whether this run of the stream is the one that earns 習熟度.
+        # ⚠️⚠️ NOT battle.resolved — /cb replay clears that flag to get here at
+        # all, so it is the one guard a probe is guaranteed to walk through.
+        # See Battle.mastery_turn.
+        credit_mastery = battle.mastery_turn != battle.turn
+        battle.mastery_turn = battle.turn
         for other in (self._session_of(f.chara_id) for f in battle.fighters):
             if other is not None:
                 other.battle_due = 0.0
@@ -4850,9 +4867,9 @@ class MpsServer:
             assert fighter.command is not None
             _item_num, is_attck, target_id = fighter.command
             # ⭐ Ahead of the probe, because this is about the card that was
-            # actually played rather than the one /cb card swapped in. Prints
-            # and stores nothing — see _battle_mastery.
-            self._battle_mastery(fighter, kind, payload)
+            # actually played rather than the one /cb card swapped in — see
+            # _battle_mastery. ⚠️⚠️ This one WRITES THE SAVE.
+            self._battle_mastery(fighter, kind, payload, credit_mastery)
             # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb card armed it — see
             # Battle.card_probe. It swaps the deckItem this ActionBegin names,
             # which is the only way to make the client resolve a kind no deck
