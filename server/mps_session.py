@@ -97,6 +97,7 @@ import posts
 import quiz
 import romance
 import script
+import shop
 import stress
 import trainingroom
 from common import ServiceConfig, ensure_runtime_dirs, inet_u32, write_packet_log
@@ -863,6 +864,11 @@ class _Session:
         # that rang while nobody was logged in is not owed to anyone afterwards.
         # It stays quiet until 登校 primes it — see the school-login handler.
         self.bell = lesson.Bell()
+        # Whether the 購買部 window is open on this connection. Not saved: the
+        # window is a bracket around a conversation with an NPC, and a mode that
+        # outlived a disconnect would refuse the next 0x4F00 with 「既に商品交換
+        # モードを開始しています」 -- a sentence the original marks 未使用.
+        self.shop_open = False
         # The period actually in progress, once 0x6100 has gone out. Not saved,
         # for the same reason: ten questions half answered are not owed to
         # anybody, and the original ends a lesson you walk out of too.
@@ -3712,6 +3718,39 @@ class MpsServer:
                 print(f"[{self.tag}] locker {name}: "
                       + " ".join(f"{t:#06x}" for t, _ in replies)
                       + (f" | {locker.summary()}" if locker is not None else ""))
+                out = b""
+                for reply_type, reply_params in replies:
+                    out += self._answer(session, sequence, reply_type, reply_params)
+                return out
+            if msg_type in shop.REQUESTS:
+                # 商品交換 at the 購買部 counter. One bracket and one operation
+                # inside it, and the bracket is why session.shop_open exists:
+                # 0x4F06 and 0x4F09 both have a sentence for being asked outside
+                # an open window, so the flag is the only state this needs.
+                #
+                # ⚠️ NOTHING HERE TAKES MONEY -- the price is a list of items,
+                # and shop.py has the evidence for that reading. A trade both
+                # takes and gives, so the character is saved once at the end
+                # rather than once per side.
+                inv = self._chars(session).items(session.chara_id)
+                if msg_type == shop.MSG_CL_REQUEST_SHOP_START:
+                    replies = shop.start_replies(inv)
+                    changed = False
+                    if inv is not None:
+                        session.shop_open = True
+                elif msg_type == shop.MSG_CL_REQUEST_SHOP_END:
+                    replies = shop.end_replies(inv, session.shop_open)
+                    changed = False
+                    session.shop_open = False
+                else:
+                    replies, changed = shop.trade_replies(
+                        inv, params, session.shop_open)
+                if changed and inv is not None:
+                    self._chars(session).set_items(session.chara_id, inv)
+                print(f"[{self.tag}] shop {name}: "
+                      + " ".join(f"{t:#06x}" for t, _ in replies)
+                      + f" | {shop.summary()}"
+                      + (f" | {inv.summary()}" if inv is not None else ""))
                 out = b""
                 for reply_type, reply_params in replies:
                     out += self._answer(session, sequence, reply_type, reply_params)

@@ -58,6 +58,7 @@ import posts
 import quiz
 import romance
 import script
+import shop
 
 # Capacities of the client's own receive buffers; see the module docstring.
 NAME_MAX = 22
@@ -242,6 +243,7 @@ HELP = (
     "/item [sample|n <数> [個数]|add <cat>:<id> [個数]|del <cat>:<id>|clear|keys"
     "|probe [on|off]]"
     " アイテム所持 (タブとカテゴリの対応は sample + probe)",
+    "/shop [out <商品番号>|in <商品番号>] 商品交換 (購買部) の中身と品切れ",
     "/jikan [日|月|…|0-6] 時間割 (サーバ側の並べ方)",
     "/lopt [seats|speech|words|lunch] <数> 0x6100 の実験用つまみ",
     "/skill [<拒否メッセージ> <reason>|clear] お助けスキル の reason を画面で確かめる",
@@ -1320,6 +1322,38 @@ def respond(
         return Reply(["/item [sample|n <数> [個数]|add <cat>:<id> [個数]",
                       "      |del <cat>:<id>|wear <cat>:<id> [off]",
                       "      |clear|keys|probe [on|off]]"])
+
+    if word == "shop":
+        # 商品交換: what the 購買部 counter offers and which rows are sold out.
+        # ⚠️ THE TRADE ITSELF IS DELIBERATELY NOT HERE. 0x4F07 comes from the
+        # window, and a console that could imitate it would blur the one
+        # distinction this end has to keep: what happened on the wire and what
+        # happened here.
+        #
+        # ⭐ `out` / `in` are the experiment's handles for the one thing
+        # shop.py cannot read out of anything -- which value of `state` the
+        # client draws as 品切れ. They live in memory and nowhere else, so a
+        # restart puts the shipped shop back rather than leaving a knob turned.
+        words = rest.split()
+        verb = words[0].lower() if words else ""
+        if verb in ("out", "in") and len(words) > 1 and words[1].isdigit():
+            number = int(words[1])
+            if shop.find(number) is None:
+                return Reply([f"商品 {number} は無い ({shop.goods_numbers()})"])
+            if verb == "out":
+                shop.SOLD_OUT.add(number)
+            else:
+                shop.SOLD_OUT.discard(number)
+            return Reply([shop.summary()])
+        if not words:
+            lines = [shop.summary()]
+            for number, key, bill in shop.GOODS:
+                price = " ＋ ".join(f"{cat}:{item_id}×{count}"
+                                   for cat, item_id, count in bill)
+                mark = " 品切れ" if number in shop.SOLD_OUT else ""
+                lines.append(f"{number}: {key[0]}:{key[1]} ← {price}{mark}")
+            return Reply(lines)
+        return Reply(["/shop [out <商品番号>|in <商品番号>] 商品交換の中身と品切れ"])
 
     if word in ("locker", "lo"):
         # The account's ロッカー, which is not the character's inventory and is

@@ -845,9 +845,16 @@ def use_replies(
     the family that does not -- so using is not spinner-driven the way throwing
     out and putting away are, and the count that comes back is what is left.
 
-    ⚠️ NOTHING HAPPENS BEYOND THE DECREMENT: whatever お弁当 did to ストレス
-    lives in `item.bin`'s undecoded tail. The wire is complete and the
-    consequence is missing, which is the honest half to ship first.
+    ⚠️ NOTHING HAPPENS BEYOND THE DECREMENT, and that is now a missing WIRE
+    rather than a missing READING: `item.bin`'s tail has been decoded since, and
+    the numbers are in it -- +0xB0 is a ストレス recovery amount (10 and 20 for
+    the 消費 tab's food, 255 for the one that reads 全快), while +0xA8 names one
+    of the six 能力 and +0xAE is how much it raises. So the consequence is not
+    invented and not unknown; it is simply not connected here yet, because
+    connecting it moves `ability` and `stress` and rewrites saves, and because
+    nobody has watched a live client to see whether 使用 has to be followed by
+    0x4811 / 0x4310 for the change to show. The wire is complete and the
+    consequence is one deliberate step behind it.
     """
     fields = parse_use(params)
     if inv is None:
