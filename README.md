@@ -88,11 +88,13 @@ how the client communicates, for the purpose of interoperability: letting an exi
 program reach a server again.
 
 It contains no code, artwork, audio or text taken from KONAMI's software. It does contain
-four small tables of integers, read mechanically out of the client's data files, because
-there are decisions this server is asked to make that it cannot make without them — see
-[Reference data](#reference-data). Message names, map names and structure offsets appear
-here because they are the identifiers the protocol itself uses; a client will not accept any
-other wording for them.
+small tables of integers, read mechanically out of the client's data files, because there
+are decisions this server is asked to make that it cannot make without them. Four of them
+are files under `reference/`; the smaller ones — a week's timetable, a set of key ranges, a
+shop's bills — are written into the modules that read them. See
+[Reference data](#reference-data) for both. Message names, map names and structure offsets
+appear here because they are the identifiers the protocol itself uses; a client will not
+accept any other wording for them.
 
 *Tokimeki Memorial* is a trademark of KONAMI. This project is not affiliated with, endorsed
 by, or connected to KONAMI in any way.
@@ -695,6 +697,14 @@ whole of what it needs; the four-choice half needs nothing at all, because this 
 shuffles those itself and already knows where it dealt the right one. Without the file a
 lesson draws the room and then asks nothing. It carries no question text, no choice wording
 and no subject names.
+
+**Not every table is a file.** A few are small enough to live in the module that reads them
+instead: the week's timetable and which abilities each subject moves in `server/curriculum.py`,
+the ranges of item keys in `server/item.py`, and the five rows of the school store's barter
+counter in `server/shop.py`. They come out of the client's data files the same way and carry
+the same nothing — numbers and keys, with no name, no description and no wording anywhere in
+them. They are literals rather than files because a handful of integers each is not worth a
+file, not because they are a different kind of thing.
 
 None of them means anything without your own copy of the game. What is deliberately not here
 is the other half of each: script text, choice prompts, the cast, event keys. Those are the

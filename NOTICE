@@ -6,16 +6,11 @@ Licensed under the Apache License, Version 2.0. See the LICENSE file.
 This is an independent implementation of a network protocol, produced by
 analysing how an existing client program communicates, for the purpose of
 interoperability. It contains no code, artwork, audio or text taken from
-KONAMI's software. It does contain three small tables of integers, read
-mechanically out of the client's data files because a server cannot
-arbitrate this protocol without them: the targets of the scenario
-branches it has to decide; for the lesson quiz, how many questions each
-category holds together with which of two answers is right for the
-true-or-false ones; and how much a conversation with a romance candidate
-raises her intimacy -- for the ones that ask her a question, per
-answer -- which is a number this server keeps and the client never
-sends. No table carries any question, any answer text, any line of
-dialogue, or any other text or imagery, and none is of any use without a
+KONAMI's software. It does contain small tables of integers -- branch
+targets, answer keys and similar rule values -- read mechanically out of
+the client's data files, because a server cannot arbitrate this protocol
+without them. They carry no question, no answer text, no line of
+dialogue, and no other text or imagery, and none is of any use without a
 lawfully obtained copy of the game. Message names, map names and
 structure offsets appear here because they are the identifiers the
 protocol itself uses.
