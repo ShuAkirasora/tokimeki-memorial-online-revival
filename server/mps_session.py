@@ -84,6 +84,7 @@ import curriculum
 import exam
 import facing
 import friends
+import gmcall
 import groups
 import gs3vm
 import item
@@ -3991,6 +3992,12 @@ class MpsServer:
                 # 仲良しグループ: 「グループ情報」 and the 勧誘 handshake behind
                 # the PC 交流メニュー's 「グループ登録申込み」; see _groups.
                 return self._groups(session, sequence, msg_type, params)
+            if msg_type in gmcall.HANDLED:
+                # ＧＭコール: the システムメニュー row that calls for a 風紀委員.
+                # Only the player's two messages are here -- the GM's own
+                # console is the 0x67xx family and nobody on this server holds
+                # 「ＧＭ権限」; see gmcall.py for why that is not a gap.
+                return self._gm_call(session, sequence, msg_type, params)
             if msg_type in lesson_skill.HANDLED:
                 # お助けスキル. Eight skills, one entry point: what differs
                 # between them is which rules apply and what goes back, and both
@@ -6903,6 +6910,142 @@ class MpsServer:
               f"here, 0xA4C4D0 rejected the reply with 「bad sequence number」")
         return reply
 
+    def _gm_call(
+        self, session: "_Session", sequence: int, msg_type: int, params: bytes
+    ) -> bytes:
+        """0x6900 / 0x6903: raise a ＧＭコール, or take it back.
+
+        Every refusal below is a sentence the client already holds and a number
+        read off `error_message.bin`; see gmcall.py for both lists in full and
+        for what the byte in the Ok is. Nothing here decides policy: the queue
+        is kept, and what a 風紀委員 does with it is a person's job.
+        """
+        book = self.accounts.gmcalls
+        me = session.chara_id
+        cancelling = msg_type == gmcall.MSG_CL_REQUEST_GM_CALL_CANCEL
+
+        if not me:
+            # Before 登校 there is nobody to call on behalf of. Both families
+            # open their list with the same sentence for exactly this.
+            reason = (gmcall.NG_CANCEL_BAD_PLAYER if cancelling
+                      else gmcall.NG_BAD_PLAYER)
+            print(f"[{self.tag}] ＧＭコール: refused, no character on this session")
+            return self._answer(
+                session, sequence,
+                gmcall.MSG_SV_NG_GM_CALL_CANCEL if cancelling
+                else gmcall.MSG_SV_NG_GM_CALL,
+                gmcall.ng_params(reason),
+            )
+
+        if cancelling:
+            call = book.of(me)
+            if call is None:
+                print(f"[{self.tag}] ＧＭコール cancel: charaId=0x{me:x} has none open")
+                return self._answer(
+                    session, sequence, gmcall.MSG_SV_NG_GM_CALL_CANCEL,
+                    gmcall.ng_params(gmcall.NG_CANCEL_NOT_CALLING),
+                )
+            if call.taken:
+                # 「現在、ＧＭが対応中ですので、ＧＭコールを取り消すことはできま
+                # せん。」 -- once somebody is on it, it is no longer the
+                # caller's to withdraw. /gm take is what sets this.
+                print(f"[{self.tag}] ＧＭコール cancel: {call.label()} is in hand")
+                return self._answer(
+                    session, sequence, gmcall.MSG_SV_NG_GM_CALL_CANCEL,
+                    gmcall.ng_params(gmcall.NG_CANCEL_IN_HAND),
+                )
+            book.close(me)
+            print(f"[{self.tag}] ＧＭコール cancelled by charaId=0x{me:x} "
+                  f"[{book.summary()}]")
+            return self._answer(
+                session, sequence, gmcall.MSG_SV_OK_GM_CALL_CANCEL, b""
+            )
+
+        report_type = gmcall.parse_request(params)
+        if report_type is None or report_type not in gmcall.REPORT_TYPES:
+            # 「報告の種類が不正です。」 -- and 「非選択」 (0) lands here too,
+            # because it is the pull-down's not-chosen-yet row rather than a
+            # kind of report. See gmcall.REPORT_TYPES.
+            print(f"[{self.tag}] ＧＭコール: refused, report type {report_type!r} "
+                  f"is not one of {sorted(gmcall.REPORT_TYPES)}")
+            return self._answer(
+                session, sequence, gmcall.MSG_SV_NG_GM_CALL,
+                gmcall.ng_params(gmcall.NG_BAD_TYPE),
+            )
+        if self._chars(session).find(me) is None:
+            # 「ＧＭコール送信者のキャラクターデータが見つかりません。」 A call
+            # is answered by going to look at the character, so one that cannot
+            # be looked up is refused rather than queued.
+            print(f"[{self.tag}] ＧＭコール: refused, no character record for "
+                  f"charaId=0x{me:x}")
+            return self._answer(
+                session, sequence, gmcall.MSG_SV_NG_GM_CALL,
+                gmcall.ng_params(gmcall.NG_NO_CHARACTER),
+            )
+        if book.of(me) is not None:
+            # 「既にGMコールを送っています。同時に複数件のＧＭコールを行うことは
+            # できません。」 One open call per character, stated by the client.
+            print(f"[{self.tag}] ＧＭコール: refused, {book.of(me).label()} "
+                  f"is already open")
+            return self._answer(
+                session, sequence, gmcall.MSG_SV_NG_GM_CALL,
+                gmcall.ng_params(gmcall.NG_ALREADY_CALLING),
+            )
+
+        # ⚠️ Counted BEFORE the new call goes in: what the player is told is how
+        # many people they are waiting behind, not including themselves.
+        ahead = book.waiting()
+        call = book.open(me, report_type)
+        print(f"[{self.tag}] ＧＭコール raised: {call.label()}, {ahead} ahead "
+              f"[{book.summary()}]")
+        return self._answer(
+            session, sequence, gmcall.MSG_SV_OK_GM_CALL, gmcall.ok_params(ahead)
+        )
+
+    def _gm_console(
+        self, session: "_Session", sequence: int, args: "list[str]"
+    ) -> bytes:
+        """``/gm ...``: the ＧＭコール queue, from the console.
+
+        ⚠️ This is the operator's channel and it is the only one there is. The
+        GM's own window is the 0x67xx family and it wants 「ＧＭ権限」, which
+        nothing here grants; until something does, a call that arrives is read
+        here and closed here.
+
+            /gm                     what the queue holds
+            /gm take [charaId]      mark it 対応中 -- the caller can no longer
+                                    cancel it, which is the client's own rule
+            /gm free [charaId]      undo that
+            /gm done [charaId]      close it
+
+        charaId defaults to the caller's own, so a one-account test needs no
+        arguments at all. Hex is accepted, the way /group takes it.
+        """
+        book = self.accounts.gmcalls
+        what = args[0].lower() if args else ""
+
+        if not what:
+            if not book.calls:
+                return self._say(session, sequence, "/gm queue empty")
+            lines = " | ".join(c.label() for c in book.calls.values())
+            return self._say(session, sequence, f"/gm {book.summary()}: {lines}")
+
+        if what not in ("take", "free", "done"):
+            return self._say(session, sequence, "/gm [take|free|done] [charaId]")
+        try:
+            who = int(args[1], 0) if len(args) > 1 else session.chara_id
+        except ValueError:
+            return self._say(session, sequence, f"/gm {what} <charaId>")
+        if book.of(who) is None:
+            return self._say(session, sequence, f"/gm: no call from 0x{who:x}")
+        if what == "done":
+            call = book.close(who)
+            return self._say(session, sequence,
+                             f"/gm closed {call.label()} [{book.summary()}]")
+        call = book.take(who, what == "take")
+        return self._say(session, sequence,
+                         f"/gm {call.label()} [{book.summary()}]")
+
     def _group_console(
         self, session: "_Session", sequence: int, args: "list[str]"
     ) -> bytes:
@@ -7093,6 +7236,8 @@ class MpsServer:
             return self._seq_probe(session, sequence, said.split()[1:])
         if said.split()[:1] == ["/group"]:
             return self._group_console(session, sequence, said.split()[1:])
+        if said.split()[:1] == ["/gm"]:
+            return self._gm_console(session, sequence, said.split()[1:])
         if said.split()[:1] == ["/couple"]:
             return self._couple_console(session, sequence, said.split()[1:])
         reply = b""
