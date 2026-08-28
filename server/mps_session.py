@@ -79,6 +79,7 @@ import career
 import chat
 import club
 import clubbattle
+import clubdata
 import codes
 import couple
 import curriculum
@@ -4149,10 +4150,16 @@ class MpsServer:
                 return self._trainingroom(session, sequence, msg_type, params)
             if msg_type >> 8 == 0x5C:
                 # クラブ対戦 itself. ⚠️ A SEPARATE FAMILY from the 0x58xx above
-                # even though 自主トレ is what reaches it here: 練習 and
-                # フリー対戦 arrive at the same messages through a door this
-                # server cannot open. See clubbattle.py.
+                # even though 自主トレ was for a long time the only thing that
+                # reached it: 練習 arrives at the same messages through the
+                # 0x5D door below, and フリー対戦 through one still unopened.
                 return self._clubbattle(session, sequence, msg_type, params)
+            if msg_type >> 8 == 0x5D:
+                # 練習's door: 「クラブ活動」 off a 顧問/キャプテン right-click,
+                # then the 対戦レベル screen. It hands over to the 0x5C family
+                # above the moment a level is picked -- 「自主トレの流れは、ＮＰ
+                # Ｃとの練習と同じです」, one fight, two doors.
+                return self._npcbattle(session, sequence, msg_type, params)
             if msg_type == lesson.MSG_CL_REQUEST_LESSON_READY:
                 # The client sends this by itself, as part of tearing the scene
                 # down after 0x6000 — there is no prompt and no button, so the
@@ -4816,6 +4823,209 @@ class MpsServer:
             [m.chara_id for m in room.members],
         )
 
+    def _practice_deck(self, chara_id: int) -> "int | None":
+        """Which deck is the 部活用 one, or None if there is not one.
+
+        ⭐ RESTORED that this matters: 0x5D02 reason 10 is 「部活デッキが作成
+        されていない、もしくは『部活用』の部活デッキがありません」, and `p07_03`
+        says 「練習では、練習用の『部活デッキ』を使用することになります」. So a
+        練習 does not let the player pick a deck the way 自主トレ does (0x5C07
+        names one there) -- the 部活用 flag names it.
+        ⚠️ USE_TYPE_PRACTICE is a BIT, not a value: a deck ticked for both uses
+        reports 0x03. See club's useType block.
+        """
+        store = self.accounts.owner_of(chara_id)
+        state = store.club(chara_id) if store else None
+        if state is None:
+            return None
+        for deck_id in range(club.DECK_COUNT):
+            if not state.deck(deck_id):
+                continue
+            if state.use_type(deck_id) & club.USE_TYPE_PRACTICE:
+                return deck_id
+        return None
+
+    def _npcbattle(
+        self, session: "_Session", sequence: int, msg_type: int, params: bytes
+    ) -> "bytes | None":
+        """0x5D00-0x5D03: 練習's own door, opened off 「クラブ活動」.
+
+        ⚠️⚠️ EVERY REFUSAL BELOW IS RESTORED, sentence and code, out of
+        `error_message.bin` 498-510 -- and the table is doing more than
+        supplying wording. It names the conditions the original checked here
+        (in a club · that club's own 顧問 · a 部活用 deck · not injured), which
+        is a rule sheet this end would otherwise have had to invent. ⭐ It also
+        says what is NOT checked: there is no code for 「you have not unlocked
+        that level」 other than 部活レベルが不正, and none at all for 「wrong
+        place」 or 「wrong time of day」.
+        """
+        chara_id = session.chara_id
+        if msg_type == clubbattle.MSG_CL_CAST_NPC_BATTLE_START:
+            npc_id = clubbattle.parse_npc_battle_start(params)
+            if npc_id is None:
+                print(f"[{self.tag}] npc battle start: short body {params.hex()}")
+                return None
+            store = self.accounts.owner_of(chara_id)
+            club_id = store.in_club(chara_id) if store else 0
+            sheet = store.ability(chara_id) if store else None
+            print(f"[{self.tag}] 練習 start: charaId={chara_id:#x} "
+                  f"npcId={npc_id} (u16, common_npc row) "
+                  f"club={club_id} ({clubdata.summary()})")
+
+            def refuse(reason: int, why: str) -> bytes:
+                print(f"[{self.tag}] 練習 refused: reason={reason} — {why}")
+                return self._answer(
+                    session, sequence, clubbattle.MSG_SV_ERROR_NPC_BATTLE_START,
+                    struct.pack(">B", reason),
+                )
+
+            if not club_id:
+                return refuse(clubbattle.NPC_START_NO_CLUB, "not in a club")
+            if not clubdata.available():
+                # ⚠️ Not a restored refusal for this situation — it is this
+                # server missing its feed, and reason 3 「今の状態では、部活に
+                # 参加することはできません」 is the least wrong of the twelve.
+                # Said plainly in the log so it is not mistaken for a rule.
+                return refuse(clubbattle.NPC_START_BAD_STATE,
+                              "no club feed on this server (not a game rule)")
+            if self._practice_deck(chara_id) is None:
+                return refuse(clubbattle.NPC_START_NO_DECK, "no 部活用 deck")
+            level = sheet.club_level[club_id] if sheet else 0
+            top = clubdata.ladder_top(club_id)
+            if top <= 0:
+                # ⭐ A restored refusal for a restored condition: reason 9 is
+                # 「部活レベルが不正です」 and a club with no ladder rows is
+                # exactly a 対戦レベル that cannot be named. ⚠️ Unreachable with
+                # a real club (all eight have 100 rungs), so this is here for
+                # the placeholder clubs 9-15 rather than for anything a player
+                # can do -- but the alternative is offering a level that then
+                # gets refused one message later, which reads like a bug.
+                return refuse(clubbattle.NPC_START_BAD_LEVEL,
+                              f"club {club_id} has no ladder")
+            # ⭐⭐⭐ THE BYTE IS A 0-BASED CEILING, MEASURED on the first screen
+            # this flow ever drew: sending 1 made the selector list TWO rows,
+            # 「レベル　１」 and 「レベル　２」, and picking the first sent
+            # 0x5C03 with 00. So both messages number the ladder from zero and
+            # this one names the highest index the player may pick -- send 0
+            # and exactly レベル１ is offered.
+            # ⭐ Which lands the reading of what the number IS: 部活レベル
+            # straight out of the save, no adjustment. 「選択したレベルの対戦で
+            # 勝利すると、次のレベルを選択できるようになります」 then says a win
+            # raises it, and a fresh member at 部活レベル 0 correctly gets one
+            # row. ⚠️ Still a reading -- what is measured is the 0-basing, not
+            # that 部活レベル is the counter the original used.
+            offered = max(0, min(top - 1, level))
+            print(f"[{self.tag}] 練習 level select: club={club_id} "
+                  f"部活Lv={level} → offering 対戦レベル1..{offered + 1} "
+                  f"(wire {offered}, 0-based) of {top}")
+            return self._answer(
+                session, sequence, clubbattle.MSG_SV_NOTIFY_NPC_BATTLE_START,
+                clubbattle.npc_battle_start_params(offered),
+            )
+
+        if msg_type == clubbattle.MSG_CL_NOTIFY_NPC_BATTLE_START:
+            # Empty body, and a Notify. Read as 「the level-select screen is
+            # up」, the same shape 0x5C07 has one level further in. ⚠️ Nothing
+            # is answered: if the client is in fact waiting for something here,
+            # the log will show it sitting still and that is the measurement.
+            print(f"[{self.tag}] 練習 screen up: charaId={chara_id:#x} "
+                  f"(0x5D03, empty body, nothing sent back)")
+            return None
+
+        print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
+        return None
+
+    def _npc_battle_info(
+        self, session: "_Session", sequence: int, level: int
+    ) -> "bytes | None":
+        """0x5C05: the roster for one 対戦レベル, and the fight starts existing.
+
+        The 0x5C06 twin, and deliberately built alongside it rather than shared:
+        the two messages agree about the player's 83 bytes and about nothing
+        else. Here the opposition is `training_npc.bin` rows named by charaId,
+        there it is other people's whole records.
+        """
+        chara_id = session.chara_id
+        store = self.accounts.owner_of(chara_id)
+        club_id = store.in_club(chara_id) if store else 0
+        info = self._peer_chara(chara_id)
+
+        def refuse(reason: int, why: str) -> bytes:
+            print(f"[{self.tag}] 対戦レベル refused: reason={reason} — {why}")
+            return self._answer(
+                session, sequence, clubbattle.MSG_SV_ERROR_BATTLE_LEVEL,
+                clubbattle.level_error_params(reason),
+            )
+
+        if not club_id or info is None:
+            return refuse(clubbattle.LEVEL_BAD_CLUB, "no club or no record")
+        # ⚠️⚠️ 0-BASED ON THE WIRE, 1-based on the screen and in the ladder's own
+        # row names (「野球部レベル１」 is the first). MEASURED: picking the top
+        # row of the selector sent 00. ⛔️ Do not "simplify" this away -- reading
+        # the byte as the level is an off-by-one that silently fields the wrong
+        # opponent rather than failing.
+        rung = level + 1
+        foes = clubdata.ladder(club_id, rung)
+        if not foes:
+            return refuse(clubbattle.LEVEL_BAD,
+                          f"club {club_id} has no 対戦レベル{rung} "
+                          f"(wire {level})")
+        sheet = store.ability(chara_id)
+        club_level = sheet.club_level[club_id] if sheet else 0
+        vitality, energy, speed = clubbattle.player_stats(club_level)
+        # ⚠️ The player is team 0 and the opponents team 1. Teams are 0-based
+        # and 0x5C05 carries no team byte at all -- with one listener there is
+        # nothing to state -- so this is only how the two sides are told apart
+        # on THIS side, and it is what the verdict is worked out against.
+        me = clubbattle.Fighter(chara_id, 0, club_id, info)
+        me.max_vitality, me.max_energy, me.speed = vitality, energy, speed
+        me.vitality, me.energy = vitality, energy
+        fighters = [me]
+        for key in foes:
+            row = clubdata.npc(key)
+            if row is None:
+                return refuse(clubbattle.LEVEL_BAD, f"{key} is not in the feed")
+            # ⚠️ The opponent's ``info`` is the PLAYER's create block. It is
+            # never sent -- 0x5C05 gives an opponent four bytes and no record --
+            # and Fighter wants one to build the 83-byte row it will never be
+            # asked for. ⛔️ Do not read this as the NPC borrowing an
+            # appearance: the client draws them out of its own table.
+            foe = clubbattle.Fighter(
+                clubdata.npc_chara_id(key), 1, row["club"], info
+            )
+            foe.max_vitality, foe.max_energy = row["vitality"], row["energy"]
+            foe.speed = row["speed"]
+            foe.vitality, foe.energy = row["vitality"], row["energy"]
+            # ⚠️ An NPC never sends 0x5C07 or 0x5C16, so it must not be waited
+            # for: `gone` is exactly 「in the roster, not waited on」 and it is
+            # what keeps all_ready/all_turn_done from hanging the fight.
+            # ⛔️ It is NOT 「retired」 and not 「disconnected」 -- see the
+            # retired property, which is about 体力 and nothing else.
+            foe.gone = True
+            fighters.append(foe)
+        battle = self.battles.open(fighters)
+        battle.npc_fight = True
+        battle.player_team = 0
+        deck_id = self._practice_deck(chara_id)
+        if deck_id is not None:
+            me.deck_id = deck_id
+        place = clubdata.training_for_club(club_id)
+        roster = " ｜ ".join(
+            f"{k} {clubdata.npc(k)['name']}"
+            f"(体{clubdata.npc(k)['vitality']} 速{clubdata.npc(k)['speed']})"
+            for k in foes
+        )
+        print(f"[{self.tag}] 練習 対戦レベル{rung} (wire {level}): charaId={chara_id:#x} "
+              f"部活Lv={club_level} 体{vitality}/気{energy}/速{speed} "
+              f"deck={deck_id} vs {roster}"
+              + (f" @ training {place[0]} bg {place[1]}" if place else ""))
+        return self._answer(
+            session, sequence, clubbattle.MSG_SV_NOTIFY_NPC_BATTLE_INFO,
+            clubbattle.npc_battle_info_params(
+                [f.chara_id for f in fighters[1:]], me.info_row()
+            ),
+        )
+
     def _clubbattle(
         self, session: "_Session", sequence: int, msg_type: int, params: bytes
     ) -> "bytes | None":
@@ -4830,6 +5040,16 @@ class MpsServer:
         chara_id = session.chara_id
         battle = self.battles.battle_of(chara_id)
 
+        if msg_type == clubbattle.MSG_CL_NOTIFY_BATTLE_LEVEL:
+            # 「対戦レベルの選択」. One byte, and it is the whole of what the
+            # player told this end about the fight they want.
+            level = clubbattle.parse_battle_level(params)
+            if level is None:
+                print(f"[{self.tag}] 対戦レベル: empty body from "
+                      f"charaId={chara_id:#x}")
+                return None
+            return self._npc_battle_info(session, sequence, level)
+
         if msg_type == clubbattle.MSG_CL_NOTIFY_BATTLE_READY:
             # ⭐ Sent by the client unprompted once its battle scene is up —
             # which is how this message named itself as the one to answer
@@ -4842,6 +5062,19 @@ class MpsServer:
                       f"(deck {deck_id}) with no battle to tell")
                 return None
             fighter.ready = True
+            # ⚠️⚠️ The CLIENT decides which deck this fight uses, and it is
+            # right to: it is the end that draws the cards, so a server that
+            # overrode this would resolve one deck while the player looked at
+            # another. ⭐ But in an 練習 the manual names the deck rather than
+            # letting the player pick (「練習では、練習用の『部活デッキ』を使用
+            # することになります」), so the two ought to agree -- and a
+            # disagreement is exactly the silent mismatch that would look like
+            # 「the card I clicked did something else」. Say so rather than
+            # correct it: which end is wrong is not knowable from here.
+            practice = self._practice_deck(chara_id) if battle.npc_fight else None
+            if practice is not None and practice != deck_id:
+                print(f"[{self.tag}] ⚠️ 練習: client brought deck {deck_id} but "
+                      f"the 部活用 deck is {practice} — following the client")
             fighter.deck_id = deck_id
             print(f"[{self.tag}] battle ready: charaId={chara_id:#x} "
                   f"deck={deck_id} ({battle.summary()})")
@@ -4914,8 +5147,10 @@ class MpsServer:
                 # 表示されます」. The repeat is over, so the next thing the
                 # manual names is the result — and unlike the ninth 0x5C09 this
                 # would have had to be, that is a message the original sends.
-                print(f"[{self.tag}] battle reached the {clubbattle.TURN_LIMIT}-"
-                      f"turn limit, showing the result")
+                wiped = battle.wiped_out()
+                why = (f"the {clubbattle.TURN_LIMIT}-turn limit"
+                       if wiped is None else f"team {wiped} all retired")
+                print(f"[{self.tag}] battle reached {why}, showing the result")
                 return self._battle_finish(session, battle)
             return self._battle_turn_start(session, battle)
 
@@ -5053,6 +5288,11 @@ class MpsServer:
         """
         if fighter.command is None:
             return None
+        if fighter.npc_card is not None:
+            # ⭐ An NPC's card is composed rather than looked up: it has no
+            # account, no save and no 0x5C07, so there is no deck here to index
+            # into. The cards themselves are its own from `npc_clubdeck.bin`.
+            return fighter.npc_card
         item_num = fighter.command[0]
         deck = self._battle_deck(fighter)
         if not 0 <= item_num < len(deck):
@@ -5061,6 +5301,176 @@ class MpsServer:
         if len(payload) != club.DECK_ITEM_BYTES:
             return None
         return (kind, payload)
+
+    def _battle_npc_choose(self, battle: "clubbattle.Battle") -> None:
+        """Give every NPC in this fight a card and a target for this turn.
+
+        ⚠️⚠️ INVENTED, the whole of it, and it is the one invention in this
+        subsystem with NO restored source of any kind: nothing anywhere says
+        how an opponent picks. What IS restored is the material it picks FROM
+        -- `npc_clubdeck.bin` gives each of the 144 opponents a named deck of
+        up to eight キーワード and eight 部活奥義, and `training_npc.bin` says
+        which deck is whose, 144 rows with no exceptions.
+        ⭐ So the choice is uniform over that deck and always an attack, which
+        is the least this can be and still be a fight. It is deliberately not
+        clever: an opponent that played well would be a design decision dressed
+        up as a restoration, and there would be no way to tell from a screen
+        which of the two it was.
+        ⚠️ The player is the only target there can be -- 練習 is one human
+        against one to three NPCs -- so no targeting rule is invented here.
+        Knob: TMO_CLUB_NPC_DEFEND, the share of turns spent defending instead
+        (0.0 by default, which is 「always attack」).
+        """
+        humans = [
+            f for f in battle.fighters
+            if not clubdata.is_npc(f.chara_id) and not f.retired
+        ]
+        if not humans:
+            return
+        for fighter in battle.fighters:
+            if not clubdata.is_npc(fighter.chara_id) or fighter.retired:
+                continue
+            row = clubdata.npc(clubdata.npc_key(fighter.chara_id))
+            deck = clubdata.npc_deck(row["deck"]) if row else None
+            cards = list(deck.get("keywords", [])) if deck else []
+            if not cards:
+                print(f"[{self.tag}] 練習 npc {fighter.chara_id:#x} has no deck "
+                      f"to play from — sits this turn out")
+                continue
+            keyword_id = random.choice(cards)
+            attack = 0 if random.random() < clubbattle.NPC_DEFEND_SHARE else 1
+            target = random.choice(humans).chara_id
+            # ⚠️ The six bytes are composed here rather than echoed, which is
+            # the one place in this family that happens on an NPC's behalf.
+            # LITTLE-ENDIAN, the same way club.keyword_deck_item does it and
+            # for the same measured reason.
+            # ⭐ ``useCount`` GOES OUT AS ZERO, and that is the reading with the
+            # least invention in it rather than a stub: 習熟度 belongs to a
+            # character's own キーワード list, `npc_clubdeck.bin` has no such
+            # column, and an opponent has no save to keep one in. So an NPC has
+            # no 習熟度 and takes no 習熟度 bonus. ⚠️ Sending full scale instead
+            # -- the first thing tried -- silently handed every opponent the
+            # +50% while a player's fresh card got none, which is a difficulty
+            # curve invented by accident.
+            fighter.npc_card = (
+                club.DECK_ITEM_KEYWORD,
+                struct.pack("<HHH", keyword_id, 0, fighter.club_id),
+            )
+            fighter.command = (0, attack, target)
+
+    def _battle_power(
+        self, kind: int, payload: bytes
+    ) -> "tuple[int, int, float, str]":
+        """``(attack, defence, mastery, label)`` for one card as played.
+
+        ⭐ Both numbers come out of the client's own tables through the local
+        feed -- `keyword.bin` +0x2e/+0x30 for a キーワード, `clubskill.bin`'s
+        攻撃力 for a 部活奥義. Neither is invented here; what IS invented is
+        what the arithmetic does with them (clubbattle.damage).
+
+        ``mastery`` is this card's 習熟度 as a fraction of its own full scale,
+        which is what 「『習熟度』が高いと…パワーがアップします」 (p07_02) needs.
+        ⚠️ It is read off the SIX BYTES THE CLIENT SENT with the card, not off
+        the owner's キーワード list: those bytes are what this fighter brought
+        into the fight, and _battle_mastery next door explains why the two
+        readings drift.
+
+        ⚠️ An unknown card comes back all zeroes rather than with a stand-in.
+        A fight where the feed is missing then does no damage, which is exactly
+        what every round before this one did -- a legible degradation rather
+        than a made-up hit.
+        """
+        if len(payload) != club.DECK_ITEM_BYTES:
+            return (0, 0, 0.0, "unreadable")
+        if kind == club.DECK_ITEM_KEYWORD:
+            keyword_id, use_count, _source = struct.unpack("<HHH", payload)
+            row = clubdata.keyword(keyword_id)
+            if row is None:
+                return (0, 0, 0.0, f"keyword {keyword_id} (not in the feed)")
+            full = row.get("fullScale") or club.KEYWORD_FULL_SCALE_DEFAULT
+            mastery = min(1.0, use_count / full) if full else 0.0
+            return (row["attack"], row["defence"], mastery,
+                    f"keyword {keyword_id} 攻{row['attack']}/守{row['defence']} "
+                    f"習熟{use_count}/{full}")
+        if kind == club.DECK_ITEM_CLUB_SKILL:
+            category, skill_id, _completeness = struct.unpack("<HHB", payload[:5])
+            row = clubdata.club_skill(category, skill_id)
+            if row is None:
+                return (0, 0, 0.0, f"奥義 {category}:{skill_id} (not in the feed)")
+            # ⚠️ A 奥義 has 攻撃力 and no 守備力 column at all -- the table has
+            # no such field, so a 奥義 played as a shield shields nothing. That
+            # is the table's shape, not a gap here.
+            # ⚠️⚠️ NOT IMPLEMENTED, and the rows are sitting right there:
+            # 消費気力, 成功率, the three ±% modifiers, the two heals and the
+            # ステータス異常 this skill inflicts. Today only 攻撃力 is acted on.
+            return (row["power"], 0, 0.0,
+                    f"奥義 {category}:{skill_id} 攻{row['power']}")
+        return (0, 0, 0.0, f"kind {kind}")
+
+    def _battle_strike(
+        self, session: "_Session", battle: "clubbattle.Battle",
+        attacker: "clubbattle.Fighter", kind: int, payload: bytes,
+        target_id: int, everyone: "list[int]",
+    ) -> bytes:
+        """One attack landing: work out the damage, take it off, narrate it.
+
+        ⭐⭐⭐ THIS IS WHERE THE FIGHT STOPPED BEING A PANTOMIME. Every round
+        from 88 to 221 played the SHAPE of a turn -- 0x5C0D, 0x5C0E, 0x5C0F,
+        0x5C12 -- and moved nobody's 体力, because the arithmetic had no
+        restored source and putting a number on the wire without one would have
+        been inventing quietly. The arithmetic is still invented; what changed
+        is that it is now invented OUT IN THE OPEN, against restored tables and
+        restored boundaries, with every knob named and reversible. See the
+        DAMAGE RULE block in clubbattle.
+
+        ⚠️ 0x5C10 Reaction is deliberately NOT sent. It narrates a 守備特性
+        (回避/反射/反撃/奥義耐性) firing, and both the probability those fire
+        with and the 「通常より強力」 multiplier two of them carry are missing
+        from every source. A fight that never fires one is a legal fight;
+        a fight that fires them on a made-up coin is a second invention on top
+        of this one. ⭐ The 守備特性 column itself is in `keyword.bin` +0x6c and
+        the client does read it, so this is a hole with a known shape.
+
+        ⚠️ The DEFENDER's card is the one they chose THIS turn, whether or not
+        they have acted yet: 「全員のコマンド入力終了後、全員の行動が実行され
+        ます」 means every choice in the turn is already made when any of them
+        resolves. A target who chose nothing has no 守備力 at all -- they did
+        not act, which the manual covers on its own terms.
+        """
+        target = battle.find(target_id)
+        if target is None or target is attacker:
+            return b""
+        if target.retired:
+            print(f"[{self.tag}] battle damage: target charaId={target_id:#x} "
+                  f"has already retired, nothing to hit")
+            return b""
+        attack, _defence, mastery, label = self._battle_power(kind, payload)
+        if attack <= 0:
+            print(f"[{self.tag}] battle damage: {label} has no 攻撃力 — "
+                  f"charaId={attacker.chara_id:#x} lands nothing")
+            return b""
+        shield, shield_label = 0, "no card"
+        guard = self._battle_deck_item(target)
+        if guard is not None:
+            _atk, shield, _m, shield_label = self._battle_power(*guard)
+        hit = clubbattle.damage(
+            attack, shield, mastery, target_attacking=not target.defending
+        )
+        taken = target.hurt(hit)
+        band = clubbattle.damage_band(taken, target.max_vitality)
+        print(f"[{self.tag}] battle damage: charaId={attacker.chara_id:#x} "
+              f"{label} → charaId={target_id:#x} "
+              f"({'防御' if target.defending else '攻撃'} {shield_label}) "
+              f"= {taken} 体力 {target.vitality + taken}→{target.vitality}"
+              f"/{target.max_vitality} band={band}"
+              f"{' ⇒ リタイヤ' if target.retired else ''}")
+        return self._tr_cast(
+            session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+            clubbattle.effect_params(
+                target_id, clubbattle.EFFECT_DAMAGE, taken, band
+            ),
+            everyone,
+        )
 
     def _battle_mastery(
         self, fighter: "clubbattle.Fighter", kind: int, payload: bytes,
@@ -5265,6 +5675,18 @@ class MpsServer:
                 ),
                 everyone,
             )
+            # ⭐⭐⭐ THE HIT ITSELF, between 0x5C0E and 0x5C0F — inside the one
+            # action's own stream, which is the only place a 0x5C11 reaches a
+            # client at all (round 90: a second stream sent into an
+            # already-played turn is ignored outright).
+            # ⚠️ Skipped when a probe has doctored the card: /cb card swaps the
+            # deckItem 0x5C0E names precisely so a kind no deck here can hold
+            # can be put on screen, and computing damage from the swapped card
+            # would make the probe move gameplay.
+            if is_attck and battle.card_probe is None:
+                out += self._battle_strike(
+                    session, battle, fighter, kind, payload, target_id, everyone
+                )
             # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb fxnext armed it. This is
             # the one place a probe alters a real resolve, and it has to be:
             # round 90 measured that a second action stream inside an
@@ -5436,7 +5858,18 @@ class MpsServer:
         seen=0: a result follows the last 0x5C16, it does not answer it.
         """
         if win_team is None:
-            win_team = clubbattle.WIN_TEAM_NEITHER
+            # ⭐⭐⭐ THE VERDICT IS COMPUTED NOW, and it is RESTORED — the two
+            # manual pages spell both rule sheets out branch by branch (see
+            # Battle.npc_win_team / pvp_win_team). Every round up to this one
+            # sent WIN_TEAM_NEITHER unconditionally, and that was correct while
+            # it lasted: with no damage in the game, p07_04's third branch
+            # 「両方が負けになります」 was the only branch a fight could reach.
+            # ⚠️ It stops being correct the moment damage exists, which is
+            # exactly what result_params' own comment said would happen.
+            win_team = (
+                battle.npc_win_team(battle.player_team) if battle.npc_fight
+                else battle.pvp_win_team()
+            )
         close = True
         if battle.hold_on_finish:
             # ⭐ /cb hold, one-shot. The 0x5C1A still goes out on the normal
@@ -6716,6 +7149,12 @@ class MpsServer:
         not answer anything itself.
         """
         battle.begin_turn()
+        # ⭐ The opponents choose here, right after the slate is wiped and
+        # before anything goes out — so that the fight is only ever waiting on
+        # the human, and the turn resolves the moment their 0x5C0A lands.
+        # ⚠️ AFTER begin_turn, never before: begin_turn clears every command,
+        # and choosing first would have the clear undo it.
+        self._battle_npc_choose(battle)
         rows = battle.turn_rows()
         # ⭐ The same deadline the wire states, kept on OUR clock as well: the
         # timeoutTime below is a moment on each client's timebase and cannot be

@@ -98,6 +98,8 @@ import characters
 import club
 
 MSG_CL_CAST_BATTLE_CHAT = 0x5C00
+MSG_CL_NOTIFY_BATTLE_LEVEL = 0x5C03
+MSG_SV_ERROR_BATTLE_LEVEL = 0x5C04
 MSG_SV_NOTIFY_NPC_BATTLE_INFO = 0x5C05
 MSG_SV_NOTIFY_TRAINING_BATTLE_INFO = 0x5C06
 MSG_CL_NOTIFY_BATTLE_READY = 0x5C07
@@ -149,15 +151,73 @@ BASE_SIZE = 71
 #: charaBodyType u16.
 MEMBER_SIZE = 83
 
-#: ⚠️ INVENTED (see the module docstring). They used to be distinct on purpose,
-#: so that the first battle to reach the screen would say which u8 is which;
-#: that question is answered now (the docstring says how) and the difference no
-#: longer carries a job. ⚠️ Left exactly as they were: changing them would
-#: move gameplay for no reading, and the values a restoration would use come
-#: from a table this server does not carry.
-DEFAULT_VITALITY = 100
-DEFAULT_ENERGY = 80
-DEFAULT_SPEED = 40
+#: ⭐⭐⭐ THE PLAYER'S 体力／気力／素早さ, off the opponents' own restored curve.
+#:
+#: ⚠️⚠️ What used to be here was `100 / 80 / 40`, three numbers invented before
+#: anything was known about the scale they had to live on. They are gone. The
+#: opponents this server now fields carry 550-1999 体力, a flat 99 気力 and
+#: 120-255 素早さ, so a 100-体力 player was not merely arbitrary, it was in the
+#: wrong currency -- the kind of invention a restored ruler makes decidable
+#: rather than a matter of taste.
+#:
+#: ⭐⭐ RESTORED, all of it except one step: `training_npc.bin` gives 部員Ａ-Ｋ
+#: as ELEVEN IDENTICAL RUNGS IN ALL EIGHT CLUBS, indexed by 部活レベル --
+#:
+#:     部活Lv  0    2    5    8   11   15   19   23   27   31   35
+#:     体力   550  610  630  650  680  710  730  750  780  810  830
+#:     素早さ 128  136  144  152  160  168  176  184  192  192  192
+#:     気力    99 on every one of the 144 rows in the table
+#:
+#: ⚠️ THE ONE INVENTED STEP is that the PLAYER is on this curve too. Nothing
+#: read so far says a player's numbers come from anywhere; the save file has no
+#: field for them and no message carries them inbound. What makes this the
+#: smallest available invention rather than a new curve is that it borrows a
+#: restored one instead of drawing one, and that it lands the player at level 0
+#: exactly where 対戦レベル１'s opponent stands (`7:3 野球部員Ａ`, 550/99/128) --
+#: the first fight in the game is same-for-same.
+#: ⭐ 気力 is the closest to restored of the three: `training_npc.bin` carries
+#: the SAME value on all 144 rows, so there is no curve to invent -- only the
+#: step that says a player gets that value too.
+#:
+#: ⭐⭐⭐ AND IT IS COMPUTED, NEVER STORED. The input is 部活レベル, which is
+#: already in the save (`ability.club_level`, one slot per club), so this adds
+#: no field to any record. Two reasons that was the right side to err on:
+#: computing stays reversible -- a real growth source later is `f(lv) + bonus`,
+#: an offset added on top -- while a number written into every character's save
+#: during the very rounds the curve is being tuned would leave old characters
+#: behind and make the next measurement unreadable.
+#: ⚠️ Not to be confused with the 残り体力/残り気力 inside a fight: those live on
+#: the Battle's Fighter objects, end with the fight, and never touched a save.
+PLAYER_STAT_CURVE = (
+    (0, 550, 128), (2, 610, 136), (5, 630, 144), (8, 650, 152),
+    (11, 680, 160), (15, 710, 168), (19, 730, 176), (23, 750, 184),
+    (27, 780, 192), (31, 810, 192), (35, 830, 192),
+)
+
+#: 気力 on every row of `training_npc.bin`, all 144 of them.
+PLAYER_ENERGY = 99
+
+
+def player_stats(club_level: int) -> "tuple[int, int, int]":
+    """``(vitality, energy, speed)`` for a player at this 部活レベル.
+
+    The curve is a step function, not an interpolation: it names the rungs the
+    opponents actually stand on, and a player between two rungs takes the lower
+    one. ⚠️ Reading it as a line through those points would be inventing a
+    shape the table does not have -- 部員 exist only at those eleven levels.
+    """
+    vitality, speed = PLAYER_STAT_CURVE[0][1], PLAYER_STAT_CURVE[0][2]
+    for rung, rung_vitality, rung_speed in PLAYER_STAT_CURVE:
+        if club_level >= rung:
+            vitality, speed = rung_vitality, rung_speed
+    return (vitality, PLAYER_ENERGY, speed)
+
+
+#: The level-0 rung, which is what a fighter starts as before anything says
+#: otherwise. ⚠️ Still the names the rest of this module uses, so that a caller
+#: with no 部活レベル to hand lands on the bottom of the restored curve rather
+#: than on a number of its own.
+DEFAULT_VITALITY, DEFAULT_ENERGY, DEFAULT_SPEED = player_stats(0)
 
 #: How many per-character status counters 0x5C09 carries, and the number of
 #: rows in the client's own ``clubstatus`` table.
@@ -289,6 +349,149 @@ DEADLINE_PINNED = bool(os.environ.get("TMO_TURN_DEADLINE_S"))
 #: written. So this is used only to STOP starting turns — a ninth 0x5C09 would
 #: draw 「残り　-1　ターン」 and that is a number the original could not send.
 TURN_LIMIT = 8
+
+
+# ---------------------------------------------------------------------------
+# ⭐⭐⭐ THE DAMAGE RULE. Half restored, half invented, and the halves are named.
+#
+# RESTORED, and it is more than it looks:
+#   * `p07_03`/`p07_02` state three rules outright -- 「攻撃時、このパワーは半分
+#     になります」 (a keyword's 守備力 counts HALF while its holder is attacking),
+#     「『習熟度』が高いと、キーワードによる攻撃や防御のパワーがアップします」,
+#     and 「相手から受けるダメージを、キーワードの守備力に応じて軽減します」;
+#   * `keyword.bin` gives every card an 攻撃力 (260-700) and a 守備力 (300-630),
+#     and those are in the SAME CURRENCY as 体力 (550-1999) -- so an attack
+#     value is a number of hit points, not a percentage and not a band index;
+#   * the fight is at most eight turns (`p07_03`, TURN_LIMIT) and the weakest
+#     opponent has 550 体力.
+#
+# ⭐⭐ THE SHAPE FOLLOWS FROM THOSE AS INEQUALITIES, which is why it is a
+# subtraction rather than a ratio. Taking the medians (攻 400, 守 450):
+#
+#     opponent is ATTACKING  -> 450/2 = 225 effective  ->  400-225 = 175/turn
+#     opponent is DEFENDING  -> 450    effective  ->  400-450 <= 0, nothing
+#                               lands, which is 「守備力に応じて軽減」 exactly
+#
+# ⚠️⚠️ THOSE ARE UNSCALED NUMBERS and a fight does not use them raw. The first
+# real fight showed why -- see DAMAGE_SCALE below, which multiplies the result
+# and whose factory value is derived from two restored numbers. Read that
+# constant before doing arithmetic with the 175 above.
+#
+# ⚠️⚠️ Only a subtraction gives 「攻撃時、守備力は半分」 anything to mean: halve
+# a number inside a ratio or a band index and the halving does not change the
+# outcome in the way the sentence promises. The restored rule picks the shape.
+# ⭐ It also explains a third restored number: a キャプテン has 1999 体力, which
+# needs 250 a turn to finish in eight, and 250 > 175 -- so ordinary cards cannot
+# beat 対戦レベル１００, which is what 奥義 (攻撃力 up to 1100) and the 習熟度
+# bonus are for. Three restored boundaries agreeing is the argument.
+#
+#     damage  = max(D_min, ATK x (1 + mastery bonus) - DEF_eff)
+#     DEF_eff = the target's card's 守備力, HALVED if the target is attacking
+#
+# ⚠️ INVENTED, every knob below, and each one is an environment variable whose
+# unset value IS the factory setting -- so a session can retune a fight without
+# editing code and without leaving a tuned number behind (the same pattern as
+# TMO_TURN_TIMEOUT_MS). Nothing here is written to any save.
+# ---------------------------------------------------------------------------
+
+#: RESTORED: 「攻撃時、このパワーは半分になります」 -- a card's 守備力 counts
+#: half while its holder spends the turn attacking.
+DEFENCE_DIVISOR_WHEN_ATTACKING = 2
+
+#: ⚠️ INVENTED. The floor under a hit that the arithmetic would otherwise take
+#: to zero or below. 1 rather than 0 because a subtraction with no floor makes
+#: the 「defend」 command an absolute wall against any weaker card, and eight
+#: turns of two players both defending would end with nothing having happened
+#: at all -- a state the win rules have no branch for. ⭐ What would overturn
+#: it: any operator-era account of a 練習 where a defended hit did nothing.
+#: Knob: TMO_CLUB_DAMAGE_FLOOR.
+DAMAGE_FLOOR = int(os.environ.get("TMO_CLUB_DAMAGE_FLOOR") or 1)
+
+#: ⚠️ INVENTED. How much 習熟度 at full scale adds to a card's 攻撃力 and
+#: 守備力. The manual says 「パワーがアップします」 and never how much.
+#: ⭐ 0.5 is picked to sit at the size the restored boundaries leave room for:
+#: median 400 attack against a captain needing 250 a turn is short by 75, and
+#: half again on a well-practised card closes that without making a fresh card
+#: useless. ⚠️ It scales linearly with useCount/fullScale, which is itself an
+#: invention -- the manual says 「高いと」 and gives no curve.
+#: Knob: TMO_CLUB_MASTERY_BONUS.
+MASTERY_BONUS_AT_FULL = float(os.environ.get("TMO_CLUB_MASTERY_BONUS") or 0.5)
+
+#: 0x5C11 ``type`` for a plain ダメージ line. 8-13 all draw the same template
+#: row (5, 「$M$Nは$sダメージを受けた」) and all move the 体力 bar; 2.85 measured
+#: that 8/9/10 differ from each other only in which sound effect fires.
+#: ⚠️ INVENTED, narrowly: WHICH of the six a given hit should use. 8 is the
+#: first, and this server sends only it. Knob: none -- a probe (/cb fxnext) can
+#: still send any of them.
+EFFECT_DAMAGE = 8
+
+#: 0x5C11 ``value2`` picks the damage BAND, the 「$s」 in that template: five
+#: adjectives from 蚊に刺されたような to 痛烈な, measured in order 0-4 (round
+#: 135). ⚠️ INVENTED: what fraction of the target's 体力 belongs in each band.
+#: ⭐ Even fifths of the TARGET's maximum, so that the adjective means the same
+#: thing to a 550-体力 部員 and a 1999-体力 キャプテン -- the alternative,
+#: absolute thresholds, would call every hit on a captain 「a mosquito bite」.
+DAMAGE_BANDS = 5
+
+#: ⚠️ INVENTED. `p07_03`'s second winning branch requires 「ＮＰＣ側に十分な
+#: ダメージを与えている」 and never says how much is enough. This is that share
+#: of the opposing side's total 体力.
+#: ⭐ Half rather than any other fraction because the branch it guards is
+#: already the 「you were ahead when time ran out」 one -- it exists to stop a
+#: fight that barely started from counting as a win, and 「more than half the
+#: other side's health gone」 is the least arbitrary reading of 「十分」 that
+#: does that. Knob: TMO_CLUB_DAMAGE_ENOUGH.
+DAMAGE_ENOUGH_SHARE = float(os.environ.get("TMO_CLUB_DAMAGE_ENOUGH") or 0.5)
+
+#: ⚠️ INVENTED. How often an NPC opponent defends instead of attacking.
+#: 0.0 -- always attack -- because that is the version with no second number in
+#: it, and because a first fight wants the damage rule visible rather than an
+#: opponent's temperament. See _battle_npc_choose for the whole of what an
+#: opponent's behaviour is. Knob: TMO_CLUB_NPC_DEFEND.
+NPC_DEFEND_SHARE = float(os.environ.get("TMO_CLUB_NPC_DEFEND") or 0.0)
+
+
+#: ⚠️ INVENTED, and the one knob a first fight immediately proved necessary.
+#: The subtraction above is in the right SHAPE and the wrong SIZE: median
+#: against median it lands 175, which empties the weakest opponent's 550 体力
+#: in 3.2 turns, and real card pairings reach 550 in a single turn. Eight
+#: turns, an elaborate tiebreak rule for when they run out, and 「残り体力の
+#: 合計」 as a criterion all describe fights that do NOT end on turn one.
+#:
+#: ⭐ SO THE FACTORY VALUE IS DERIVED FROM TWO RESTORED NUMBERS RATHER THAN
+#: PICKED: the weakest opponent has 550 体力 (`training_npc.bin`) and a fight
+#: is at most 8 turns (`p07_03`), so a median exchange should take about
+#: 550/8 = 69 a turn. 69/175 = 0.39, and 0.4 is that to one figure.
+#: ⚠️ What it deliberately does NOT do is change the shape: every relation the
+#: restored rules fix -- 攻撃時は守備力半分, 守備力が大きいほどダメージが減る,
+#: a captain being out of reach of ordinary cards -- survives a uniform scale.
+#: ⭐ What would overturn it: any operator-era screenshot or video of a 練習
+#: with a damage number or a bar readable across turns.
+#: Knob: TMO_CLUB_DAMAGE_SCALE.
+DAMAGE_SCALE = float(os.environ.get("TMO_CLUB_DAMAGE_SCALE") or 0.4)
+
+
+def damage(
+    attack: int, defence: int, mastery: float = 0.0,
+    target_attacking: bool = True,
+) -> int:
+    """How much 体力 one card takes off, in the shape argued above.
+
+    ``mastery`` is useCount/fullScale for the attacking card, 0.0 to 1.0.
+    ``target_attacking`` says whether the target spent this turn attacking,
+    which is the half/full question for their own card's 守備力.
+    """
+    powered = attack * (1.0 + MASTERY_BONUS_AT_FULL * max(0.0, min(1.0, mastery)))
+    shield = defence / DEFENCE_DIVISOR_WHEN_ATTACKING if target_attacking else defence
+    return max(DAMAGE_FLOOR, int((powered - shield) * DAMAGE_SCALE))
+
+
+def damage_band(value: int, max_vitality: int) -> int:
+    """0x5C11's ``value2``: which of the five adjectives narrates this hit."""
+    if max_vitality <= 0:
+        return 0
+    share = value * DAMAGE_BANDS // max_vitality
+    return max(0, min(DAMAGE_BANDS - 1, share))
 
 
 def base_block(info: bytes) -> bytes:
@@ -969,6 +1172,162 @@ def part_params(chara_id: int, reason: int = PART_DISCONNECTED) -> bytes:
     return struct.pack(">IB", chara_id, reason & 0xFF)
 
 
+# ---------------------------------------------------------------------------
+# ⭐⭐⭐ 練習（ＮＰＣ対戦）'s own door, 0x5D00-0x5D03. It has been called
+# unreachable in this tree since round 72, and that was true when it was
+# written: 顧問 and キャプテン could not be put on a map, so the right-click
+# menu the manual names could not be opened. Round 217 removed that -- a map
+# object's whole identity is the charaId 0x480F carries, so `2:0 石打` stands
+# up with one message -- and `menu.bin` row 0:3 顧問・キャプテンメニュー holds
+# exactly four items: 20 入部, 21 クラブ活動, 11 部活奥義合成, 402 リーダー試験.
+#
+# ⭐⭐ 「クラブ活動」 IS THE DOOR, in the manual's own words: 「顧問または
+# キャプテンの交流メニューから『クラブ活動』を選択すると、ウエストアップ画面に
+# 切り替わり、対戦レベルの選択に進みます」 (p07_03). So there was never a
+# missing menu item -- 練習 is not on the menu under its own name.
+#
+#     0x5D00 MsgClCastNpcClubBattleStart      npcId u16   <- 「クラブ活動」
+#     0x5D01 MsgSvNotifyNpcClubBattleStart    level i8    (0-based ceiling)
+#     0x5D02 MsgSvErrorNpcClubBattleStart     reason u8
+#     0x5D03 MsgClNotifyNpcClubBattleStart    (empty)     <- 「my screen is up」
+#     0x5C03 MsgClNotifyClubBattleLevel       level i8    (0-based, chosen row)
+#     0x5C04 MsgSvErrorClubBattleLevel        reason u8
+#     0x5C05 MsgSvNotifyNpcClubBattleInfo     the roster; the fight begins
+#
+# ⚠️⚠️ THREE OF THOSE WIDTHS ARE NOT WHAT THE DUMP STRINGS SUGGEST, and each was
+# corrected by the client rather than by a second reading: `npcId` prints as
+# `npcId=%d` like every u32 charaId in this protocol and is a u16; both `level`
+# fields go through the stream vtable's SIGNED 8-bit slot; and both are indexed
+# from zero, which a real client settled by drawing two rows for a 1 and then
+# answering 00 for the first of them. See each parser for the disassembly.
+#
+# ⚠️ Shapes from the client's own deserializers; the two refusal tables are
+# `error_message.bin` 498-510 and 760-775, whole and unedited. The ORDER is
+# MEASURED as far as 0x5D03 -- it really does arrive after 0x5D01, the way
+# 0x5C07 arrives after 0x5C06 -- and this end answers it with nothing.
+# ---------------------------------------------------------------------------
+MSG_CL_CAST_NPC_BATTLE_START = 0x5D00
+MSG_SV_NOTIFY_NPC_BATTLE_START = 0x5D01
+MSG_SV_ERROR_NPC_BATTLE_START = 0x5D02
+MSG_CL_NOTIFY_NPC_BATTLE_START = 0x5D03
+
+#: 0x5D02's ``reason``, RESTORED from `error_message.bin` 498-510. ⭐ Rows 0, 1,
+#: 4 and 12 are marked 未使用 in the table itself, which is this data's way of
+#: saying which codes the original never sent.
+NPC_START_NO_CLUB = 2      # クラブに入部していないなどが原因で部活を開始できません。
+NPC_START_BAD_STATE = 3    # 今の状態では、部活に参加することはできません。
+NPC_START_OTHER_CLUB = 8   # 所属クラブ以外の部活…を行うことはできません。
+NPC_START_BAD_LEVEL = 9    # 部活レベルが不正です。
+NPC_START_NO_DECK = 10     # 部活デッキが作成されていない、もしくは「部活用」…
+NPC_START_INJURED = 11     # 怪我をしているため、部活に参加できません。
+
+#: 0x5C04's ``reason``, RESTORED from `error_message.bin` 760-775. Only the two
+#: this server can honestly mean are named.
+LEVEL_BAD = 7              # 選択された対戦レベルが不正です。
+LEVEL_BAD_CLUB = 8         # 所属クラブの情報が不正です。
+
+
+def parse_npc_battle_start(params: bytes) -> "int | None":
+    """0x5D00's npcId -- which 顧問/キャプテン the player right-clicked.
+
+    ⚠️⚠️ TWO BYTES, not four, and this is the one field in the flow the dump
+    string got read wrong from. `the field-name extractor` prints ``npcId=%d`` and every
+    other npcId in this protocol is a u32 charaId, so four was the obvious
+    reading; the deserializer at 0x8DB8E0 makes ONE call through the stream
+    vtable's ``+0x28``, which is uint16. MEASURED the same round: a real client
+    right-clicking `2:0 石打` and choosing 「クラブ活動」 sent a two-byte body.
+    ⭐ Lesson shape: a field NAME shared with another message is not a width.
+
+    ⭐ So this cannot be a charaId -- 16 bits has no room for the category the
+    charaId space puts in the high half. What arrives for `common_npc 2:0` is
+    0, i.e. the row alone. ⚠️ Which is enough for the original, because
+    `error_message.bin` 506 says the only 練習 you may have is your own club's
+    (「所属クラブ以外の部活…を行うことはできません」) -- the club is the
+    PLAYER's, and this names which of that club's two openers was clicked.
+    """
+    if len(params) < 2:
+        return None
+    return struct.unpack_from(">H", params, 0)[0]
+
+
+def npc_battle_start_params(level: int) -> bytes:
+    """0x5D01: the 対戦レベル the level-select screen should open on.
+
+    ⚠️ WHAT THIS NUMBER MEANS is read from the manual, not from the client:
+    「対戦レベルは、選択したレベルの対戦で勝利すると、次のレベルを選択できるよう
+    になります」 -- so there is a ceiling per club that a win raises, and one
+    byte at the start of the flow is the only place it could be stated.
+    ⚠️ That the byte is the CEILING rather than, say, the club's own 部活レベル
+    is a reading, and the screen is what settles it.
+
+    ⚠️ SIGNED. The reader (0x8D84A0, shared with 0x5C03) goes through the
+    stream vtable's ``+0x1c``, which is int8 -- the same signed slot 0x5C1C's
+    reason uses and the opposite of every reason byte in the 0x5C family. The
+    ladder tops out at 100 so the two readings agree over the whole range, but
+    packing it as signed is what the client actually asks for.
+    """
+    return struct.pack(">b", max(-128, min(127, level)))
+
+
+def parse_battle_level(params: bytes) -> "int | None":
+    """0x5C03's level -- which 対戦レベル the player picked off the screen.
+
+    ⚠️ One byte, and SIGNED: the reader is the very same function 0x5D01 uses
+    (0x8D84A0, ``+0x1c``). Read back the same way, so that a level this end
+    could never have meant shows up as a negative number rather than as 200.
+    """
+    if len(params) < 1:
+        return None
+    return struct.unpack_from(">b", params, 0)[0]
+
+
+def level_error_params(reason: int) -> bytes:
+    return struct.pack(">B", reason & 0xFF)
+
+
+#: (0x2c - 0x04) / 4 -- how many npcCharaId the client's own array has room for.
+NPC_BATTLE_MAX = 10
+
+
+def npc_battle_info_params(npc_chara_ids: "list[int]", pc_row: bytes) -> bytes:
+    """0x5C05's body: the opponents as bare charaIds, then the player's row.
+
+    Reader at 0x8EECE0, read for read: a u16 count through the stream vtable's
+    +0x28, that many u32 through +0x24, and then the same 83-byte member record
+    0x5C06 carries (u32 charaId, the 71-byte base block, vitality u16, energy
+    u8, speed u8, clubId u16, charaBodyType u16 -- every field at the offset
+    the deserializer writes it to).
+
+    ⭐⭐⭐ THE OPPONENTS ARE FOUR BYTES EACH AND NOTHING ELSE, which is the
+    finding this message carries. No names, no 体力, no deck: the client looks
+    an opponent up in its own `training_npc.bin` by charaId, exactly the way
+    round 217 found it looks a map object's appearance up. So this server has
+    to get one number per opponent right and has nothing else it could get
+    wrong -- and it explains why the client reads 体力/気力/素早さ out of that
+    table at three fixed offsets (2.157) while the SERVER needs them only for
+    its own arithmetic.
+
+    ⚠️ THE ARRAY THE CLIENT READS INTO HOLDS TEN. The count lands at +0x2c and
+    the entries start at +0x04, so ten u32 fit exactly, and the loop has no
+    bounds check of its own. The ladder never fields more than three, so this
+    is a ceiling nothing approaches -- but it is a real one.
+
+    ⚠️ Unlike 0x5C06 there is no per-recipient ``team`` byte, because there is
+    only ever one recipient: the other side is not listening.
+    """
+    if len(npc_chara_ids) > NPC_BATTLE_MAX:
+        raise AssertionError(
+            f"{len(npc_chara_ids)} opponents, the reader's array holds "
+            f"{NPC_BATTLE_MAX}"
+        )
+    if len(pc_row) != MEMBER_SIZE:
+        raise AssertionError(f"pcInfo is {len(pc_row)}B, reader wants {MEMBER_SIZE}")
+    out = struct.pack(">H", len(npc_chara_ids))
+    for chara_id in npc_chara_ids:
+        out += struct.pack(">I", chara_id)
+    return out + pc_row
+
+
 def training_battle_info_params(
     team: int, team1_rows: "list[bytes]", team2_rows: "list[bytes]"
 ) -> bytes:
@@ -1071,6 +1430,12 @@ class Fighter:
         self.command: "tuple[int, int, int] | None" = None
         #: Whether this player has said 「done choosing」 (0x5C16) this turn.
         self.turn_done = False
+        #: For an NPC opponent only: the ``(kind, six bytes)`` it is playing
+        #: this turn, composed on its behalf because it has no save file and
+        #: sends no 0x5C0A. None for anyone with a deck of their own.
+        #: ⚠️ It is what 0x5C0E puts on the wire for that opponent, so the
+        #: keyword id in it has to be one the client can look up.
+        self.npc_card: "tuple[int, bytes] | None" = None
         #: Set when this fighter's connection went away mid-fight. They stay in
         #: the roster — every message this family sends carries the same rows it
         #: carried before, so nothing on the wire changes shape — but the fight
@@ -1098,6 +1463,41 @@ class Fighter:
         self.command = None
         self.turn_done = False
 
+    @property
+    def retired(self) -> bool:
+        """体力 gone. 「リタイヤ」 in the manual's word, and template row 18's.
+
+        ⭐ RESTORED that this state exists and what it is called; restored too
+        that the client reaches it by itself, because it retires its OWN
+        character the moment that character's 体力 hits zero and never says so
+        upstream (round 99). So this side has to keep the same count in
+        parallel rather than wait to be told.
+        """
+        return self.vitality <= 0
+
+    @property
+    def defending(self) -> bool:
+        """Did this fighter spend the turn defending rather than attacking?
+
+        ⚠️ Read off the 0x5C0A that is still in hand: its ``isAttck`` byte is
+        the 攻撃か防御か choice `p07_03` step 2) describes. A fighter with no
+        command this turn is not defending -- they simply did not act, which
+        the manual covers separately (「キャラクターは行動しません」).
+        """
+        return self.command is not None and not self.command[1]
+
+    def hurt(self, amount: int) -> int:
+        """Take ``amount`` off 体力 and return what was actually taken.
+
+        ⚠️ Clamped at zero on this side even though the CLIENT's bar is not:
+        round 97 measured that a 体力 bar driven below zero comes back FULL, so
+        a server that let its own count go negative would be tracking a fight
+        the screen is not showing. See the EFFECT_TEMPLATE notes.
+        """
+        taken = min(max(0, amount), self.vitality)
+        self.vitality -= taken
+        return taken
+
     def info_row(self) -> bytes:
         """This fighter's 83 bytes for 0x5C06."""
         return member_row(
@@ -1123,6 +1523,17 @@ class Battle:
 
     def __init__(self, fighters: "list[Fighter]") -> None:
         self.fighters = fighters
+        #: ⭐⭐ Which door this fight came in through, because THE TWO DOORS
+        #: HAVE DIFFERENT RULE SHEETS. 練習 is `p07_03`, whose 「それ以外」 is a
+        #: plain loss for the player; 自主トレ is `p07_04`, whose 「それ以外」 is
+        #: 「両方が負けになります」. Nothing else about the fight differs --
+        #: 「自主トレの流れは、ＮＰＣとの練習と同じです」 -- so this flag is the
+        #: whole of the difference and it is read only when the verdict is
+        #: worked out. Set by the 0x5C05 path; 0x5C06's leaves it False.
+        self.npc_fight = False
+        #: In an 練習, which side the human is on. Meaningless when npc_fight
+        #: is False, where both sides are people.
+        self.player_team = 0
         #: One short of the first turn: every 0x5C09 advances it first, so the
         #: opening one goes out as FIRST_TURN and nothing has to special-case
         #: 「is this the first」.
@@ -1378,14 +1789,100 @@ class Battle:
         return self.turn
 
     def finished(self) -> bool:
-        """Has the eight-turn limit been reached?
+        """「８ターンが終了するまで、もしくはどちらかの体力が全員０になるまで」.
 
-        ⚠️ The manual's other ending — 「どちらかの体力が全員０になるまで」 — is
-        not testable here: nothing takes 体力 off anybody, because no damage
-        formula has been restored. So this asks the only half that can be
-        answered, and the fight that reaches it simply stops (see TURN_LIMIT).
+        ⭐⭐ BOTH HALVES NOW, which is new. For every round up to this one the
+        second half was untestable — nothing took 体力 off anybody — and this
+        function asked only about the turn count. Damage exists now, so a fight
+        can end the way the manual's own sentence says it usually does.
         """
-        return self.turn >= TURN_LIMIT
+        return self.turn >= TURN_LIMIT or self.wiped_out() is not None
+
+    def wiped_out(self) -> "int | None":
+        """The team whose fighters are ALL retired, or None. 「どちらかの体力が
+        全員０」.
+
+        ⚠️ Over the whole roster rather than active(): a fighter who dropped
+        their connection is not knocked out, and treating them as one would
+        hand the other side a win nobody landed.
+        """
+        for team in sorted({f.team for f in self.fighters}):
+            side = self.side(team)
+            if side and all(f.retired for f in side):
+                return team
+        return None
+
+    def npc_win_team(self, player_team: int) -> int:
+        """The 練習 verdict, `p07_03`'s two branches and its 「それ以外」.
+
+        ⭐⭐⭐ RESTORED, word for word, and it is a DIFFERENT RULE SHEET from
+        自主トレ's — do not merge the two:
+
+            1. ＮＰＣが全員リタイヤした場合
+            2. ＮＰＣが残り一人で、その残り体力がプレイヤーの残り体力より
+               少なく、かつＮＰＣ側に十分なダメージを与えている場合
+            それ以外の場合は、プレイヤーの負けとなります
+
+        So an 練習 that ends with nobody hurt is a plain LOSS for the player.
+        ⚠️ That is why WIN_TEAM_NEITHER must not be carried over here: it is
+        p07_04's third branch and p07_03 has no third branch.
+
+        ⚠️ INVENTED, one clause: 「十分なダメージ」 is not a number anywhere.
+        DAMAGE_ENOUGH_SHARE below is that number, and it is the only made-up
+        thing in this verdict.
+        """
+        foes = [f for f in self.fighters if f.team != player_team]
+        us = [f for f in self.fighters if f.team == player_team]
+        if foes and all(f.retired for f in foes):
+            return player_team
+        standing = [f for f in foes if not f.retired]
+        if len(standing) == 1 and us:
+            foe = standing[0]
+            ours = sum(f.vitality for f in us)
+            dealt = sum(f.max_vitality - f.vitality for f in foes)
+            enough = sum(f.max_vitality for f in foes) * DAMAGE_ENOUGH_SHARE
+            if foe.vitality < ours and dealt >= enough:
+                return player_team
+        return 1 - player_team if player_team in (0, 1) else WIN_TEAM_NEITHER
+
+    def pvp_win_team(self) -> int:
+        """The 自主トレ verdict, `p07_04`.
+
+        ⭐ Its two winning branches are the same shape as p07_03's, but its
+        「それ以外」 is 「両方が負けになります」 — which is what WIN_TEAM_NEITHER
+        has been sending on its own for every round since round 100, back when
+        a damage-less fight made that the only branch reachable.
+
+        ⚠️ 「残り体力」 is summed over a side here, because 自主トレ takes several
+        people per side while the sentence the branch comes from was written
+        about one. That is a reading, and it is the only one available: the
+        manual gives no rule for comparing two groups.
+
+        ⚠️ Branch 1 is checked for BOTH sides before branch 2 for either, so a
+        knockout always outranks a points win. Within branch 2 both sides can
+        qualify at once (each down to one hurt fighter); the earlier team wins,
+        which is arbitrary, and nothing read so far says what the original did.
+        """
+        teams = sorted({f.team for f in self.fighters})
+        if len(teams) != 2:
+            return WIN_TEAM_NEITHER
+
+        def opponents(team: int) -> "list[Fighter]":
+            return self.side(teams[1 - teams.index(team)])
+
+        for team in teams:
+            foes = opponents(team)
+            if foes and all(f.retired for f in foes):
+                return team
+        for team in teams:
+            foes = opponents(team)
+            standing = [f for f in foes if not f.retired]
+            ours = sum(f.vitality for f in self.side(team))
+            dealt = sum(f.max_vitality - f.vitality for f in foes)
+            enough = sum(f.max_vitality for f in foes) * DAMAGE_ENOUGH_SHARE
+            if len(standing) == 1 and standing[0].vitality < ours and dealt >= enough:
+                return team
+        return WIN_TEAM_NEITHER
 
     def all_chosen(self) -> bool:
         """Has every fighter sent their 0x5C0A this turn?
