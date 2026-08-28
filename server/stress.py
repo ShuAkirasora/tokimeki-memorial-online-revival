@@ -105,7 +105,7 @@ FULL = 257
 # cannot.
 HEALING_MAPS = (48,)  # 特殊教室校舎１Ｆ保健室
 
-# ── INVENTED ───────────────────────────────────────────────────────────────
+# ── INVENTED — how much ストレス one activity adds (授業 / クラブ / 奥義合成) ──
 # Nothing below is read off anything. `lesson.bin` carries no stress column,
 # `chara_condition.bin` is four names and two zero bytes, and `p05_09` gives no
 # figure at all — not a rate, not a threshold, not a cap.

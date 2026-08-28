@@ -168,7 +168,9 @@ MEMBER_SIZE = 83
 #:     素早さ 128  136  144  152  160  168  176  184  192  192  192
 #:     気力    99 on every one of the 144 rows in the table
 #:
-#: ⚠️ THE ONE INVENTED STEP is that the PLAYER is on this curve too. Nothing
+#: ⚠️ INVENTED — the player's 体力／気力／素早さ, taken off the opponents' own
+#: restored ladder by 部活レベル. The invented step is only that a PLAYER is on
+#: that ladder at all. Nothing
 #: read so far says a player's numbers come from anywhere; the save file has no
 #: field for them and no message carries them inbound. What makes this the
 #: smallest available invention rather than a new curve is that it borrows a
@@ -251,7 +253,10 @@ NUM_OF_CHARA_ABILITY = len(ability.ABILITIES)
 #: through its own width-checked accessor.
 TURN_START_ROW_SIZE = 23
 
-#: ⚠️ INVENTED as a number, but no longer a free choice. Three things bound it:
+#: ⚠️ INVENTED — the コマンド選択 time limit in ms: how long a player gets each
+#: turn to choose a card. Pacing rather than a rule; the manual says only
+#: 「０になる前に入力を完了できなかった場合、キャラクターは行動しません」.
+#: Three things bound it without fixing it:
 #:
 #: 1. The manual states the SEMANTICS (p07_03): 「０になる前に入力を完了できな
 #:    かった場合、キャラクターは行動しません」 — running out costs that
@@ -394,11 +399,13 @@ TURN_LIMIT = 8
 # TMO_TURN_TIMEOUT_MS). Nothing here is written to any save.
 # ---------------------------------------------------------------------------
 
-#: RESTORED: 「攻撃時、このパワーは半分になります」 -- a card's 守備力 counts
-#: half while its holder spends the turn attacking.
+#: ⭐ RESTORED, and ⛔️ NOT A KNOB: 「攻撃時、このパワーは半分になります」 -- a
+#: card's 守備力 counts half while its holder spends the turn attacking. The 2
+#: is the manual's, so tuning it would turn a restoration back into an invention.
 DEFENCE_DIVISOR_WHEN_ATTACKING = 2
 
-#: ⚠️ INVENTED. The floor under a hit that the arithmetic would otherwise take
+#: ⚠️ INVENTED — the damage floor: the least one attack can take off, so that a
+#: defended hit is not simply nothing. Without it,
 #: to zero or below. 1 rather than 0 because a subtraction with no floor makes
 #: the 「defend」 command an absolute wall against any weaker card, and eight
 #: turns of two players both defending would end with nothing having happened
@@ -407,7 +414,8 @@ DEFENCE_DIVISOR_WHEN_ATTACKING = 2
 #: Knob: TMO_CLUB_DAMAGE_FLOOR.
 DAMAGE_FLOOR = int(os.environ.get("TMO_CLUB_DAMAGE_FLOOR") or 1)
 
-#: ⚠️ INVENTED. How much 習熟度 at full scale adds to a card's 攻撃力 and
+#: ⚠️ INVENTED — what a fully mastered card gains: 習熟度 at full scale adds this
+#: share to its 攻撃力 and 守備力 (0.5 = +50%, scaling linearly). The manual says
 #: 守備力. The manual says 「パワーがアップします」 and never how much.
 #: ⭐ 0.5 is picked to sit at the size the restored boundaries leave room for:
 #: median 400 attack against a captain needing 250 a turn is short by 75, and
@@ -417,7 +425,8 @@ DAMAGE_FLOOR = int(os.environ.get("TMO_CLUB_DAMAGE_FLOOR") or 1)
 #: Knob: TMO_CLUB_MASTERY_BONUS.
 MASTERY_BONUS_AT_FULL = float(os.environ.get("TMO_CLUB_MASTERY_BONUS") or 0.5)
 
-#: 0x5C11 ``type`` for a plain ダメージ line. 8-13 all draw the same template
+#: ⚠️ INVENTED — which 0x5C11 type an ordinary hit uses. All six draw the same
+#: sentence and differ only in sound effect. 8-13 all draw the same template
 #: row (5, 「$M$Nは$sダメージを受けた」) and all move the 体力 bar; 2.85 measured
 #: that 8/9/10 differ from each other only in which sound effect fires.
 #: ⚠️ INVENTED, narrowly: WHICH of the six a given hit should use. 8 is the
@@ -425,7 +434,8 @@ MASTERY_BONUS_AT_FULL = float(os.environ.get("TMO_CLUB_MASTERY_BONUS") or 0.5)
 #: still send any of them.
 EFFECT_DAMAGE = 8
 
-#: 0x5C11 ``value2`` picks the damage BAND, the 「$s」 in that template: five
+#: ⚠️ INVENTED — how the damage wording is banded: even shares of the TARGET's
+#: maximum 体力. The count of five is the client's. value2 picks the band,
 #: adjectives from 蚊に刺されたような to 痛烈な, measured in order 0-4 (round
 #: 135). ⚠️ INVENTED: what fraction of the target's 体力 belongs in each band.
 #: ⭐ Even fifths of the TARGET's maximum, so that the adjective means the same
@@ -433,7 +443,9 @@ EFFECT_DAMAGE = 8
 #: absolute thresholds, would call every hit on a captain 「a mosquito bite」.
 DAMAGE_BANDS = 5
 
-#: ⚠️ INVENTED. `p07_03`'s second winning branch requires 「ＮＰＣ側に十分な
+#: ⚠️ INVENTED — the 「did I hurt them enough」 threshold: what share of the other
+#: side's total 体力 has to be gone to count as 「十分」. `p07_03`'s second branch
+#: requires it,
 #: ダメージを与えている」 and never says how much is enough. This is that share
 #: of the opposing side's total 体力.
 #: ⭐ Half rather than any other fraction because the branch it guards is
@@ -443,7 +455,8 @@ DAMAGE_BANDS = 5
 #: does that. Knob: TMO_CLUB_DAMAGE_ENOUGH.
 DAMAGE_ENOUGH_SHARE = float(os.environ.get("TMO_CLUB_DAMAGE_ENOUGH") or 0.5)
 
-#: ⚠️ INVENTED. How often an NPC opponent defends instead of attacking.
+#: ⚠️ INVENTED — what share of its turns an NPC opponent spends defending rather
+#: than attacking.
 #: 0.0 -- always attack -- because that is the version with no second number in
 #: it, and because a first fight wants the damage rule visible rather than an
 #: opponent's temperament. See _battle_npc_choose for the whole of what an
@@ -451,7 +464,8 @@ DAMAGE_ENOUGH_SHARE = float(os.environ.get("TMO_CLUB_DAMAGE_ENOUGH") or 0.5)
 NPC_DEFEND_SHARE = float(os.environ.get("TMO_CLUB_NPC_DEFEND") or 0.0)
 
 
-#: ⚠️ INVENTED, and the one knob a first fight immediately proved necessary.
+#: ⚠️ INVENTED — the overall damage scale: the formula's result is multiplied by
+#: this. ⭐ It is the one knob the very first fight proved necessary.
 #: The subtraction above is in the right SHAPE and the wrong SIZE: median
 #: against median it lands 175, which empties the weakest opponent's 550 体力
 #: in 3.2 turns, and real card pairings reach 550 in a single turn. Eight

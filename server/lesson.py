@@ -615,7 +615,8 @@ def ng_params(reason: int) -> bytes:
 # 「１回の授業につき１０問出題されます」 (`p06_02`).
 QUESTIONS_PER_LESSON = 10
 
-# ⚠️ INVENTED, all three, and they are pacing rather than rules.
+# ⚠️ INVENTED — the classroom's pacing: how long a question is open and how long
+# each beat of the presentation holds. All three, and pacing rather than rules.
 #
 # `p06_02` puts a 「残り時間」 on the panel and says to answer before it reaches
 # zero, without ever saying what it starts at; nothing in `lesson.bin`,
@@ -647,7 +648,9 @@ MAX_ITEMS = 32
 # A ruler for the 結果発表, set by `/quiz ab` and nothing else. None means send
 # the two ability arrays equal, which is what a server with no 能力 subsystem
 # honestly reports; a list overrides one side of that so the screen has to draw
-# something. These are INVENTED measuring values, and unlike `/ab`'s sheet they
+# something. ⚠️ INVENTED — what each of the six abilities gains when a lesson
+# ends (None = nothing is added).
+# These are measuring values, and unlike `/ab`'s sheet they
 # are never written to a save — the point is to find out *whether* 0x6102's
 # twelve u16 reach the screen at all, which nothing recorded so far answers.
 #

@@ -80,7 +80,9 @@ LEVELS = (0, 1, 2)
 #
 # Which of the two *types* a question is has no such sentence behind it. `p06_02`
 # says only 「種類は「４択」か「○×」の２種類になります」, one line before the
-# 難易度 sentence that does specify. So the type roll below is INVENTED, and it
+# 難易度 sentence that does specify.
+# ⚠️ INVENTED — what share of questions come out as ○×, the rest being 四択.
+# So the type roll below is
 # is a coin flip because that is the least assuming shape, not because anything
 # says even odds.
 TYPE_ODDS_TRUEFALSE = 0.5

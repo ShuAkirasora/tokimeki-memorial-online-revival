@@ -228,7 +228,7 @@ REASON_NEUROSIS = 2
 REASON_ALREADY_SAT = 3       # 「１科目につき１回しか受けられません」
 REASON_NO_QUESTIONS = 4      # the bank has nothing for this subject at this 難易度
 
-# ── INVENTED ────────────────────────────────────────────────────────────────
+# ── INVENTED — how a 試験 is scored: points per question, how many, pass mark ──
 # Twenty questions and a 通知表 that wants 70, 80 and 80 out of the score.
 POINTS_PER_QUESTION = 5
 

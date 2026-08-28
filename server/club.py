@@ -472,7 +472,8 @@ KEYWORD_FULL_SCALE = {
     791: 90,  # マウス・トゥ・マウス
 }
 
-# ⚠️⚠️ INVENTED (the smallest-invention rule), and it is the ONLY invented number in this
+# ⚠️⚠️ INVENTED — how much one use of a キーワード adds to its 習熟度.
+# ⚠️ (the smallest-invention rule), and it is the ONLY invented number in this
 # loop — everything else around it is restored. How much one use of a
 # キーワード in クラブ活動 adds to its 習熟度.
 #
