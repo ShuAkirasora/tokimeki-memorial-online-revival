@@ -1007,6 +1007,13 @@ MSG_SV_NG_DRAMA_EVENT_MATCHING_START = 0xE001
 MSG_SV_OK_DRAMA_EVENT_MATCHING_START = 0xE002
 MSG_SV_NOTIFY_DRAMA_EVENT_LIST = 0xE003
 MSG_SV_NOTIFY_DRAMA_PARTY_LIST = 0xE004
+# The closing half of the same bracket, and it is not a formality: 「やめる」
+# sends the cast and then the client sits on 「サーバーと通信しています」 until
+# the notify comes back. Both are empty (`the shape reader`), so the whole
+# exchange is the pair of ids. Measured in round 217, the first time this
+# screen was ever open.
+MSG_CL_CAST_DRAMA_EVENT_MATCHING_END = 0xE005
+MSG_SV_NOTIFY_DRAMA_EVENT_MATCHING_END = 0xE006
 
 MSG_CL_QUERY_CHARA_MENU_DRAMA_EVENT_LIST = 0x4300
 MSG_SV_RESULT_CHARA_MENU_DRAMA_EVENT_LIST = 0x4301
@@ -1019,6 +1026,10 @@ MSG_SV_NOTIFY_CHARA_MENU_DRAMA_EVENT_LIST = 0x4302
 #   0x4200 QueryDramaeventMatchingPossible  npcId{categoryId,id}
 #       -> 0x4201 result, reason            both u8. The gate in front of the
 #          matching screen — the client asks an NPC whether matching is on.
+#          ⭐⭐ Both halves are measured now (round 217): the body is the
+#          charaId of the NPC that was right-clicked, and `result` is 0 for yes.
+#          A 1 opens error_message.bin's 0x4201 and prints the sentence `reason`
+#          selects — seven of them, none a success.
 #   0x5700 RequestDramaEventStart           scriptId, actorId (both u16)
 #       -> 0x5701 dramaEventId              u64. ⭐ The only message in the game
 #          that names a scriptId *and* which role the player takes, so this is
@@ -1026,8 +1037,10 @@ MSG_SV_NOTIFY_CHARA_MENU_DRAMA_EVENT_LIST = 0x4302
 #   0x5600 RequestNpcEventStart             npcEventId (u16)
 #       -> 0x5601 (empty) / 0x5602 reason
 #
-# ⚠️ Every reply below is a first guess at what "yes" looks like. `result=1`
-# and a made-up session id are the cheapest hypotheses, not measurements.
+# ⚠️ The replies below started as first guesses at what "yes" looks like, and
+# the first one to be tested was wrong: 0x4201 went out as `result=1` for two
+# hundred rounds on the reading that 1 = true. ⛔️ So a made-up session id is
+# still a guess, not a measurement.
 MSG_CL_QUERY_DRAMAEVENT_MATCHING_POSSIBLE = 0x4200
 MSG_SV_RESULT_DRAMAEVENT_MATCHING_POSSIBLE = 0x4201
 MSG_CL_REQUEST_NPC_EVENT_START = 0x5600

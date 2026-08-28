@@ -2203,12 +2203,22 @@ class MpsServer:
         print(f"[{self.tag}] drama <- {name} (0x{msg_type:04x}) params={params.hex()}")
 
         if msg_type == script.MSG_CL_QUERY_DRAMAEVENT_MATCHING_POSSIBLE:
-            # result, reason — both u8. Say yes and give no reason; if the
-            # client wanted a particular non-zero reason alongside a yes, the
-            # screen not opening is what will say so.
+            # result, reason — both u8, and the first byte is 0 for yes.
+            #
+            # ⚠️⚠️ It used to be 1 here, on the reading that 1 = true, and that
+            # was backwards: the first time this message ever flew (round 217,
+            # off a general_npc stood on the map by /cid) the client answered
+            # (1, 0) with 「キャラクター情報が不正です。」 — which is exactly
+            # error_message.bin's 0x4201 reason 0. So the client read the 1 as
+            # 「no」 and then printed the reason beside it. The seven sentences
+            # under 0x4201 are the whole vocabulary of this refusal, and none of
+            # them is a success, so there is no reading in which 1 means yes.
+            #
+            # The body the query carries is the charaId of the NPC that was
+            # right-clicked (0x0003001b = general_npc 3:27), not an npcId.
             return self._answer(
                 session, seen, script.MSG_SV_RESULT_DRAMAEVENT_MATCHING_POSSIBLE,
-                bytes((1, 0)),
+                bytes((0, 0)),
             )
 
         if msg_type == script.MSG_CL_REQUEST_NPC_MAP_OBJECT_EVENT:
@@ -2451,9 +2461,19 @@ class MpsServer:
                 )
             )
 
+        if msg_type == script.MSG_CL_CAST_DRAMA_EVENT_MATCHING_END:
+            # 「やめる」. A Cast takes no answer by the naming convention, and
+            # that convention is wrong here: round 217 pressed the button with
+            # nothing behind it and the client stopped on 「サーバーと通信して
+            # います」 until the connection was torn down. The notify is what
+            # closes the screen, and it is empty, so this is the whole exchange.
+            return self._answer(
+                session, seen, script.MSG_SV_NOTIFY_DRAMA_EVENT_MATCHING_END, b"",
+            )
+
         # The rest of the 0xE0xx family — party create/join/ready/start — is
-        # only reachable once the screen is up, so it is logged rather than
-        # answered until we have seen the screen come up at all.
+        # only reachable once a party exists, so it is logged rather than
+        # answered until we have seen one form.
         return None
 
     def _script_incoming(
@@ -7537,6 +7557,35 @@ class MpsServer:
             )
             for batch in range(0, len(act_entries), ADD_BATCH):
                 part = act_entries[batch : batch + ADD_BATCH]
+                reply += self._answer(
+                    session,
+                    sequence,
+                    MSG_SV_NOTIFY_CHARACTER_ADD,
+                    struct.pack(">H", len(part)) + b"".join(part),
+                )
+        if answer.id_probes and info is not None:
+            # /cid: the charaId is the variable this time, so it comes from the
+            # ruler instead of from a PROBE_ID_BASE. The looks in `info` are
+            # along for the ride and mostly ignored: for an id the client reads
+            # as a table reference it draws the chibi the table names, not the
+            # one this record describes.
+            id_entries = [
+                add_entry(
+                    chara_id,
+                    info,
+                    pos=(pos_x, pos_y),
+                    names=marker_names(label),
+                    map_id=session.map_id,
+                )
+                for label, pos_x, pos_y, chara_id in answer.id_probes
+            ]
+            print(
+                f"[{self.tag}] charaId ruler: {len(id_entries)} stand-ins "
+                f"on map {session.map_id} around {session.pos}: "
+                + " ".join(f"{label}=0x{cid:x}" for label, _, _, cid in answer.id_probes)
+            )
+            for batch in range(0, len(id_entries), ADD_BATCH):
+                part = id_entries[batch : batch + ADD_BATCH]
                 reply += self._answer(
                     session,
                     sequence,

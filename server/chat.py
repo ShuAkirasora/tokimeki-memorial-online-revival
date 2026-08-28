@@ -226,6 +226,7 @@ HELP = (
     "/maps <名前> 検索",
     "/dirs 方向の目盛りを置く",
     "/act [開始値] action の目盛りを置く (頭上アイコン探し)",
+    "/cid <cat>:<id> … charaId を指定して立たせる (先生・秘書・顧問はこれ)",
     "/npc <cat>:<id> <cat>:<id> NPC制御 (2つめが台本キー)",
     "/npca 登場済みの恋愛候補生を配置 / <始> <終> [分類] で生キー",
     "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
@@ -333,17 +334,17 @@ DIRECTION_PROBE_COLS = 4
 DIRECTION_PROBE_STEP = 3  # cells between neighbours; adjacent ones overlap
 
 
-def direction_probes(
-    map_id: int, pos: tuple[int, int], base: int = 0
-) -> list[tuple[str, int, int, int]]:
-    """``(label, x, y, direction)`` for the grid, kept inside the map.
+def probe_cells(
+    map_id: int, pos: tuple[int, int], count: int
+) -> list[tuple[int, int]]:
+    """The squares a ruler of ``count`` stand-ins occupies around the player.
 
-    ``base`` shifts the values the grid spells out, so ``/act 16`` reads the
-    next sixteen without moving the geometry. It defaults to the factory value
-    of 0, which is what every caller before round 150 asked for.
+    Split out of ``direction_probes`` so every ruler stands on the same grid:
+    the two rules below were each paid for once and there is no reason for a
+    second ruler to rediscover them.
     """
-    rows = -(-DIRECTION_PROBE_COUNT // DIRECTION_PROBE_COLS)
-    span_x = DIRECTION_PROBE_COLS * DIRECTION_PROBE_STEP
+    rows = -(-count // DIRECTION_PROBE_COLS)
+    span_x = min(count, DIRECTION_PROBE_COLS) * DIRECTION_PROBE_STEP
     span_y = rows * DIRECTION_PROBE_STEP
     width, height = mapgraph.size(map_id) or (span_x, span_y)
     # Shifted whole rather than clamped per cell: clamping would stack the
@@ -354,19 +355,50 @@ def direction_probes(
     # stand-in would share a square with the player, and two sprites with two
     # labels on one square is the reading the ruler can least afford to get wrong.
     top = min(max(pos[1] - span_y // 2 + 1, 0), max(height - span_y, 0))
-    probes = []
-    for slot in range(DIRECTION_PROBE_COUNT):
+    cells = []
+    for slot in range(count):
         column, row = slot % DIRECTION_PROBE_COLS, slot // DIRECTION_PROBE_COLS
-        value = base + slot
-        probes.append(
+        cells.append(
             (
-                str(value),
                 min(left + column * DIRECTION_PROBE_STEP, width - 1),
                 min(top + row * DIRECTION_PROBE_STEP, height - 1),
-                value,
             )
         )
-    return probes
+    return cells
+
+
+def direction_probes(
+    map_id: int, pos: tuple[int, int], base: int = 0
+) -> list[tuple[str, int, int, int]]:
+    """``(label, x, y, direction)`` for the grid, kept inside the map.
+
+    ``base`` shifts the values the grid spells out, so ``/act 16`` reads the
+    next sixteen without moving the geometry. It defaults to the factory value
+    of 0, which is what every caller before round 150 asked for.
+    """
+    cells = probe_cells(map_id, pos, DIRECTION_PROBE_COUNT)
+    return [
+        (str(base + slot), x, y, base + slot) for slot, (x, y) in enumerate(cells)
+    ]
+
+
+def id_probes(
+    map_id: int, pos: tuple[int, int], chara_ids: list[int]
+) -> list[tuple[str, int, int, int]]:
+    """``(label, x, y, charaId)`` — one stand-in per charaId, labelled with it.
+
+    The rulers above vary a field of the 74-byte entry while the charaId stays a
+    stand-in id; this one varies the charaId itself, because that is the one
+    number the client resolves through a table instead of drawing from the
+    record. FUN_0070F100 splits it into category (``id >> 16``) and row, and for
+    categories 1/2/3/7 it looks the row up in capture_npc / common_npc /
+    general_npc / training_npc and takes the chibi from there — so an entry
+    carrying 0x00030000 is the server asking for a general_npc, by name.
+    """
+    return [
+        (f"{cid >> 16}:{cid & 0xFFFF}", x, y, cid)
+        for cid, (x, y) in zip(chara_ids, probe_cells(map_id, pos, len(chara_ids)))
+    ]
 
 
 class ScriptAction(NamedTuple):
@@ -398,6 +430,8 @@ class Reply(NamedTuple):
     # Same shape, but the fourth number is the tinychara ``action`` field
     # instead of ``direction``; see /act.
     action_probes: list[tuple[str, int, int, int]] = []
+    # Same shape again, and the fourth number is the charaId itself; see /cid.
+    id_probes: list[tuple[str, int, int, int]] = []
     script: ScriptAction | None = None
     # A new capture_npc_event key for this session; see /nev.
     npc_event: tuple[int, int] | None = None
@@ -549,6 +583,30 @@ def respond(
     if word == "dirs":
         probes = direction_probes(map_id, pos)
         return Reply([f"方向 0-{DIRECTION_PROBE_COUNT - 1} を並べた"], probes=probes)
+
+    if word == "cid":
+        # Stand-ins whose charaId is dictated rather than minted. Every other
+        # way of putting a body on the map picks the id for you: a player gets
+        # the one their account owns, and a ちびキャラ gets whichever actor its
+        # placement script declares. The client, though, reads the id as a table
+        # reference — category in the top 16 bits, row in the bottom — and both
+        # the chibi it draws and the right-click menu it offers come out of the
+        # row it lands on. So the id is a question the server can ask, and this
+        # is the only command that asks it.
+        #
+        # No validation against the id tables, for the same reason /npc has
+        # none: server/ does not read reference/idlist/. Two numbers per
+        # stand-in is the whole contract, and an id nothing answers for is a
+        # legitimate probe rather than a mistake.
+        pairs = [parse_id_pair(text) for text in rest.split()]
+        if not pairs or None in pairs:
+            return Reply(["/cid <cat>:<id> ...  例: /cid 3:0 3:27 2:0"])
+        ids = [(pair[0] << 16) | pair[1] for pair in pairs if pair is not None]
+        probes = id_probes(map_id, pos, ids)
+        return Reply(
+            [f"charaId {len(ids)}体: " + " ".join(label for label, *_ in probes)],
+            id_probes=probes,
+        )
 
     if word == "npc":
         # This is the command that puts a chibi NPC on the map, and the working
