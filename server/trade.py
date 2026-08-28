@@ -90,6 +90,20 @@ from friends.py, groups.py and NG_REASON, which means their refusals are silent
 or wrong on screen -- known, not unknown, and each needs its own look at a real
 client before it moves.
 
+⭐⭐⭐ ROUND 214 REPLACED THE INFERENCE ABOVE WITH A READING, and corrected part
+of it. The client picks the table with a function, FUN_008163e9, which takes a
+message id and returns a pseudo id; its only caller (0x817048) builds the
+(id, reason) key from the answer. So:
+
+  * 0x5116 -> 0xFF09 exactly as round 213 measured on screen, which is what
+    tells us the function is the right one;
+  * 0x510D and 0x510E -> **0xFF04**, not 0xFF09. See NOTIFY_* below.
+  * ⚠️ 0xFF08, the list whose sentences say 「友達登録の申し込みに失敗しました」,
+    is produced NOWHERE in the whole image: 0x6405 and 0x640C, the two friend
+    refusals, are sent to 0xFF07 -- the 仲良しグループ list. So are 0xFF03 and
+    0xFF06 (デート, which has no messages at all) unreachable. Whatever else is
+    true of the note above, "friend refusals should come out of 0xFF08" is not.
+
 WHAT IS NOT SENT, AND WHY
 -------------------------
 Three sentences in the list need a number this project has not read:
@@ -200,6 +214,33 @@ REASON_STATE_ERROR = 22         # サーバーエラーが発生しました。�
 REASON_ITEMS_LOCKED = 23        # 現在、アイテムの操作が禁止されています。
 REASON_BAD_TRADE_INFO = 24      # アイテムトレードに失敗しました。（トレード情報が不正）
 REASON_ITEM_UPDATE_FAILED = 25  # アイテムトレードに失敗しました。（アイテム情報変更失敗）
+
+# ---------------------------------------------------------------------------
+# ⭐⭐⭐ AND THE TWO NOTIFIES ARE NOT LOOKED UP IN THAT LIST AT ALL. Round 214
+# found the client's own message-id -> table function (FUN_008163e9, one caller
+# at 0x817048, which builds the (id, reason) key), and it sends 0x510D and
+# 0x510E to **0xFF04** while every Ng and Error above goes to 0xFF09.
+#
+# 0xFF04 holds reasons 11..17 and nothing else, and it is shared by every
+# 申し込み subsystem's Notify -- ツーショット's 0x500A/0x5203, 仲良しグループ's
+# 0x6217/0x6222, 友達登録's 0x640D, ＧＭチャット's 0x6807/0x680B, and these two.
+# It is the list for 「the application you were part of is over, and here is
+# why」, which no per-subsystem list ever had.
+#
+# ⚠️ This is a fix, not an addition. The two notifies used to carry codes out of
+# 0xFF09 -- REASON_NONE on a clean close and REASON_BAD_TRADE_INFO (24) when a
+# partner disconnected -- and 0xFF04 has no row 0 and no row 24, which is exactly
+# what round 213 measured: a disconnected partner's window closed and left not
+# one character on screen. Nothing was wrong with the reading that a sentence
+# existed for it; the wrong part was which list to read it out of.
+# ---------------------------------------------------------------------------
+NOTIFY_FAILED = 11        # 申し込みに失敗しました。
+NOTIFY_DECLINED = 12      # 申し込みを断られました。
+NOTIFY_CANCELLED = 13     # 申し込みがキャンセルされました。
+NOTIFY_PARTNER_GONE = 14  # 相手がログアウトもしくはキャラクター選択画面に戻ったため、申し込みをキャンセルしました。
+NOTIFY_END = 15           # 未使用：：：終了メッセージ
+NOTIFY_OUT_OF_RANGE = 16  # 指定されたキャラクターが申し込み可能な範囲に存在しません。
+NOTIFY_OTHER_ACCEPTED = 17  # １つの申し込みが承諾されましたので、他の申し込みはキャンセルしました。
 
 #: 0x5104's ``reply``. ⚠️ The 勧誘 handshake taught that both buttons of a
 #: confirmation box can send the Ok message and put the answer in the byte

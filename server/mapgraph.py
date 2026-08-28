@@ -23,6 +23,9 @@ from pathlib import Path
 
 GRAPH_PATH = Path(__file__).resolve().parent.parent / "reference" / "mapgraph.json"
 
+#: A cell that belongs to no ツーショット place, as ``regions`` packs it.
+NO_PLACE = 0xFF
+
 
 def _load() -> dict[int, dict]:
     try:
@@ -34,7 +37,24 @@ def _load() -> dict[int, dict]:
     for entry in graph.values():
         packed = entry.get("walk")
         entry["walk"] = base64.b64decode(packed) if packed else None
+        runs = entry.get("regions")
+        entry["regions"] = _unpack_regions(base64.b64decode(runs)) if runs else None
     return graph
+
+
+def _unpack_regions(runs: bytes) -> bytes:
+    """``u8 place, u16 count`` pairs back into one byte per cell, row-major.
+
+    Written by ``the map exporter``'s ``Collision.region_runs``; both ends agree
+    that byte ``y * width + x`` is that cell's ツーショット place, with
+    ``NO_PLACE`` where the cell belongs to none.
+    """
+    out = bytearray()
+    for index in range(0, len(runs) - 2, 3):
+        place = runs[index]
+        count = runs[index + 1] | (runs[index + 2] << 8)
+        out.extend(bytes([place]) * count)
+    return bytes(out)
 
 
 GRAPH = _load()
@@ -79,6 +99,30 @@ def walkable(map_id: int, pos: tuple[int, int]) -> bool | None:
     width = entry["size"][0]
     index = pos[1] * width + pos[0]
     return bool(entry["walk"][index >> 3] & (1 << (index & 7)))
+
+
+def region(map_id: int, pos: tuple[int, int]) -> int | None:
+    """The ``twoshot_place`` key of the cell being stood on, or None.
+
+    ⭐ THE CELL SAYS SO ITSELF. Every cell of every ``cld_*.bin`` carries a u32
+    at +4, and each of the values that is not 0xffffffff is a key of
+    `twoshot_place.bin` — 屋外 is cut into its 27 outdoor places, 食堂 into 食堂
+    and 購買部, all 26 classrooms into the one place called 教室. That is where
+    MsgSvNotifyTwoshotStart's ``placeId`` comes from and it is not a guess; see
+    ``the map exporter``'s module docstring for the four checks, and
+    ``server/twoshot.py`` for what the answer is used for.
+
+    None means two different things that this server treats the same, because
+    the client cannot tell them apart either: the graph has no data for the map,
+    or the cell belongs to no place. 33% of all cells are the latter, and
+    refusing a twoshot there is exactly what 0xFF05 reason 11 says.
+    """
+    entry = GRAPH.get(map_id)
+    if entry is None or entry["regions"] is None or not inside(map_id, pos):
+        return None
+    width = entry["size"][0]
+    place = entry["regions"][pos[1] * width + pos[0]]
+    return None if place == NO_PLACE else place
 
 
 def nearest_walkable(

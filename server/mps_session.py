@@ -103,6 +103,7 @@ import shop
 import stress
 import trade
 import trainingroom
+import twoshot
 from common import ServiceConfig, ensure_runtime_dirs, inet_u32, write_packet_log
 
 # All 675 ids, recovered from tmo.exe's parser tables and the category base each
@@ -291,20 +292,20 @@ FIXED_REPLIES = {
     # family are handled below, and the refusals it does send now carry a real
     # reason out of error_message.bin's 0xFF09 list instead of this placeholder.
     #
-    # The one that is left is ツーショット: 0x5000..0x500A, 0x5200..0x5203 and
-    # 0x5400..0x5405 are a whole subsystem and a refusal is a rule nobody has
-    # read off the client. ⚠️ INVENTED, and what overturns it is implementing
-    # the family -- at which point this row comes out too.
-    # ⭐ When it does, the reason byte has a real list of its own waiting:
-    # error_message.bin files ツーショット's sentences under the pseudo id
-    # 0xFF05, the same way it files トレード's under 0xFF09. 0xFF05 reason 11,
-    # 「指定されたキャラクターがいる場所ではツーショットチャットを行うことは
-    # できません」, is also the first hint anyone has had about where
-    # MsgSvNotifyTwoshotStart's placeId comes from: the target's whereabouts.
+    # ⭐ ツーショット IS NO LONGER ONE OF THEM EITHER, and it was the last. Its
+    # row said the same thing 経歴's and トレード's did -- that a refusal was
+    # honest while the subsystem behind the icon did not exist -- and the thing
+    # that takes such a row out is building it. That is what server/twoshot.py
+    # does; 0x5000 and the other six MsgCl of the family are handled below, and
+    # its refusals now carry a real index into error_message.bin instead of this
+    # placeholder. ⭐⭐ The hint this row used to record -- that 0xFF05 reason 11
+    # was the only clue to MsgSvNotifyTwoshotStart's placeId -- paid off: the
+    # place is the cell's own, filed at +4 of every cld cell. See twoshot.py.
     #
-    # Reason byte is the NG_REASON placeholder defined below; the table is built
-    # before that name exists, hence the literal.
-    0x5000: (0x5002, b"\x00"),  # MsgClRequestTwoshotRequest -> MsgSvNgTwoshotRequest
+    # ⇒ NO ROW HERE IS A PLACEHOLDER REFUSAL ANY MORE. What is left in this
+    # table are answers that really are one constant -- an Ok with no payload,
+    # an empty list -- and the comments above are the record of the three that
+    # were not, and of what took each of them out.
 }
 
 MSG_CL_QUERY_CHARACTER_LIST = 0x0318
@@ -988,6 +989,15 @@ class _Session:
         self.trade_asking: int | None = None
         self.trade_with: int | None = None
         self.trade_table = trade.Table()
+        # ツーショットチャット, the fourth handshake of that shape and the one
+        # that takes the whole screen: 0x5004/0x5005 carry no charaId either, so
+        # one open application each way and no more. ``twoshot_with`` is the
+        # partner while the ウェストアップ screen is up. Nothing is saved and,
+        # unlike トレード, nothing outlives it at all -- when it ends there is
+        # not even an item move to write down. See server/twoshot.py.
+        self.twoshot_asked: int | None = None
+        self.twoshot_asking: int | None = None
+        self.twoshot_with: int | None = None
         # The client's own clock, as of the last tag-8 probe, plus when that
         # arrived by our monotonic clock. MsgSvNotifyCharaMove has to state an
         # arrivalTime on the client's timebase, and the tag-8 exchange is the
@@ -2866,6 +2876,11 @@ class MpsServer:
             # 0x580D and the fight's 0x5C1B exist to prevent. Ahead of the
             # removal below because it looks the partner up by charaId.
             self._trade_partner_gone(session)
+            # ⚠️ And the same for a twoshot, where it is worse: the survivor is
+            # not looking at a dead window on top of the map, they are looking at
+            # a ウェストアップ screen INSTEAD of the map, with nobody left to talk
+            # to and no message coming.
+            self._twoshot_partner_gone(session)
             # Who was watching this character, worked out before the removal for
             # the same reason: after it, _peers can no longer see the session at
             # all, and the answer would be the wrong map's crowd.
@@ -3305,6 +3320,7 @@ class MpsServer:
                 # Same treatment as the disconnect path, and for the same
                 # reason: a partner left in front of a dead trade window.
                 self._trade_partner_gone(session)
+                self._twoshot_partner_gone(session)
                 # Same treatment as the disconnect path: 「中断」 takes this
                 # player out of the fight, and the fight carries on for whoever
                 # is left rather than being taken off the board (Fighter.gone).
@@ -4184,6 +4200,12 @@ class MpsServer:
                 # its own family -- a window with one live button and three dead
                 # ones wedges on the first wrong click. See server/trade.py.
                 return self._trade(session, sequence, msg_type, params)
+            if msg_type in twoshot.HANDLED:
+                # ツーショットチャット: the menu's first icon and the ウェスト
+                # アップ screen behind it. Same argument, one size larger -- this
+                # one replaces the whole map view, so a half-answered family
+                # leaves a player with no way back. See server/twoshot.py.
+                return self._twoshot(session, sequence, msg_type, params)
             if msg_type in gmcall.HANDLED:
                 # ＧＭコール: the システムメニュー row that calls for a 風紀委員.
                 # Only the player's two messages are here -- the GM's own
@@ -8534,11 +8556,13 @@ class MpsServer:
         a leaver out of a 看板 room and the 0x5C1B that takes a fighter out of a
         fight, and for the same reason: the client cannot see the socket close.
 
-        ⚠️ A JUDGEMENT CALL ON THE REASON BYTE, not a reading. 0xFF09 has no
-        「切断による」 the way the room family's 0x580D reason 2 does, so the
-        nearest true sentence in the list is 24 「アイテムトレードに失敗しました。
-        （トレード情報が不正）」 -- the trade information really has stopped being
-        valid. A capture of the original doing this some other way replaces it.
+        ⭐⭐⭐ THE JUDGEMENT CALL THIS USED TO BE IS GONE. It used to send 24
+        out of 0xFF09 -- the nearest true sentence in the wrong list -- and round
+        213 watched the client close the window with nothing on screen, which is
+        what a missing row looks like. 0x510E is looked up in **0xFF04**, whose
+        row 14 is 「相手がログアウトもしくはキャラクター選択画面に戻ったため、
+        申し込みをキャンセルしました」: both halves of this path, spelled out by
+        the original. See trade.NOTIFY_* and server/twoshot.py.
         """
         partner = session.trade_with
         if partner is None:
@@ -8552,7 +8576,7 @@ class MpsServer:
               f"telling {partner}")
         self._push(other, self._answer(
             other, 0, trade.MSG_SV_NOTIFY_TRADE_CANCEL,
-            trade.reason(trade.REASON_BAD_TRADE_INFO),
+            trade.reason(trade.NOTIFY_PARTNER_GONE),
         ))
 
     def _trade_peer(self, session: "_Session") -> "_Session | None":
@@ -8675,7 +8699,7 @@ class MpsServer:
                       f"(answer={answer})")
                 self._push(other, self._answer(
                     other, 0, trade.MSG_SV_NOTIFY_TRADE_CANCEL,
-                    trade.reason(trade.REASON_NONE),
+                    trade.reason(trade.NOTIFY_DECLINED),
                 ))
                 return b""
             session.trade_with = asker
@@ -8712,14 +8736,15 @@ class MpsServer:
                   f"{other.chara_id}")
             self._trade_clear(session)
             self._trade_clear(other)
-            # ⭐ reason 0 on a clean close, and that is not the placeholder this
-            # server used to send everywhere: in the 0xFF09 list slot 0 is
-            # 「未使用：：：エラーなし」 -- the developers' own name for "nothing
-            # went wrong", marked 未使用 because a sentence saying so is never
-            # meant to reach the screen. A refusal below carries a real code; a
-            # normal ending carries this.
+            # ⭐ The reading that used to be here was right and pointed at the
+            # wrong list: a clean close does carry the developers' own name for
+            # 「nothing went wrong」, but 0x510D/0x510E read 0xFF04, where that
+            # slot is 15 「未使用：：：終了メッセージ」 rather than 0
+            # 「未使用：：：エラーなし」. Both are 未使用 because a sentence saying
+            # so is never meant to reach the screen; only one of them is in the
+            # list this message is looked up in.
             self._push(other, self._answer(
-                other, 0, notify_type, trade.reason(trade.REASON_NONE),
+                other, 0, notify_type, trade.reason(trade.NOTIFY_END),
             ))
             return self._answer(session, seen, ok_type, b"")
 
@@ -8968,6 +8993,404 @@ class MpsServer:
         return self._answer(
             session, 0, trade.MSG_SV_ERROR_TRADE_READY, trade.reason(code),
         )
+
+    # ------------------------------------------------------------------
+    # ツーショットチャット (0x5000..0x500A, 0x5200..0x5203, 0x5400..0x5405).
+    # See server/twoshot.py for the handshake, for the manual sentences that say
+    # what the screen is, for where placeId comes from, and for the client
+    # function that says which error table each refusal is looked up in.
+    # ------------------------------------------------------------------
+
+    def _forget_stale_twoshot(self, session: "_Session") -> None:
+        """Drop an application the other end can no longer answer for.
+
+        Same treatment and same argument as _forget_stale_trade: an application
+        is open exactly while both ends are connected, so clearing it when it is
+        next looked at keeps the rule in one place. An open *screen* is the part
+        that cannot be cleaned up quietly -- see _twoshot_partner_gone.
+        """
+        if session.twoshot_asked is not None:
+            other = self._session_of(session.twoshot_asked)
+            if other is None or other.twoshot_asking != session.chara_id:
+                session.twoshot_asked = None
+        if session.twoshot_asking is not None:
+            other = self._session_of(session.twoshot_asking)
+            if other is None or other.twoshot_asked != session.chara_id:
+                session.twoshot_asking = None
+
+    def _twoshot_clear(self, session: "_Session") -> None:
+        """Put one session back to having no twoshot and no application."""
+        session.twoshot_asked = None
+        session.twoshot_asking = None
+        session.twoshot_with = None
+
+    def _twoshot_partner_gone(self, session: "_Session") -> None:
+        """Tell whoever was in a twoshot with this session that it is over.
+
+        Called from the disconnect and 下校 paths next to _trade_partner_gone,
+        and it matters more than that one does: a trade window sits on top of
+        the map, a ウェストアップ screen replaces it. A survivor who is not told
+        is looking at a portrait of somebody who has left, with the map gone.
+
+        ⭐ THE REASON BYTE IS NOT A JUDGEMENT CALL HERE, which is what the
+        0xFF04 finding bought. 0x5203 is looked up in that list and its row 14 is
+        「相手がログアウトもしくはキャラクター選択画面に戻ったため、申し込みを
+        キャンセルしました」 -- both halves of this path, named. トレード had to
+        pick the nearest sentence out of the wrong list; this one has its own.
+        """
+        partner = session.twoshot_with
+        asked, asking = session.twoshot_asked, session.twoshot_asking
+        self._twoshot_clear(session)
+        for who, msg_type in ((partner, twoshot.MSG_SV_NOTIFY_TWOSHOT_END),
+                              (asked, twoshot.MSG_SV_NOTIFY_TWOSHOT_CANCEL),
+                              (asking, twoshot.MSG_SV_NOTIFY_TWOSHOT_CANCEL)):
+            if who is None:
+                continue
+            other = self._session_of(who)
+            if other is None:
+                continue
+            if (other.twoshot_with != session.chara_id
+                    and other.twoshot_asked != session.chara_id
+                    and other.twoshot_asking != session.chara_id):
+                continue
+            self._twoshot_clear(other)
+            print(f"[{self.tag}] ツーショット: charaId={session.chara_id} went "
+                  f"away, telling {who}")
+            self._push(other, self._answer(
+                other, 0, msg_type,
+                twoshot.reason(twoshot.NOTIFY_PARTNER_GONE),
+            ))
+
+    def _twoshot_peer(self, session: "_Session") -> "_Session | None":
+        """The other end of an open twoshot, if it is there and agrees.
+
+        Both sessions have to name each other, the rule _trade_peer states: a
+        one-sided ``twoshot_with`` is a bug this end would otherwise act on.
+        """
+        partner = session.twoshot_with
+        if partner is None:
+            return None
+        other = self._session_of(partner)
+        if other is None or other.twoshot_with != session.chara_id:
+            return None
+        return other
+
+    def _twoshot_place(self, session: "_Session") -> "int | None":
+        """The ツーショット place this session is standing in, or None.
+
+        One lookup, and mapgraph.region carries the argument for why the cell's
+        own field is the answer. None is both 「this map has no data」 and 「this
+        cell is in no place」, which is what 0xFF05 reason 11 refuses either way.
+        """
+        return mapgraph.region(session.map_id, session.pos)
+
+    def _twoshot(self, session: "_Session", seen: int,
+                 msg_type: int, params: bytes) -> bytes:
+        """The whole family. See server/twoshot.py.
+
+        The application half is the fourth of this shape -- 友達登録, 勧誘,
+        トレード, and now this -- and is refused on the same grounds when the
+        other side is offline, for the same reason: nothing in the family can
+        carry an application across a logout.
+
+        What is different from トレード is that the state after 承諾 is a screen
+        rather than a table: there is nothing to put in it, nothing to agree on,
+        and nothing to write down when it ends.
+        """
+        me = session.chara_id
+        self._forget_stale_twoshot(session)
+
+        if msg_type == twoshot.MSG_CL_REQUEST_TWOSHOT_REQUEST:
+            return self._twoshot_request(session, seen, params)
+
+        if msg_type in (twoshot.MSG_CL_OK_TWOSHOT_RESPONSE,
+                        twoshot.MSG_CL_NG_TWOSHOT_RESPONSE):
+            return self._twoshot_response(session, seen, msg_type, params)
+
+        if msg_type == twoshot.MSG_CL_REQUEST_TWOSHOT_CANCEL:
+            return self._twoshot_cancel(session, seen)
+
+        if msg_type == twoshot.MSG_CL_REQUEST_TWOSHOT_END:
+            return self._twoshot_end(session, seen)
+
+        # 0x5400 and 0x5403, which both need an open screen.
+        error_type = (twoshot.MSG_SV_ERROR_TWOSHOT_CHAT
+                      if msg_type == twoshot.MSG_CL_CAST_TWOSHOT_CHAT
+                      else twoshot.MSG_SV_ERROR_TWOSHOT_EMOTION)
+        other = self._twoshot_peer(session)
+        if other is None:
+            print(f"[{self.tag}] ツーショット 0x{msg_type:04x} from charaId={me}: "
+                  "not in a twoshot")
+            return self._answer(
+                session, seen, error_type,
+                twoshot.reason(twoshot.CHAT_NO_PARTNER),
+            )
+        if msg_type == twoshot.MSG_CL_CAST_TWOSHOT_CHAT:
+            return self._twoshot_chat(session, other, seen, params)
+        return self._twoshot_emotion(session, other, seen, params)
+
+    def _twoshot_request(self, session: "_Session", seen: int,
+                         params: bytes) -> bytes:
+        """0x5000: the first icon of the PC 交流メニュー, pressed.
+
+        ⭐ The place check is the one refusal this family has that the others do
+        not, and it is the reason twoshot.py went looking for placeId at all:
+        0xFF05 reason 11 says a twoshot cannot happen where the target is
+        standing, so the server has to know where that is and whether it is
+        anywhere. mapgraph.region answers both.
+        """
+        me = session.chara_id
+        target = twoshot.parse_target(params)
+        other = self._session_of(target) if target else None
+        if other is not None:
+            self._forget_stale_twoshot(other)
+        why = None
+        code = twoshot.REASON_REQUEST_FAILED
+        place = None
+        if target == me and me:
+            why, code = "oneself", twoshot.REASON_SELF
+        elif target == 0 or other is None:
+            why, code = "not online", twoshot.REASON_BAD_CHARA
+        elif session.twoshot_with is not None:
+            why, code = "already in a twoshot", twoshot.REASON_REQUEST_FAILED
+        elif session.twoshot_asked is not None:
+            why, code = "already asked somebody", twoshot.REASON_ALREADY_ASKED
+        elif (other.twoshot_with is not None
+              or other.twoshot_asking is not None
+              or other.twoshot_asked is not None
+              or session.twoshot_asking is not None):
+            # The four conditions トレード's own branch spells out, and the last
+            # one is again about us: a session already BEING asked cannot become
+            # an asker without leaving the client two open questions and one
+            # answer, because 0x5004/0x5005 carry no charaId.
+            why, code = "the target is busy", twoshot.REASON_TARGET_BUSY
+        else:
+            place = self._twoshot_place(other)
+            if place is None:
+                why, code = (f"map {other.map_id} {other.pos} is in no place",
+                             twoshot.REASON_BAD_PLACE)
+        if why is not None:
+            print(f"[{self.tag}] ツーショット from charaId={me} to {target} "
+                  f"refused: {why} (reason={code})")
+            return self._answer(
+                session, seen, twoshot.MSG_SV_NG_TWOSHOT_REQUEST,
+                twoshot.reason(code),
+            )
+        assert other is not None
+        session.twoshot_asked = target
+        other.twoshot_asking = me
+        print(f"[{self.tag}] ツーショット: charaId={me} is asking {target} "
+              f"(place {place})")
+        reply = self._answer(
+            session, seen, twoshot.MSG_SV_OK_TWOSHOT_REQUEST, b"")
+        self._push(other, self._answer(
+            other, 0, twoshot.MSG_SV_REQUEST_TWOSHOT_RESPONSE,
+            twoshot.response_params(me),
+        ))
+        return reply
+
+    def _twoshot_response(self, session: "_Session", seen: int,
+                          msg_type: int, params: bytes) -> bytes:
+        """0x5004 承諾 / 0x5005 拒否, and the screen opening if it is a yes."""
+        me = session.chara_id
+        answer = twoshot.parse_answer(params)
+        # The 勧誘 rule again: read the byte, not the message id.
+        if (msg_type == twoshot.MSG_CL_OK_TWOSHOT_RESPONSE
+                and answer != twoshot.ANSWER_YES):
+            msg_type = twoshot.MSG_CL_NG_TWOSHOT_RESPONSE
+        asker = session.twoshot_asking
+        other = self._session_of(asker) if asker is not None else None
+        if asker is None or other is None or other.twoshot_asked != me:
+            print(f"[{self.tag}] ツーショット answer from charaId={me}: "
+                  "nobody is asking, ignoring")
+            session.twoshot_asking = None
+            return b""
+        session.twoshot_asking = None
+        other.twoshot_asked = None
+        if msg_type == twoshot.MSG_CL_NG_TWOSHOT_RESPONSE:
+            print(f"[{self.tag}] ツーショット: charaId={me} declined {asker} "
+                  f"(answer={answer})")
+            self._push(other, self._answer(
+                other, 0, twoshot.MSG_SV_NOTIFY_TWOSHOT_CANCEL,
+                twoshot.reason(twoshot.NOTIFY_DECLINED),
+            ))
+            return b""
+        # ⚠️ The place is read again HERE rather than remembered from 0x5000.
+        # Between the two messages the person who was asked can walk, and the
+        # background belongs to where they are when the screen opens.
+        place = self._twoshot_place(session)
+        if place is None:
+            print(f"[{self.tag}] ツーショット: charaId={me} accepted {asker} but "
+                  f"map {session.map_id} {session.pos} is in no place")
+            self._push(other, self._answer(
+                other, 0, twoshot.MSG_SV_NOTIFY_TWOSHOT_CANCEL,
+                twoshot.reason(twoshot.NOTIFY_FAILED),
+            ))
+            return self._answer(
+                session, seen, twoshot.MSG_SV_NOTIFY_TWOSHOT_CANCEL,
+                twoshot.reason(twoshot.NOTIFY_FAILED),
+            )
+        session.twoshot_with = asker
+        other.twoshot_with = me
+        print(f"[{self.tag}] ツーショット: charaId={me} accepted {asker} "
+              f"(answer={answer}); place {place} "
+              f"({MAP_NAMES.get(session.map_id, '?')} {session.pos})")
+        # ⚠️ Push first, build second -- the sequence rule _trade_notify_both
+        # states and round 151 paid for.
+        self._push(other, self._answer(
+            other, 0, twoshot.MSG_SV_NOTIFY_TWOSHOT_START,
+            twoshot.start_params(place),
+        ))
+        return self._answer(
+            session, seen, twoshot.MSG_SV_NOTIFY_TWOSHOT_START,
+            twoshot.start_params(place),
+        )
+
+    def _twoshot_cancel(self, session: "_Session", seen: int) -> bytes:
+        """0x5007: an application withdrawn before anybody answered it.
+
+        ⚠️ Taken from either end of the application, the way トレード's 0x5106
+        is taken from either end of the trade. An asker pressing 「中止」 is the
+        path the client is expected to use; a session that is being asked has
+        0x5005 for saying no, but if it sends this instead the honest reading is
+        still 「申し込みがキャンセルされました」 and refusing it would leave two
+        clients waiting on each other.
+        """
+        me = session.chara_id
+        partner = session.twoshot_asked
+        if partner is None:
+            partner = session.twoshot_asking
+        if partner is None:
+            print(f"[{self.tag}] ツーショット cancel from charaId={me}: "
+                  "no application open")
+            return self._answer(
+                session, seen, twoshot.MSG_SV_NG_TWOSHOT_CANCEL,
+                twoshot.reason(twoshot.REASON_TARGET_NOT_ASKED),
+            )
+        other = self._session_of(partner)
+        session.twoshot_asked = None
+        session.twoshot_asking = None
+        print(f"[{self.tag}] ツーショット: charaId={me} withdrew the "
+              f"application with {partner}")
+        reply = self._answer(
+            session, seen, twoshot.MSG_SV_OK_TWOSHOT_CANCEL, b"")
+        if other is not None:
+            if other.twoshot_asked == me:
+                other.twoshot_asked = None
+            if other.twoshot_asking == me:
+                other.twoshot_asking = None
+            self._push(other, self._answer(
+                other, 0, twoshot.MSG_SV_NOTIFY_TWOSHOT_CANCEL,
+                twoshot.reason(twoshot.NOTIFY_CANCELLED),
+            ))
+        return reply
+
+    def _twoshot_end(self, session: "_Session", seen: int) -> bytes:
+        """0x5200: the 「ツーショットチャット終了ボタン」 of `manual/p05_03`.
+
+        ⚠️ THE REFUSAL IS THE ONE JUDGEMENT CALL IN THIS FILE. 0x5202 is looked
+        up in 0xFF05, and none of that list's twelve sentences means 「you are
+        not in a twoshot」 -- they are all about an application. 5
+        「キャラクターの情報が不正です」 is the least wrong of them and is not one
+        of the slots the original marked 未使用. An honest client cannot get
+        here: the button 「ツーショットチャット時のみ表示されます」.
+        """
+        me = session.chara_id
+        other = self._twoshot_peer(session)
+        if other is None:
+            self._twoshot_clear(session)
+            print(f"[{self.tag}] ツーショット end from charaId={me}: "
+                  "not in a twoshot")
+            return self._answer(
+                session, seen, twoshot.MSG_SV_NG_TWOSHOT_END,
+                twoshot.reason(twoshot.REASON_BAD_CHARA),
+            )
+        print(f"[{self.tag}] ツーショット: charaId={me} ended the twoshot with "
+              f"{other.chara_id}")
+        self._twoshot_clear(session)
+        self._twoshot_clear(other)
+        # ⭐ NOTIFY_END is 0xFF04's slot 15, 「未使用：：：終了メッセージ」 -- the
+        # developers' own name for this exact message, marked 未使用 because a
+        # normal ending is not something to put a sentence on screen about. The
+        # same shape as トレード's 「未使用：：：エラーなし」 on a clean close.
+        #
+        # ⭐⭐⭐ 0x5203 GOES TO BOTH ENDS, AND THAT IS MEASURED. This method's
+        # first draft copied トレード -- Ok to the asker, Notify to the peer --
+        # and the smoke was green because the smoke only checked that each
+        # message arrived. On a real client 0x5201 alone left the ウェストアップ
+        # screen standing: 三郎 pressed 終了, answered ［は い］, and went on
+        # looking at a portrait. Pushing a bare 0x5203 by hand from the console
+        # put the map back instantly. ⇒ 0x5201 is the receipt and 0x5203 is what
+        # tears the screen down, so this end needs it too -- exactly the symmetry
+        # 0x5006 already has, since it is 0x5006 that put the screen up on both
+        # sides in the first place.
+        notify = twoshot.reason(twoshot.NOTIFY_END)
+        self._push(other, self._answer(
+            other, 0, twoshot.MSG_SV_NOTIFY_TWOSHOT_END, notify,
+        ))
+        return (self._answer(session, seen, twoshot.MSG_SV_OK_TWOSHOT_END, b"")
+                + self._answer(
+                    session, 0, twoshot.MSG_SV_NOTIFY_TWOSHOT_END, notify))
+
+    def _twoshot_chat(self, session: "_Session", other: "_Session",
+                      seen: int, params: bytes) -> bytes:
+        """0x5400 -> 0x5401, to both ends and nobody else.
+
+        ⭐ The packer is chat.notify_params unchanged, and that is a reading off
+        the client rather than a resemblance: Input_MsgSvNotifyTwoshotChat's
+        vtable[0] is 0x8D6230, the same deserializer Input_MsgSvNotifyNormalChat
+        uses, so the buffer sizes it is clamped to are this message's own.
+
+        ⚠️ NO 「/」 COMMANDS IN HERE, deliberately. The console's commands are
+        map commands -- /go, /npc, /act -- and the map is not on screen during a
+        twoshot. A line typed here is a line, and it goes to one person.
+        """
+        me = session.chara_id
+        said = chat.parse_cast(params)
+        info = self._chars(session).find(me)
+        who = display_name(info) if info else "?"
+        print(f"[{self.tag}] ツーショット chat {who} -> {other.chara_id}: {said!r}")
+        body = chat.notify_params(me, who, said)
+        self._push(other, self._answer(
+            other, 0, twoshot.MSG_SV_NOTIFY_TWOSHOT_CHAT, body))
+        return self._answer(
+            session, seen, twoshot.MSG_SV_NOTIFY_TWOSHOT_CHAT, body)
+
+    def _twoshot_emotion(self, session: "_Session", other: "_Session",
+                         seen: int, params: bytes) -> bytes:
+        """0x5403 -> 0x5404. A face in here, not an icon over a head.
+
+        ⭐ chat.lesson_emotion_params again by the same kind of evidence:
+        Input_MsgSvNotifyTwoshotEmotion and Input_MsgSvNotifyLessonEmotion share
+        deserializer 0x8F1840.
+
+        ⚠️⚠️ THE RANGE CHECK PROTECTS THE CLIENT FROM A CRASH, and its lower
+        bound was paid for on screen. `wu_emotion` has faces for 0..10 and then
+        nothing until 24, so 11..17 -- 疑問 ひらめき かがやき 沈黙 グー チョキ
+        パー -- have nothing to change to, and a 0x5404 carrying one of them
+        kills tmo.exe with an access violation. ⭐ 0 is 表情デフォルト and the
+        client casts it on its own every ten seconds to put the face back;
+        refusing that is what round 214's first draft did, and it papered the
+        screen with 「受信したチャットデータが不正です」. See
+        twoshot.EMOTION_WITH_FACE for both measurements.
+        """
+        me = session.chara_id
+        emotion = twoshot.parse_emotion(params)
+        if emotion not in twoshot.EMOTION_WITH_FACE:
+            print(f"[{self.tag}] ツーショット emotion {emotion} from charaId={me} "
+                  "refused: wu_emotion has no face for it (sending it on would "
+                  "crash the client)")
+            return self._answer(
+                session, seen, twoshot.MSG_SV_ERROR_TWOSHOT_EMOTION,
+                twoshot.reason(twoshot.CHAT_BAD_DATA),
+            )
+        print(f"[{self.tag}] ツーショット emotion charaId={me} -> "
+              f"{other.chara_id}: {emotion}")
+        body = chat.lesson_emotion_params(me, emotion)
+        self._push(other, self._answer(
+            other, 0, twoshot.MSG_SV_NOTIFY_TWOSHOT_EMOTION, body))
+        return self._answer(
+            session, seen, twoshot.MSG_SV_NOTIFY_TWOSHOT_EMOTION, body)
 
     def _friends(self, session: "_Session", seen: int,
                  msg_type: int, params: bytes) -> bytes:
