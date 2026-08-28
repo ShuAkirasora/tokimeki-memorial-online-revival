@@ -4867,7 +4867,6 @@ class MpsServer:
                 return None
             store = self.accounts.owner_of(chara_id)
             club_id = store.in_club(chara_id) if store else 0
-            sheet = store.ability(chara_id) if store else None
             print(f"[{self.tag}] 練習 start: charaId={chara_id:#x} "
                   f"npcId={npc_id} (u16, common_npc row) "
                   f"club={club_id} ({clubdata.summary()})")
@@ -4890,7 +4889,9 @@ class MpsServer:
                               "no club feed on this server (not a game rule)")
             if self._practice_deck(chara_id) is None:
                 return refuse(clubbattle.NPC_START_NO_DECK, "no 部活用 deck")
-            level = sheet.club_level[club_id] if sheet else 0
+            member = store.club(chara_id) if store else None
+            unlocked = (member.battle_level_of(club_id) if member
+                        else club.FIRST_BATTLE_LEVEL)
             top = clubdata.ladder_top(club_id)
             if top <= 0:
                 # ⭐ A restored refusal for a restored condition: reason 9 is
@@ -4908,15 +4909,19 @@ class MpsServer:
             # 0x5C03 with 00. So both messages number the ladder from zero and
             # this one names the highest index the player may pick -- send 0
             # and exactly レベル１ is offered.
-            # ⭐ Which lands the reading of what the number IS: 部活レベル
-            # straight out of the save, no adjustment. 「選択したレベルの対戦で
-            # 勝利すると、次のレベルを選択できるようになります」 then says a win
-            # raises it, and a fresh member at 部活レベル 0 correctly gets one
-            # row. ⚠️ Still a reading -- what is measured is the 0-basing, not
-            # that 部活レベル is the counter the original used.
-            offered = max(0, min(top - 1, level))
+            # ⭐⭐⭐ AND WHAT THE NUMBER IS IS RESTORED AS OF ROUND 223. Round
+            # 222 sent 部活レベル straight out of the save and said so as a
+            # reading; p07_03 step 1 names the counter outright and it is a
+            # different one -- 「対戦レベルは、選択したレベルの対戦で勝利すると、
+            # 次のレベルを選択できるようになります」. So this is a per-club
+            # count of rungs WON, kept on the Membership, and 部活レベル (which
+            # 「クラブ活動に参加することにより」 raises) is not it. A fresh
+            # member is at 対戦レベル１ and gets exactly one row, which is what
+            # the old reading also produced -- the two only part company after
+            # the first fight, which is why 222 could not tell them apart.
+            offered = max(0, min(top - 1, unlocked - 1))
             print(f"[{self.tag}] 練習 level select: club={club_id} "
-                  f"部活Lv={level} → offering 対戦レベル1..{offered + 1} "
+                  f"対戦Lv 上限={unlocked} → offering 対戦レベル1..{offered + 1} "
                   f"(wire {offered}, 0-based) of {top}")
             return self._answer(
                 session, sequence, clubbattle.MSG_SV_NOTIFY_NPC_BATTLE_START,
@@ -5006,6 +5011,7 @@ class MpsServer:
         battle = self.battles.open(fighters)
         battle.npc_fight = True
         battle.player_team = 0
+        battle.npc_level = level
         deck_id = self._practice_deck(chara_id)
         if deck_id is not None:
             me.deck_id = deck_id
@@ -5400,12 +5406,45 @@ class MpsServer:
             # ⚠️ A 奥義 has 攻撃力 and no 守備力 column at all -- the table has
             # no such field, so a 奥義 played as a shield shields nothing. That
             # is the table's shape, not a gap here.
-            # ⚠️⚠️ NOT IMPLEMENTED, and the rows are sitting right there:
-            # 消費気力, 成功率, the three ±% modifiers, the two heals and the
-            # ステータス異常 this skill inflicts. Today only 攻撃力 is acted on.
+            # ⭐ The rest of the row -- 消費気力, 成功率, the three ±%, the two
+            # heals, the ステータス異常 -- is acted on by _battle_skill_effects,
+            # which is where the whole of a 奥義 that is not damage lives.
             return (row["power"], 0, 0.0,
                     f"奥義 {category}:{skill_id} 攻{row['power']}")
         return (0, 0, 0.0, f"kind {kind}")
+
+    def _battle_skill_row(self, kind: int, payload: bytes) -> "dict | None":
+        """The `clubskill.bin` row behind a played card, or None if it is not a 奥義."""
+        if kind != club.DECK_ITEM_CLUB_SKILL or len(payload) != club.DECK_ITEM_BYTES:
+            return None
+        category, skill_id, _completeness = struct.unpack("<HHB", payload[:5])
+        return clubdata.club_skill(category, skill_id)
+
+    def _battle_card_ability(self, kind: int, payload: bytes) -> "int | None":
+        """Which 能力パラメータ this card raises when it is played, 0-5 or None.
+
+        ⭐⭐ RESTORED end to end: 「使用したキーワードの能力属性や、使用した部活
+        奥義のクラブ属性によって、能力パラメータが増加します」 (p07_03), and both
+        tables carry the column the sentence names -- `keyword.bin` +0x2c
+        (261 rows, agreeing with the six id blocks with no exceptions) and
+        `clubskill.bin` +0xbc (57 rows, 0-5). ⚠️ The manual says a 奥義 goes by
+        its 「クラブ属性」 and the row has BOTH a クラブ属性 (its club, 1-8) and
+        an 能力属性 (0-5); the six 能力パラメータ are what the sentence is about,
+        so the 0-5 column is the one that can answer it and the other cannot.
+        """
+        if len(payload) != club.DECK_ITEM_BYTES:
+            return None
+        if kind == club.DECK_ITEM_KEYWORD:
+            keyword_id = struct.unpack_from("<H", payload)[0]
+            row = clubdata.keyword(keyword_id)
+        else:
+            row = self._battle_skill_row(kind, payload)
+        if row is None:
+            return None
+        axis = row.get("ability")
+        if axis is None or not 0 <= int(axis) < clubbattle.NUM_OF_CHARA_ABILITY:
+            return None
+        return int(axis)
 
     def _battle_strike(
         self, session: "_Session", battle: "clubbattle.Battle",
@@ -5453,6 +5492,13 @@ class MpsServer:
         guard = self._battle_deck_item(target)
         if guard is not None:
             _atk, shield, _m, shield_label = self._battle_power(*guard)
+        # ⭐ The ±% a 部活奥義 put on either side. 100 on both is the untouched
+        # case and the arithmetic below is then exactly what round 222 shipped.
+        # ⚠️ They scale the CARD, because that is where 攻撃力/守備力 live at
+        # all -- a fighter has no attack of their own to scale.
+        pct = (attacker.attack_pct, target.defence_pct)
+        attack = attack * attacker.attack_pct // clubbattle.PERCENT_BASE
+        shield = shield * target.defence_pct // clubbattle.PERCENT_BASE
         hit = clubbattle.damage(
             attack, shield, mastery, target_attacking=not target.defending
         )
@@ -5461,7 +5507,9 @@ class MpsServer:
         print(f"[{self.tag}] battle damage: charaId={attacker.chara_id:#x} "
               f"{label} → charaId={target_id:#x} "
               f"({'防御' if target.defending else '攻撃'} {shield_label}) "
-              f"= {taken} 体力 {target.vitality + taken}→{target.vitality}"
+              + ("" if pct == (clubbattle.PERCENT_BASE, clubbattle.PERCENT_BASE)
+                 else f"[攻{pct[0]}% 守{pct[1]}%] ")
+              + f"= {taken} 体力 {target.vitality + taken}→{target.vitality}"
               f"/{target.max_vitality} band={band}"
               f"{' ⇒ リタイヤ' if target.retired else ''}")
         return self._tr_cast(
@@ -5471,6 +5519,193 @@ class MpsServer:
             ),
             everyone,
         )
+
+    def _battle_skill_cast(
+        self, actor: "clubbattle.Fighter", row: "dict", label: str,
+    ) -> bool:
+        """Pay a 部活奥義's 消費気力 and roll its 成功率. Did it land?
+
+        ⭐⭐ BOTH GATES ARE THE TABLE'S OWN and neither is invented here:
+
+        * 消費気力 (`clubskill.bin` +0xb6, 2-50) is a cost the CLIENT already
+          checks for itself -- both of its reads of that column are
+          ``cmp al, byte ptr [esi+0xb6]``, which is 「is there enough」 -- so a
+          skill whose cost is not covered is one the original refused. This end
+          keeps its own 気力 count because the client never reports its own.
+        * 成功率 (+0xc3, %) is pinned by a second witness inside the same file:
+          the 失敗時 line at +0x170 is non-empty on exactly the thirteen rows
+          whose rate is under 100, with no exceptions. A table that carries a
+          「it did not work」 sentence for precisely the rows that can fail is
+          one that means this column to be rolled.
+
+        ⚠️ A FAILURE SENDS NOTHING, and that is a hole with a known shape.
+        The client owns the 失敗時 sentence (it is in its copy of the record),
+        but WHICH message tells it to draw that sentence is unread -- the 0x5C11
+        sweep found 5/6/7 and 17/20-29 drawing nothing at all, so there is no
+        measured 「this missed」 type to send. A quiet failure is the honest
+        rendering: the action still plays, and nothing happens.
+        """
+        cost = int(row.get("energy") or 0)
+        if not actor.spend_energy(cost):
+            print(f"[{self.tag}] battle skill: charaId={actor.chara_id:#x} "
+                  f"{label} needs 気力 {cost}, has {actor.energy} — no effect")
+            return False
+        rate = int(row.get("rate") or 100)
+        if rate < 100 and random.randrange(100) >= rate:
+            print(f"[{self.tag}] battle skill: charaId={actor.chara_id:#x} "
+                  f"{label} 成功率 {rate}% — FAILED (気力 {cost} spent, "
+                  f"{actor.energy} left; nothing sent, see _battle_skill_cast)")
+            return False
+        if cost:
+            print(f"[{self.tag}] battle skill: charaId={actor.chara_id:#x} "
+                  f"{label} 消費気力 {cost} → {actor.energy}/{actor.max_energy}"
+                  + (f", 成功率 {rate}% passed" if rate < 100 else ""))
+        return True
+
+    def _battle_skill_effects(
+        self, session: "_Session", battle: "clubbattle.Battle",
+        actor: "clubbattle.Fighter", row: "dict", label: str,
+        target_id: int, everyone: "list[int]",
+    ) -> bytes:
+        """Everything a 部活奥義 does that is not damage: ±%, the two heals, 異常.
+
+        ⭐⭐ WHO IT LANDS ON IS THE TABLE'S: ``side`` (+0xc2, 0 敵 / 1 味方) and
+        ``target`` (+0xb4, bit0 味方 / bit1 全体) agree with each other on all
+        57 rows, and their four combinations are exactly the four phrasings the
+        descriptions use -- (0,0) 相手一人, (0,2) 相手パーティ全体, (1,1) 味方
+        一人, (1,3) 味方全員. ⚠️ Two rows carry ``target`` 15 (`2:6`, `3:2`);
+        bits 2 and 3 are unclaimed, but bit1 is set on both and both are
+        ally-side buffs, so they read as 全体 without having to name the other
+        two bits.
+
+        ⚠️ A single-target ally skill uses the targetId the client chose, and
+        falls back to the caster when that names nobody on the right side. In
+        練習 the player's side is one character, so the two are the same thing;
+        the fallback is for 自主トレ, where they need not be.
+
+        ⚠️⚠️ WHICH COLUMNS ARE APPLIED SILENTLY, and why it is not an omission:
+        a ±% ABOVE 100 and a clubstatus 0 CURE both lack a 0x5C11 type. The
+        sweep of types 0-29 (rounds 97/98) found 「攻撃力が N％ 下がった」 at 14,
+        15 and 16 and nothing at all at 17 and 20-29, so the client has a line
+        for the debuff and none for the buff. The effect is real either way --
+        this server's own numbers move -- and the screen simply does not
+        narrate it. See the SKILL EFFECTS block in clubbattle.
+        """
+        friendly = bool(row.get("side"))
+        whole = bool(int(row.get("target") or 0) & 2)
+        side = [f for f in battle.active()
+                if (f.team == actor.team) == friendly]
+        if whole:
+            targets = side
+        else:
+            chosen = battle.find(target_id)
+            targets = [chosen] if chosen in side else ([actor] if friendly else [])
+        if not targets:
+            return b""
+        out = b""
+        for target in targets:
+            for column, field, effect_type, name in (
+                ("atkPct", "attack_pct", clubbattle.EFFECT_ATTACK_PCT, "攻撃力"),
+                ("defPct", "defence_pct", clubbattle.EFFECT_DEFENCE_PCT, "防御力"),
+                ("spdPct", "speed_pct", clubbattle.EFFECT_SPEED_PCT, "素早さ"),
+            ):
+                percent = int(row.get(column) or clubbattle.PERCENT_BASE)
+                if percent == clubbattle.PERCENT_BASE:
+                    continue
+                now = target.modify_percent(field, percent)
+                drawn = now < clubbattle.PERCENT_BASE
+                print(f"[{self.tag}] battle skill: {label} {name} x{percent}% "
+                      f"→ charaId={target.chara_id:#x} at {now}%"
+                      f"{'' if drawn else ' (applied, no line for a buff)'}")
+                if drawn:
+                    out += self._tr_cast(
+                        session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                        clubbattle.effect_params(
+                            target.chara_id, effect_type, now, 0),
+                        everyone,
+                    )
+            heal_hp, heal_ep = target.restore(
+                int(row.get("healHp") or 0), int(row.get("healEp") or 0))
+            for amount, effect_type, name, now, ceiling in (
+                (heal_hp, clubbattle.EFFECT_VITALITY, "体力",
+                 target.vitality, target.max_vitality),
+                (heal_ep, clubbattle.EFFECT_ENERGY, "気力",
+                 target.energy, target.max_energy),
+            ):
+                if amount <= 0:
+                    continue
+                print(f"[{self.tag}] battle skill: {label} {name} +{amount} "
+                      f"→ charaId={target.chara_id:#x} {now}/{ceiling}")
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                    clubbattle.effect_params(
+                        target.chara_id, effect_type, amount, 0),
+                    everyone,
+                )
+            ailment = int(row.get("ailment", clubbattle.AILMENT_NONE))
+            if ailment == clubbattle.AILMENT_NONE:
+                continue
+            target.afflict(ailment)
+            effect_type = clubbattle.AILMENT_EFFECT.get(ailment)
+            print(f"[{self.tag}] battle skill: {label} ステータス異常 "
+                  f"{ailment} → charaId={target.chara_id:#x}"
+                  + (f" (0x5C11 type={effect_type})" if effect_type is not None
+                     else " — 通常, a cure, and the client has no line for it")
+                  + (" ⇒ リタイヤ" if target.retired else ""))
+            if effect_type is not None:
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                    clubbattle.effect_params(target.chara_id, effect_type, 0, 0),
+                    everyone,
+                )
+        return out
+
+    def _battle_reward_play(
+        self, fighter: "clubbattle.Fighter", kind: int, payload: bytes,
+    ) -> None:
+        """What playing one card EARNS its player. 【練習に参加すると】.
+
+        ⭐⭐⭐ THE HEADING IS THE RULE: p07_03 and p07_04 both hang this on
+        「参加すると」, not on winning, and both the β and the later generation
+        of both pages agree. So a card played is a card credited, whatever the
+        fight ends up doing.
+
+        Two things, and each is half restored:
+
+        * 能力パラメータ -- WHICH one is the card's own 能力属性 column
+          (_battle_card_ability), HOW MUCH is invented
+          (clubbattle.ABILITY_GAIN_PER_USE).
+        * クラブの素 -- WHICH ones the card can yield are its own eight +0x36
+          slots, WITH WHAT CHANCE is invented (clubbattle.SOZAI_DROP_CHANCE).
+          ⚠️ キーワード only: a 部活奥義 has no such column, which is the
+          table's shape and not an omission here.
+
+        ⚠️ Accumulated on the Fighter and spent once at the end, rather than
+        written straight into the save. Two reasons and both are load-bearing:
+        0x5C1A wants a before AND an after, which needs the fight's total in
+        one piece; and a fight that is abandoned half way should not have paid
+        out through a dozen separate writes.
+
+        ⚠️ NPC opponents are skipped by the caller -- they have no save.
+        """
+        axis = self._battle_card_ability(kind, payload)
+        if axis is not None:
+            fighter.ability_gain[axis] += clubbattle.ABILITY_GAIN_PER_USE
+        if kind != club.DECK_ITEM_KEYWORD or len(payload) != club.DECK_ITEM_BYTES:
+            return
+        row = clubdata.keyword(struct.unpack_from("<H", payload)[0])
+        slots = (row or {}).get("sozai") or []
+        if not slots or random.random() >= clubbattle.SOZAI_DROP_CHANCE:
+            return
+        category, _, item_id = random.choice(slots).partition(":")
+        try:
+            key = (int(category), int(item_id))
+        except ValueError:
+            return
+        fighter.items_won.append(key)
+        print(f"[{self.tag}] battle reward: charaId={fighter.chara_id:#x} "
+              f"クラブの素 {key[0]}:{key[1]} off this play "
+              f"(chance {clubbattle.SOZAI_DROP_CHANCE})")
 
     def _battle_mastery(
         self, fighter: "clubbattle.Fighter", kind: int, payload: bytes,
@@ -5578,13 +5813,15 @@ class MpsServer:
         0x5C0D roster instead of reading it off the plays. Also off on every
         live path, also a permutation of this fight's own fighters.
 
-        ⚠️⚠️ NOTHING HAPPENS to anybody as a result. 0x5C0E states the card and
-        the target, 0x5C0F says that character is done, and no 体力 moves: the
-        damage rules are not restored, and 0x5C10/0x5C11 (Reaction/Effect) are
-        not written. What this restores is the SHAPE of a turn, which is what
-        the client is stuck waiting for; the arithmetic inside it is a separate
-        piece of work and inventing it here would put numbers on the wire that
-        no reading supports.
+        ⚠️⚠️ THIS PARAGRAPH USED TO SAY 「NOTHING HAPPENS to anybody as a
+        result」, and it was true from round 88 to round 221. It is not any
+        more, and both halves arrived in the open: round 222 made damage real
+        (_battle_strike), round 223 wired the rest of a 部活奥義's row
+        (_battle_skill_cast / _battle_skill_effects) and what a played card
+        earns its player (_battle_reward_play). 0x5C11 goes out from inside
+        this stream, which is the only place it reaches a client at all.
+        ⚠️ 0x5C10 Reaction is still not written — see _battle_strike for the
+        two numbers it would need and neither source has.
 
         ⚠️ The order goes out AFTER the cards have been looked up, so 0x5C0D
         names exactly the characters the 0x5C0E stream is about to mention. The
@@ -5683,10 +5920,31 @@ class MpsServer:
             # deckItem 0x5C0E names precisely so a kind no deck here can hold
             # can be put on screen, and computing damage from the swapped card
             # would make the probe move gameplay.
-            if is_attck and battle.card_probe is None:
+            # ⭐⭐ THE 奥義's OWN GATES, ahead of the hit: 消費気力 has to be paid
+            # and 成功率 has to be rolled before anything lands, and a skill
+            # that fails does no damage either. A キーワード has neither column
+            # and goes straight through, which is what every round up to 222
+            # did for both kinds.
+            skill = self._battle_skill_row(kind, payload)
+            landed = True
+            if skill is not None and battle.card_probe is None:
+                landed = self._battle_skill_cast(
+                    fighter, skill, club.describe_deck_item(kind, payload))
+            if is_attck and landed and battle.card_probe is None:
                 out += self._battle_strike(
                     session, battle, fighter, kind, payload, target_id, everyone
                 )
+            if skill is not None and landed and battle.card_probe is None:
+                out += self._battle_skill_effects(
+                    session, battle, fighter, skill,
+                    club.describe_deck_item(kind, payload), target_id, everyone,
+                )
+            # ⭐ 【練習に参加すると】 — credited for the play, not for the win.
+            # ⚠️ Behind the same probe guard as the two above and behind the
+            # mastery flag, so a /cb replay of a turn cannot pay twice.
+            if (credit_mastery and battle.card_probe is None
+                    and not clubdata.is_npc(fighter.chara_id)):
+                self._battle_reward_play(fighter, kind, payload)
             # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb fxnext armed it. This is
             # the one place a probe alters a real resolve, and it has to be:
             # round 90 measured that a second action stream inside an
@@ -5813,6 +6071,167 @@ class MpsServer:
         gauge = sheet.club_gauge[club_id] if 0 <= club_id < len(sheet.club_gauge) else 0
         return (params, level, gauge)
 
+    def _battle_payout(
+        self, battle: "clubbattle.Battle", win_team: int,
+    ) -> "dict[int, dict]":
+        """Hand out everything one finished クラブ活動 is worth. WRITES SAVES.
+
+        Returns ``{charaId: {before, after, items, book, hurt}}`` where before
+        and after are each ``(six ability params, 部活Lv, gauge, 合成可数)`` --
+        the two halves 0x5C1A wants side by side.
+
+        ⭐⭐⭐ FOUR THINGS MOVE, and the manual gates each one differently:
+
+        * 能力パラメータ -- 【練習に参加すると】, per card played. Already
+          accumulated on each Fighter as the fight went (_battle_reward_play);
+          this is where the total is spent.
+        * 部活レベル -- 「クラブ別に存在する熟練度…クラブ活動に参加することにより
+          アップします」 (p07_01). One activity, one gauge step, carrying into
+          the level. ⚠️ Per club and only for a fighter who HAS one: 自主トレ
+          takes all comers 「所属クラブに関係なく」, and a 無所属 fighter has no
+          gauge to fill.
+        * クラブの素 -- rolled per play, granted here.
+        * 奥義の書 -- 練習 only (p07_04 drops it from the same sentence), one
+          roll for the activity, and the eligible books are the club's own
+          eight. ⚠️ It goes into the INVENTORY as well as into 0x5C1A's book
+          field: the two tables share one key space and one アイテム window, so
+          a book the result screen names and the bag does not have would be a
+          reward that does not exist.
+        * 【怪我】 -- 「ストレスが高い状態でクラブ活動に参加すると怪我をする場合
+          があります」. The stress charge happens HERE rather than after the
+          send, because 0x5C1A carries a ``hurt`` byte and a byte cannot be
+          filled in after the message has gone out.
+
+        ⚠️ WIN_TEAM IS NOT A GATE FOR ANY OF THEM. It is taken for the one
+        thing p07_03 does hang on winning -- 「対戦レベルは、選択したレベルの
+        対戦で勝利すると、次のレベルを選択できるようになります」 -- and that is
+        a gate on what may be PICKED next time, not a reward.
+
+        ⚠️ ``hurt`` is sent as a flag rather than as a 体調 index. The field is
+        named 【怪我】 and it is one byte; whether the client reads it as a
+        boolean or as an index into `chara_condition.bin` is UNTESTED, and 1 is
+        the value both readings agree on (1 is 怪我's own row only under the
+        boolean reading, but 0 is 「no」 under either).
+        """
+        payout: "dict[int, dict]" = {}
+        for fighter in battle.fighters:
+            params, level, gauge = self._battle_sheet(fighter)
+            before = (params, level, gauge, clubbattle.gousei_entry_max(level))
+            record = {"before": before, "after": before,
+                      "items": [], "book": None, "hurt": 0}
+            payout[fighter.chara_id] = record
+            store = self.accounts.owner_of(fighter.chara_id)
+            sheet = store.ability(fighter.chara_id) if store else None
+            if store is None or sheet is None:
+                # An NPC, or a character this server cannot find. Nothing to
+                # pay and nowhere to put it -- before == after, as before.
+                continue
+            raised = list(params)
+            for axis, steps in enumerate(fighter.ability_gain):
+                if steps and axis < len(sheet.params):
+                    sheet.params[axis] = clubbattle.raise_ability(
+                        sheet.params[axis], steps)
+                    raised[axis] = sheet.params[axis]
+            club_id = fighter.club_id
+            after_level, after_gauge = level, gauge
+            if 0 < club_id < len(sheet.club_level):
+                after_level, after_gauge = clubbattle.club_activity_gain(
+                    level, gauge)
+                sheet.club_level[club_id] = after_level
+                sheet.club_gauge[club_id] = after_gauge
+            # ⭐ The same reading that makes 「参加すると」 the gate makes this
+            # the moment 怪我 is decided: stress.charge judges the state the
+            # player SAT DOWN in and then charges this activity's own.
+            condition = self._battle_stress(fighter.chara_id, sheet)
+            record["hurt"] = 1 if condition in (stress.INJURY,
+                                                stress.DOCTOR_STOP) else 0
+            store.set_ability(fighter.chara_id, sheet)
+            record["after"] = (raised, after_level, after_gauge,
+                               clubbattle.gousei_entry_max(after_level))
+            print(f"[{self.tag}] battle payout: charaId={fighter.chara_id:#x} "
+                  f"能力 {params}→{raised} · 部活Lv {level}({gauge})→"
+                  f"{after_level}({after_gauge}) · 合成可 {before[3]}→"
+                  f"{record['after'][3]} · 体調 {stress.name(condition)}"
+                  f"{', hurt=1' if record['hurt'] else ''}")
+            won = list(fighter.items_won)
+            if battle.npc_fight and club_id:
+                book = self._battle_book(club_id)
+                if book is not None:
+                    record["book"] = book
+                    won.append(book)
+            inventory = store.items(fighter.chara_id)
+            for category, item_id in won:
+                if inventory is None or not inventory.receive(category, item_id, 1):
+                    print(f"[{self.tag}] battle payout: charaId="
+                          f"{fighter.chara_id:#x} cannot hold {category}:{item_id} "
+                          f"— it is won and not carried")
+                    continue
+                record["items"].append((category, item_id))
+            if inventory is not None and record["items"]:
+                store.set_items(fighter.chara_id, inventory)
+                print(f"[{self.tag}] battle payout: charaId="
+                      f"{fighter.chara_id:#x} got "
+                      + " ".join(f"{c}:{i}" for c, i in record["items"])
+                      + (f" (奥義の書 {record['book'][0]}:{record['book'][1]})"
+                         if record["book"] else ""))
+            self._battle_unlock_level(fighter, battle, win_team)
+        return payout
+
+    def _battle_book(self, club_id: int) -> "tuple[int, int] | None":
+        """Roll this 練習's 奥義の書, or None. See clubbattle.BOOK_DROP_CHANCE."""
+        if random.random() >= clubbattle.BOOK_DROP_CHANCE:
+            return None
+        books = clubdata.books_of_club(club_id)
+        if not books:
+            return None
+        category, _, book_id = random.choice(books).partition(":")
+        try:
+            return (int(category), int(book_id))
+        except ValueError:
+            return None
+
+    def _battle_unlock_level(
+        self, fighter: "clubbattle.Fighter", battle: "clubbattle.Battle",
+        win_team: int,
+    ) -> None:
+        """「選択したレベルの対戦で勝利すると、次のレベルを選択できるように」.
+
+        ⭐⭐⭐ RESTORED, and it settles the question 2.179 十 left open. The byte
+        0x5D01 carries was being read as 部活レベル straight out of the save,
+        with that reading flagged as a reading; p07_03 step 1 names the counter
+        outright and it is a DIFFERENT one -- 対戦レベル is what a WIN raises,
+        one rung at a time, while 部活レベル is what PARTICIPATION raises. Both
+        pages of both manual generations carry the sentence.
+        ⚠️ Per club, because each club has its own hundred-rung ladder, and
+        kept on the Membership rather than on the ability sheet: it is not one
+        of the two arrays the キャラメニュー draws.
+
+        ⚠️ Only the rung that was actually fought unlocks the next one. Winning
+        a level below the ceiling changes nothing, which is what 「選択したレベ
+        ルの対戦で」 says: it is the chosen level's own win that counts.
+        """
+        if not battle.npc_fight or fighter.team != battle.player_team:
+            return
+        if win_team != fighter.team or not fighter.club_id:
+            return
+        store = self.accounts.owner_of(fighter.chara_id)
+        member = store.club(fighter.chara_id) if store else None
+        if member is None:
+            return
+        top = clubdata.ladder_top(fighter.club_id)
+        raised = member.unlock_battle_level(
+            fighter.club_id, battle.npc_level, ceiling=top)
+        if raised is None:
+            return
+        store.set_club(fighter.chara_id, member)
+        # ⚠️ Both numbers here are 1-BASED: ``npc_level`` came off the wire
+        # 0-based and gets its +1, ``raised`` is already the screen's own
+        # counting and must NOT get one. Round 223 printed `raised + 1` and
+        # logged 「unlocked up to 3」 for a save that correctly said 2.
+        print(f"[{self.tag}] battle payout: charaId={fighter.chara_id:#x} won "
+              f"対戦レベル {battle.npc_level + 1} ⇒ unlocked up to "
+              f"{raised} of {top} (club {fighter.club_id})")
+
     def _battle_finish(
         self, session: "_Session", battle: "clubbattle.Battle",
         win_team: "int | None" = None, send_end: bool = True,
@@ -5843,11 +6262,12 @@ class MpsServer:
         exit, and it is pure plumbing: one restored byte (END_NORMAL), no
         arithmetic, nothing invented.
 
-        ⚠️ What is NOT sent here: 0x5C17 GetKeyword, 0x5C18 GetItem, 0x5C19
-        GetClubSkill. The manual grants all three with 〜ことがあります, so
-        sending none of them is a legal round rather than a hole, and each one
-        carries a lookup key (a keyword id, a categoryId/id pair) that this
-        server has no restored rule for choosing. See their constants.
+        ⭐⭐ 0x5C18 GetItem IS sent here, ahead of the result, one per クラブの素
+        won — the 結果画面's 「入手アイテム」 column is drawn BY the result, so
+        anything it should list has to arrive before it. ⚠️ 0x5C17 GetKeyword
+        and 0x5C19 GetClubSkill are still not sent, for two different reasons;
+        see their constants in clubbattle rather than reading the two silences
+        as one.
 
         ⚠️ The Battle is CLOSED before returning, so a stray 0x5C0A or 0x5C16
         arriving after the result finds nothing — which is what those handlers
@@ -5883,30 +6303,69 @@ class MpsServer:
                 win_team = battle.hold_win_team
                 battle.hold_win_team = None
         everyone = [f.chara_id for f in battle.fighters]
-        sheets = {f.chara_id: self._battle_sheet(f) for f in battle.fighters}
         for fighter in battle.fighters:
-            params, level, gauge = sheets[fighter.chara_id]
+            params, level, gauge = self._battle_sheet(fighter)
             print(f"[{self.tag}] battle result: charaId={fighter.chara_id:#x} "
                   f"team={fighter.team} club={fighter.club_id} "
                   f"部活Lv={level}({gauge}) 能力={params}")
         print(f"[{self.tag}] battle end: winTeam={win_team} "
               f"after turn {battle.turn} ({battle.summary()})")
+        # ⭐⭐⭐ THE PAYOUT RUNS BEFORE THE MESSAGE, because the message reports
+        # it: 0x5C1A carries a before AND an after for four different counters,
+        # and none of them can be filled in once the bytes have gone out.
+        # ⚠️ Only on a real ending. A /cb hold fight passes through here twice
+        # and a probe holding the board open must not pay the player twice --
+        # the same guard _battle_stress has always been under, which is why the
+        # stress charge moved INTO the payout rather than staying below.
+        if close:
+            payout = self._battle_payout(battle, win_team)
+        else:
+            payout = {}
+            for fighter in battle.fighters:
+                params, level, gauge = self._battle_sheet(fighter)
+                still = (params, level, gauge, clubbattle.gousei_entry_max(level))
+                payout[fighter.chara_id] = {
+                    "before": still, "after": still,
+                    "items": [], "book": None, "hurt": 0,
+                }
+            print(f"[{self.tag}] battle payout: WITHHELD (probe hold) — "
+                  f"0x5C1A goes out with before == after, the ruler it has "
+                  f"always been")
 
         def body(chara_id: int) -> bytes:
-            params, level, gauge = sheets.get(
-                chara_id, ([0] * clubbattle.NUM_OF_CHARA_ABILITY, 0, 0)
-            )
-            # ⚠️ before == after, everywhere. See clubbattle.result_params: the
-            # rule that would move any of these is not restored, and a server
-            # that made one up would be writing an invented reward into a save.
+            record = payout.get(chara_id) or {}
+            zero = ([0] * clubbattle.NUM_OF_CHARA_ABILITY, 0, 0, 0)
+            before = record.get("before") or zero
+            after = record.get("after") or zero
             return clubbattle.result_params(
                 win_team,
-                before_gauge=gauge, after_gauge=gauge,
-                before_lv=level, after_lv=level,
-                before_ability=params, after_ability=params,
+                before_gauge=before[2], after_gauge=after[2],
+                before_lv=before[1], after_lv=after[1],
+                before_ability=before[0], after_ability=after[0],
+                book_category=(record.get("book") or (0, 0))[0],
+                book_id=(record.get("book") or (0, 0))[1],
+                hurt=record.get("hurt") or 0,
+                before_gousei_entry_max=before[3],
+                after_gousei_entry_max=after[3],
             )
 
-        out = self._tr_cast(
+        # ⭐⭐ 0x5C18 GOES OUT AHEAD OF 0x5C1A, one per item. The 結果画面's
+        # 「入手アイテム」 column is drawn by the result message, so anything it
+        # is supposed to list has to have arrived before it. ⚠️ The 奥義の書 is
+        # NOT sent through 0x5C18 as well -- it has its own field inside 0x5C1A
+        # and naming it twice would put it on the screen twice.
+        out = b""
+        for fighter in battle.fighters:
+            record = payout.get(fighter.chara_id) or {}
+            book = record.get("book")
+            for category, item_id in record.get("items") or ():
+                if (category, item_id) == book:
+                    continue
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_GET_ITEM,
+                    struct.pack(">HH", category, item_id), [fighter.chara_id],
+                )
+        out += self._tr_cast(
             session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_RESULT, body, everyone
         )
         if send_end:
@@ -5926,7 +6385,10 @@ class MpsServer:
             if other is not None:
                 other.battle_due = 0.0
         if close:
-            self._battle_stress(everyone)
+            # ⚠️ The ストレス charge is NOT here any more. It moved up into
+            # _battle_payout, because 0x5C1A's ``hurt`` byte reports the very
+            # 体調 this charge decides and a byte cannot be filled in after the
+            # message has gone out. Same guard, same once-per-ending, earlier.
             self.battles.close(session.chara_id)
             # ⚠️ Tied to `close`, not to `send_end`: a HELD fight is a probe
             # standing still, and taking its room away would move a second
@@ -5937,8 +6399,8 @@ class MpsServer:
                   f"board, /cb still has a target")
         return out
 
-    def _battle_stress(self, everyone: "list[int]") -> None:
-        """One クラブ活動's worth of ストレス for everybody who fought.
+    def _battle_stress(self, chara_id: int, sheet: "ability.AbilitySheet") -> int:
+        """One クラブ活動's worth of ストレス for one fighter. Returns the 体調.
 
         ⭐⭐⭐ RESTORED from `p05_09`: 「授業・試験 / クラブ活動 / 奥義合成 を
         行なうと、ストレスがたまります」 and 「ストレスが高い状態でクラブ活動を
@@ -5948,15 +6410,21 @@ class MpsServer:
         it, so 怪我 and ドクターストップ were unreachable states; _injured says
         how that survived so long.
 
-        ⚠️ Tied to the real ending only. The caller charges inside ``if close``,
-        because a ``/cb hold`` fight passes through _battle_finish twice and a
-        probe holding the board open must not cost the players two 部活.
+        ⚠️ Tied to the real ending only. _battle_payout calls this inside
+        ``if close``, because a ``/cb hold`` fight passes through
+        _battle_finish twice and a probe holding the board open must not cost
+        the players two 部活.
 
         ⚠️ Everybody, not just the handling session: 自主トレ is a fight between
         accounts and the sheet of each one lives in its own store, which is why
-        this goes through accounts.owner_of exactly as _battle_sheet does. A
-        fighter who has already dropped still pays -- they did the activity --
-        and simply has no session to be told about it.
+        the caller reaches every sheet through accounts.owner_of exactly as
+        _battle_sheet does. A fighter who has already dropped still pays --
+        they did the activity -- and simply has no session to be told about it.
+
+        ⚠️⚠️ IT DOES NOT WRITE THE SHEET BACK. The caller does, once, after it
+        has also spent this fight's 能力パラメータ and 部活レベル into the same
+        object -- three writes of one record would be three chances for two of
+        them to disagree.
 
         ⚠️⚠️ NOTHING IS SENT FROM HERE, and that is deliberate. The moment this
         runs is the 結果画面, which is the one moment round 96 measured a client
@@ -5968,17 +6436,12 @@ class MpsServer:
         on every arriving packet -- so the screen is updated by the client's
         next breath instead, off the path this server has already measured.
         """
-        for chara_id in everyone:
-            store = self.accounts.owner_of(chara_id)
-            sheet = store.ability(chara_id) if store else None
-            if sheet is None:
-                continue
-            added, condition = stress.after_club_activity(sheet)
-            store.set_ability(chara_id, sheet)
-            print(f"[{self.tag}] club activity: charaId={chara_id:#x} "
-                  f"ストレス +{added} -> {sheet.stress} "
-                  f"({stress.screen(sheet.stress)}/100), 体調 "
-                  f"{stress.name(condition)}")
+        added, condition = stress.after_club_activity(sheet)
+        print(f"[{self.tag}] club activity: charaId={chara_id:#x} "
+              f"ストレス +{added} -> {sheet.stress} "
+              f"({stress.screen(sheet.stress)}/100), 体調 "
+              f"{stress.name(condition)}")
+        return condition
 
     def _battle_leave_rooms(
         self, everyone: "list[int]", refresh_fighters: bool = False

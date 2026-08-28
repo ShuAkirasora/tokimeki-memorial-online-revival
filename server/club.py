@@ -563,6 +563,12 @@ DECK_CAPACITY = 25
 # error_message.bin 462: the sentence counts 日.
 REJOIN_DAYS = 10
 
+#: ⭐ RESTORED: a fresh member may fight 対戦レベル１ and nothing above it.
+#: 「最初はクラブの部員と対戦することになりますが、勝ち進むことにより、いずれ
+#: 顧問やキャプテンと対戦できるようになります」 (p07_03) — the ladder opens one
+#: rung at a time from the bottom, and the bottom is where everyone starts.
+FIRST_BATTLE_LEVEL = 1
+
 # Reason codes, both messages. Named for what the sentence says, not for what
 # the server means by sending it.
 NG_ENTER_FAILED = 2
@@ -688,6 +694,29 @@ class Membership:
                     self.deck_use[int(key)] = int(value) & 0xFF
                 except (TypeError, ValueError):
                     continue
+        # ⭐⭐⭐ 対戦レベル: the highest rung of each club's 練習 ladder this
+        # character may pick, 1-BASED as the screen counts, stored per club.
+        #
+        # ⚠️⚠️ IT IS NOT 部活レベル, and telling the two apart is the whole
+        # reason it lives here. p07_03 step 1: 「対戦レベルは、選択したレベルの
+        # 対戦で勝利すると、次のレベルを選択できるようになります」 — a WIN moves
+        # this one. p07_01: 「部活レベルは…クラブ活動に参加することによりアップ
+        # します」 — PARTICIPATION moves that one. Both sentences are in both
+        # manual generations. Until round 223 this end sent 部活レベル as the
+        # ceiling 0x5D01 carries, which was a reading and is now retired.
+        #
+        # ⚠️ On the Membership rather than on the AbilitySheet: the sheet is
+        # what the キャラメニュー draws (u8[16] level + u8[16] gauge, 2.30) and
+        # this is not one of those two arrays. A missing club key means 「never
+        # won anything here」, which is FIRST_BATTLE_LEVEL.
+        self.battle_level: "dict[int, int]" = {}
+        levels = saved.get("battleLevel")
+        if isinstance(levels, dict):
+            for key, value in levels.items():
+                try:
+                    self.battle_level[int(key)] = max(FIRST_BATTLE_LEVEL, int(value))
+                except (TypeError, ValueError):
+                    continue
         # Owned キーワード, in the order 0x4305 will send them: one
         # [keywordId, useCount, clubSource] triple per row. A key the client's
         # own table does not have is dropped rather than sent on, the same
@@ -749,6 +778,9 @@ class Membership:
             "inClub": self.in_club,
             "left": {str(key): value for key, value in sorted(self.left.items())},
             "deckUse": {str(key): value for key, value in sorted(self.deck_use.items())},
+            "battleLevel": {
+                str(key): value for key, value in sorted(self.battle_level.items())
+            },
             "keywords": [list(row) for row in self.keywords],
             "clubSkills": [list(row) for row in self.skills],
             "deckItems": {
@@ -756,6 +788,32 @@ class Membership:
                 for key, value in sorted(self.deck_items.items())
             },
         }
+
+    # ---------------------------------------------------------- 対戦レベル
+
+    def battle_level_of(self, club_id: int) -> int:
+        """The highest 対戦レベル this character may pick in that club, 1-based."""
+        return max(FIRST_BATTLE_LEVEL,
+                   int(self.battle_level.get(club_id, FIRST_BATTLE_LEVEL)))
+
+    def unlock_battle_level(
+        self, club_id: int, won_level: int, ceiling: int = 0
+    ) -> "int | None":
+        """A win at 0-based ``won_level`` opens the next rung. New top, or None.
+
+        ⚠️ ``won_level`` is what 0x5C03 carried, so it is 0-based; everything
+        stored and returned here is 1-based, the way the screen and the ladder's
+        own row names count. ⭐ Only a win AT the current ceiling moves it —
+        「選択したレベルの対戦で勝利すると」 is about the level that was chosen,
+        and re-winning a rung below the top says nothing new.
+        """
+        top = self.battle_level_of(club_id)
+        if won_level + 1 < top:
+            return None
+        if ceiling and top >= ceiling:
+            return None
+        self.battle_level[club_id] = top + 1
+        return self.battle_level[club_id]
 
     # ------------------------------------------------------------ キーワード
 

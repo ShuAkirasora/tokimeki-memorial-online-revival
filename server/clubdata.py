@@ -5,14 +5,19 @@ client's own data files, and -- like `runtime/drama_events.json` and everything
 else under `runtime/` -- it is a LOCAL FEED that reaches no repository. Nothing
 in here carries a number of its own.
 
-    keyword    261 rows: attack, defence, and the 習熟度 full scale
+    keyword    261 rows: attack, defence, the 習熟度 full scale, the 能力属性
+               a play raises and the クラブの素 a play can yield
     npc        144 rows: the practice opponents' vitality/energy/speed, their
                部活レベル, their club and which deck they bring
     ladder     800 rows: 8 clubs x 100 対戦レベル, the 1-3 opponents at each
     training     9 rows: 自主トレ plus the eight clubs' 練習, each one's club
                and the background its battle screen draws
     clubskill   57 rows: every 部活奥義's effects -- attack power, 消費気力,
-               success rate, the three +-% modifiers, two heals, one ailment
+               success rate, the three +-% modifiers, two heals, one ailment,
+               and the 能力属性 it raises
+    skillbook   57 rows: every 奥義の書 -- which 部活奥義 it makes and whose
+               club that is. ⚠️ The RECIPE half is deliberately not exported;
+               合成 is not implemented and this end only needs 「which book」
     npcdeck    200 rows: which キーワード and 部活奥義 an opponent brings
 
 ⚠️ WHY THE FEED AND NOT A LITERAL IN HERE. Most of these are large tables of
@@ -81,17 +86,29 @@ def summary() -> str:
     # out of it is one that can go missing without anybody noticing.
     return "club feed: " + " · ".join(
         f"{name} {len(data.get(name, {}))}"
-        for name in ("keyword", "npc", "ladder", "training", "clubskill", "npcdeck")
+        for name in ("keyword", "npc", "ladder", "training", "clubskill",
+                     "skillbook", "npcdeck")
     )
 
 
 def keyword(keyword_id: int) -> "dict | None":
-    """`{attack, defence, fullScale}` for one キーワード, or None.
+    """`{attack, defence, fullScale, ability, sozai}` for one キーワード, or None.
 
     ⭐ attack/defence are `keyword.bin` +0x2e/+0x30 and they are in the SAME
     CURRENCY as 体力: 260-700 and 300-630 against opponents holding 550-1999.
     So an attack value is not a percentage and not a band index -- it is priced
     in 体力, which is the one thing the tables settle about the damage rule.
+
+    ⭐⭐ ``ability`` is +0x2c, 0-5, and it is the whole of what 「使用したキー
+    ワードの能力属性…によって、能力パラメータが増加します」 (p07_03) needs from
+    this end: WHICH of the six goes up is the table's, and only HOW MUCH is
+    invented. 261 rows agree with the six id blocks with no exceptions, and the
+    client looks the same field up in `chara_ability_type.bin` (2.154 一).
+
+    ⭐ ``sozai`` is +0x36's eight slots as ``["32:1", …]`` -- the クラブの素 this
+    card can yield, all 94 of them inside `item.bin` categories 32-40 with no
+    exceptions (2.156 二). ⚠️ Every one of the 261 rows has at least one slot,
+    so an empty list means the feed is old, not that this card yields nothing.
     """
     return _data().get("keyword", {}).get(str(keyword_id))
 
@@ -100,12 +117,38 @@ def club_skill(category_id: int, skill_id: int) -> "dict | None":
     """One 部活奥義's effect row, by its `clubskill.bin` key.
 
     ⭐ The whole row is restored -- 攻撃力 (0-1100, the same 体力 currency the
-    keywords are in), 消費気力, 成功率, the three ±% modifiers, the two heals
-    and the ステータス異常 it inflicts. ⚠️ Only ``power`` is acted on today;
-    everything else is carried here so that the rest of 奥義 is a matter of
-    using rows that already exist rather than of reading a table again.
+    keywords are in), 消費気力, 成功率, the three ±% modifiers, the two heals,
+    the ステータス異常 it inflicts and the 能力属性 it raises.
+    ⭐⭐ ALL OF IT IS ACTED ON as of round 223; up to 222 only ``power`` was, and
+    the rest sat here unused. See clubbattle's SKILL EFFECTS block for which
+    0x5C11 ``type`` each column narrates through and which two columns are
+    applied silently because the client has no line for them.
     """
     return _data().get("clubskill", {}).get(f"{category_id}:{skill_id}")
+
+
+def skill_book(category_id: int, book_id: int) -> "dict | None":
+    """One 奥義の書 by its `item_skillbook.bin` key: `{skill, club}`.
+
+    ⚠️ The key space is `item.bin`'s -- categories 17-24 are the eight clubs'
+    books and they sit in the same inventory as everything else, which is why
+    `item.ITEM_KEYS` already carries them.
+    """
+    return _data().get("skillbook", {}).get(f"{category_id}:{book_id}")
+
+
+def books_of_club(club_id: int) -> "list[str]":
+    """Every 奥義の書 whose 部活奥義 belongs to this club, as ``"17:0"`` keys.
+
+    ⭐ The partition is restored and exact: a book's category is its club + 16,
+    and that equals the 奥義's own category and the 奥義's クラブ属性 column,
+    57 rows out of 57 with no exceptions. ⚠️ So this is not 「books that look
+    like they belong to this club」 -- it is the table's own grouping.
+    """
+    return sorted(
+        key for key, row in _data().get("skillbook", {}).items()
+        if row.get("club") == club_id
+    )
 
 
 def npc(key: str) -> "dict | None":

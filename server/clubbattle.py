@@ -125,16 +125,26 @@ MSG_CL_NOTIFY_BATTLE_TURN_END = 0x5C16
 #: The three 「you got something」 messages, all of them Sv, all of them
 #: OPTIONAL: the manual grants them with 〜ことがあります (p07_03 「『奥義の書』
 #: や合成アイテムが手に入ることがあります」, p07_04 「合成アイテムが手に入るこ
-#: とがあります」). ⚠️ NOT SENT by this server, and that is a decision rather
-#: than a gap — what earns a keyword, an item or a 部活奥義 is not restored, so
-#: the honest count is none, and 「ことがあります」 says none is a legal round.
-#: ⭐ 0x5C17's share of that gap is down to one number as of round 196: which
-#: キーワード 習熟 yields is in `keyword.bin` (+46..+52), which of those a
-#: character is eligible for is next to it (+54..+60, one per slot: 0 male,
-#: 1 female, 2 either), and where the gauge fills is `club.keyword_full_scale`.
-#: ⚠️ What one *use* adds is not, and it is the last thing between here and
-#: sending this message. ⚠️ 習熟度 is not only the gate: `p07_02` says it also
-#: raises a キーワード's attack and defence, so raising it moves more than this.
+#: とがあります」).
+#:
+#: ⭐⭐ ONE OF THE THREE IS SENT as of round 223 and the other two are not, and
+#: the reason differs for each — ⛔️ do not read the two silences as one gap:
+#:
+#: * 0x5C18 GetItem IS SENT. Which クラブの素 a played キーワード can yield is
+#:   its own eight +0x36 slots (94 items inside `item.bin` 32-40, no
+#:   exceptions, 2.156 二); only the chance is invented (SOZAI_DROP_CHANCE).
+#: * 0x5C17 GetKeyword is NOT sent, and it is STOPPED rather than unknown. The
+#:   gate is restored down to one step: 習熟度 fills at +1 a use against each
+#:   card's own 満刻度 (`club.keyword_full_scale`), the 後継 are `keyword.bin`
+#:   +46..+52, and each successor carries a sex tag beside it (+54..+60, 0
+#:   male / 1 female / 2 either). ⚠️ What is missing is WHICH successor to
+#:   grant when a chain still offers two or three, and the user is holding that
+#:   question open on purpose — see the methodology in the private tree.
+#:   ⚠️ 習熟度 is not only this gate: `p07_02` says it also raises a キーワード's
+#:   attack and defence, so filling it moves more than this message.
+#: * 0x5C19 GetClubSkill is NOT sent because 練習 has no restored trigger for
+#:   it. A 部活奥義 is MADE — 奥義の書 plus 合成アイテム, `p07_05` — and neither
+#:   reward sentence hands one over ready-made.
 MSG_SV_NOTIFY_BATTLE_GET_KEYWORD = 0x5C17
 MSG_SV_NOTIFY_BATTLE_GET_ITEM = 0x5C18
 MSG_SV_NOTIFY_BATTLE_GET_CLUB_SKILL = 0x5C19
@@ -508,6 +518,244 @@ def damage_band(value: int, max_vitality: int) -> int:
     return max(0, min(DAMAGE_BANDS - 1, share))
 
 
+# ---------------------------------------------------------------------------
+# ⭐⭐⭐ THE SKILL EFFECTS. `clubskill.bin`'s 570-byte tail was read whole in
+# round 200 and only its 攻撃力 column was ever acted on; this is the rest.
+#
+# ⚠️⚠️ NOTHING IN THIS BLOCK IS A NUMBER OF OURS. Every quantity is the table's
+# own — 消費気力, 成功率, the three ±%, the two heals, the ステータス異常 key.
+# What IS decided here is only which 0x5C11 ``type`` narrates each column, and
+# every one of those was measured on a real client in rounds 97 and 98 (see the
+# EFFECT template table above). ⭐ So this is wiring, not invention, and the invention rule's
+# ledger gains no row from any of it.
+#
+# ⚠️ The two asymmetries worth knowing before reading the code:
+#
+# 1. 14/15/16 are 「攻撃力／防御力／素早さ が N％ 下がった」 and the client
+#    prints ``100 - value``. There is NO 上がった counterpart: the sweep of
+#    types 0-29 found 17 and 20-29 drawing nothing at all. So a BUFF (a column
+#    above 100) is applied and not narrated — a hole with a known shape, not a
+#    choice to leave the effect out.
+# 2. clubstatus 0 is 通常, and three 奥義 carry it — 「ステータス異常を洗い流
+#    す」. It is a CURE, and types 5/6/7 (which would be where a cure line
+#    lives) draw nothing either. Same treatment: applied, not narrated.
+EFFECT_ATTACK_PCT = 14
+EFFECT_DEFENCE_PCT = 15
+EFFECT_SPEED_PCT = 16
+EFFECT_VITALITY = 18
+EFFECT_ENERGY = 19
+#: clubstatus 5 練習不能 — the same 0x5C11 that greys the sprite out. ⚠️ It sets
+#: the client's 体力 to 0 WITHOUT repainting the bar (round 99), so a server
+#: that sends it has to retire its own copy of that fighter in the same breath
+#: or the two counts part company.
+EFFECT_RETIRE = 4
+
+#: clubstatus id -> the 0x5C11 ``type`` that inflicts it. ⭐ 1-4 are 眠り/しびれ/
+#: 沈黙/混乱 and they are types 0-3 in clubstatus order, MEASURED one by one
+#: (rounds 90, 91, 98 — type 3 also lights the fourth status lamp). 5 練習不能
+#: is type 4, measured in round 98. ⚠️ 0 (通常, a cure) has no type; 6 奥義無効
+#: and 7 奥義反射 never appear in the column (46 rows carry 0xFFFF, the rest
+#: 0-5), so nothing here has to guess at them.
+AILMENT_EFFECT = {1: 0, 2: 1, 3: 2, 4: 3, 5: EFFECT_RETIRE}
+AILMENT_NONE = 0xFFFF
+AILMENT_CURE = 0
+
+#: `clubskill.bin`'s ±% columns are 100-based and this server keeps a fighter's
+#: modifier the same way, so 「no modifier」 is 100 rather than 0.
+PERCENT_BASE = 100
+#: ⚠️ INVENTED — where a stacked ±% stops. The table's own columns run 50-200,
+#: and nothing says what happens when two 奥義 land on the same fighter; this
+#: server multiplies them and clamps, so a stack can neither zero a fighter's
+#: attack nor run away with it. ⭐ What would overturn it: any account of two
+#: modifiers stacking. Knob: none — it is a bound, not a quantity.
+PERCENT_FLOOR = 10
+PERCENT_CEILING = 400
+
+
+# ---------------------------------------------------------------------------
+# ⭐⭐⭐ THE REWARD RULE — what one finished fight is worth, and what the manual
+# settles about it.
+#
+# ⚠️⚠️ READ THE HEADING THE MANUAL PUTS THIS UNDER FIRST: 【練習に参加すると】,
+# on p07_03 AND on p07_04 AND in the β generation of both. 「参加」 — the reward
+# is for TAKING PART, not for winning. That matters because the promotional
+# page says the opposite in so many words (`game/club.txt`: 「相手の体力を０に
+# した方が勝ちとなり、奥義合成に必要な『奥義の書』をゲットできます！」), and
+# the promotional page is the one a reader meets first. The manual is the rule
+# sheet and the manual's own section heading is unambiguous, so PARTICIPATION
+# is the gate here and the promo line is read as a simplification: winning is
+# what a player is expected to do, not what the reward tests.
+#
+#     p07_03 (練習)    使用したキーワードの能力属性や、使用した部活奥義のクラブ
+#                      属性によって、能力パラメータが増加します。
+#                      また、「奥義の書」や合成アイテムが手に入ることがあります。
+#     p07_04 (自主トレ) …同じ。ただし「合成アイテムが手に入ることがあります」
+#                      — ⭐ NO 奥義の書. The book is 練習's alone.
+#     p07_01           部活レベル: クラブ別に存在する熟練度…クラブ活動に参加す
+#                      ることによりアップします。
+#     p07_03 step 1    対戦レベルは、選択したレベルの対戦で勝利すると、次のレベ
+#                      ルを選択できるようになります。   ← ⭐ THE ONE that IS
+#                      gated on winning, and it is not a reward, it is a gate.
+#
+# ⭐⭐ ONE DIFFERENCE BETWEEN THE TWO MANUAL GENERATIONS, and it runs the
+# opposite way from the usual: the β page says 能力パラメータが「増減」します
+# where the later page says 「増加」. β2 is the generation this client belongs
+# to, so the β wording is the contemporary one — ⚠️ but nothing anywhere says
+# what would make a parameter go DOWN, and a 減 rule invented to match one verb
+# would be a second invention on top of the first. So this server only raises,
+# and the β verb is recorded as an open reading rather than acted on.
+# ⚠️ Note the shape of this: the standing rule in the private tree is 「the β
+# manual not saying it does not mean this build lacks it」, and that rule is
+# about ABSENCE. This is its mirror image — the β page says MORE than the later
+# one — and it is not covered by that rule.
+
+#: ⭐⭐⭐ RESTORED, and it is the ability sheet's own encoding: `abilityParam` is
+#: an 8.8 fixed-point u16 where the high byte is the level the screen draws as
+#: 「レベル N+1」 and the low byte is the progress bar inside it (ability.py has
+#: the thirty measurements). So a level is 256 steps, and 「how much does one
+#: card play give」 is a question about those steps rather than about levels.
+ABILITY_LEVEL_STEPS = 256
+#: ⚠️ RESTORED as a ceiling, not invented: ability.py measured that 値 >= 32768
+#: — the u16's sign bit — switches the screen to a different rule altogether
+#: (round(値 x 25 / 65536)), and that switch was bracketed rather than found.
+#: Staying under it is the only way the sheet means what it says.
+ABILITY_CEILING = ABILITY_LEVEL_STEPS * 128 - 1
+
+#: ⚠️ INVENTED — how many of those 256 steps one played card is worth. The
+#: manual settles WHICH parameter moves (the card's own 能力属性 column) and
+#: says only 「増加します」 about the amount.
+#:
+#: ⭐⭐ THE FACTORY VALUE IS DERIVED FROM THE COUNTER NEXT DOOR rather than
+#: picked. 習熟度 is the one per-use counter in this subsystem that is already
+#: settled: +1 per use (club.USE_COUNT_PER_USE, decided by the user in round
+#: 196) against a 満刻度 that is 64 on 251 of the 261 rows. So a typical card
+#: masters in 64 plays. Giving an ability level the same pace is
+#: 256 / 64 = 4 steps a play — one ability level per 64 plays, the same 64 the
+#: table already uses for 「this much practice is a lot」.
+#: ⭐ Which also keeps it inside the shape the manual describes: p07_01 says
+#: players change clubs 「能力パラメータのレベルアップをしたいとき」, so club
+#: activity is a REAL source of ability levels and not a rounding error.
+#: ⚠️ What would overturn it: any operator-era account of how many 練習 an
+#: ability level took. Knob: TMO_CLUB_ABILITY_GAIN.
+ABILITY_GAIN_PER_USE = int(os.environ.get("TMO_CLUB_ABILITY_GAIN") or 4)
+
+#: ⭐⭐ RESTORED, by structure: 部活レベル and its gauge are TWO PARALLEL u8[16]
+#: arrays, one pair per club, in the ability sheet (0x4310) and again in
+#: 0x5C1A's beforeLv/afterLv + beforeGauge/afterGauge. That is the same
+#: level-plus-progress pair `abilityParam` packs into one 8.8 u16, split across
+#: two bytes — and the 部活 tab draws it the same way, a level with a bar under
+#: it. So the gauge is a 256-step track that carries into the level, and
+#: 「クラブ活動に参加することによりアップします」 (p07_01) is what fills it.
+#: ⭐⭐⭐ AND THE 256 IS MEASURED, round 223, off the 結果画面's own gauge:
+#: two fights, gauge 32 then 64, bar fill 29 px then 53 px on a 192 px track.
+#: The SLOPE is (53-29)/(64-32) = 0.75 px a point, and 192 / 0.75 = 256 exactly.
+#: ⭐ The slope is what carries the argument -- it does not care about the 5 px
+#: constant the fit also shows (29 - 32x0.75 = 5), which is a lead-in cap this
+#: bar draws before the first point. ⚠️ That cap is very probably the same
+#: unexplained offset ability.py records for the OTHER bar (「99 filled 37.8%,
+#: one point only, so the offset the ability bar carries was not separated
+#: out」) -- two bars, one unexplained constant, still unexplained.
+#: ⚠️ The CARRY itself is still a reading: no screen has been watched crossing
+#: the boundary, only the track it crosses.
+CLUB_GAUGE_FULL = 256
+#: RESTORED: 部活レベル is 0-99 — `npc_training_level.bin` is 8 clubs x 100 rungs
+#: and p07_06's 部活レベル制限 offers 1-99.
+CLUB_LEVEL_MAX = 99
+
+#: ⚠️ INVENTED — how much of that 256-step gauge one クラブ活動 fills, and this
+#: one is PICKED rather than derived. ⭐ What is fixed around it: the gauge is
+#: 256 steps (above), a club has 100 levels, and the opponents' own stat ladder
+#: has its eleven rungs at 部活レベル 0/2/5/8/11/15/19/23/27/31/35 — so the part
+#: of the range a player actually feels is the first thirty-odd levels.
+#: 32 makes that eight activities a level: the first ladder rung arrives after
+#: 16 fights, the last after 280, and a club tops out at 792. ⭐ 8 is the round
+#: number this subsystem uses everywhere else it needs one (8 clubs, 8 ターン,
+#: 8 キーワード and 8 奥義 slots in a deck, 8 material kinds in a recipe), which
+#: is the whole of why it is 8 and not 5 or 10 — ⚠️ SAY IT PLAINLY: that is a
+#: resemblance, not a derivation.
+#: ⚠️ What would overturn it: any operator-era account of how long a 部活レベル
+#: took, or a screenshot pair showing a gauge before and after one 練習.
+#: Knob: TMO_CLUB_ACTIVITIES_PER_LEVEL.
+ACTIVITIES_PER_CLUB_LEVEL = max(
+    1, int(os.environ.get("TMO_CLUB_ACTIVITIES_PER_LEVEL") or 8)
+)
+CLUB_GAUGE_PER_ACTIVITY = max(1, CLUB_GAUGE_FULL // ACTIVITIES_PER_CLUB_LEVEL)
+
+#: ⚠️ INVENTED — the chance one played キーワード yields one of its own クラブの素.
+#: ⭐ RESTORED around it: THAT a play can yield one (p07_03/p07_04 「合成アイテム
+#: が手に入ることがあります」) and WHICH ones a given card can yield (its own
+#: eight +0x36 slots, 94 items inside `item.bin` 32-40 with no exceptions).
+#: ⭐ A quarter because 「ことがあります」 has to stay true of a single play —
+#: most plays give nothing — while a recipe's twenty-odd materials still land
+#: in the same order of fights as a 部活レベル does. ⚠️ Which of an eligible
+#: card's slots is drawn is uniform: the table gives no weights, and
+#: `item_skillbook.bin`'s +0xDD (which looks like a rarity and moves inversely
+#: to price) is DELIBERATELY NOT USED — 2.158 三 says in so many words that it
+#: has no third witness and must not be taken for a drop rate.
+#: Knob: TMO_CLUB_SOZAI_DROP.
+SOZAI_DROP_CHANCE = float(os.environ.get("TMO_CLUB_SOZAI_DROP") or 0.25)
+
+#: ⚠️ INVENTED — the chance one 練習 yields a 奥義の書, and 練習 only: p07_04
+#: drops the book from 自主トレ's otherwise identical sentence.
+#: ⭐ RESTORED around it: that it happens 「ことがあります」, that the reward is
+#: for taking part, and WHICH books are eligible — a book's category is its
+#: club + 16 and that equals its 奥義's クラブ属性, 57 rows out of 57, so 「the
+#: eight books of the club you are practising with」 is the table's own grouping
+#: rather than a guess. ⚠️ A quarter for the same reason as the materials, and
+#: the pick among the eligible eight is uniform for the same reason.
+#: Knob: TMO_CLUB_BOOK_DROP.
+BOOK_DROP_CHANCE = float(os.environ.get("TMO_CLUB_BOOK_DROP") or 0.25)
+
+#: ⭐ RESTORED, both ends of 合成可アイテム数 — the count 0x5C1A carries as
+#: before/afterGouseiEntryMax and 0x5301 as nGouseiEntryMax. That 部活レベル
+#: decides it at all is p07_05 (「部活レベルによって合成できるアイテムの種類数
+#: が決まっていますので、規定レベルに達していないとアイテムが揃っていても合成
+#: はできません」); the FLOOR is that page's own screenshot caption, a player
+#: limited to two kinds; the CEILING is `item_skillbook.bin`, where no recipe
+#: uses more than eight material kinds, so eight is 「everything」.
+GOUSEI_ENTRY_MIN = 2
+GOUSEI_ENTRY_MAX = 8
+#: ⚠️ INVENTED — the straight line between those two restored ends: how many
+#: 部活レベル buy one more kind. 16 reaches all eight at 部活レベル 96, near the
+#: top of the 0-99 range, so the last kind arrives when a club is nearly maxed.
+#: ⭐ What would overturn it: any account naming the level at which a third
+#: (or an eighth) kind became available.
+#: Knob: TMO_CLUB_GOUSEI_LEVELS_PER_KIND.
+GOUSEI_LEVELS_PER_KIND = max(
+    1, int(os.environ.get("TMO_CLUB_GOUSEI_LEVELS_PER_KIND") or 16)
+)
+
+
+def raise_ability(value: int, steps: int = ABILITY_GAIN_PER_USE) -> int:
+    """One card play's worth of 能力パラメータ, clamped to the readable range."""
+    return max(0, min(ABILITY_CEILING, value + max(0, steps)))
+
+
+def club_activity_gain(
+    level: int, gauge: int, steps: int = CLUB_GAUGE_PER_ACTIVITY
+) -> "tuple[int, int]":
+    """One クラブ活動's worth of 部活レベル progress: ``(level, gauge)``.
+
+    The gauge fills, carries into the level, and stops at 部活レベル 99 with the
+    gauge held one step short of full — a maxed club has nowhere for the carry
+    to go, and leaving it at 255 keeps the bar looking full rather than
+    resetting it to empty every activity.
+    """
+    level = max(0, min(CLUB_LEVEL_MAX, level))
+    gauge = max(0, gauge) + max(0, steps)
+    level += gauge // CLUB_GAUGE_FULL
+    gauge %= CLUB_GAUGE_FULL
+    if level >= CLUB_LEVEL_MAX:
+        return (CLUB_LEVEL_MAX, CLUB_GAUGE_FULL - 1)
+    return (level, gauge)
+
+
+def gousei_entry_max(club_level: int) -> int:
+    """合成可アイテム数 for this 部活レベル — how many KINDS a 合成 may use."""
+    kinds = GOUSEI_ENTRY_MIN + max(0, club_level) // GOUSEI_LEVELS_PER_KIND
+    return min(GOUSEI_ENTRY_MAX, kinds)
+
+
 def base_block(info: bytes) -> bytes:
     """The 71-byte ``base`` for one character, out of their create block.
 
@@ -744,10 +992,11 @@ def action_end_params(chara_id: int) -> bytes:
     """0x5C0F: that character is done acting, and nothing else.
 
     ⚠️ It carries no result. Whatever the action DID — damage, a status, a
-    miss — is 0x5C10 Reaction and 0x5C11 Effect. Both can now be BUILT (see
-    below) but neither is wired into the turn: what an action does to anybody
-    has no restored formula, so this server plays the card and changes nothing.
-    The pair is the turn's structure, not its outcome.
+    heal, a ±% — is 0x5C11 Effect, sent from inside this same action's stream;
+    0x5C0E/0x5C0F are the turn's STRUCTURE, not its outcome.
+    ⚠️ 0x5C10 Reaction is the one of the two that is still never sent: it
+    narrates a 守備特性 firing, and both the probability and the 「通常より強力」
+    multiplier that would drive it are missing from every source.
     """
     return struct.pack(">I", chara_id)
 
@@ -1109,25 +1358,34 @@ def result_params(
     0x5C06 already tells each client which side it is on, so the winner does
     not need restating in the recipient's own coordinates.
 
-    ⚠️ EVERY before/after PAIR GOES OUT EQUAL from this server, and that is the
-    finding, not a placeholder. 「使用したキーワードの能力属性や、使用した部活
-    奥義のクラブ属性によって、能力パラメータが増加します」 (p07_03) names a
-    rule — which keyword raises which ability, by how much — that is not
-    restored anywhere. An 「after」 larger than its 「before」 would be this
-    server inventing a reward curve and then writing it into a save file.
-    ⭐ Sending them as a matched pair is also what makes them a RULER: the
-    caller can set them apart deliberately (``/cb result``) and read off which
-    half of each pair the screen actually draws.
+    ⭐⭐⭐ THE PAIRS MOVE as of round 223, and what moved was the READING rather
+    than the caution. Every round up to 222 sent before == after and said so as
+    a finding: 「使用したキーワードの能力属性や、使用した部活奥義のクラブ属性に
+    よって、能力パラメータが増加します」 (p07_03) was read as naming a rule that
+    「is not restored anywhere」. ⚠️ HALF of it was restored the whole time —
+    WHICH parameter rises is the played card's own 能力属性 column, in
+    `keyword.bin` +0x2c and `clubskill.bin` +0xbc, and both had been read
+    already (rounds 198 and 200). Only HOW MUCH is invented. See clubbattle's
+    REWARD RULE block for the four counters this message carries and for what
+    gates each one.
+    ⭐ They are still a RULER when a probe wants one: ``/cb result`` sets any
+    pair apart deliberately, and a ``/cb hold`` fight still sends them equal.
 
     ⚠️ ``book`` is 「奥義の書」 and 自主トレ never grants one — p07_04 drops it
-    from the reward sentence that p07_03 has it in. {0, 0} is 「no book」 on the
-    same argument as the unsent 0x5C17/0x5C18/0x5C19: a category and an id are
-    a key the client looks up, so any other value would be a made-up lookup.
+    from the reward sentence that p07_03 has it in. ⭐ Which book is not a
+    made-up lookup either: a book's category is its club + 16 and that equals
+    its 奥義's own category and its クラブ属性 on all 57 rows, so 「one of the
+    eight belonging to the club being practised with」 is the table's own
+    grouping. {0, 0} is 「no book」.
 
-    ⚠️ ``hurt`` is 【怪我】, and it has a restored TRIGGER with no restored
-    THRESHOLD: 「ストレスが高い状態でクラブ活動に参加すると怪我をする場合があ
-    ります」 (both pages). 「高い」 is not a number and 「場合があります」 is not
-    a certainty, so 0 goes out until something says where the line is.
+    ⚠️ ``hurt`` is 【怪我】, with a restored TRIGGER and an invented THRESHOLD:
+    「ストレスが高い状態でクラブ活動に参加すると怪我をする場合があります」 (both
+    pages). 「高い」 is not a number, and the line this server draws is
+    stress.NEUROSIS_AT, invented for 授業 and shared rather than doubled.
+    ⚠️⚠️ It goes out as a FLAG (1 = this activity caused 怪我). Whether the
+    client reads the byte as a boolean or as an index into
+    `chara_condition.bin` is UNTESTED; 0 means 「no」 under either reading, which
+    is what makes the untested half safe to leave untested.
     """
     if len(before_ability) != NUM_OF_CHARA_ABILITY:
         raise AssertionError(
@@ -1471,11 +1729,88 @@ class Fighter:
         #: 0x5C1A right there would have to make up a winTeam at a moment
         #: nothing says a fight ends.
         self.gone = False
+        #: 攻撃力／守備力／素早さ as a percentage of this fighter's base, moved
+        #: by 部活奥義's ±% columns. 100 is 「untouched」, the same base the
+        #: table uses. ⚠️ They live for the fight and no longer: p07_03 draws
+        #: them under 「自分の状態」 alongside 残り体力, which is fight state.
+        self.attack_pct = PERCENT_BASE
+        self.defence_pct = PERCENT_BASE
+        self.speed_pct = PERCENT_BASE
+        #: ⭐ What this fighter has EARNED so far this fight, six 能力パラメータ
+        #: steps in ability.ABILITIES order. Accumulated as cards are played
+        #: — 「使用したキーワードの…によって」 is per use — and spent once, into
+        #: the save and into 0x5C1A's before/after pair, when the fight ends.
+        self.ability_gain = [0] * NUM_OF_CHARA_ABILITY
+        #: クラブの素 won this fight, as ``(categoryId, id)``. Same lifecycle:
+        #: rolled as cards are played, granted once at the end.
+        self.items_won: "list[tuple[int, int]]" = []
 
     def begin_turn(self) -> None:
         """Forget last turn's choice. Called for everyone by every 0x5C09."""
         self.command = None
         self.turn_done = False
+
+    def modify_percent(self, which: str, percent: int) -> int:
+        """Stack one ±% modifier and return the new value.
+
+        ⚠️ Multiplicative rather than additive, so that two halvings are a
+        quarter rather than nothing. Neither shape is restored — what is
+        restored is that the columns are percentages of a base (100 = no
+        change, which 57 rows out of 57 agree on) — so the choice is between
+        two readings of a number, and the multiplicative one is the one that
+        cannot reach zero. Clamped either way, see PERCENT_FLOOR.
+        """
+        current = getattr(self, which)
+        value = max(PERCENT_FLOOR,
+                    min(PERCENT_CEILING, current * max(0, percent) // PERCENT_BASE))
+        setattr(self, which, value)
+        return value
+
+    def spend_energy(self, cost: int) -> bool:
+        """Pay a 部活奥義's 消費気力, or refuse if there is not enough.
+
+        ⭐ RESTORED that this is a gate: the client checks the very same column
+        itself (two ``cmp al, byte ptr [esi+0xb6]`` sites), so a skill whose
+        cost is not covered is one the original would not have let through.
+        This end keeps its own count because the client's is not reported back.
+        """
+        if cost <= 0:
+            return True
+        if self.energy < cost:
+            return False
+        self.energy -= cost
+        return True
+
+    def restore(self, vitality: int = 0, energy: int = 0) -> "tuple[int, int]":
+        """体力回復量／気力回復量, clamped at the ceilings 0x5C06 announced.
+
+        ⚠️ A retired fighter is NOT excluded here. Round 99 measured that a
+        type=18 heal refills the bar of a downed character (the sprite stays
+        grey), so the client already has an opinion about this and it is 「the
+        heal lands」. Keeping the same count on this side is the point.
+        """
+        gained_hp = max(0, min(self.max_vitality - self.vitality, max(0, vitality)))
+        gained_ep = max(0, min(self.max_energy - self.energy, max(0, energy)))
+        self.vitality += gained_hp
+        self.energy += gained_ep
+        return (gained_hp, gained_ep)
+
+    def afflict(self, ailment: int) -> None:
+        """Set (or, for clubstatus 0, clear) this fighter's ステータス異常.
+
+        ⚠️ The counters in ``states`` are what 0x5C09 carries, and NOTHING has
+        ever read them back — the client keeps its own copy from 0x5C11 and the
+        field is unmeasured rather than known-inert (see the ``states`` comment).
+        They are written here anyway so that the two ends agree on paper; the
+        one that reaches the screen is the 0x5C11 the caller sends.
+        """
+        if ailment == AILMENT_CURE:
+            self.states = [0] * NUM_OF_CLUB_STATUS
+            return
+        if 0 <= ailment < NUM_OF_CLUB_STATUS:
+            self.states[ailment] = 1
+        if ailment == 5:  # 練習不能 — the client sets 体力 to 0 on its own.
+            self.vitality = 0
 
     @property
     def retired(self) -> bool:
@@ -1488,6 +1823,18 @@ class Fighter:
         parallel rather than wait to be told.
         """
         return self.vitality <= 0
+
+    @property
+    def effective_speed(self) -> int:
+        """素早さ after whatever ±% this fight has put on it.
+
+        ⭐ It is read where the acting order is worked out, which is the one
+        place 素早さ has a job here (Battle.actors). ⚠️ It does NOT go back on
+        the wire: 0x5C06 announced the base once and nothing in this family
+        carries a revised one, so the client's own 行動順 comes from the 0x5C0D
+        this server sends rather than from a number it recomputes.
+        """
+        return max(1, self.speed * self.speed_pct // PERCENT_BASE)
 
     @property
     def defending(self) -> bool:
@@ -1548,6 +1895,13 @@ class Battle:
         #: In an 練習, which side the human is on. Meaningless when npc_fight
         #: is False, where both sides are people.
         self.player_team = 0
+        #: The 対戦レベル this 練習 is being fought at, 0-BASED, exactly as
+        #: 0x5C03 carried it. ⚠️ The screen and the ladder's own row names are
+        #: 1-based, so this is +1 everywhere it is shown.
+        #: ⭐ It is kept because winning THIS rung is what unlocks the next one
+        #: (「選択したレベルの対戦で勝利すると」, p07_03 step 1) -- the verdict
+        #: alone cannot say which rung was won.
+        self.npc_level = 0
         #: One short of the first turn: every 0x5C09 advances it first, so the
         #: opening one goes out as FIRST_TURN and nothing has to special-case
         #: 「is this the first」.
@@ -1948,7 +2302,7 @@ class Battle:
         """
         chose = [f for f in self.fighters if f.command is not None]
         order = sorted(
-            enumerate(chose), key=lambda pair: (-pair[1].speed, pair[0])
+            enumerate(chose), key=lambda pair: (-pair[1].effective_speed, pair[0])
         )
         return [fighter for _index, fighter in order]
 
