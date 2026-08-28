@@ -358,9 +358,12 @@ MAX_CHARACTERS = 3
 # 0x100, count at +0x308), and the player is using one -- so two are free to ask
 # the client something and read the answer off one screen.
 #
-# Each entry is ``(nickname, charaFrameId, capturedNpcId, coupleFlag)`` and
-# clones the first real character's looks, so the notebooks differ only in the
-# field under test and in the あだな that labels them.
+# Each entry is ``(nickname, charaFrameId, capturedNpcId, coupleFlag, couple)``
+# and clones the first real character's looks, so the notebooks differ only in
+# the field under test and in the あだな that labels them. ``couple`` is None or
+# ``(familyName, firstName, nickName, inClass)`` for the partner -- round 218's
+# addition, and the only way to put a カップル on this screen without writing
+# loverCharaId into a save file.
 #
 # ⚠️ charaFrameId is which of the three notebooks the entry lands in, not
 # decoration. The first attempt at this ruler left it cloned along with
@@ -373,7 +376,7 @@ MAX_CHARACTERS = 3
 # be looked at, not pressed.
 #
 # Empty in normal play.
-LIST_PROBES: tuple[tuple[str, int, int, int], ...] = ()
+LIST_PROBES: "tuple[tuple[str, int, int, int, tuple[bytes, bytes, bytes, int] | None], ...]" = ()
 LIST_PROBE_ID_BASE = 9500  # past PROBE_ID_BASE's markers and the direction ruler
 
 
@@ -576,6 +579,8 @@ def list_entry(
     class_post: int = 0,
     club_post: int = posts.NO_CLUB_POST,
     tutorial_flag: int = 0,
+    couple_names: "tuple[bytes, bytes, bytes] | None" = None,
+    couple_in_class: int = 0,
 ) -> bytes:
     """Build one 238-byte MsgSvResultCharacterListFromAccount entry.
 
@@ -622,8 +627,27 @@ def list_entry(
     out += b"\x00" * NUM_OF_CLUB  # clubParamInfo.gauge[16]
     out += struct.pack(">H", 0)  # virtue
     out += struct.pack(">B", 0)  # stress
-    out += struct.pack(">HH", 0, 0)  # charaCondition, coupleInClass
-    out += b"\x00" * (3 * NAME_LEN)  # couple family/first/nick names
+    out += struct.pack(">HH", 0, couple_in_class & 0xFFFF)  # charaCondition, coupleInClass
+    # ⭐⭐ FOUR MORE FIELDS THAT HAD NEVER BEEN FILLED, and the comment naming
+    # them had been sitting here since the entry was first built: the partner's
+    # 組 and their three names. Round 218 read them off the client's own dump of
+    # this message (the `coupleInClass=` / `coupleFamilyName=` strings at
+    # 0x7FE8xx) and connected them to the pair /couple already stores. This is
+    # the one place in this build where a カップル has somewhere to show: the
+    # キャラクター選択 notebook is a screen that exists and opens, while the
+    # 0x45xx カップル一覧 behind CSequencerCoupleInfo has no way in -- see
+    # couple.py for why that is a date and not a gap.
+    #
+    # ⚠️ ONLY A PARTNER IN THE SAME ACCOUNT CAN BE NAMED HERE. This runs off one
+    # CharacterStore and a lover in somebody else's account is not in it, so a
+    # cross-account pair sends coupleFlag with the names left blank. That is the
+    # honest rendering of "this store does not know", and it is visible on
+    # screen rather than silent, which is why it is not worked around here.
+    if couple_names is None:
+        out += b"\x00" * (3 * NAME_LEN)  # couple family/first/nick names
+    else:
+        for raw in couple_names:
+            out += raw.ljust(NAME_LEN, b"\x00")[:NAME_LEN]
     out += struct.pack(">Q", 0)  # playTime
     out += struct.pack(">HHH", map_id, *(pos or SPAWN_POS))  # posInfo: mapId, posX, posY
     out += struct.pack(">B", 0)  # direction
@@ -1118,6 +1142,7 @@ class CharacterStore:
                     in_club=self.in_club(chara_id),
                     group_name=self.group_name(chara_id),
                     couple_flag=1 if self.lover(chara_id) else 0,
+                    couple_names=self.lover_names(chara_id),
                     title=self.title(chara_id),
                     class_post=held.class_post,
                     club_post=held.club_post,
@@ -1126,13 +1151,16 @@ class CharacterStore:
             )
         if self.records and LIST_PROBES:
             info = bytes.fromhex(str(self.records[0]["info"]))
-            for index, (label, frame_id, captured, couple) in enumerate(LIST_PROBES):
+            for index, probe in enumerate(LIST_PROBES):
+                label, frame_id, captured, couple_flag, couple = probe
                 parts.append(
                     list_entry(
                         LIST_PROBE_ID_BASE + index,
                         relabel(info, label, frame_id),
                         captured_npc_id=captured,
-                        couple_flag=couple,
+                        couple_flag=couple_flag,
+                        couple_names=None if couple is None else couple[:3],
+                        couple_in_class=0 if couple is None else couple[3],
                     )
                 )
         if len(parts) > MAX_CHARACTERS:
@@ -1415,6 +1443,27 @@ class CharacterStore:
                 continue
             return int(record.get("lover", 0) or 0)
         return 0
+
+    def lover_names(self, chara_id: int) -> "tuple[bytes, bytes, bytes] | None":
+        """This character's partner's three names, for 0x0319's couple fields.
+
+        None when there is no partner, and also when there is one this store
+        cannot see: a lover in another account is not in self.records, and the
+        entry then goes out with coupleFlag set and the names blank. See
+        list_entry for why that is left visible rather than papered over.
+        """
+        lover_id = self.lover(chara_id)
+        if not lover_id:
+            return None
+        info = self.find(lover_id)
+        if info is None:
+            return None
+        f = parse_create_info(info)
+        return (
+            bytes(f["familyName"]),   # type: ignore[arg-type]
+            bytes(f["firstName"]),    # type: ignore[arg-type]
+            bytes(f["nickName"]),     # type: ignore[arg-type]
+        )
 
     def set_lover(self, chara_id: int, lover_id: int) -> bool:
         """Point one character's ``loverCharaId`` somewhere. False if not ours.

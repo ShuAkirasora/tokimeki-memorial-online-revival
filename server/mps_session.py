@@ -80,6 +80,7 @@ import chat
 import club
 import clubbattle
 import codes
+import couple
 import curriculum
 import exam
 import facing
@@ -3748,6 +3749,26 @@ class MpsServer:
                     ability.MSG_SV_RESULT_CHARA_MENU_ABILITY,
                     sheet.result_params(card.test_level() - 1),
                 )
+            if msg_type == couple.MSG_CL_QUERY_COUPLE_LIST:
+                # 「カップル一覧」. 0x4500 carries no body, so it asks for the
+                # server's whole list rather than for one character's pair --
+                # see couple.py for the layout, for the three invented fields,
+                # and for why the pairing rules that would fill this list are
+                # POST-DATED (this build is 2006-01-23; カップルシステム shipped
+                # 2007-02-14) rather than undocumented.
+                #
+                # ⚠️ Nothing in this build is known to send this: the message audit
+                # says 0x4500 has never arrived, and `menu_item.bin` has no row
+                # that would open the screen. It is answered anyway because
+                # 0x4503 is a Notify -- /couple probe can push one unasked, the
+                # way /cid pushes 0x480F -- and an answered query is the only
+                # thing that makes the pushed one meaningful.
+                entries = self._couple_entries()
+                print(f"[{self.tag}] couple list: {len(entries)} entries")
+                out = b""
+                for reply_type, reply_params in couple.list_replies(entries):
+                    out += self._answer(session, sequence, reply_type, reply_params)
+                return out
             if msg_type in (career.MSG_CL_QUERY_CHARA_CAREER,
                             career.MSG_CL_QUERY_CHARA_CAREER_LIST):
                 # 「経歴」 -- the 生徒情報 window's last tab, and the bottom-right
@@ -7383,6 +7404,60 @@ class MpsServer:
             return self._say(session, sequence, f"/group left {was} (re-login to see it)")
         return self._say(session, sequence, f"/group: unknown '{what}'")
 
+    def _couple_half(self, chara_id: int) -> bytes:
+        """One side of a 0x4503 row, built from whatever this end knows.
+
+        A charaId nothing here owns still gets a row: the wire has a fixed slot
+        for it and the client will draw whatever is in it, so leaving the names
+        blank is the honest rendering of "we hold no record", not an error to
+        raise. /couple probe relies on exactly that.
+        """
+        store = self.accounts.owner_of(chara_id)
+        info = store.find(chara_id) if store is not None else None
+        if info is None:
+            return couple.half(chara_id, b"", b"", b"")
+        fields = parse_create_info(info)
+        return couple.half(
+            chara_id,
+            bytes(fields["familyName"]),      # type: ignore[arg-type]
+            bytes(fields["firstName"]),       # type: ignore[arg-type]
+            bytes(fields["nickName"]),        # type: ignore[arg-type]
+        )
+
+    def _couple_entries(self) -> "list[bytes]":
+        """Every pair this server holds, as 0x4503 rows.
+
+        Read off loverCharaId rather than stored a second time, so this list and
+        /couple can never drift apart. Each pair is emitted once with the lower
+        charaId as info[0], which also makes the order stable across calls
+        instead of depending on which account happened to be loaded first.
+
+        ⚠️ ONE-SIDED LINKS ARE SKIPPED. /couple writes both sides when both are
+        reachable and says 片側のみ when it could not, so an arrow with nothing
+        pointing back is a probe rather than a couple. ⚠️ classId is left at 0
+        for both halves: in_class lives on the live session, and this list is
+        built from saved records that may belong to nobody who is logged in.
+        """
+        seen: "set[tuple[int, int]]" = set()
+        entries: "list[bytes]" = []
+        for chara_id in sorted(self.accounts.charas.owners):
+            store = self.accounts.owner_of(chara_id)
+            if store is None:
+                continue
+            lover = store.lover(chara_id)
+            if not lover:
+                continue
+            other = self.accounts.owner_of(lover)
+            if other is None or other.lover(lover) != chara_id:
+                continue
+            pair = (min(chara_id, lover), max(chara_id, lover))
+            if pair in seen:
+                continue
+            seen.add(pair)
+            entries.append(couple.entry(self._couple_half(pair[0]),
+                                        self._couple_half(pair[1])))
+        return entries
+
     def _couple_console(
         self, session: "_Session", sequence: int, args: "list[str]"
     ) -> bytes:
@@ -7391,13 +7466,23 @@ class MpsServer:
             /couple                    who this character is paired with
             /couple <charaId>          pair with that character (hex ok)
             /couple clear              break the pair
+            /couple list               push the カップル一覧 this server holds
+            /couple probe              push one made-up row, nothing saved
 
         ⚠️⚠️ **This is a knob on two wire fields, not a 交際 system.** The
         manual (`manual/p05_12`) says a couple exists and that 恋人 get an extra
-        「デート申込み」 on each other's 交流メニュー; it says nothing about how a
+        「デート申込み」 on each other's 交流メニュー.
+
+        ⛔️ THIS DOCSTRING USED TO SAY the manual "says nothing about how a
         pair is made, refused or broken, and there is no handshake in the
-        message table to read one off. Round 154 measured the other half and it
-        is worse than unattested — see PROTOCOL 2.104:
+        message table to read one off". BOTH HALVES WERE WRONG, and round 218
+        retracted them. p05_12 states the rules in full and with numbers --
+        rings traded, one of each per character, five days locked out after a
+        split -- and 0x4500..0x4503 is the handshake family that was said not to
+        exist. What is actually true is narrower and harder: those rules
+        POST-DATE this build by thirteen months, and couple.py carries the three
+        independent pieces of table evidence for it. Round 154 measured the
+        other half — see PROTOCOL 2.104:
 
           * the ring is **eight fixed slots**, menu item ids 0..7, built by the
             constructor at 0x6A6AE8 walking the 8-record table at 0xD85790;
@@ -7434,6 +7519,32 @@ class MpsServer:
 
         if not what:
             return self._say(session, sequence, state())
+        if what in ("list", "probe"):
+            # ⭐ 0x4503 is a Notify, so this end may push it without being
+            # asked -- the same standing /cid used on 0x480F to put a teacher on
+            # the map in round 217. Nothing in this build sends 0x4500, so this
+            # is the only way the カップル一覧 screen can be reached at all.
+            #
+            # ⚠️ `probe` SAVES NOTHING. It builds one row out of made-up ids
+            # and ASCII names chosen so every slot on screen can be told apart,
+            # and hands it straight to the wire. That is deliberate: pairing two
+            # real characters to see the screen would write loverCharaId into a
+            # save file, and this end does not touch saves to run an experiment.
+            if what == "probe":
+                entries = [couple.entry(
+                    couple.half(0x11111111, b"Fam1", b"Giv1", b"Nic1", 1),
+                    couple.half(0x22222222, b"Fam2", b"Giv2", b"Nic2", 2),
+                    ardent=11, match=22, date=(2006, 3, 4),
+                )]
+            else:
+                entries = self._couple_entries()
+            out = b""
+            for reply_type, reply_params in couple.list_replies(entries):
+                if reply_type == couple.MSG_SV_NOTIFY_COUPLE_LIST:
+                    print(f"[{self.tag}] couple {what}: "
+                          f"{couple.describe(reply_params)}")
+                out += self._answer(session, sequence, reply_type, reply_params)
+            return out
         if what == "clear":
             was = mine.lover(me)
             if not was:
