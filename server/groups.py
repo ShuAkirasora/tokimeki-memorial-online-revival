@@ -74,7 +74,11 @@ from characters import GROUP_NAME_LEN, NAME_LEN, NO_GROUP
 # length in the docstring above.
 # UNANSWERED 0x6200 -- 作成: the button that sends it is an NPC event (理事長秘書)
 #   this server cannot stage, so nothing can reach it; /group create stands in.
-# UNANSWERED 0x622A -- グループ一覧: same door, same NPC.
+# ⭐⭐⭐ 0x622A IS NO LONGER ONE OF THEM, and the sentence above is what round 219
+#   falsified: 「this server cannot stage」 stopped being true in round 217, when
+#   /cid put the 理事長秘書 on the map by charaId alone. Her ring has five icons
+#   and 「グループ一覧を見る」 is one of them, so the door was never behind a wall
+#   -- it was behind a spawn. 0x622A is handled below.
 # UNANSWERED 0x4700 -- グループチャット: a 会話ツール message, not this menu's;
 #   the whole 会話ツール window is unopened. Shape is 0x6109's, see chat.py.
 MSG_CL_REQUEST_CHARA_GROUP_CREATE = 0x6200
@@ -196,6 +200,20 @@ TRANSFER = frozenset({
     MSG_CL_REQUEST_CHARA_GROUP_TRANSFER_CANCEL,
 })
 
+#: 同好会登録: the 理事長秘書's third door. ⭐ Round 219 opened it and put the
+#: whole family on the wire for the first time -- see CLUBLIKE_TEST_LEVEL for
+#: the one number in it that is not this version's.
+MSG_CL_REQUEST_CLUB_LIKE_REGISTER = 0x0800
+MSG_SV_OK_CLUB_LIKE_REGISTER = 0x0801
+MSG_SV_NG_CLUB_LIKE_REGISTER = 0x0802
+
+#: グループ一覧: the 秘書's second door. Two messages come back, not one --
+#: 0x622B carries the count and 0x622D carries the rows.
+MSG_CL_QUERY_CHARA_GROUP_LIST = 0x622A
+MSG_SV_RESULT_CHARA_GROUP_LIST = 0x622B
+MSG_SV_ERROR_CHARA_GROUP_LIST = 0x622C
+MSG_SV_NOTIFY_CHARA_GROUP_LIST = 0x622D
+
 HANDLED = frozenset({
     MSG_CL_QUERY_CHARA_GROUP_INFO,
     MSG_CL_REQUEST_CHARA_GROUP_UPDATE,
@@ -206,7 +224,52 @@ HANDLED = frozenset({
     MSG_CL_REQUEST_CHARA_GROUP_KICK,
     MSG_CL_REQUEST_CHARA_GROUP_DESTROY,
     MSG_CL_REQUEST_CHARA_GROUP_PART,
+    MSG_CL_REQUEST_CLUB_LIKE_REGISTER,
+    MSG_CL_QUERY_CHARA_GROUP_LIST,
 }) | TRANSFER
+
+#: 0x0802's reasons, straight out of error_message.bin. ⭐ The table is what
+#: makes this family implementable without inventing anything: every refusal
+#: below quotes a sentence the client already ships, and the three marked
+#: 未使用：：： there are the three not used here either.
+#:
+#:   0  キャラクター情報が不正です。
+#:   1  未使用：：：選択されたＮＰＣの情報が不正です。
+#:   2  未使用：：：同好会登録機能は公開されていません。
+#:   3  仲良しグループ情報が不正です。
+#:   4  仲良しグループのリーダーではありませんので、同好会登録はできません。
+#:   5  グループの人数が条件に満たないため、同好会登録はできません。
+#:   6  試験レベルが条件に満たないため、同好会登録はできません。
+#:   7  既に同好会として登録されています。
+#:   8  仲良しグループデータの取得もしくは変更に失敗したため、…
+#:   9  未使用：：：未定義のエラーが発生しました。
+#:
+#: ⭐⭐ Reason 1 is worth reading even though it is unused: it says the request
+#: is judged with an NPC in hand, which is what the door being on the 理事長
+#: 秘書's ring already implies. Nothing on the wire carries that NPC -- 0x0800
+#: is the catchcopy and nothing else -- so the client is trusted for it here.
+CLUBLIKE_NG_NO_CHARACTER = 0
+CLUBLIKE_NG_NO_GROUP = 3
+CLUBLIKE_NG_NOT_LEADER = 4
+CLUBLIKE_NG_TOO_FEW = 5
+CLUBLIKE_NG_TEST_LEVEL = 6
+CLUBLIKE_NG_ALREADY = 7
+CLUBLIKE_NG_STORE = 8
+
+#: ⚠️⚠️ THE ONE NUMBER HERE THAT IS NOT THIS CLIENT'S VERSION. The β manual
+#: this build belongs to (`beta/manual/p05_05`, and the exe is stamped
+#: 2006-01-23) states the size rule and *no* 試験レベル rule at all:
+#: 「「仲良しグループ」のメンバーが１５人になった場合、「同好会」として登録する
+#: ことができます」. The later manual adds one: 「試験レベルが３になり、かつ…」.
+#:
+#: ⭐ It is still enforced, and the reason is that the *client* is the better
+#: witness than its own manual here: error_message.bin ships reason 6 for
+#: 試験レベル as a live sentence, so the check existed in this build even though
+#: the β manual left the threshold unwritten. What the later manual supplies is
+#: only the number. ⇒ the rule is this version's, the constant is borrowed, and
+#: that is why it is spelled out here rather than inlined: a borrowed number that
+#: reads like a measured one is the kind of thing nobody re-checks later.
+CLUBLIKE_TEST_LEVEL = 3
 
 #: 「仲良しグループ」は１５人まで登録できます (p05_05 §3). The client checks
 #: nothing about the size before it sends 0x6218 -- the icon is live whatever
@@ -495,6 +558,52 @@ class GroupBook:
         self._save()
         return True
 
+    def promote(self, group_id: int, catchcopy: bytes) -> bool:
+        """同好会登録: 仲良しグループ -> 同好会, 0x0800. False if the store fails.
+
+        Two fields move together and that is the whole mutation: ``clublike``
+        goes to 1, which is what raises ``limit`` from MEMBER_LIMIT to
+        CLUBLIKE_MEMBER_LIMIT, and the キャッチコピー the dialog collected is
+        kept beside it.
+
+        ⭐ ``public`` is forced on, and that is not this end's idea:
+        error_message.bin's 0xFF07 reason 27 is 「同好会を非公開にはできません。
+        （公開必須です）」, so the client already ships the sentence for a 同好会
+        that tries to go 非公開. Doing it here at the moment of promotion is what
+        keeps that sentence from ever being needed.
+        ⚠️ Whoever answers 0x620A next has to refuse 非公開 on a 同好会 with that
+        very reason, or this half is decorative -- see the methodology.
+
+        ⚠️ The caller checks the rules; this only writes. That split is the same
+        one create/join keep, and it is what lets the refusals quote the
+        client's own reason bytes instead of a bool.
+        """
+        group = self.groups.get(group_id)
+        if group is None:
+            return False
+        group.clublike = 1
+        group.public = 1
+        group.catchcopy = catchcopy.split(b"\x00")[0][:MAX_CATCHCOPY]
+        self._save()
+        return True
+
+    def listing(self) -> "list[Group]":
+        """The groups the 理事長秘書's 「グループ一覧を見る」 shows: 公開 only.
+
+        ⚠️⚠️ The filter is the one rule in this family whose source is NOT this
+        build's manual. `beta/manual` has no 公開設定 section at all -- the word
+        only ever appears there about 通知表公開 and 経歴公開, which are options
+        on a different screen. The later manual is where 「「公開」にすると、…
+        理事長秘書の「グループ一覧を見る」から起動するグループリストに情報を掲載
+        されます」 is written down.
+        ⭐ It is applied anyway for the same reason CLUBLIKE_TEST_LEVEL is: the
+        flag itself is this build's -- 0x620A has carried ``publicFlag`` since
+        round 144 and 0x6208 sends it back -- so what the later manual supplies
+        is what the flag is *for*, not the flag. A publicFlag nothing reads is
+        the alternative, and that is not more faithful, only emptier.
+        """
+        return [group for group in self.groups.values() if group.public]
+
     def update(self, group_id: int, public: int, catchcopy: bytes) -> bool:
         """［更 新］: the 公開 dropdown and the キャッチコピー box, 0x620A.
 
@@ -606,6 +715,45 @@ class GroupBook:
             f"{len(self.groups)} group(s), "
             f"{len(self.qualified)} qualified leader(s)"
         )
+
+
+def group_list_params(listed: "list[Group]") -> bytes:
+    """MsgSvNotifyCharaGroupList (0x622D): the rows behind 「グループ一覧を見る」.
+
+    Read out of the client's own deserializer at 0x8D2100 rather than guessed
+    from the field list, because the two disagree about the strings. Per entry,
+    in wire order:
+
+        u16 nameLen  + nameLen bytes        ← the group's name
+        u16 copyLen  + copyLen bytes        ← its キャッチコピー
+        u8  entry                           ← how many members it holds
+        u8  clublikeGroupFlag
+
+    with a u16 row count in front of the lot. ⚠️ Both strings are *counted*, not
+    the fixed 21-byte field the character record spends on friendGroupName --
+    the reader takes their lengths off the wire (0x8D2100 pulls each u16 through
+    the stream's +0x28 slot and hands it to the counted-string reader at
+    0xA49610) and steps 0x3C bytes to the next entry. That 0x3C is the size of
+    the *struct*, not of anything on the wire; nothing pads to it.
+    ⭐ the shape reader calls this entry=6B, which is the same reading counted a
+    different way: 2 + 2 for the two lengths and 1 + 1 for the two bytes.
+
+    ⭐ ``entry`` and ``clublikeGroupFlag`` are one byte each, so a 同好会 at its
+    full 30 still fits and nothing here can overflow them.
+
+    ⚠️ The count includes the trailing NUL, the convention read_counted
+    documents for the rest of the family -- and round 219 confirmed it from the
+    other direction, on the first 0x0800 ever seen: 「TESTCLUB」 arrived as
+    ``0009`` + 8 bytes + ``00``.
+    """
+    out = struct.pack(">H", len(listed))
+    for group in listed:
+        name = group.name.split(b"\x00")[0] + b"\x00"
+        catchcopy = group.catchcopy.split(b"\x00")[0] + b"\x00"
+        out += struct.pack(">H", len(name)) + name
+        out += struct.pack(">H", len(catchcopy)) + catchcopy
+        out += struct.pack(">BB", min(len(group.members), 0xFF), group.clublike)
+    return out
 
 
 def result_params(group: Group, roster: "list[tuple[int, bytes, bytes, int, int]]") -> bytes:

@@ -266,6 +266,26 @@ FIXED_REPLIES = {
     # The requests do carry something (0x5600 reads one u16) which is ignored;
     # whatever an event needs beyond being acknowledged is still unknown.
     0x5600: (0x5601, b""),  # MsgClRequestNpcEventStart -> MsgSvOkNpcEventStart
+    # ⭐⭐⭐ The bracket around *every* menu opened on a non-capture NPC, first
+    # seen on the wire in round 219 by right-clicking the 理事長秘書 (2:9) and
+    # picking 「校則を読む」. Both requests are empty and both Oks deserialize
+    # through 0x8CB9A0, the same zero-param stub 0x4003 and 0x5600 above use, so
+    # an Ok is the type and nothing else.
+    #
+    # ⚠️⚠️ The End is NOT a formality, and the way that shows is delayed: the
+    # 校則 window opens and closes perfectly well with neither answered, so the
+    # first click looks like a complete success. It is the *next* right-click on
+    # an NPC that stops on 「通信中 / サーバーからの返答待ちです」 -- the client
+    # still counts the bracket as open. 0x4E02's own reason 4 spells that state
+    # out (「既に交流メニューを開いています。」), which is what identifies the
+    # box: it is not the second menu failing, it is the first never closing.
+    #
+    # ⭐ Same lesson 0xE005 taught in round 217, one family over: a name that
+    # says the client does not wait for a body does not say the client does not
+    # wait for an answer. Answering these two is what makes all four of the
+    # 秘書's other doors reachable a second time.
+    0x4E00: (0x4E01, b""),  # ...MenuAccessStart -> MsgSvOkNonCaptureNpcMenuAccessStart
+    0x4E03: (0x4E04, b""),  # ...MenuAccessEnd   -> MsgSvOkNonCaptureNpcMenuAccessEnd
     # ⭐ 0x5603 used to be the row below this one. It moved into the drama
     # branch in round 160, because answering it is no longer a formality: a
     # script started from a map object ends with the client sending this and
@@ -8069,6 +8089,10 @@ class MpsServer:
             return self._group_destroy(session, seen, params)
         if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_PART:
             return self._group_part(session, seen)
+        if msg_type == groups.MSG_CL_REQUEST_CLUB_LIKE_REGISTER:
+            return self._clublike_register(session, seen, params)
+        if msg_type == groups.MSG_CL_QUERY_CHARA_GROUP_LIST:
+            return self._group_list(session, seen)
         if msg_type in groups.TRANSFER:
             return self._group_transfer(session, seen, msg_type, params)
         if msg_type != groups.MSG_CL_QUERY_CHARA_GROUP_INFO:
@@ -8104,6 +8128,110 @@ class MpsServer:
         return self._answer(
             session, seen, groups.MSG_SV_RESULT_CHARA_GROUP_INFO,
             groups.result_params(group, roster),
+        )
+
+    def _clublike_register(self, session: "_Session", seen: int,
+                           params: bytes) -> bytes:
+        """同好会登録 on the 理事長秘書's ring: 0x0800 -> 0x0801 / 0x0802.
+
+        ⭐⭐⭐ Round 219 walked this door end to end for the first time. The ring
+        is reachable at all because of round 217's 「/cid 2:9」 -- the whole
+        family had been written off as 「behind an NPC this server cannot stage」,
+        and staging her is one console line.
+
+        The request is one counted string, the キャッチコピー the dialog collects,
+        and nothing else -- no group id, no NPC id. Measured, not inferred:
+        pressing ［登 録］ with 「TESTCLUB」 typed in sent
+
+            0x0800 params = 0009 54455354434c5542 00
+
+        i.e. a u16 count of 9 covering eight characters and their NUL. Which
+        group it means is therefore this end's business: it is the sender's own,
+        and a character in none of them is reason 3.
+
+        ⭐ The client gates only one thing before it sends, and it is worth
+        writing down because it is the reason an empty catchcopy never arrives:
+        ［登 録］ stays greyed until the box has text in it.
+
+        The refusals in order. ⚠️ The *order* is a choice -- the original's is
+        not knowable from the table -- but every reason byte is the client's own
+        sentence, so a player never sees a string this project wrote:
+
+            3  not in a group at all
+            4  in one, but not its leader
+            7  it is already a 同好会
+            6  試験レベル below CLUBLIKE_TEST_LEVEL
+            5  fewer than MEMBER_LIMIT members
+            8  the store refused the write
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        catchcopy = groups.read_counted(params)
+        group = book.of(me)
+
+        def refuse(reason: int, why: str) -> bytes:
+            print(f"[{self.tag}] 同好会登録 for charaId={me}: refused, {why} "
+                  f"(reason={reason})")
+            return self._answer(
+                session, seen, groups.MSG_SV_NG_CLUB_LIKE_REGISTER,
+                struct.pack(">B", reason),
+            )
+
+        if group is None:
+            return refuse(groups.CLUBLIKE_NG_NO_GROUP, "in no group")
+        if group.leader != me:
+            return refuse(groups.CLUBLIKE_NG_NOT_LEADER,
+                          f"not the leader of {group.label()}")
+        if group.clublike:
+            return refuse(groups.CLUBLIKE_NG_ALREADY,
+                          f"{group.label()} is already a 同好会")
+        card = self._chars(session).scorecard(me)
+        if card is None:
+            # ⚠️ Reason 0, not 3: the group is fine, the character is not
+            # readable, which is the one this end can honestly say.
+            return refuse(groups.CLUBLIKE_NG_NO_CHARACTER, "no scorecard")
+        level = card.test_level()
+        if level < groups.CLUBLIKE_TEST_LEVEL:
+            return refuse(groups.CLUBLIKE_NG_TEST_LEVEL,
+                          f"試験レベル {level} < {groups.CLUBLIKE_TEST_LEVEL}")
+        if len(group.members) < groups.MEMBER_LIMIT:
+            return refuse(groups.CLUBLIKE_NG_TOO_FEW,
+                          f"{len(group.members)} member(s) < {groups.MEMBER_LIMIT}")
+        if not book.promote(group.id, catchcopy):
+            return refuse(groups.CLUBLIKE_NG_STORE, "store write failed")
+        print(f"[{self.tag}] 同好会登録: {group.label()} is now a 同好会, "
+              f"キャッチコピー={catchcopy!r}")
+        return self._answer(
+            session, seen, groups.MSG_SV_OK_CLUB_LIKE_REGISTER, b"",
+        )
+
+    def _group_list(self, session: "_Session", seen: int) -> bytes:
+        """グループ一覧を見る on the same ring: 0x622A -> 0x622B then 0x622D.
+
+        ⚠️⚠️ Two messages, and the split is the shape of the family rather than
+        a choice: 0x622B carries one u32 the dump calls ``nNum`` and 0x622D
+        carries the rows. Answering only the Result leaves a window that knows
+        how many groups exist and can draw none of them, which is the
+        half-answered window 2.93 warns about.
+
+        ⭐ The request is empty -- no page number, no filter -- so everything the
+        list is allowed to show goes in one Notify. What 「allowed」 means is
+        groups.listing(): 公開 only, and the caveat about where that rule comes
+        from is written there rather than repeated here.
+        """
+        listed = self.accounts.groups.listing()
+        print(f"[{self.tag}] グループ一覧 for charaId={session.chara_id}: "
+              f"{len(listed)} 公開 group(s) of "
+              f"{len(self.accounts.groups.groups)}")
+        return (
+            self._answer(
+                session, seen, groups.MSG_SV_RESULT_CHARA_GROUP_LIST,
+                struct.pack(">I", len(listed)),
+            )
+            + self._answer(
+                session, seen, groups.MSG_SV_NOTIFY_CHARA_GROUP_LIST,
+                groups.group_list_params(listed),
+            )
         )
 
     def _group_update(self, session: "_Session", seen: int, params: bytes) -> bytes:
