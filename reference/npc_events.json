@@ -1,0 +1,3817 @@
+{
+ "capture_npc_event": [
+  {
+   "key": "0:0",
+   "ssb": "amm_e001.ssb",
+   "scriptId": 8192,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:1",
+   "ssb": "amm_e002.ssb",
+   "scriptId": 8193,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:2",
+   "ssb": "amm_e003.ssb",
+   "scriptId": 8194,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:3",
+   "ssb": "amm_e004.ssb",
+   "scriptId": 8195,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:4",
+   "ssb": "amm_e005.ssb",
+   "scriptId": 8196,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:5",
+   "ssb": "amm_e006.ssb",
+   "scriptId": 8197,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:6",
+   "ssb": "amm_e007.ssb",
+   "scriptId": 8198,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:7",
+   "ssb": "amm_e008.ssb",
+   "scriptId": 8199,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:8",
+   "ssb": "amm_e009.ssb",
+   "scriptId": 8200,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:9",
+   "ssb": "amm_e010.ssb",
+   "scriptId": 8201,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:10",
+   "ssb": "amm_e011.ssb",
+   "scriptId": 8202,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:11",
+   "ssb": "amm_e012.ssb",
+   "scriptId": 8203,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:20",
+   "ssb": "amm_o011.ssb",
+   "scriptId": 8204,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "0:21",
+   "ssb": "amm_o012.ssb",
+   "scriptId": 8205,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:1",
+   "ssb": "amm_c011.ssb",
+   "scriptId": 8206,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:2",
+   "ssb": "amm_c012.ssb",
+   "scriptId": 8207,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:3",
+   "ssb": "amm_c013.ssb",
+   "scriptId": 8208,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:11",
+   "ssb": "amm_c021.ssb",
+   "scriptId": 8209,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:12",
+   "ssb": "amm_c022.ssb",
+   "scriptId": 8210,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:14",
+   "ssb": "amm_c024.ssb",
+   "scriptId": 8211,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:15",
+   "ssb": "amm_c025.ssb",
+   "scriptId": 8212,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:16",
+   "ssb": "amm_c026.ssb",
+   "scriptId": 8213,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:20",
+   "ssb": "amm_c030.ssb",
+   "scriptId": 8214,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:21",
+   "ssb": "amm_c031.ssb",
+   "scriptId": 8215,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:22",
+   "ssb": "amm_c032.ssb",
+   "scriptId": 8216,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:23",
+   "ssb": "amm_c033.ssb",
+   "scriptId": 8217,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:24",
+   "ssb": "amm_c034.ssb",
+   "scriptId": 8218,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:25",
+   "ssb": "amm_c035.ssb",
+   "scriptId": 8219,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:26",
+   "ssb": "amm_c036.ssb",
+   "scriptId": 8220,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:28",
+   "ssb": "amm_c038.ssb",
+   "scriptId": 8221,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:29",
+   "ssb": "amm_c039.ssb",
+   "scriptId": 8222,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:31",
+   "ssb": "amm_c041.ssb",
+   "scriptId": 8223,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:32",
+   "ssb": "amm_c042.ssb",
+   "scriptId": 8224,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:33",
+   "ssb": "amm_c043.ssb",
+   "scriptId": 8225,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:34",
+   "ssb": "amm_c044.ssb",
+   "scriptId": 8226,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:35",
+   "ssb": "amm_c045.ssb",
+   "scriptId": 8227,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:41",
+   "ssb": "amm_c051.ssb",
+   "scriptId": 8228,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:42",
+   "ssb": "amm_c052.ssb",
+   "scriptId": 8229,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:43",
+   "ssb": "amm_c053.ssb",
+   "scriptId": 8230,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:45",
+   "ssb": "amm_c055.ssb",
+   "scriptId": 8231,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:48",
+   "ssb": "amm_c058.ssb",
+   "scriptId": 8232,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:49",
+   "ssb": "amm_c059.ssb",
+   "scriptId": 8233,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:51",
+   "ssb": "amm_c061.ssb",
+   "scriptId": 8234,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:52",
+   "ssb": "amm_c062.ssb",
+   "scriptId": 8235,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:53",
+   "ssb": "amm_c063.ssb",
+   "scriptId": 8236,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:55",
+   "ssb": "amm_c065.ssb",
+   "scriptId": 8237,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:58",
+   "ssb": "amm_c068.ssb",
+   "scriptId": 8238,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:59",
+   "ssb": "amm_c069.ssb",
+   "scriptId": 8239,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:61",
+   "ssb": "amm_c071.ssb",
+   "scriptId": 8240,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:62",
+   "ssb": "amm_c072.ssb",
+   "scriptId": 8241,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:63",
+   "ssb": "amm_c073.ssb",
+   "scriptId": 8242,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:64",
+   "ssb": "amm_c074.ssb",
+   "scriptId": 8243,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:65",
+   "ssb": "amm_c075.ssb",
+   "scriptId": 8244,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:71",
+   "ssb": "amm_c081.ssb",
+   "scriptId": 8245,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:72",
+   "ssb": "amm_c082.ssb",
+   "scriptId": 8246,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:73",
+   "ssb": "amm_c083.ssb",
+   "scriptId": 8247,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:77",
+   "ssb": "amm_c087.ssb",
+   "scriptId": 8248,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:78",
+   "ssb": "amm_c088.ssb",
+   "scriptId": 8249,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:81",
+   "ssb": "amm_c091.ssb",
+   "scriptId": 8250,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:82",
+   "ssb": "amm_c092.ssb",
+   "scriptId": 8251,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:83",
+   "ssb": "amm_c093.ssb",
+   "scriptId": 8252,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:87",
+   "ssb": "amm_c097.ssb",
+   "scriptId": 8253,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:91",
+   "ssb": "amm_c101.ssb",
+   "scriptId": 8254,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:92",
+   "ssb": "amm_c102.ssb",
+   "scriptId": 8255,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:93",
+   "ssb": "amm_c103.ssb",
+   "scriptId": 8256,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:97",
+   "ssb": "amm_c107.ssb",
+   "scriptId": 8257,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:129",
+   "ssb": "amm_c201.ssb",
+   "scriptId": 8258,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:130",
+   "ssb": "amm_c202.ssb",
+   "scriptId": 8259,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:131",
+   "ssb": "amm_c203.ssb",
+   "scriptId": 8260,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:145",
+   "ssb": "amm_c301.ssb",
+   "scriptId": 8261,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:146",
+   "ssb": "amm_c302.ssb",
+   "scriptId": 8262,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:147",
+   "ssb": "amm_c303.ssb",
+   "scriptId": 8263,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:194",
+   "ssb": "amm_c502.ssb",
+   "scriptId": 8264,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:199",
+   "ssb": "amm_c507.ssb",
+   "scriptId": 8265,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:200",
+   "ssb": "amm_c508.ssb",
+   "scriptId": 8266,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:202",
+   "ssb": "amm_c510.ssb",
+   "scriptId": 8267,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:203",
+   "ssb": "amm_c511.ssb",
+   "scriptId": 8268,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:204",
+   "ssb": "amm_c512.ssb",
+   "scriptId": 8269,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:205",
+   "ssb": "amm_c513.ssb",
+   "scriptId": 8270,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:206",
+   "ssb": "amm_c514.ssb",
+   "scriptId": 8271,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:207",
+   "ssb": "amm_c515.ssb",
+   "scriptId": 8272,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "16:208",
+   "ssb": "amm_c516.ssb",
+   "scriptId": 8273,
+   "npc": [
+    1,
+    0
+   ]
+  },
+  {
+   "key": "1:1",
+   "ssb": "ksg_e002.ssb",
+   "scriptId": 8274,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:2",
+   "ssb": "ksg_e003.ssb",
+   "scriptId": 8275,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:3",
+   "ssb": "ksg_e004.ssb",
+   "scriptId": 8276,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:4",
+   "ssb": "ksg_e005.ssb",
+   "scriptId": 8277,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:5",
+   "ssb": "ksg_e006.ssb",
+   "scriptId": 8278,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:6",
+   "ssb": "ksg_e007.ssb",
+   "scriptId": 8279,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:7",
+   "ssb": "ksg_e008.ssb",
+   "scriptId": 8280,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:8",
+   "ssb": "ksg_e009.ssb",
+   "scriptId": 8281,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:9",
+   "ssb": "ksg_e010.ssb",
+   "scriptId": 8282,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:10",
+   "ssb": "ksg_e011.ssb",
+   "scriptId": 8283,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:11",
+   "ssb": "ksg_e012.ssb",
+   "scriptId": 8284,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:20",
+   "ssb": "ksg_o011.ssb",
+   "scriptId": 8285,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "1:21",
+   "ssb": "ksg_o012.ssb",
+   "scriptId": 8286,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:11",
+   "ssb": "ksg_c021.ssb",
+   "scriptId": 8287,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:12",
+   "ssb": "ksg_c022.ssb",
+   "scriptId": 8288,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:13",
+   "ssb": "ksg_c023.ssb",
+   "scriptId": 8289,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:14",
+   "ssb": "ksg_c024.ssb",
+   "scriptId": 8290,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:15",
+   "ssb": "ksg_c025.ssb",
+   "scriptId": 8291,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:22",
+   "ssb": "ksg_c032.ssb",
+   "scriptId": 8292,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:23",
+   "ssb": "ksg_c033.ssb",
+   "scriptId": 8293,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:24",
+   "ssb": "ksg_c034.ssb",
+   "scriptId": 8294,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:25",
+   "ssb": "ksg_c035.ssb",
+   "scriptId": 8295,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:29",
+   "ssb": "ksg_c039.ssb",
+   "scriptId": 8296,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:31",
+   "ssb": "ksg_c041.ssb",
+   "scriptId": 8297,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:32",
+   "ssb": "ksg_c042.ssb",
+   "scriptId": 8298,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:33",
+   "ssb": "ksg_c043.ssb",
+   "scriptId": 8299,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:34",
+   "ssb": "ksg_c044.ssb",
+   "scriptId": 8300,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:35",
+   "ssb": "ksg_c045.ssb",
+   "scriptId": 8301,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:36",
+   "ssb": "ksg_c046.ssb",
+   "scriptId": 8302,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:37",
+   "ssb": "ksg_c047.ssb",
+   "scriptId": 8303,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:38",
+   "ssb": "ksg_c048.ssb",
+   "scriptId": 8304,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:39",
+   "ssb": "ksg_c049.ssb",
+   "scriptId": 8305,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:41",
+   "ssb": "ksg_c051.ssb",
+   "scriptId": 8306,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:42",
+   "ssb": "ksg_c052.ssb",
+   "scriptId": 8307,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:43",
+   "ssb": "ksg_c053.ssb",
+   "scriptId": 8308,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:44",
+   "ssb": "ksg_c054.ssb",
+   "scriptId": 8309,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:45",
+   "ssb": "ksg_c055.ssb",
+   "scriptId": 8310,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:46",
+   "ssb": "ksg_c056.ssb",
+   "scriptId": 8311,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:47",
+   "ssb": "ksg_c057.ssb",
+   "scriptId": 8312,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:48",
+   "ssb": "ksg_c058.ssb",
+   "scriptId": 8313,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:49",
+   "ssb": "ksg_c059.ssb",
+   "scriptId": 8314,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:51",
+   "ssb": "ksg_c061.ssb",
+   "scriptId": 8315,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:52",
+   "ssb": "ksg_c062.ssb",
+   "scriptId": 8316,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:53",
+   "ssb": "ksg_c063.ssb",
+   "scriptId": 8317,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:54",
+   "ssb": "ksg_c064.ssb",
+   "scriptId": 8318,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:55",
+   "ssb": "ksg_c065.ssb",
+   "scriptId": 8319,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:56",
+   "ssb": "ksg_c066.ssb",
+   "scriptId": 8320,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:57",
+   "ssb": "ksg_c067.ssb",
+   "scriptId": 8321,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:58",
+   "ssb": "ksg_c068.ssb",
+   "scriptId": 8322,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:59",
+   "ssb": "ksg_c069.ssb",
+   "scriptId": 8323,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:61",
+   "ssb": "ksg_c071.ssb",
+   "scriptId": 8324,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:62",
+   "ssb": "ksg_c072.ssb",
+   "scriptId": 8325,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:63",
+   "ssb": "ksg_c073.ssb",
+   "scriptId": 8326,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:64",
+   "ssb": "ksg_c074.ssb",
+   "scriptId": 8327,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:67",
+   "ssb": "ksg_c077.ssb",
+   "scriptId": 8328,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:68",
+   "ssb": "ksg_c078.ssb",
+   "scriptId": 8329,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:69",
+   "ssb": "ksg_c079.ssb",
+   "scriptId": 8330,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:71",
+   "ssb": "ksg_c081.ssb",
+   "scriptId": 8331,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:72",
+   "ssb": "ksg_c082.ssb",
+   "scriptId": 8332,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:73",
+   "ssb": "ksg_c083.ssb",
+   "scriptId": 8333,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:74",
+   "ssb": "ksg_c084.ssb",
+   "scriptId": 8334,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:75",
+   "ssb": "ksg_c085.ssb",
+   "scriptId": 8335,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:76",
+   "ssb": "ksg_c086.ssb",
+   "scriptId": 8336,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:77",
+   "ssb": "ksg_c087.ssb",
+   "scriptId": 8337,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:78",
+   "ssb": "ksg_c088.ssb",
+   "scriptId": 8338,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:79",
+   "ssb": "ksg_c089.ssb",
+   "scriptId": 8339,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:81",
+   "ssb": "ksg_c091.ssb",
+   "scriptId": 8340,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:83",
+   "ssb": "ksg_c093.ssb",
+   "scriptId": 8341,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:84",
+   "ssb": "ksg_c094.ssb",
+   "scriptId": 8342,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:85",
+   "ssb": "ksg_c095.ssb",
+   "scriptId": 8343,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:86",
+   "ssb": "ksg_c096.ssb",
+   "scriptId": 8344,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:87",
+   "ssb": "ksg_c097.ssb",
+   "scriptId": 8345,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:88",
+   "ssb": "ksg_c098.ssb",
+   "scriptId": 8346,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:129",
+   "ssb": "ksg_c201.ssb",
+   "scriptId": 8347,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:130",
+   "ssb": "ksg_c202.ssb",
+   "scriptId": 8348,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:131",
+   "ssb": "ksg_c203.ssb",
+   "scriptId": 8349,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:145",
+   "ssb": "ksg_c301.ssb",
+   "scriptId": 8350,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:146",
+   "ssb": "ksg_c302.ssb",
+   "scriptId": 8351,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:147",
+   "ssb": "ksg_c303.ssb",
+   "scriptId": 8352,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:193",
+   "ssb": "ksg_c501.ssb",
+   "scriptId": 8353,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:194",
+   "ssb": "ksg_c502.ssb",
+   "scriptId": 8354,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:195",
+   "ssb": "ksg_c503.ssb",
+   "scriptId": 8355,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:197",
+   "ssb": "ksg_c505.ssb",
+   "scriptId": 8356,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:198",
+   "ssb": "ksg_c506.ssb",
+   "scriptId": 8357,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:199",
+   "ssb": "ksg_c507.ssb",
+   "scriptId": 8358,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:200",
+   "ssb": "ksg_c508.ssb",
+   "scriptId": 8359,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:201",
+   "ssb": "ksg_c509.ssb",
+   "scriptId": 8360,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:202",
+   "ssb": "ksg_c510.ssb",
+   "scriptId": 8361,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:203",
+   "ssb": "ksg_c511.ssb",
+   "scriptId": 8362,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:204",
+   "ssb": "ksg_c512.ssb",
+   "scriptId": 8363,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:206",
+   "ssb": "ksg_c514.ssb",
+   "scriptId": 8364,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:207",
+   "ssb": "ksg_c515.ssb",
+   "scriptId": 8365,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "17:208",
+   "ssb": "ksg_c516.ssb",
+   "scriptId": 8366,
+   "npc": [
+    1,
+    1
+   ]
+  },
+  {
+   "key": "2:1",
+   "ssb": "yyi_e002.ssb",
+   "scriptId": 8367,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:2",
+   "ssb": "yyi_e003.ssb",
+   "scriptId": 8368,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:3",
+   "ssb": "yyi_e004.ssb",
+   "scriptId": 8369,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:4",
+   "ssb": "yyi_e005.ssb",
+   "scriptId": 8370,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:5",
+   "ssb": "yyi_e006.ssb",
+   "scriptId": 8371,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:6",
+   "ssb": "yyi_e007.ssb",
+   "scriptId": 8372,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:7",
+   "ssb": "yyi_e008.ssb",
+   "scriptId": 8373,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:8",
+   "ssb": "yyi_e009.ssb",
+   "scriptId": 8374,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:9",
+   "ssb": "yyi_e010.ssb",
+   "scriptId": 8375,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:10",
+   "ssb": "yyi_e011.ssb",
+   "scriptId": 8376,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:11",
+   "ssb": "yyi_e012.ssb",
+   "scriptId": 8377,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:20",
+   "ssb": "yyi_o011.ssb",
+   "scriptId": 8378,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "2:21",
+   "ssb": "yyi_o012.ssb",
+   "scriptId": 8379,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:11",
+   "ssb": "yyi_c021.ssb",
+   "scriptId": 8380,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:12",
+   "ssb": "yyi_c022.ssb",
+   "scriptId": 8381,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:13",
+   "ssb": "yyi_c023.ssb",
+   "scriptId": 8382,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:14",
+   "ssb": "yyi_c024.ssb",
+   "scriptId": 8383,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:19",
+   "ssb": "yyi_c029.ssb",
+   "scriptId": 8384,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:21",
+   "ssb": "yyi_c031.ssb",
+   "scriptId": 8385,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:22",
+   "ssb": "yyi_c032.ssb",
+   "scriptId": 8386,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:23",
+   "ssb": "yyi_c033.ssb",
+   "scriptId": 8387,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:29",
+   "ssb": "yyi_c039.ssb",
+   "scriptId": 8388,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:31",
+   "ssb": "yyi_c041.ssb",
+   "scriptId": 8389,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:32",
+   "ssb": "yyi_c042.ssb",
+   "scriptId": 8390,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:33",
+   "ssb": "yyi_c043.ssb",
+   "scriptId": 8391,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:41",
+   "ssb": "yyi_c051.ssb",
+   "scriptId": 8392,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:42",
+   "ssb": "yyi_c052.ssb",
+   "scriptId": 8393,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:49",
+   "ssb": "yyi_c059.ssb",
+   "scriptId": 8394,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:51",
+   "ssb": "yyi_c061.ssb",
+   "scriptId": 8395,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:52",
+   "ssb": "yyi_c062.ssb",
+   "scriptId": 8396,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:53",
+   "ssb": "yyi_c063.ssb",
+   "scriptId": 8397,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:61",
+   "ssb": "yyi_c071.ssb",
+   "scriptId": 8398,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:62",
+   "ssb": "yyi_c072.ssb",
+   "scriptId": 8399,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:63",
+   "ssb": "yyi_c073.ssb",
+   "scriptId": 8400,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:69",
+   "ssb": "yyi_c079.ssb",
+   "scriptId": 8401,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:71",
+   "ssb": "yyi_c081.ssb",
+   "scriptId": 8402,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:73",
+   "ssb": "yyi_c083.ssb",
+   "scriptId": 8403,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:74",
+   "ssb": "yyi_c084.ssb",
+   "scriptId": 8404,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:79",
+   "ssb": "yyi_c089.ssb",
+   "scriptId": 8405,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:81",
+   "ssb": "yyi_c091.ssb",
+   "scriptId": 8406,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:82",
+   "ssb": "yyi_c092.ssb",
+   "scriptId": 8407,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:83",
+   "ssb": "yyi_c093.ssb",
+   "scriptId": 8408,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:84",
+   "ssb": "yyi_c094.ssb",
+   "scriptId": 8409,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:89",
+   "ssb": "yyi_c099.ssb",
+   "scriptId": 8410,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:91",
+   "ssb": "yyi_c101.ssb",
+   "scriptId": 8411,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:92",
+   "ssb": "yyi_c102.ssb",
+   "scriptId": 8412,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:93",
+   "ssb": "yyi_c103.ssb",
+   "scriptId": 8413,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:99",
+   "ssb": "yyi_c109.ssb",
+   "scriptId": 8414,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:129",
+   "ssb": "yyi_c201.ssb",
+   "scriptId": 8415,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:130",
+   "ssb": "yyi_c202.ssb",
+   "scriptId": 8416,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:131",
+   "ssb": "yyi_c203.ssb",
+   "scriptId": 8417,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:145",
+   "ssb": "yyi_c301.ssb",
+   "scriptId": 8418,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:146",
+   "ssb": "yyi_c302.ssb",
+   "scriptId": 8419,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:147",
+   "ssb": "yyi_c303.ssb",
+   "scriptId": 8420,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:193",
+   "ssb": "yyi_c501.ssb",
+   "scriptId": 8421,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:194",
+   "ssb": "yyi_c502.ssb",
+   "scriptId": 8422,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:195",
+   "ssb": "yyi_c503.ssb",
+   "scriptId": 8423,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:196",
+   "ssb": "yyi_c504.ssb",
+   "scriptId": 8424,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:197",
+   "ssb": "yyi_c505.ssb",
+   "scriptId": 8425,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:199",
+   "ssb": "yyi_c507.ssb",
+   "scriptId": 8426,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:200",
+   "ssb": "yyi_c508.ssb",
+   "scriptId": 8427,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:201",
+   "ssb": "yyi_c509.ssb",
+   "scriptId": 8428,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:202",
+   "ssb": "yyi_c510.ssb",
+   "scriptId": 8429,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:203",
+   "ssb": "yyi_c511.ssb",
+   "scriptId": 8430,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:204",
+   "ssb": "yyi_c512.ssb",
+   "scriptId": 8431,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:205",
+   "ssb": "yyi_c513.ssb",
+   "scriptId": 8432,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:206",
+   "ssb": "yyi_c514.ssb",
+   "scriptId": 8433,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "18:207",
+   "ssb": "yyi_c515.ssb",
+   "scriptId": 8434,
+   "npc": [
+    1,
+    2
+   ]
+  },
+  {
+   "key": "3:0",
+   "ssb": "skr_e001.ssb",
+   "scriptId": 8435,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:1",
+   "ssb": "skr_e002.ssb",
+   "scriptId": 8436,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:2",
+   "ssb": "skr_e003.ssb",
+   "scriptId": 8437,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:3",
+   "ssb": "skr_e004.ssb",
+   "scriptId": 8438,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:4",
+   "ssb": "skr_e005.ssb",
+   "scriptId": 8439,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:5",
+   "ssb": "skr_e006.ssb",
+   "scriptId": 8440,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:6",
+   "ssb": "skr_e007.ssb",
+   "scriptId": 8441,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:7",
+   "ssb": "skr_e008.ssb",
+   "scriptId": 8442,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:8",
+   "ssb": "skr_e009.ssb",
+   "scriptId": 8443,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:9",
+   "ssb": "skr_e010.ssb",
+   "scriptId": 8444,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:10",
+   "ssb": "skr_e011.ssb",
+   "scriptId": 8445,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:11",
+   "ssb": "skr_e012.ssb",
+   "scriptId": 8446,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:20",
+   "ssb": "skr_o011.ssb",
+   "scriptId": 8447,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "3:21",
+   "ssb": "skr_o012.ssb",
+   "scriptId": 8448,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:1",
+   "ssb": "skr_c011.ssb",
+   "scriptId": 8449,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:2",
+   "ssb": "skr_c012.ssb",
+   "scriptId": 8450,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:3",
+   "ssb": "skr_c013.ssb",
+   "scriptId": 8451,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:4",
+   "ssb": "skr_c014.ssb",
+   "scriptId": 8452,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:11",
+   "ssb": "skr_c021.ssb",
+   "scriptId": 8453,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:12",
+   "ssb": "skr_c022.ssb",
+   "scriptId": 8454,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:13",
+   "ssb": "skr_c023.ssb",
+   "scriptId": 8455,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:21",
+   "ssb": "skr_c031.ssb",
+   "scriptId": 8456,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:22",
+   "ssb": "skr_c032.ssb",
+   "scriptId": 8457,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:23",
+   "ssb": "skr_c033.ssb",
+   "scriptId": 8458,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:28",
+   "ssb": "skr_c038.ssb",
+   "scriptId": 8459,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:29",
+   "ssb": "skr_c039.ssb",
+   "scriptId": 8460,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:31",
+   "ssb": "skr_c041.ssb",
+   "scriptId": 8461,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:32",
+   "ssb": "skr_c042.ssb",
+   "scriptId": 8462,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:33",
+   "ssb": "skr_c043.ssb",
+   "scriptId": 8463,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:41",
+   "ssb": "skr_c051.ssb",
+   "scriptId": 8464,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:42",
+   "ssb": "skr_c052.ssb",
+   "scriptId": 8465,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:43",
+   "ssb": "skr_c053.ssb",
+   "scriptId": 8466,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:48",
+   "ssb": "skr_c058.ssb",
+   "scriptId": 8467,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:49",
+   "ssb": "skr_c059.ssb",
+   "scriptId": 8468,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:51",
+   "ssb": "skr_c061.ssb",
+   "scriptId": 8469,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:52",
+   "ssb": "skr_c062.ssb",
+   "scriptId": 8470,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:53",
+   "ssb": "skr_c063.ssb",
+   "scriptId": 8471,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:57",
+   "ssb": "skr_c067.ssb",
+   "scriptId": 8472,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:61",
+   "ssb": "skr_c071.ssb",
+   "scriptId": 8473,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:62",
+   "ssb": "skr_c072.ssb",
+   "scriptId": 8474,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:63",
+   "ssb": "skr_c073.ssb",
+   "scriptId": 8475,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:64",
+   "ssb": "skr_c074.ssb",
+   "scriptId": 8476,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:67",
+   "ssb": "skr_c077.ssb",
+   "scriptId": 8477,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:68",
+   "ssb": "skr_c078.ssb",
+   "scriptId": 8478,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:69",
+   "ssb": "skr_c079.ssb",
+   "scriptId": 8479,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:71",
+   "ssb": "skr_c081.ssb",
+   "scriptId": 8480,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:72",
+   "ssb": "skr_c082.ssb",
+   "scriptId": 8481,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:73",
+   "ssb": "skr_c083.ssb",
+   "scriptId": 8482,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:77",
+   "ssb": "skr_c087.ssb",
+   "scriptId": 8483,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:81",
+   "ssb": "skr_c091.ssb",
+   "scriptId": 8484,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:82",
+   "ssb": "skr_c092.ssb",
+   "scriptId": 8485,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:83",
+   "ssb": "skr_c093.ssb",
+   "scriptId": 8486,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:87",
+   "ssb": "skr_c097.ssb",
+   "scriptId": 8487,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:89",
+   "ssb": "skr_c099.ssb",
+   "scriptId": 8488,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:91",
+   "ssb": "skr_c101.ssb",
+   "scriptId": 8489,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:92",
+   "ssb": "skr_c102.ssb",
+   "scriptId": 8490,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:93",
+   "ssb": "skr_c103.ssb",
+   "scriptId": 8491,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:97",
+   "ssb": "skr_c107.ssb",
+   "scriptId": 8492,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:98",
+   "ssb": "skr_c108.ssb",
+   "scriptId": 8493,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:99",
+   "ssb": "skr_c109.ssb",
+   "scriptId": 8494,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:129",
+   "ssb": "skr_c201.ssb",
+   "scriptId": 8495,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:130",
+   "ssb": "skr_c202.ssb",
+   "scriptId": 8496,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:131",
+   "ssb": "skr_c203.ssb",
+   "scriptId": 8497,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:145",
+   "ssb": "skr_c301.ssb",
+   "scriptId": 8498,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:146",
+   "ssb": "skr_c302.ssb",
+   "scriptId": 8499,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:147",
+   "ssb": "skr_c303.ssb",
+   "scriptId": 8500,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:193",
+   "ssb": "skr_c501.ssb",
+   "scriptId": 8501,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:194",
+   "ssb": "skr_c502.ssb",
+   "scriptId": 8502,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:195",
+   "ssb": "skr_c503.ssb",
+   "scriptId": 8503,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:196",
+   "ssb": "skr_c504.ssb",
+   "scriptId": 8504,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:197",
+   "ssb": "skr_c505.ssb",
+   "scriptId": 8505,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:199",
+   "ssb": "skr_c507.ssb",
+   "scriptId": 8506,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:201",
+   "ssb": "skr_c509.ssb",
+   "scriptId": 8507,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:203",
+   "ssb": "skr_c511.ssb",
+   "scriptId": 8508,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:204",
+   "ssb": "skr_c512.ssb",
+   "scriptId": 8509,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:205",
+   "ssb": "skr_c513.ssb",
+   "scriptId": 8510,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:206",
+   "ssb": "skr_c514.ssb",
+   "scriptId": 8511,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "19:208",
+   "ssb": "skr_c516.ssb",
+   "scriptId": 8512,
+   "npc": [
+    1,
+    3
+   ]
+  },
+  {
+   "key": "4:1",
+   "ssb": "ink_e002.ssb",
+   "scriptId": 8513,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:2",
+   "ssb": "ink_e003.ssb",
+   "scriptId": 8514,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:3",
+   "ssb": "ink_e004.ssb",
+   "scriptId": 8515,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:4",
+   "ssb": "ink_e005.ssb",
+   "scriptId": 8516,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:5",
+   "ssb": "ink_e006.ssb",
+   "scriptId": 8517,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:6",
+   "ssb": "ink_e007.ssb",
+   "scriptId": 8518,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:7",
+   "ssb": "ink_e008.ssb",
+   "scriptId": 8519,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:8",
+   "ssb": "ink_e009.ssb",
+   "scriptId": 8520,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:9",
+   "ssb": "ink_e010.ssb",
+   "scriptId": 8521,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:10",
+   "ssb": "ink_e011.ssb",
+   "scriptId": 8522,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:11",
+   "ssb": "ink_e012.ssb",
+   "scriptId": 8523,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:20",
+   "ssb": "ink_o011.ssb",
+   "scriptId": 8524,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "4:21",
+   "ssb": "ink_o012.ssb",
+   "scriptId": 8525,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:11",
+   "ssb": "ink_c021.ssb",
+   "scriptId": 8526,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:12",
+   "ssb": "ink_c022.ssb",
+   "scriptId": 8527,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:13",
+   "ssb": "ink_c023.ssb",
+   "scriptId": 8528,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:21",
+   "ssb": "ink_c031.ssb",
+   "scriptId": 8529,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:22",
+   "ssb": "ink_c032.ssb",
+   "scriptId": 8530,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:23",
+   "ssb": "ink_c033.ssb",
+   "scriptId": 8531,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:31",
+   "ssb": "ink_c041.ssb",
+   "scriptId": 8532,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:32",
+   "ssb": "ink_c042.ssb",
+   "scriptId": 8533,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:33",
+   "ssb": "ink_c043.ssb",
+   "scriptId": 8534,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:38",
+   "ssb": "ink_c048.ssb",
+   "scriptId": 8535,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:41",
+   "ssb": "ink_c051.ssb",
+   "scriptId": 8536,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:42",
+   "ssb": "ink_c052.ssb",
+   "scriptId": 8537,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:43",
+   "ssb": "ink_c053.ssb",
+   "scriptId": 8538,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:45",
+   "ssb": "ink_c055.ssb",
+   "scriptId": 8539,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:48",
+   "ssb": "ink_c058.ssb",
+   "scriptId": 8540,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:51",
+   "ssb": "ink_c061.ssb",
+   "scriptId": 8541,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:52",
+   "ssb": "ink_c062.ssb",
+   "scriptId": 8542,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:55",
+   "ssb": "ink_c065.ssb",
+   "scriptId": 8543,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:56",
+   "ssb": "ink_c066.ssb",
+   "scriptId": 8544,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:57",
+   "ssb": "ink_c067.ssb",
+   "scriptId": 8545,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:58",
+   "ssb": "ink_c068.ssb",
+   "scriptId": 8546,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:59",
+   "ssb": "ink_c069.ssb",
+   "scriptId": 8547,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:61",
+   "ssb": "ink_c071.ssb",
+   "scriptId": 8548,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:62",
+   "ssb": "ink_c072.ssb",
+   "scriptId": 8549,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:63",
+   "ssb": "ink_c073.ssb",
+   "scriptId": 8550,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:64",
+   "ssb": "ink_c074.ssb",
+   "scriptId": 8551,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:65",
+   "ssb": "ink_c075.ssb",
+   "scriptId": 8552,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:66",
+   "ssb": "ink_c076.ssb",
+   "scriptId": 8553,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:67",
+   "ssb": "ink_c077.ssb",
+   "scriptId": 8554,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:68",
+   "ssb": "ink_c078.ssb",
+   "scriptId": 8555,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:69",
+   "ssb": "ink_c079.ssb",
+   "scriptId": 8556,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:72",
+   "ssb": "ink_c082.ssb",
+   "scriptId": 8557,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:73",
+   "ssb": "ink_c083.ssb",
+   "scriptId": 8558,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:74",
+   "ssb": "ink_c084.ssb",
+   "scriptId": 8559,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:75",
+   "ssb": "ink_c085.ssb",
+   "scriptId": 8560,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:76",
+   "ssb": "ink_c086.ssb",
+   "scriptId": 8561,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:77",
+   "ssb": "ink_c087.ssb",
+   "scriptId": 8562,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:78",
+   "ssb": "ink_c088.ssb",
+   "scriptId": 8563,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:79",
+   "ssb": "ink_c089.ssb",
+   "scriptId": 8564,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:81",
+   "ssb": "ink_c091.ssb",
+   "scriptId": 8565,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:82",
+   "ssb": "ink_c092.ssb",
+   "scriptId": 8566,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:83",
+   "ssb": "ink_c093.ssb",
+   "scriptId": 8567,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:84",
+   "ssb": "ink_c094.ssb",
+   "scriptId": 8568,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:129",
+   "ssb": "ink_c201.ssb",
+   "scriptId": 8569,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:130",
+   "ssb": "ink_c202.ssb",
+   "scriptId": 8570,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:131",
+   "ssb": "ink_c203.ssb",
+   "scriptId": 8571,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:145",
+   "ssb": "ink_c301.ssb",
+   "scriptId": 8572,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:146",
+   "ssb": "ink_c302.ssb",
+   "scriptId": 8573,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:147",
+   "ssb": "ink_c303.ssb",
+   "scriptId": 8574,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:194",
+   "ssb": "ink_c502.ssb",
+   "scriptId": 8575,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:195",
+   "ssb": "ink_c503.ssb",
+   "scriptId": 8576,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:196",
+   "ssb": "ink_c504.ssb",
+   "scriptId": 8577,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:199",
+   "ssb": "ink_c507.ssb",
+   "scriptId": 8578,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:203",
+   "ssb": "ink_c511.ssb",
+   "scriptId": 8579,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:204",
+   "ssb": "ink_c512.ssb",
+   "scriptId": 8580,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:205",
+   "ssb": "ink_c513.ssb",
+   "scriptId": 8581,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:206",
+   "ssb": "ink_c514.ssb",
+   "scriptId": 8582,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:207",
+   "ssb": "ink_c515.ssb",
+   "scriptId": 8583,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:208",
+   "ssb": "ink_c516.ssb",
+   "scriptId": 8584,
+   "npc": [
+    1,
+    4
+   ]
+  },
+  {
+   "key": "20:209",
+   "ssb": "ink_c517.ssb",
+   "scriptId": 8585,
+   "npc": [
+    1,
+    4
+   ]
+  }
+ ],
+ "common_npc_event": [
+  {
+   "key": "0:0",
+   "ssb": "isu_c001.ssb",
+   "scriptId": 16384,
+   "npc": [
+    2,
+    0
+   ]
+  },
+  {
+   "key": "0:1",
+   "ssb": "isu_c002.ssb",
+   "scriptId": 16385,
+   "npc": [
+    2,
+    0
+   ]
+  },
+  {
+   "key": "1:0",
+   "ssb": "otm_c001.ssb",
+   "scriptId": 16386,
+   "npc": [
+    2,
+    1
+   ]
+  },
+  {
+   "key": "1:1",
+   "ssb": "otm_c002.ssb",
+   "scriptId": 16387,
+   "npc": [
+    2,
+    1
+   ]
+  },
+  {
+   "key": "3:0",
+   "ssb": "kmn_c001.ssb",
+   "scriptId": 16388,
+   "npc": [
+    2,
+    2
+   ]
+  },
+  {
+   "key": "3:1",
+   "ssb": "kmn_c002.ssb",
+   "scriptId": 16389,
+   "npc": [
+    2,
+    2
+   ]
+  },
+  {
+   "key": "2:0",
+   "ssb": "utm_c001.ssb",
+   "scriptId": 16390,
+   "npc": [
+    2,
+    3
+   ]
+  },
+  {
+   "key": "2:1",
+   "ssb": "utm_c002.ssb",
+   "scriptId": 16391,
+   "npc": [
+    2,
+    3
+   ]
+  },
+  {
+   "key": "4:0",
+   "ssb": "kns_c001.ssb",
+   "scriptId": 16392,
+   "npc": [
+    2,
+    4
+   ]
+  },
+  {
+   "key": "4:1",
+   "ssb": "kns_c002.ssb",
+   "scriptId": 16393,
+   "npc": [
+    2,
+    4
+   ]
+  },
+  {
+   "key": "5:0",
+   "ssb": "ygn_c001.ssb",
+   "scriptId": 16394,
+   "npc": [
+    2,
+    5
+   ]
+  },
+  {
+   "key": "5:1",
+   "ssb": "ygn_c002.ssb",
+   "scriptId": 16395,
+   "npc": [
+    2,
+    5
+   ]
+  },
+  {
+   "key": "6:0",
+   "ssb": "krt_c001.ssb",
+   "scriptId": 16396,
+   "npc": [
+    2,
+    6
+   ]
+  },
+  {
+   "key": "6:1",
+   "ssb": "krt_c002.ssb",
+   "scriptId": 16397,
+   "npc": [
+    2,
+    6
+   ]
+  },
+  {
+   "key": "7:0",
+   "ssb": "hrn_c001.ssb",
+   "scriptId": 16398,
+   "npc": [
+    2,
+    7
+   ]
+  },
+  {
+   "key": "7:1",
+   "ssb": "hrn_c002.ssb",
+   "scriptId": 16399,
+   "npc": [
+    2,
+    7
+   ]
+  },
+  {
+   "key": "8:0",
+   "ssb": "hsn_c001.ssb",
+   "scriptId": 16400,
+   "npc": [
+    2,
+    8
+   ]
+  },
+  {
+   "key": "8:1",
+   "ssb": "hsn_c002.ssb",
+   "scriptId": 16401,
+   "npc": [
+    2,
+    8
+   ]
+  },
+  {
+   "key": "9:1",
+   "ssb": "hsy_c002.ssb",
+   "scriptId": 16402,
+   "npc": [
+    2,
+    9
+   ]
+  },
+  {
+   "key": "10:1",
+   "ssb": "ons_c002.ssb",
+   "scriptId": 16403,
+   "npc": [
+    2,
+    10
+   ]
+  },
+  {
+   "key": "11:1",
+   "ssb": "kyt_c002.ssb",
+   "scriptId": 16404,
+   "npc": [
+    2,
+    11
+   ]
+  },
+  {
+   "key": "11:2",
+   "ssb": "kyt_c003.ssb",
+   "scriptId": 16405,
+   "npc": [
+    2,
+    11
+   ]
+  }
+ ],
+ "general_npc_event": [
+  {
+   "key": "64:1",
+   "ssb": "fte_c002.ssb",
+   "scriptId": 24576,
+   "npc": [
+    3,
+    0
+   ]
+  },
+  {
+   "key": "64:2",
+   "ssb": "fte_c003.ssb",
+   "scriptId": 24577,
+   "npc": [
+    3,
+    0
+   ]
+  },
+  {
+   "key": "65:1",
+   "ssb": "mte_c002.ssb",
+   "scriptId": 24578,
+   "npc": [
+    3,
+    1
+   ]
+  },
+  {
+   "key": "65:2",
+   "ssb": "mte_c003.ssb",
+   "scriptId": 24579,
+   "npc": [
+    3,
+    1
+   ]
+  },
+  {
+   "key": "91:1",
+   "ssb": "tik_c002.ssb",
+   "scriptId": 24580,
+   "npc": [
+    3,
+    27
+   ]
+  },
+  {
+   "key": "91:2",
+   "ssb": "tik_c003.ssb",
+   "scriptId": 24581,
+   "npc": [
+    3,
+    27
+   ]
+  }
+ ],
+ "extra_npc_event": [
+  {
+   "key": "128:0",
+   "ssb": "sta_c001.ssb",
+   "scriptId": 32768,
+   "npc": [
+    4,
+    0
+   ]
+  }
+ ]
+}

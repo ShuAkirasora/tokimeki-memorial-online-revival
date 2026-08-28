@@ -94,6 +94,7 @@ import lesson
 import lesson_skill
 import mapgraph
 import mps_cipher
+import multipurpose
 import naming
 import options
 import posts
@@ -2266,6 +2267,24 @@ class MpsServer:
             if result is not None and result.event is not None:
                 event = result.event
                 print(f"[{self.tag}] lck_s102 → event {event[0]}:{event[1]}")
+            # ⭐⭐⭐ And except on 「リーダー試験を受ける」, where the data picks
+            # the event and this end has no business choosing: the event tables
+            # file every row under the npcId it belongs to, so the 理事長秘書's
+            # exam is a lookup on the very npcId that just arrived. Round 219
+            # sent DEFAULT_NPC_EVENT here, which is a capture_npc_event key, and
+            # the client dutifully looked 16:1 up in common_npc_event, where it
+            # does not exist -- the request was answered and nothing happened.
+            # See script.event_for_menu_item.
+            #
+            # ⚠️ /nev still outranks it. The override exists to point this end
+            # at a script by hand, and an item that has a right answer is
+            # exactly when someone is most likely to be testing a wrong one.
+            ring = script.event_for_menu_item(npc_id, menu_item)
+            if ring is not None and session.npc_event_npc is None:
+                event = ring["event"]
+                print(f"[{self.tag}] menuItem {menu_item} → {ring['table']} "
+                      f"{event[0]}:{event[1]} ({ring['ssb']}, "
+                      f"scriptId 0x{ring['scriptId']:04X})")
             answer_npc = npc_id if session.npc_event_npc is None else session.npc_event_npc
             # ⭐ Which table the client is about to read `event` out of, said
             # before it goes rather than guessed from what comes back: the whole
@@ -4255,6 +4274,12 @@ class MpsServer:
                 # 仲良しグループ: 「グループ情報」 and the 勧誘 handshake behind
                 # the PC 交流メニュー's 「グループ登録申込み」; see _groups.
                 return self._groups(session, sequence, msg_type, params)
+            if msg_type in multipurpose.HANDLED:
+                # 多目的室予約: the 理事長秘書's fourth ring item. Grouped for
+                # the same reason 仲良しグループ is -- the list, the details
+                # box, 予約 and キャンセル are one window, and a list that can
+                # show a booking but not make one is not a feature.
+                return self._multipurpose(session, sequence, msg_type, params)
             if msg_type in trade.HANDLED:
                 # アイテムトレード: the PC 交流メニュー's sixth icon and the
                 # window behind it. One piece for the reason item.py gives for
@@ -8234,6 +8259,213 @@ class MpsServer:
             )
         )
 
+    def _multipurpose(self, session: "_Session", seen: int,
+                      msg_type: int, params: bytes) -> bytes:
+        """多目的室予約 on the 理事長秘書's ring: the 0x09xx family, four doors.
+
+        The window is one screen with four things it can ask: which days of this
+        room are taken (0x0900), who holds one of them (0x0903), take a free one
+        (0x0906) and give it back (0x0909). See server/multipurpose.py for the
+        layouts, all four of them read out of the client rather than guessed,
+        and for what the reason tables say the rules are.
+        """
+        if msg_type == multipurpose.MSG_CL_QUERY_MULTIPURPOSE_ROOM_BOOKING:
+            return self._room_booking(session, seen, params)
+        if msg_type == multipurpose.MSG_CL_QUERY_MULTIPURPOSE_ROOM_RESERVE:
+            return self._room_reserve_query(session, seen, params)
+        if msg_type == multipurpose.MSG_CL_REQUEST_MULTIPURPOSE_ROOM_RESERVE:
+            return self._room_reserve(session, seen, params)
+        return self._room_cancel(session, seen, params)
+
+    def _room_names(self) -> "dict[int, bytes]":
+        """{groupId: its 21-byte name}, for the rows that name a group."""
+        return {group.id: group.name
+                for group in self.accounts.groups.groups.values()}
+
+    def _room_booking(self, session: "_Session", seen: int, params: bytes) -> bytes:
+        """One tab of the 多目的室 window: 0x0900 -> 0x0901.
+
+        ⭐⭐⭐ One row per **booking**, not one per day. The window draws its own
+        fourteen dated rows and only asks this end which of them are taken; a
+        day with no row is free. Sending a row per day with the free ones blank
+        is the trap round 220 walked into -- an empty groupName matches every
+        viewer, so fourteen blank rows read as fourteen bookings held by
+        whoever is looking. See BookingBook.rows in server/multipurpose.py.
+        """
+        if len(params) < 2:
+            print(f"[{self.tag}] 多目的室: short booking query {params.hex()}")
+            return None
+        room = struct.unpack_from(">H", params, 0)[0]
+        if room >= multipurpose.ROOM_COUNT:
+            print(f"[{self.tag}] 多目的室: roomId {room} is not one of the "
+                  f"{multipurpose.ROOM_COUNT} tabs")
+            return self._answer(
+                session, seen, multipurpose.MSG_SV_ERROR_MULTIPURPOSE_ROOM_BOOKING,
+                struct.pack(">B", multipurpose.BOOKING_NG_ROOM),
+            )
+        rows = self.accounts.multipurpose.rows(room, self._room_names())
+        taken = [day.isoformat() for day, name in rows if name]
+        print(f"[{self.tag}] 多目的室 room {room}: {len(rows)} day(s), "
+              f"{len(taken)} booked{' ' + ', '.join(taken) if taken else ''}")
+        return self._answer(
+            session, seen, multipurpose.MSG_SV_RESULT_MULTIPURPOSE_ROOM_BOOKING,
+            multipurpose.booking_params(room, rows),
+        )
+
+    def _room_reserve_query(self, session: "_Session", seen: int,
+                            params: bytes) -> bytes:
+        """Clicking a selectable row: 0x0903 -> 0x0904, the reservation box.
+
+        ⚠️⚠️ **This is answered for a free day too, and that is not a guess:**
+        0x0905's five reasons are 「選択された多目的室の情報が不正です」, two
+        「情報不正 / データが取得できません」 and two 未使用 -- **not one of them
+        says 「そこは空いています」**. A family whose error table has no code for
+        the ordinary case is telling you the ordinary case is not an error.
+
+        ⭐ Round 220 measured what refusing costs: answering the Error closed the
+        window's box before it drew, so the ［予約］ form never opened and the
+        row could not be taken. The Result is what opens it, and on a free day
+        it opens pre-filled with the asker's own group and name -- which is what
+        the four fields are for on the way *in*: 0x0906 sends a comment and a
+        publicFlag back, and they have to be shown before they can be edited.
+        """
+        room = struct.unpack_from(">H", params, 0)[0] if len(params) >= 2 else 0xFFFF
+        day = multipurpose.read_date(params, 2)
+        if day is None or room >= multipurpose.ROOM_COUNT:
+            print(f"[{self.tag}] 多目的室: bad reserve query {params.hex()}")
+            return self._answer(
+                session, seen, multipurpose.MSG_SV_ERROR_MULTIPURPOSE_ROOM_RESERVE,
+                struct.pack(">B", multipurpose.BOOKING_NG_ROOM),
+            )
+        booking = self.accounts.multipurpose.at(room, day)
+        holder = (booking.group_id if booking is not None
+                  else self.accounts.groups.id_of(session.chara_id))
+        occupant = booking.chara_id if booking is not None else session.chara_id
+        group = self.accounts.groups.groups.get(holder)
+        info = self._peer_chara(occupant)
+        fields = parse_create_info(info) if info is not None else None
+        family = bytes(fields["familyName"]) if fields else b""
+        first = bytes(fields["firstName"]) if fields else b""
+        print(f"[{self.tag}] 多目的室 details: room {room} {day.isoformat()} "
+              + (f"held by {booking.label()}, public={booking.public}"
+                 if booking is not None else "is free, offering it to the asker"))
+        return self._answer(
+            session, seen, multipurpose.MSG_SV_RESULT_MULTIPURPOSE_ROOM_RESERVE,
+            multipurpose.reserve_params(
+                group.name if group is not None else b"",
+                family, first,
+                booking.comment if booking is not None else b"",
+                booking.public if booking is not None else 1,
+            ),
+        )
+
+    def _room_reserve(self, session: "_Session", seen: int, params: bytes) -> bytes:
+        """Taking a free day: 0x0906 -> 0x0907 / 0x0908.
+
+        Body is roomId, the date, a counted comment and publicFlag.
+
+        The refusals, and every byte of them is the client's own sentence:
+
+            0  roomId is not one of the seven tabs
+            1  the sender is in no group -- see below
+            2  no ScoreCard for the sender
+            5  their group already holds a booking
+            6  the day is outside the window, or already taken
+
+        ⚠️⚠️ Reason 1 is doing work the manual would have given to reason 4.
+        「予約権限がありません。」 is marked 未使用 on 0x0908 and live on 0x090B,
+        so the original server refused a *cancel* for permission and never a
+        booking -- while the β manual says the room is something a 同好会 can
+        book. This end does not invent that gate: it asks for a group, which is
+        the least the request needs to name a booker at all, and leaves the
+        manual's sentence an open question rather than a check with no witness.
+        """
+        room = struct.unpack_from(">H", params, 0)[0] if len(params) >= 2 else 0xFFFF
+        day = multipurpose.read_date(params, 2)
+        comment = groups.read_counted(params, 6)
+        public = params[8 + len(comment)] if len(params) > 8 + len(comment) else 1
+        book = self.accounts.multipurpose
+        me = session.chara_id
+        group = self.accounts.groups.of(me)
+
+        def refuse(reason: int, why: str) -> bytes:
+            print(f"[{self.tag}] 多目的室予約 for charaId={me}: refused, {why} "
+                  f"(reason={reason})")
+            return self._answer(
+                session, seen, multipurpose.MSG_SV_NG_MULTIPURPOSE_ROOM_RESERVE,
+                struct.pack(">B", reason),
+            )
+
+        if room >= multipurpose.ROOM_COUNT:
+            return refuse(multipurpose.RESERVE_NG_ROOM, f"roomId {room}")
+        if group is None:
+            return refuse(multipurpose.RESERVE_NG_CHARACTER, "in no group")
+        if self._chars(session).scorecard(me) is None:
+            return refuse(multipurpose.RESERVE_NG_NO_DATA, "no scorecard")
+        held = book.of_group(group.id)
+        if held is not None:
+            return refuse(multipurpose.RESERVE_NG_ALREADY,
+                          f"{group.label()} already holds {held.label()}")
+        if day is None or day not in multipurpose.window():
+            return refuse(multipurpose.RESERVE_NG_DATE,
+                          f"{day.isoformat() if day else params[2:6].hex()} is "
+                          f"outside the {multipurpose.HORIZON_DAYS}-day horizon")
+        if book.at(room, day) is not None:
+            return refuse(multipurpose.RESERVE_NG_DATE,
+                          f"room {room} {day.isoformat()} is already taken")
+        book.add(multipurpose.Booking(room, day, group.id, me, comment, public))
+        shown = comment.split(b"\x00")[0].decode("cp932", "replace")
+        print(f"[{self.tag}] 多目的室予約: {group.label()} took room {room} on "
+              f"{day.isoformat()}, public={public} comment={shown!r}")
+        return self._answer(
+            session, seen, multipurpose.MSG_SV_OK_MULTIPURPOSE_ROOM_RESERVE, b"",
+        )
+
+    def _room_cancel(self, session: "_Session", seen: int, params: bytes) -> bytes:
+        """Giving one back: 0x0909 -> 0x090A / 0x090B.
+
+        ⭐ Reasons 0, 4 and 5 are three different nos and the table spells the
+        difference out: 0 is 「that slot holds nothing」, 5 is 「you hold nothing
+        anywhere」 and 4 is 「that one is not yours」. Nothing here needs a notion
+        of leadership to tell them apart, and none is invented.
+        """
+        room = struct.unpack_from(">H", params, 0)[0] if len(params) >= 2 else 0xFFFF
+        day = multipurpose.read_date(params, 2)
+        book = self.accounts.multipurpose
+        me = session.chara_id
+        group = self.accounts.groups.of(me)
+
+        def refuse(reason: int, why: str) -> bytes:
+            print(f"[{self.tag}] 多目的室キャンセル for charaId={me}: refused, "
+                  f"{why} (reason={reason})")
+            return self._answer(
+                session, seen, multipurpose.MSG_SV_NG_MULTIPURPOSE_ROOM_CANCEL,
+                struct.pack(">B", reason),
+            )
+
+        booking = (None if day is None or room >= multipurpose.ROOM_COUNT
+                   else book.at(room, day))
+        if booking is None:
+            return refuse(multipurpose.CANCEL_NG_NO_BOOKING,
+                          f"nothing at room {room} "
+                          f"{day.isoformat() if day else params[2:6].hex()}")
+        if group is None:
+            return refuse(multipurpose.CANCEL_NG_CHARACTER, "in no group")
+        if self._chars(session).scorecard(me) is None:
+            return refuse(multipurpose.CANCEL_NG_NO_DATA, "no scorecard")
+        if book.of_group(group.id) is None:
+            return refuse(multipurpose.CANCEL_NG_NONE_HELD,
+                          f"{group.label()} holds no booking")
+        if booking.group_id != group.id:
+            return refuse(multipurpose.CANCEL_NG_NOT_YOURS,
+                          f"{booking.label()} is not {group.label()}'s")
+        book.remove(booking)
+        print(f"[{self.tag}] 多目的室キャンセル: {group.label()} gave back "
+              f"room {room} on {booking.day.isoformat()}")
+        return self._answer(
+            session, seen, multipurpose.MSG_SV_OK_MULTIPURPOSE_ROOM_CANCEL, b"",
+        )
+
     def _group_update(self, session: "_Session", seen: int, params: bytes) -> bytes:
         """［更 新］ inside the 仲良しグループ情報 window: 0x620A → 0x620B/0x620C.
 
@@ -8386,6 +8618,10 @@ class MpsServer:
         print(f"[{self.tag}] 解散: charaId={me} is dissolving {group.label()}: "
               f"comment[{len(comment)}]={shown!r}")
         told = [member for member in group.members if member != me]
+        # ⚠️ Before the disband, while the id still resolves: a 多目的室 booking
+        # is the group's, and one left behind by a group that no longer exists
+        # holds a room shut against everybody with nobody able to cancel it.
+        self.accounts.multipurpose.forget_group(group.id)
         book.disband(group.id)
         self._forget_group_handshakes(session)
         body = groups.counted(comment[:groups.MAX_COMMENT])

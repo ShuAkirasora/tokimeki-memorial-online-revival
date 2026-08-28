@@ -107,6 +107,9 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent / "runtime" / "scripts"
 BRANCH_PATH = Path(__file__).resolve().parent.parent / "reference" / "branches.json"
+NPC_EVENT_PATH = (
+    Path(__file__).resolve().parent.parent / "reference" / "npc_events.json"
+)
 
 
 def _load_branches() -> dict[int, dict]:
@@ -442,6 +445,90 @@ def event_table_for(npc_id: int) -> str:
     — 4, 0, 17, anything — lands in the capture_npc_event one.
     """
     return _EVENT_TABLE_BY_KIND.get(npc_id >> 16, "capture_npc_event")
+
+
+def _load_npc_events() -> dict[tuple[int, int], list[dict]]:
+    """``{(kind, rosterIndex): [event, ...]}`` -- every event, filed under its NPC.
+
+    ⭐⭐⭐ This index answers the question `event_table_for` above could only
+    ask. That comment settles *which* of the four tables the client reads out
+    of, and the answer is the npcId this end writes into the 0x6305 body -- but
+    it leaves open what to write, and round 219 answered the 理事長秘書's
+    リーダー試験 with `common_npc_event 16:1`, a key that is not in that table
+    at all, because nothing here knew any better. The screen stayed empty.
+
+    ⭐ It did not need guessing: **every event record names its own NPC.** Two
+    u16 at record +0x38 and +0x3A are the (kind, roster index) pair, and on all
+    423 rows of the four tables the kind equals the table's own arm --
+    `the NPC-event check check` is that assertion. So "what event does this NPC
+    have" is a lookup. 2:9 (理事長秘書) owns exactly one: `common_npc_event 9:1`,
+    which is hsy_c002.ssb.
+
+    ⚠️ And it settles a trap the key alone walks into: an event's categoryId is
+    *not* the roster index, it only usually equals it. common_npc_event's
+    category 2 belongs to roster 2:3 and category 3 to roster 2:2 -- 内海 and
+    神野, whom the two tables list in opposite order (2.170 六). Deriving the
+    index from the key picks the wrong person for exactly those two.
+
+    Absent file is silent, like `_load_branches`: without it nothing recognises
+    a ring item and every 0x6304 falls back to DEFAULT_NPC_EVENT, which is what
+    this server did before the table existed.
+    """
+    try:
+        raw = json.loads(NPC_EVENT_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    index: dict[tuple[int, int], list[dict]] = {}
+    for table, entries in raw.items():
+        for entry in entries:
+            category, ident = (int(part) for part in entry["key"].split(":"))
+            index.setdefault(tuple(entry["npc"]), []).append({
+                "table": table,
+                "event": (category, ident),
+                "ssb": entry["ssb"],
+                "scriptId": entry["scriptId"],
+            })
+    return index
+
+
+NPC_EVENTS = _load_npc_events()
+
+# The ring item behind 「リーダー試験を受ける」. 402 is what the client sends;
+# `menu_item.bin` 37:402 is the row, and its type is 0, so it lands as a 0x6304
+# event request rather than the 0x6301 sub-menu MENU_ITEM_TALK's neighbours use.
+MENU_ITEM_LEADER_EXAM = 402
+
+# Which event id a リーダー試験 is, in whichever table the NPC belongs to.
+#
+# ⭐ It is a constant because the data makes it one: in common_npc_event and
+# general_npc_event the `.ssb` behind an event is always cNNN with NNN == id + 1
+# -- 28 rows, no exceptions -- and c002 is the リーダー試験 for every NPC that
+# has one. So this end recognises the exam by number and never has to match a
+# Japanese title. (c003 is id 2, the second half for the four staff who have
+# one; nothing sends the player there yet.)
+LEADER_EXAM_EVENT_ID = 1
+
+
+def events_of(npc_id: int) -> list[dict]:
+    """Every event filed under this npcId, in table order."""
+    return NPC_EVENTS.get((npc_id >> 16, npc_id & 0xFFFF), [])
+
+
+def event_for_menu_item(npc_id: int, menu_item: int) -> "dict | None":
+    """The event this ring item should start on this NPC, or None for the default.
+
+    ⚠️ Only リーダー試験 is answered here, and the omission is deliberate rather
+    than unfinished: 「会話」 (MENU_ITEM_TALK) has no one right answer -- which
+    conversation an NPC offers is progress state this server does not model, and
+    DEFAULT_NPC_EVENT plus /nev is the standing arrangement for it. The exam is
+    different because the data picks it: one NPC, one c002, no state involved.
+    """
+    if menu_item != MENU_ITEM_LEADER_EXAM:
+        return None
+    for found in events_of(npc_id):
+        if found["event"][1] == LEADER_EXAM_EVENT_ID:
+            return found
+    return None
 
 
 def npc_map_object_event_params(event: tuple[int, int], npc_id: int) -> bytes:

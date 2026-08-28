@@ -103,6 +103,7 @@ import gmcall
 import groups
 import item
 import konami_id
+import multipurpose
 import naming
 from characters import CharacterStore
 
@@ -221,6 +222,10 @@ class AccountStore:
         self.friends = friends.FriendBook(self.dir)
         # Beside it, and for the same reason: a 仲良しグループ spans accounts.
         self.groups = groups.GroupBook(self.dir)
+        # And beside it: a 多目的室 booking belongs to a group, so it spans
+        # accounts for exactly the same reason, and the seven rooms are the
+        # school's rather than any one player's.
+        self.multipurpose = multipurpose.BookingBook(self.dir)
         # And beside those two: a ＧＭコール queue is the server's, and the
         # count that rides in MsgSvOkGMCall counts across every account.
         self.gmcalls = gmcall.CallBook(self.dir)
