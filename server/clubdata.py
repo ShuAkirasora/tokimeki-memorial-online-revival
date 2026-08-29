@@ -15,9 +15,9 @@ in here carries a number of its own.
     clubskill   57 rows: every 部活奥義's effects -- attack power, 消費気力,
                success rate, the three +-% modifiers, two heals, one ailment,
                and the 能力属性 it raises
-    skillbook   57 rows: every 奥義の書 -- which 部活奥義 it makes and whose
-               club that is. ⚠️ The RECIPE half is deliberately not exported;
-               合成 is not implemented and this end only needs 「which book」
+    skillbook   57 rows: every 奥義の書 -- which 部活奥義 it makes, whose club
+               that is, and ⭐ the RECIPE (2-8 合成アイテム with a count each),
+               which round 226 added because 奥義合成 now consumes it
     npcdeck    200 rows: which キーワード and 部活奥義 an opponent brings
 
 ⚠️ WHY THE FEED AND NOT A LITERAL IN HERE. Most of these are large tables of
@@ -128,13 +128,50 @@ def club_skill(category_id: int, skill_id: int) -> "dict | None":
 
 
 def skill_book(category_id: int, book_id: int) -> "dict | None":
-    """One 奥義の書 by its `item_skillbook.bin` key: `{skill, club}`.
+    """One 奥義の書 by its `item_skillbook.bin` key: `{skill, club, mats}`.
 
     ⚠️ The key space is `item.bin`'s -- categories 17-24 are the eight clubs'
     books and they sit in the same inventory as everything else, which is why
     `item.ITEM_KEYS` already carries them.
+
+    ⭐ ``mats`` is the RECIPE, and it is what p07_05 says a book is for:
+    「『奥義の書』には部活奥義を合成するためのレシピが書いてあり、そのレシピ通りの
+    合成アイテムを用意する必要があります」. 2-8 kinds, each with a count, every
+    key inside `item.bin`'s 32-40 クラブの素. ⚠️ It arrived in the feed only in
+    round 226; a feed written before that has the other two fields and no
+    ``mats``, which recipe_of reports as 「no recipe」 rather than as an empty
+    one -- see 0x5308 reason 11.
     """
     return _data().get("skillbook", {}).get(f"{category_id}:{book_id}")
+
+
+def recipe_of(category_id: int, book_id: int) -> "list[tuple[int, int, int]] | None":
+    """This book's recipe as ``[(category, itemId, count), ...]``, or None.
+
+    None means 「this book has no usable recipe」 and is what 0x5308 reason 11
+    「奥義の書の内容が正常でない」 is for. An empty list is not a thing the table
+    produces -- every one of the 57 rows uses between two and eight slots.
+
+    ⚠️ ONE ROW IS KNOWN TO BE MALFORMED IN THE ORIGINAL DATA and it is not
+    repaired here: `22:6 眼力解明書` names two materials but leaves a 1 in the
+    third count slot. The tool that writes the feed pairs counts with slots by
+    index and drops the stray, which is the reading 2.158 三 settled: the
+    original table had a slot removed without its count being removed with it.
+    Anything that tried to be cleverer here would be inventing a third material
+    for a book that has two.
+    """
+    row = skill_book(category_id, book_id)
+    if not row:
+        return None
+    out = []
+    for entry in row.get("mats") or ():
+        key = str(entry.get("key") or "")
+        category, _, item_id = key.partition(":")
+        try:
+            out.append((int(category), int(item_id), int(entry.get("count") or 0)))
+        except ValueError:
+            return None
+    return out or None
 
 
 def books_of_club(club_id: int) -> "list[str]":

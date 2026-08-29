@@ -127,6 +127,13 @@ HEALING_SECONDS_PER_POINT = 1.0 # three times that, in the 保健室
 # ⚠️ One 自主トレ fight is one クラブ活動, whatever its length -- turns are not
 # what the sentence counts.
 STRESS_PER_CLUB_ACTIVITY = 26
+
+# 「奥義合成」 is the third and last entry on that list, and it gets the same
+# figure for the same reason the other two do: one sentence names all three and
+# gives a figure for none, so a difference between them would be a second
+# invention resting on the first. ⭐ One attempt is one 合成, win or lose --
+# p05_09 counts 「行なうと」, and a failed 合成 was still performed.
+STRESS_PER_GOUSEI = 26
 # ── end INVENTED (inventions:skip) ────────────────────────────────────────
 
 
@@ -214,15 +221,35 @@ def after_lesson(sheet) -> "tuple[int, int]":
 
 
 def after_club_activity(sheet) -> "tuple[int, int]":
-    """One クラブ活動's worth, and it breaks into 怪我 rather than ノイローゼ.
-
-    ⚠️ 奥義合成 is the third source on the manual's list and has no call site:
-    0x5306 MsgClRequestGousei is unanswered here because the door to it is the
-    顧問's 交流メニュー, which this server cannot draw (2.90). When that door
-    opens, this is the function it wants -- 合成 is クラブ活動 as far as p05_09
-    is concerned, both being on the same list.
-    """
+    """One クラブ活動's worth, and it breaks into 怪我 rather than ノイローゼ."""
     return charge(sheet, STRESS_PER_CLUB_ACTIVITY, breaks_into=INJURY)
+
+
+def after_gousei(sheet) -> "tuple[int, int]":
+    """One 奥義合成's worth. ⭐⭐⭐ It CHARGES BUT DOES NOT BREAK.
+
+    ⚠️⚠️ The third source on p05_09's list is the one that is on that list
+    and on no other, and the asymmetry is the whole reading:
+
+        1.ストレスがたまる場合   授業・試験 / クラブ活動 / 奥義合成
+        3.体調不良          ノイローゼ … 授業や試験を受けると
+                          怪我      … クラブ活動を行なうと
+
+    Three sources, two ways to break, and 合成 is not one of the two. That is
+    an earlier lesson -- an absence is a value that gets read -- taken the careful way
+    rather than the lazy one: it does not rest on the silence alone, because
+    `error_message.bin` says the same thing from the other side. The 練習 door
+    has a 怪我 code (0x5D02 reason 11
+    「怪我をしているため、部活に参加できません」) and the 合成 door (0x5302, seven
+    codes) has none -- so 怪我 does not bar 合成 either, and gousei.py checks
+    barred_from_club nowhere. ⭐ Two witnesses, a table and a page, agreeing.
+
+    ⚠️ ``breaks_into=HEALTHY`` is how that is expressed rather than a second
+    code path: worsen() returns the condition unchanged when what is added is
+    HEALTHY, so a player already at 怪我 stays at 怪我 and a healthy one over
+    the threshold stays healthy. See charge.
+    """
+    return charge(sheet, STRESS_PER_GOUSEI, breaks_into=HEALTHY)
 
 
 def barred_from_club(condition: int) -> bool:

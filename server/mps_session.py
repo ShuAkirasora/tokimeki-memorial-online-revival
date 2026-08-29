@@ -87,6 +87,7 @@ import exam
 import facing
 import friends
 import gmcall
+import gousei
 import groups
 import gs3vm
 import item
@@ -1066,6 +1067,14 @@ class _Session:
         # put the same chibis back. Bodies rather than parsed pairs: nothing
         # here needs to read them, only to send them again.
         self.npc_spawns: list[bytes] = []
+        # The npcId of the 顧問 whose 奥義合成ウィンドウ is open, or None when
+        # none is. ⚠️ A STATE RATHER THAN A FLAG BECAUSE THE REFUSAL TABLE SAYS
+        # SO: 0x5302 reason 5 「既に部活奥義を合成できる状態になっています」 and
+        # 0x5305 reason 1 「部活奥義の合成は開始されていません」 are both about
+        # this variable, one from each side. Per session because the window is,
+        # and the id is kept rather than a bool so the log can say which NPC a
+        # 合成 was done at. See gousei.py.
+        self.gousei_npc: int | None = None
         # The capture_npc_event key of the conversation currently running,
         # or None when the script on air was started some other way. Only set by
         # the NPC_EVENT_START branch, so that /sc-ing a conversation script by
@@ -4160,6 +4169,13 @@ class MpsServer:
                 # above the moment a level is picked -- 「自主トレの流れは、ＮＰ
                 # Ｃとの練習と同じです」, one fight, two doors.
                 return self._npcbattle(session, sequence, msg_type, params)
+            if msg_type >> 8 == 0x53:
+                # 奥義合成: 「部活奥義合成」 off the same right-click ring 練習
+                # is on -- `menu.bin 0:3` lists both, and `menu_item.bin` gives
+                # them the same type 2, which is the type that sends a message
+                # of its own rather than starting a script or opening a
+                # sub-menu. So this door and 0x5D's are the same door.
+                return self._gousei(session, sequence, msg_type, params)
             if msg_type == lesson.MSG_CL_REQUEST_LESSON_READY:
                 # The client sends this by itself, as part of tearing the scene
                 # down after 0x6000 — there is no prompt and no button, so the
@@ -4936,6 +4952,270 @@ class MpsServer:
             print(f"[{self.tag}] 練習 screen up: charaId={chara_id:#x} "
                   f"(0x5D03, empty body, nothing sent back)")
             return None
+
+        print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
+        return None
+
+    def _gousei_level(self, chara_id: int, club_id: int) -> int:
+        """This character's 部活レベル in that club, or 0.
+
+        ⚠️ 部活レベル, NOT 対戦レベル. The two were told apart in round 223 and
+        the difference matters here for the same reason it mattered there:
+        「部活レベルによって合成できるアイテムの種類数が決まっています」 and
+        「部活レベルに応じた成功率」 are both about the counter 「クラブ活動に参加
+        することにより」 raises, which lives on the ability sheet, not the one a
+        WIN raises, which lives on the Membership.
+        """
+        store = self.accounts.owner_of(chara_id)
+        sheet = store.ability(chara_id) if store else None
+        if sheet is None or not 0 < club_id < len(sheet.club_level):
+            return 0
+        return sheet.club_level[club_id]
+
+    def _gousei(
+        self, session: "_Session", sequence: int, msg_type: int, params: bytes
+    ) -> "bytes | None":
+        """0x5300-0x5309: 奥義合成, off 「部活奥義合成」 on the 顧問's ring.
+
+        ⭐⭐⭐ REACHABLE SINCE ROUND 217 AND NOBODY NOTICED FOR SEVEN ROUNDS.
+        `stress.py` carried a comment saying this message goes unanswered
+        「because the door to it is the 顧問's 交流メニュー, which this server
+        cannot draw」, which was true when it was written and stopped being true
+        the moment `/cid 2:0` put a 顧問 on the map. The same shape as an earlier lesson:
+        a comment explaining why something is not done does not update itself
+        when the reason goes away.
+
+        The rules below come from p07_05 and from `error_message.bin` 318-341;
+        gousei.py quotes both in full and says which of them decides what.
+        """
+        chara_id = session.chara_id
+        store = self.accounts.owner_of(chara_id)
+        sheet = store.ability(chara_id) if store else None
+
+        if msg_type == gousei.MSG_CL_REQUEST_GOUSEI_START:
+            npc_id = gousei.parse_start(params)
+            if npc_id is None:
+                print(f"[{self.tag}] 奥義合成 start: short body {params.hex()}")
+                return None
+
+            def refuse_start(reason: int, why: str) -> bytes:
+                print(f"[{self.tag}] 奥義合成 refused: reason={reason} — {why}")
+                return self._answer(
+                    session, sequence, gousei.MSG_SV_NG_GOUSEI_START,
+                    gousei.ng_start_params(reason),
+                )
+
+            club_id = store.in_club(chara_id) if store else 0
+            # ⭐ The npcId is printed decomposed because THIS IS THE MEASUREMENT:
+            # gousei.parse_start reads it as u32 off the deserializer's uint32
+            # slot, while the 練習 door one menu item away reads sixteen bits.
+            # If the client in fact sends two bytes, this line says 0:0 and the
+            # reading is wrong -- which is exactly how round 223 caught 0x5D00.
+            print(f"[{self.tag}] 奥義合成 start: charaId={chara_id:#x} "
+                  f"npcId={npc_id:#x} ({npc_id >> 16}:{npc_id & 0xFFFF}) "
+                  f"club={club_id} body={params.hex()}")
+            if store is None or sheet is None:
+                return refuse_start(gousei.START_NO_PLAYER, "no character")
+            if not club_id:
+                return refuse_start(gousei.START_NOT_IN_CLUB, "not in a club")
+            if session.gousei_npc is not None:
+                # 「既に部活奥義を合成できる状態になっています」, and it is a
+                # restored refusal for a restored condition: the table would not
+                # carry this sentence unless the original held the same state.
+                return refuse_start(
+                    gousei.START_ALREADY,
+                    f"already open at npcId={session.gousei_npc:#x}")
+            if not clubdata.available():
+                # ⚠️ Not a restored refusal for this situation -- it is this
+                # server missing its feed, exactly as in _npcbattle, and reason
+                # 4 「現在、部活奥義を合成することはできません」 is the least
+                # wrong of the five that are used. Said plainly so it is not
+                # mistaken for a rule.
+                return refuse_start(gousei.START_CANNOT_NOW,
+                                    "no club feed on this server (not a rule)")
+            # ⚠️⚠️ 怪我 IS NOT CHECKED, on purpose and with two witnesses. See
+            # stress.after_gousei; the short form is that 0x5302 has no code for
+            # it where the 練習 door has one, and p05_09's 体調不良 list names
+            # 授業 and クラブ活動 and not this.
+            level = self._gousei_level(chara_id, club_id)
+            entry_max = clubbattle.gousei_entry_max(level)
+            session.gousei_npc = npc_id
+            print(f"[{self.tag}] 奥義合成 window: club={club_id} 部活Lv={level} "
+                  f"→ 合成可アイテム数={entry_max} "
+                  f"(成功率 {gousei.success_rate(level)}%)")
+            return self._answer(
+                session, sequence, gousei.MSG_SV_OK_GOUSEI_START,
+                gousei.ok_start_params(entry_max),
+            )
+
+        if msg_type == gousei.MSG_CL_REQUEST_GOUSEI_END:
+            # ⚠️⚠️ THE CLOSING HALF IS NOT OPTIONAL. an earlier lesson's shape: a bracket
+            # whose End goes unanswered costs nothing now and everything the
+            # next time the window is opened, because the client is still
+            # waiting on the last one. The body is empty in both directions.
+            if session.gousei_npc is None:
+                # 「部活奥義の合成は開始されていません」 -- reason 1, which
+                # cannot travel: 0x5305 reads no bytes at this client's end (see
+                # gousei.NG_END_BODY), so the reason is logged and the wire
+                # carries the bare Ng.
+                print(f"[{self.tag}] 奥義合成 end: not started "
+                      f"(0x5305, reason={gousei.END_NOT_STARTED} logged only)")
+                return self._answer(
+                    session, sequence, gousei.MSG_SV_NG_GOUSEI_END,
+                    gousei.NG_END_BODY,
+                )
+            print(f"[{self.tag}] 奥義合成 end: closing window at "
+                  f"npcId={session.gousei_npc:#x}")
+            session.gousei_npc = None
+            return self._answer(
+                session, sequence, gousei.MSG_SV_OK_GOUSEI_END, b"")
+
+        if msg_type == gousei.MSG_CL_REQUEST_GOUSEI:
+            parsed = gousei.parse_request(params)
+            if parsed is None:
+                print(f"[{self.tag}] 奥義合成: short body {params.hex()}")
+                return None
+            book, registered = parsed
+
+            def refuse(reason: int, why: str) -> bytes:
+                print(f"[{self.tag}] 奥義合成 NG: reason={reason} — {why}")
+                return self._answer(
+                    session, sequence, gousei.MSG_SV_NG_GOUSEI,
+                    gousei.ng_params(reason),
+                )
+
+            print(f"[{self.tag}] 奥義合成: charaId={chara_id:#x} "
+                  f"奥義の書={book[0]}:{book[1]} "
+                  f"登録={gousei.describe(registered)} body={params.hex()}")
+            if store is None or sheet is None:
+                return refuse(gousei.NG_NO_PLAYER, "no character")
+            if session.gousei_npc is None:
+                return refuse(gousei.NG_CANNOT_NOW,
+                              "no 合成 window is open (no 0x5300 first)")
+            club_id = store.in_club(chara_id)
+            if not club_id:
+                return refuse(gousei.NG_CANNOT_NOW, "not in a club")
+            row = clubdata.skill_book(*book)
+            if row is None:
+                return refuse(gousei.NG_BAD_BOOK,
+                              f"{book[0]}:{book[1]} is not in item_skillbook")
+            recipe = clubdata.recipe_of(*book)
+            if recipe is None:
+                # 「奥義の書の内容が正常でない」 -- a book with no usable recipe.
+                # Unreachable from the real table (57 rows, 57 recipes) and
+                # reachable from a feed written before round 226.
+                return refuse(gousei.NG_BOOK_CONTENT,
+                              f"{book[0]}:{book[1]} has no recipe in the feed")
+            skill_category, _, skill_id = str(row.get("skill") or "").partition(":")
+            try:
+                skill = (int(skill_category), int(skill_id))
+            except ValueError:
+                return refuse(gousei.NG_ID_LIST_FAILED,
+                              f"book names skill {row.get('skill')!r}")
+            inventory = store.items(chara_id)
+            member = store.club(chara_id)
+            if inventory is None or member is None:
+                return refuse(gousei.NG_NO_PLAYER, "no inventory or membership")
+            if not inventory.held(*book):
+                return refuse(gousei.NG_BOOK_NOT_HELD,
+                              f"{book[0]}:{book[1]} is not carried")
+            level = self._gousei_level(chara_id, club_id)
+            entry_max = clubbattle.gousei_entry_max(level)
+            # ⭐⭐⭐ THE CAP IS OVER REGISTERED KINDS, measured round 226: the
+            # window draws 「N／M」 with M = the byte 0x5301 carried and N = the
+            # rows in the 合成 list, materials and 消費アイテム together, and the
+            # client refuses the row that would push N past M by itself.
+            # ⚠️ So this branch is a backstop for a client whose M is stale --
+            # which is exactly what reason 7's 「（部活レベルが足りません）」 is
+            # about -- rather than the ordinary path.
+            if len(registered) > entry_max:
+                return refuse(
+                    gousei.NG_TOO_MANY_KINDS,
+                    f"{len(registered)} kinds registered, 部活Lv {level} allows "
+                    f"{entry_max}")
+            if len(recipe) > entry_max:
+                # ⭐ p07_05's screenshot caption: a player holding every item and
+                # refused anyway, because the recipe cannot fit under M. It
+                # cannot be reached through the window (the player would have to
+                # register more than M rows to try) and it is the sentence that
+                # fits, so it is answered here rather than falling through to
+                # reason 8, which would blame the combination for a level.
+                return refuse(
+                    gousei.NG_TOO_MANY_KINDS,
+                    f"recipe needs {len(recipe)} kinds, 部活Lv {level} allows "
+                    f"{entry_max}")
+            materials, boosters, matches = gousei.split_registered(recipe, registered)
+            if not matches:
+                return refuse(
+                    gousei.NG_WRONG_RECIPE,
+                    f"recipe {gousei.describe(recipe)} vs registered "
+                    f"{gousei.describe(materials)}")
+            # ⚠️ Nothing checks that the book's club is the player's. There is no
+            # refusal code for it in the fourteen, and 練習 only ever hands out
+            # books of the club being practised with, so a foreign book is
+            # something a save editor produced rather than something play can.
+            if row.get("club") != club_id:
+                print(f"[{self.tag}] 奥義合成: ⚠️ book belongs to club "
+                      f"{row.get('club')}, player is in {club_id} — allowed, "
+                      f"no refusal code exists for it")
+            spend = [(book[0], book[1], 1)] + list(registered)
+            short = [(c, i, n) for c, i, n in spend if inventory.held(c, i) < n]
+            if short:
+                # 「アイテムデータの操作…に失敗しました」. ⚠️ The sentence that
+                # fits better -- reason 6 「登録された合成アイテムを所持していな
+                # い」 -- is marked 未使用 in the table, so the original never
+                # sent it and neither does this. See gousei.py.
+                return refuse(gousei.NG_WRITE_FAILED,
+                              f"not carried: {gousei.describe(short)}")
+            for category, item_id, count in spend:
+                inventory.take(category, item_id, count)
+            store.set_items(chara_id, inventory)
+            made = gousei.completeness(boosters)
+            rate = gousei.success_rate(level)
+            roll = random.randrange(100)
+            won = roll < rate
+            print(f"[{self.tag}] 奥義合成: 部活Lv={level} 成功率={rate}% "
+                  f"roll={roll} → {'成功' if won else '失敗'} · "
+                  f"消費アイテム={gousei.describe(boosters)} → 完成度={made} · "
+                  f"spent {gousei.describe(spend)}")
+            if won:
+                # ⚠️ INVENTED, and it is a design choice rather than a number:
+                # a repeat 合成 of a skill already owned keeps the HIGHER 完成度.
+                # p07_05 frames repetition as the intended way to raise it
+                # (「完成度を上げたい場合は、…合成を繰り返して見つけていく必要が
+                # あります」), and an overwrite would make the search punish the
+                # searcher -- one wrong guess costing a 完成度 already paid for.
+                # ⭐ What would overturn it: an account of a 合成 that lowered a
+                # 部活奥義's 完成度.
+                held = member.club_skill_completeness(*skill)
+                keep = max(made, held or 0)
+                member.grant_club_skill(skill[0], skill[1], keep)
+                store.set_club(chara_id, member)
+                print(f"[{self.tag}] 奥義合成 成功: {skill[0]}:{skill[1]} "
+                      f"完成度={keep}"
+                      + (f" (kept, this 合成 made {made})" if keep != made else "")
+                      + f" — 部活奥義 {len(member.skills)} 種")
+            else:
+                # 「登録した「奥義の書」・合成アイテム・消費アイテムが全てなくな
+                # ります」 -- already spent above, because failure eats the same
+                # things success does. The client draws msg_text 501 off the
+                # 0xFFFF sentinel; see gousei.FAIL_SENTINEL.
+                print(f"[{self.tag}] 奥義合成 失敗: everything registered is "
+                      f"gone (0x5307 sentinel {gousei.FAIL_SENTINEL:#06x})")
+            added, condition = stress.after_gousei(sheet)
+            store.set_ability(chara_id, sheet)
+            print(f"[{self.tag}] 奥義合成: ストレス +{added} -> {sheet.stress} "
+                  f"({stress.screen(sheet.stress)}/100), 体調 "
+                  f"{stress.name(condition)}")
+            # ⚠️ NOTHING ELSE IS PUSHED. The 部活奥義 list (0x4308) and the item
+            # window (0x4D03) are both answers to queries the client makes when
+            # it opens those windows, and whether the 合成 window refreshes
+            # itself off 0x5307 alone has not been measured. _drain_vitals will
+            # carry the ストレス change on the next packet as it always does.
+            return self._answer(
+                session, sequence, gousei.MSG_SV_OK_GOUSEI,
+                gousei.ok_params(*skill, made) if won else gousei.fail_params(),
+            )
 
         print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
         return None

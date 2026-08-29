@@ -877,6 +877,18 @@ class Membership:
         self.skills.append(row)
         return True
 
+    def club_skill_completeness(self, category: int, skill_id: int) -> "int | None":
+        """The 完成度 of a 部活奥義 this character owns, or None if it has none.
+
+        ⭐ 完成度 は、レベル１〜１０まであり (p07_05), so None and 0 are not the
+        same answer and the caller has to be able to tell them apart -- see the
+        keep-the-higher rule in mps_session._gousei.
+        """
+        for existing in self.skills:
+            if existing[:2] == [category, skill_id]:
+                return existing[2]
+        return None
+
     def revoke_club_skill(self, category: int, skill_id: int) -> bool:
         before = len(self.skills)
         self.skills = [row for row in self.skills if row[:2] != [category, skill_id]]
