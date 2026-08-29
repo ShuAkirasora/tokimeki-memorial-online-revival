@@ -104,13 +104,14 @@ CLUB_POST_COUNTS = (1, 6, 6, 4, 4, 3, 3, 10, 3)
 #: `club_post.bin` does not have, and 0xFFFF is measured to be one, in a club
 #: and out of it.
 #:
-#: ⭐ INVENTED, and the smallest invention available (the smallest-invention rule). The
-#: table has no 「無職」 row for clubs 1-8 -- every club's row 0 is a real rank
-#: -- so the original game most likely gave every member a post on 入部 and
-#: never had this state at all. This server has members with no post because it
-#: has no post system, and something has to go on the wire for them. 0xFFFF is
-#: the idiom the rest of this protocol already uses for 「none」 (unequipped
-#: accessories, and friendGroupId's 0xFFFFFFFF).
+#: ⭐ INVENTED — the 部活役職 key sent for a member who has no post at all.
+#: The smallest invention available (the smallest-invention rule): the table has no 「無職」
+#: row for clubs 1-8 -- every club's row 0 is a real rank -- so the original game
+#: most likely gave every member a post on 入部 and never had this state at all.
+#: This server has members with no post because it has no post system, and
+#: something has to go on the wire for them. 0xFFFF is the idiom the rest of this
+#: protocol already uses for 「none」 (unequipped accessories, and
+#: friendGroupId's 0xFFFFFFFF).
 NO_CLUB_POST = 0xFFFF
 
 #: `club_post.bin`'s row 0:0, 「無職」. ⚠️ Only reachable for 無所属, and even

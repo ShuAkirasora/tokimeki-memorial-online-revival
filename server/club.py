@@ -221,13 +221,13 @@ until it has been obtained once, and which therefore has to be per-character.
 
 RESTORED in round 193: how a キーワード is granted
 --------------------------------------------------
-⭐⭐⭐ This heading used to read 「INVENTED: that a character can own a
-キーワード at all」. It does not any more, because the original's own grant is
-in the scripts: `PC_KEYWORD_UPDATE` (0x8185), 127 of them across 38 scenarios,
-whose slot operand is `keywordId << 5`. Both チュートリアル open a character's
-account with six of them — one per category below, each chosen by a coin flip
-between two — and 36 ドラマイベント hand out two to six more. The wiring is
-`mps_session._script_keywords`; the reading and its evidence are 2.150.
+⭐⭐⭐ (inventions:skip) This heading used to read 「INVENTED: that a character
+can own a キーワード at all」. It does not any more, because the original's own
+grant is in the scripts: `PC_KEYWORD_UPDATE` (0x8185), 127 of them across 38
+scenarios, whose slot operand is `keywordId << 5`. Both チュートリアル open a
+character's account with six of them — one per category below, each chosen by a
+coin flip between two — and 36 ドラマイベント hand out two to six more. The
+wiring is `mps_session._script_keywords`; the reading and its evidence are 2.150.
 
 ⚠️ **What is still invented is 習熟度**, and only that: in the original
 `use_count` is filled by using a キーワード in クラブ活動 until it rises.
@@ -500,8 +500,9 @@ KEYWORD_FULL_SCALE = {
 # table; or a client build that displays 習熟度 as a number instead of a gauge.
 USE_COUNT_PER_USE = 1
 
-# ⚠️ INVENTED alongside it, and a separate decision: 習熟度 stops at the full
-# scale rather than counting on past it. It is not only a gate — p07_02 says
+# ⚠️ INVENTED — whether 習熟度 stops at the full scale or counts on past it.
+# A separate decision from the step above, and this end stops it. It is not only
+# a gate — p07_02 says
 # 「『習熟度』が高いと、キーワードによる攻撃や防御のパワーがアップします」 —
 # so a count that kept climbing would keep raising a keyword's power with
 # nothing on screen to show it. 「習熟度がＭＡＸになると」 reads as a finished

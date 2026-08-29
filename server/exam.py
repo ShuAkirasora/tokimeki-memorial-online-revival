@@ -236,7 +236,7 @@ POINTS_PER_QUESTION = 5
 # none of them. An exam is one activity where 授業 is one activity, so it costs
 # what a lesson costs; the difference is that an exam happens far less often.
 STRESS_PER_EXAM = 26
-# ── end INVENTED ────────────────────────────────────────────────────────────
+# ── end INVENTED (inventions:skip) ────────────────────────────────────────
 
 
 def course_of(card: "curriculum.ScoreCard") -> int:

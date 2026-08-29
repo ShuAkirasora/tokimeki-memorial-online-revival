@@ -52,15 +52,16 @@ from its own `period`, the one 0x0319 and 0x6501 carry.
 different -- that is what PROBE below is for, and why it takes six numbers
 rather than being six separate knobs.
 
-⭐ THAT MAKES FOUR OF THE SIX DERIVABLE RATHER THAN INVENTED. 登校 is not a
-metaphor here -- it is MsgClRequestSchoolLogin, the message the client sends
-when the player picks a character, and 下校 is MsgClRequestSchoolLogout. So
-「登校回数」 is how many times that has happened and 「累計登校時間」 is how
-long they added up to, both of which this server is the only thing that can
-know. 「授業出席数」 is the 通知表's own attendance column summed over the eight
-subjects -- the same numbers 0x430D already sends, so a second copy would be a
-second answer. 「習得部活奥義」 is the length of the 部活奥義 list 0x4308 sends.
-None of the four is stored twice and none is a constant.
+⭐ THAT MAKES FOUR OF THE SIX DERIVABLE RATHER THAN INVENTED. (inventions:skip)
+登校 is not a metaphor here -- it is MsgClRequestSchoolLogin, the message the
+client sends when the player picks a character, and 下校 is
+MsgClRequestSchoolLogout. So 「登校回数」 is how many times that has happened
+and 「累計登校時間」 is how long they added up to, both of which this server is
+the only thing that can know. 「授業出席数」 is the 通知表's own attendance
+column summed over the eight subjects -- the same numbers 0x430D already sends,
+so a second copy would be a second answer. 「習得部活奥義」 is the length of the
+部活奥義 list 0x4308 sends. None of the four is stored twice and none is a
+constant.
 
 ⚠️ INVENTED: 称号 and 過去の実績. `designation.bin` has exactly one row and it
 is the empty one, and `career.bin` has three, every one of them awarded by

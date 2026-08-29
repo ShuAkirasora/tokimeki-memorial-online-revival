@@ -127,7 +127,7 @@ HEALING_SECONDS_PER_POINT = 1.0 # three times that, in the 保健室
 # ⚠️ One 自主トレ fight is one クラブ活動, whatever its length -- turns are not
 # what the sentence counts.
 STRESS_PER_CLUB_ACTIVITY = 26
-# ── end INVENTED ───────────────────────────────────────────────────────────
+# ── end INVENTED (inventions:skip) ────────────────────────────────────────
 
 
 def screen(value: int) -> int:

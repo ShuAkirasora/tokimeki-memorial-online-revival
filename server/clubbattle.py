@@ -435,8 +435,8 @@ DAMAGE_FLOOR = int(os.environ.get("TMO_CLUB_DAMAGE_FLOOR") or 1)
 #: Knob: TMO_CLUB_MASTERY_BONUS.
 MASTERY_BONUS_AT_FULL = float(os.environ.get("TMO_CLUB_MASTERY_BONUS") or 0.5)
 
-#: ⚠️ INVENTED — which 0x5C11 type an ordinary hit uses. All six draw the same
-#: sentence and differ only in sound effect. 8-13 all draw the same template
+#: ⚠️ INVENTED — the 0x5C11 effect type an ordinary hit uses. All six draw the
+#: same sentence and differ only in sound effect. 8-13 all draw the same template
 #: row (5, 「$M$Nは$sダメージを受けた」) and all move the 体力 bar; 2.85 measured
 #: that 8/9/10 differ from each other only in which sound effect fires.
 #: ⚠️ INVENTED, narrowly: WHICH of the six a given hit should use. 8 is the

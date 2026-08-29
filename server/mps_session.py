@@ -373,8 +373,8 @@ MSG_SV_RESULT_CHARA_INFO = 0x6501
 MSG_SV_ERROR_CHARA_INFO = 0x6502
 MSG_CL_REQUEST_MINIMAP_START = 0x3C00
 
-# How long the teacher's opening line is given, in the client's own milliseconds.
-# ⚠️ INVENTED, and only meaningful if speechEndTime really is a moment in the
+# ⚠️ INVENTED — how long the teacher's opening line is given, in the client's
+# own milliseconds. Only meaningful if speechEndTime really is a moment in the
 # timesync's frame rather than a duration — see lesson.start_params.
 #
 # Ten minutes rather than the eight seconds that seemed reasonable, and that is

@@ -298,24 +298,25 @@ MEMBER_LIMIT = 15
 CLUBLIKE_MEMBER_LIMIT = 30
 
 
-#: How much キャッチコピー this end will keep. ⚠️ INVENTED, and deliberately
-#: larger than anything the client has been seen to send rather than fitted to
-#: it: the wire field is counted, so unlike friendGroupName nothing in the
-#: protocol caps it, and a cap that is too small does not fail loudly -- it
-#: silently shortens what the player typed and makes the 「type it, press
-#: ［更 新］, reopen the window」 round trip look like it half-worked.
+#: ⚠️ INVENTED — how much キャッチコピー this end will keep. Deliberately larger
+#: than anything the client has been seen to send rather than fitted to it: the
+#: wire field is counted, so unlike friendGroupName nothing in the protocol caps
+#: it, and a cap that is too small does not fail loudly -- it silently shortens
+#: what the player typed and makes the 「type it, press ［更 新］, reopen the
+#: window」 round trip look like it half-worked.
 #:
 #: ⭐ The one length that *is* measured is what arrives: _group_update logs it,
 #: so the client's own edit-box limit falls out of the first update anyone does
 #: instead of having to be read out of a dialog resource.
 MAX_CATCHCOPY = 64
 
-#: How much of 解散's and 引継's comment this end will hand on. ⚠️ INVENTED for
-#: the same reason MAX_CATCHCOPY is, and it only ever caps what gets *echoed*:
-#: nothing here stores a comment, so a cap that is too small does not lose data,
-#: it truncates a sentence on somebody else's screen. Kept well above anything
-#: the client has been seen to send; _group_destroy logs what arrives, which is
-#: where the client's own limit can be read off when a real one types into it.
+#: ⚠️ INVENTED — how much of 解散's and 引継's comment this end will hand on.
+#: Invented for the same reason MAX_CATCHCOPY is, and it only ever caps what gets
+#: *echoed*: nothing here stores a comment, so a cap that is too small does not
+#: lose data, it truncates a sentence on somebody else's screen. Kept well above
+#: anything the client has been seen to send; _group_destroy logs what arrives,
+#: which is where the client's own limit can be read off when a real one types
+#: into it.
 MAX_COMMENT = 256
 
 

@@ -632,10 +632,11 @@ QUESTIONS_PER_LESSON = 10
 ANSWER_SECONDS = 20
 GRADING_SECONDS = 6
 
-# Where 高評価 / 並評価 / 低評価 divide, on **this question's** class-wide rate —
+# INVENTED — where 高評価 / 並評価 / 低評価 divide, on one question's rate.
+# It is **this question's** class-wide rate —
 # 「先生が今回の問題についての正解率と感想を述べます」, so it is the one question
-# and not the 通算 figure. INVENTED, and with a single student in the room only
-# the two ends are reachable at all: one student's rate is 0% or 100%.
+# and not the 通算 figure. With a single student in the room only the two ends
+# are reachable at all: one student's rate is 0% or 100%.
 GRADING_GOOD = 0.75
 GRADING_FAIR = 0.40
 
@@ -674,8 +675,9 @@ END_ABILITY_RULER = (250, 500, 1000, 2000, 4000, 8000)
 # *Which* abilities is read off `lesson.bin` — curriculum.SUBJECT_ABILITY. *How
 # much* is nowhere: no table holds a step, and the client cannot hold one either,
 # because it never computes an ability, it only draws the two arrays 0x6102 sends
-# it. So the number below is INVENTED, and it is invented in the one unit the
-# screen has already settled.
+# it. So the number below is INVENTED — how much one lesson moves an ability, in
+# 256ths of a レベル. It is invented in the one unit the screen has already
+# settled.
 #
 # abilityParam is 8.8 fixed point — レベル = (値 >> 8) + 1, and the bar under the
 # number is (値 & 0xFF) / 256. So the honest way to state a step is in 256ths of
