@@ -1488,6 +1488,15 @@ class CharacterStore:
         state = self.club(chara_id)
         return state.in_club if state else club.NO_CLUB
 
+    def sex(self, chara_id: int) -> "int | None":
+        """This character's 性別 out of the create block, or None if not ours.
+
+        Same numbering the cast slots in `drama_events.json` use, which is why
+        `drama.selectable_actors` can compare the two directly.
+        """
+        info = self.find(chara_id)
+        return None if info is None else int(parse_create_info(info)["sex"])
+
     def full_name(self, chara_id: int) -> tuple[bytes, bytes] | None:
         """``(familyName, firstName)`` as the create block holds them, SJIS.
 

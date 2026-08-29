@@ -15,6 +15,8 @@ per member and the rest left open for whoever walks in.
     0xE010 MsgSvNgDramaPartyInfo         reason u8
     0xE011 MsgClRequestDramaPartyJoin    dramaPartyId u64, password[u16],
                                          actorId u16
+    0xE012 MsgSvOkDramaPartyJoin         dramaPartyId u64
+    0xE013 MsgSvNgDramaPartyJoin         reason u8
     0xE014 MsgClRequestDramaPartyPart    ()
     0xE015 MsgSvOkDramaPartyPart         ()
     0xE016 MsgSvNgDramaPartyPart         reason u8
@@ -121,10 +123,12 @@ NG_BAD_CHARACTER = 0        # キャラクター情報の取得に失敗しま�
 NG_BAD_EVENT = 2            # 選択されたドラマイベントの情報が不正です。
 NG_BAD_PARTY = 4            # 選択されたパーティの情報が不正です。
 NG_BAD_ACTOR = 5            # 選択された登場人物の情報が不正です。
+NG_BAD_PASSWORD = 7         # パスワードが正しくありません。
 NG_ACTOR_TAKEN = 14         # 選択された登場人物は、他のキャラクターが担当…
 NG_NO_ROOM = 15             # この場所では、これ以上パーティを登録できません。
 NG_NOT_IN_PARTY = 16        # パーティに参加していません。
 NG_ALREADY_IN_PARTY = 17    # 既にパーティに参加しています。
+NG_ALREADY_STARTED = 23     # 既にドラマイベントが開始されています。
 NG_DUPLICATE_NAME = 26      # 同名のパーティが存在しています。
 
 # 0xE00A's reason, from the client's own three sentences at 0xBD75D8:
@@ -132,6 +136,37 @@ NG_DUPLICATE_NAME = 26      # 同名のパーティが存在しています。
 PART_SELF = 0
 PART_KICKED = 1
 PART_DISCONNECTED = 2
+
+
+def selectable_actors(event: dict, sex: int, owns_keyword) -> int:
+    """``flgSelectActor``: a bit per cast slot this character is allowed to play.
+
+    ⭐⭐⭐ THE GATE ON THE 参加 SCREEN. Round 229 spent a client run on 「入れま
+    せん」: with this byte zero, EVERY 登場人物 button on パーティ参加 reads
+    「入れません」 and the teacher says 「このパーティには参加できないようだ。」
+    — for every party, every role, whatever `flgUnreserve` says, and with not
+    one byte going back up the wire. Send it and the same buttons become
+    「募集中」/「しめきり」 and the screen works. ⚠️ It is NOT the same thing as
+    `flgUnreserve`: that one says which roles are free, this one says which
+    roles are *yours to take*, and the client needs both.
+    ⚠️ 0xE003 carries it per event, not per party, so it is about the character
+    and the drama — never about who is already in a booking.
+
+    The rule is restored rather than invented: the client computes the same
+    thing locally for the パーティ作成 dialog, where 五郎 (男) gets Ａ太 in white
+    and Ｂ美 greyed out, so the two inputs are the ones `drama_event.bin` keeps
+    per slot — the role's 性別, and its 必要キーワード where it has one.
+    """
+    mask = 0
+    for slot in event.get("cast", ()):
+        index = int(slot["slot"])
+        if index >= CAST_MAX or int(slot["sex"]) != sex:
+            continue
+        keyword = slot.get("keyword")
+        if keyword is not None and not owns_keyword(int(keyword)):
+            continue
+        mask |= 1 << index
+    return mask
 
 
 def counted(text: str, limit: int) -> bytes:
@@ -188,11 +223,16 @@ class Party:
     index: int
     name: str
     password: str
-    #: Which cast slot the leader took. ⚠️ Nothing transfers it: a party only
-    #: ever has one member on this server, and the last one leaving deletes the
-    #: party, so leadership has never had to move. ⛔️ The day 0xE011 lets a
-    #: second person in, this needs a rule for what happens when the leader
-    #: leaves — 0xE00A carries `actorIdLeader` precisely to announce that.
+    #: Which cast slot the leader took.
+    #:
+    #: ⚠️ INVENTED — that leadership passes to the member who has been in the
+    #: party longest when the leader leaves (`Board.part`). Round 229 let a
+    #: second person in with 0xE011, which is the day the old note here was
+    #: waiting for: nothing on the wire says where leadership goes, but
+    #: 0xE00A carries `actorIdLeader` *after* the departure, so the protocol
+    #: takes for granted that it can have moved. ⛔️ Not a knob: who leads is
+    #: a rule, not a number. Seniority rather than the lowest cast slot
+    #: because the slot is a role in a play — 0 is not a rank.
     leader_actor_id: int
     #: Which cast slots this drama actually has, from `drama_events.json`.
     #: ⚠️ Empty means "the event is not in the export", not "no roles": the
@@ -270,9 +310,15 @@ class Board:
         party = self.party_of(chara_id)
         if party is None:
             return None
+        left = next(a for a in party.actors if a.chara_id == chara_id)
         party.actors = [a for a in party.actors if a.chara_id != chara_id]
         if not party.actors:
             self.parties.pop(party.party_id, None)
+        elif left.actor_id == party.leader_actor_id:
+            # See Party.leader_actor_id: the longest-standing member left in
+            # the room takes over, and 0xE00A tells everyone in the same
+            # breath as the departure.
+            party.leader_actor_id = party.actors[0].actor_id
         return party
 
     def summary(self) -> str:
@@ -366,6 +412,25 @@ def part_params(actor_id: int, reason: int, leader_actor_id: int,
         struct.pack(">HBH", actor_id, reason, leader_actor_id)
         + counted(password, PASSWORD_MAX)
     )
+
+
+def parse_join(params: bytes) -> tuple[int, str, int] | None:
+    """A MsgClRequestDramaPartyJoin body → (dramaPartyId, password, actorId).
+
+    None when the fixed head or the trailing actorId is missing. ⚠️ The
+    actorId is *behind* the counted password here, the mirror image of
+    0xE00B where it comes first — so it can only be read after walking the
+    string, and a body that stops inside it is a message we did not
+    understand rather than a refusal with a number.
+    """
+    if len(params) < 8:
+        return None
+    (party_id,) = struct.unpack_from(">Q", params, 0)
+    password, at = read_counted(params, 8)
+    if at + 2 > len(params):
+        return None
+    (actor_id,) = struct.unpack_from(">H", params, at)
+    return party_id, password, actor_id
 
 
 def parse_create(params: bytes) -> tuple[int, int, int, str, str] | None:

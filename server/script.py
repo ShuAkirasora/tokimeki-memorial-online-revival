@@ -1240,21 +1240,33 @@ def drama_events() -> list[dict]:
         return []
 
 
-def drama_event_record(genre: int, index: int) -> bytes:
-    """One 20-byte entry: the key, then six named-but-unmeasured fields.
+def drama_event_record(genre: int, index: int, select_actor: int = 0) -> bytes:
+    """One 20-byte entry: the key, ``flgSelectActor``, and four still-zero fields.
 
     ``nPartyNum, flgSelectActor, orderOpen, orderLast, maxPoint,
-    flgAcquiredKeyword`` — the names are the client's own (dump 0x90C3A0), the
-    zeros are ours.
+    flgAcquiredKeyword`` — the names are the client's own (dump 0x90C3A0).
+    ⭐ Round 229 measured the second of the six and nothing else: it is the
+    mask of cast slots this character may take, and the パーティ参加 screen is
+    dead without it (`drama.selectable_actors`). ⚠️ `nPartyNum` was measured
+    in round 228 and is deliberately still zero — the client counts the
+    parties on its own list and never reads ours (2.183 四).
     """
-    return struct.pack(">HHHBHQBH", genre, index, 0, 0, 0, 0, 0, 0)
+    return struct.pack(">HHHBHQBH", genre, index, 0, select_actor, 0, 0, 0, 0)
 
 
-def drama_event_list_params(keys: list[tuple[int, int]], limit: int = DRAMA_EVENT_MAX) -> bytes:
-    """A MsgSvNotifyDramaEventList / …CharaMenu… body from `(genre, index)` pairs."""
+def drama_event_list_params(keys: list[tuple[int, int]], limit: int = DRAMA_EVENT_MAX,
+                            select_actor=None) -> bytes:
+    """A MsgSvNotifyDramaEventList / …CharaMenu… body from `(genre, index)` pairs.
+
+    ``select_actor(genre, index) -> int`` fills ``flgSelectActor`` per event;
+    without it every event goes out as zero, which is what the callers that
+    have no character in hand want and what this end sent until round 229.
+    """
     kept = keys[:limit]
     return struct.pack(">H", len(kept)) + b"".join(
-        drama_event_record(genre, index) for genre, index in kept
+        drama_event_record(genre, index,
+                           select_actor(genre, index) if select_actor else 0)
+        for genre, index in kept
     )
 
 
