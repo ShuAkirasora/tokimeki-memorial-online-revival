@@ -542,23 +542,36 @@ CLUB_SKILL_RULER = (1, 2, 5, 9, 10, 0, 11, 50, 100, 255)
 #
 # ⭐⭐ kind = 1 IS 部活奥義, MEASURED — and the first four of the six bytes are
 # the `clubskill.bin` key, `categoryId u16` then `id u16`, same little-endian.
-# Nothing here can own one, so no 0x5B03 has ever carried one; what settled it
-# was doctoring a live 0x5C0E instead (`/cb card`, see Battle.card_probe). Sent
-# `01 00 00 00 64 00`, the client read it back out of its own data file and
-# said 「野球部奥義【重いコンダラ】を使用した！」 — that skill's own sentence,
-# which is row 1:0 of the table.
+# It was FIRST settled by doctoring a live 0x5C0E (`/cb card`, see
+# Battle.card_probe), because for ninety rounds nothing here could own a 奥義 to
+# put in a deck: sent `01 00 00 00 64 00`, the client read it back out of its
+# own data file and said 「野球部奥義【重いコンダラ】を使用した！」, that
+# skill's own sentence, row 1:0 of the table.
 #
-# ⚠️ The LAST TWO bytes are still unread: every probe so far sent `64 00` and
-# nothing on screen depended on them.
+# ⭐⭐⭐ ROUND 227 GOT THE REAL THING. 奥義合成 (round 226) put a 奥義 in a
+# player's hands, the 部活デッキ window registered it, and the client composed
+# the six bytes itself:
+#
+#     01 00 00 00 28 00     1:0 重いコンダラ, 完成度 0x28 = 40
+#     01 00 03 00 03 00     1:3 鉄の足腰,     完成度 3
+#
+# ⇒ the layout is `u16 categoryId, u16 id, u8 完成度, u8 0`, little-endian —
+# byte for byte what club_skill_deck_item had been writing on the strength of
+# 0x4308's row alone. ⚠️ The SIXTH byte is still unclaimed: the client sends
+# zero, and nothing says whether that is a field or the union's padding.
 DECK_ITEM_BYTES = 6
 DECK_ITEM_KEYWORD = 0
 DECK_ITEM_CLUB_SKILL = 1
 # ⚠️ Used only to refuse an absurd count, not as a rule the client is known to
 # obey. It was originally read off `npc_clubdeck.bin` as 「25 slots」, and round
 # 200 took that reading apart (see the module docstring: the NPC decks are
-# 8 + 8). The number is LEFT AS IT WAS ON PURPOSE — nothing measured what the
-# client's own deck window will accept, so lowering the sanity limit to 16
-# would be inventing a restriction, not restoring one.
+# 8 + 8). ⭐⭐ ROUND 227 MEASURED THE CLIENT'S OWN LIMIT: a deck holds EIGHT
+# entries in total, キーワード and 部活奥義 sharing the same eight slots — with
+# eight キーワード registered the ▷ button does nothing at all until one is
+# taken out. The number here is STILL LEFT AS IT WAS: eight is the window's
+# rule and the window enforces it, so an over-long deck cannot arrive from a
+# real client, and writing 8 in here would be this end legislating for the
+# client rather than refusing an absurd count. See the protocol notes 2.182 三.
 DECK_CAPACITY = 25
 
 # error_message.bin 462: the sentence counts 日.
@@ -951,8 +964,12 @@ class Membership:
         ⚠️ LITTLE-ENDIAN like the キーワード branch, and one byte shorter than
         the six the union holds: 0x4308's row is categoryId u16 + id u16 +
         completeness u8, which is five. The sixth byte is what the union costs
-        to hold the six-byte キーワード branch, so it goes out as zero — every
-        probe so far has sent it as zero too, and nothing has ever read it.
+        to hold the six-byte キーワード branch, so it goes out as zero.
+
+        ⭐⭐⭐ ROUND 227 CONFIRMED ALL SIX, from the client's own composition:
+        a real 0x5B03 built by the 部活デッキ window carried `01 00 00 00 28 00`
+        for 1:0 at 完成度 40. This layout was a reading of 0x4308's row for
+        ninety rounds; it is now measured, byte for byte, in both directions.
         """
         for owned_category, owned_id, completeness in self.skills:
             if (owned_category, owned_id) == (category, skill_id):

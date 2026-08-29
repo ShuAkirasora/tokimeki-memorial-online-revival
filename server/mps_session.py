@@ -5729,9 +5729,14 @@ class MpsServer:
     def _battle_strike(
         self, session: "_Session", battle: "clubbattle.Battle",
         attacker: "clubbattle.Fighter", kind: int, payload: bytes,
-        target_id: int, everyone: "list[int]",
+        targets: "list[clubbattle.Fighter | None]", everyone: "list[int]",
     ) -> bytes:
-        """One attack landing: work out the damage, take it off, narrate it.
+        """One attack landing on each of ``targets``: damage, take it off, narrate.
+
+        ⭐⭐ ``targets`` IS A LIST because a 部活奥義 can be 敵全体 -- four of
+        the eight 野球部 rows are, and the client cannot name that set on the
+        wire (see _battle_skill_targets). A キーワード has no 対象 column and
+        keeps the one target 0x5C0A named, which is the single-element case.
 
         ⭐⭐⭐ THIS IS WHERE THE FIGHT STOPPED BEING A PANTOMIME. Every round
         from 88 to 221 played the SHAPE of a turn -- 0x5C0D, 0x5C0E, 0x5C0F,
@@ -5756,49 +5761,54 @@ class MpsServer:
         resolves. A target who chose nothing has no 守備力 at all -- they did
         not act, which the manual covers on its own terms.
         """
-        target = battle.find(target_id)
-        if target is None or target is attacker:
-            return b""
-        if target.retired:
-            print(f"[{self.tag}] battle damage: target charaId={target_id:#x} "
-                  f"has already retired, nothing to hit")
-            return b""
-        attack, _defence, mastery, label = self._battle_power(kind, payload)
-        if attack <= 0:
+        attack_base, _defence, mastery, label = self._battle_power(kind, payload)
+        if attack_base <= 0:
             print(f"[{self.tag}] battle damage: {label} has no 攻撃力 — "
                   f"charaId={attacker.chara_id:#x} lands nothing")
             return b""
-        shield, shield_label = 0, "no card"
-        guard = self._battle_deck_item(target)
-        if guard is not None:
-            _atk, shield, _m, shield_label = self._battle_power(*guard)
-        # ⭐ The ±% a 部活奥義 put on either side. 100 on both is the untouched
-        # case and the arithmetic below is then exactly what round 222 shipped.
-        # ⚠️ They scale the CARD, because that is where 攻撃力/守備力 live at
-        # all -- a fighter has no attack of their own to scale.
-        pct = (attacker.attack_pct, target.defence_pct)
-        attack = attack * attacker.attack_pct // clubbattle.PERCENT_BASE
-        shield = shield * target.defence_pct // clubbattle.PERCENT_BASE
-        hit = clubbattle.damage(
-            attack, shield, mastery, target_attacking=not target.defending
-        )
-        taken = target.hurt(hit)
-        band = clubbattle.damage_band(taken, target.max_vitality)
-        print(f"[{self.tag}] battle damage: charaId={attacker.chara_id:#x} "
-              f"{label} → charaId={target_id:#x} "
-              f"({'防御' if target.defending else '攻撃'} {shield_label}) "
-              + ("" if pct == (clubbattle.PERCENT_BASE, clubbattle.PERCENT_BASE)
-                 else f"[攻{pct[0]}% 守{pct[1]}%] ")
-              + f"= {taken} 体力 {target.vitality + taken}→{target.vitality}"
-              f"/{target.max_vitality} band={band}"
-              f"{' ⇒ リタイヤ' if target.retired else ''}")
-        return self._tr_cast(
-            session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
-            clubbattle.effect_params(
-                target_id, clubbattle.EFFECT_DAMAGE, taken, band
-            ),
-            everyone,
-        )
+        out = b""
+        for target in targets:
+            if target is None or target is attacker:
+                continue
+            if target.retired:
+                print(f"[{self.tag}] battle damage: target "
+                      f"charaId={target.chara_id:#x} has already retired, "
+                      f"nothing to hit")
+                continue
+            shield, shield_label = 0, "no card"
+            guard = self._battle_deck_item(target)
+            if guard is not None:
+                _atk, shield, _m, shield_label = self._battle_power(*guard)
+            # ⭐ The ±% a 部活奥義 put on either side. 100 on both is the
+            # untouched case and the arithmetic below is then exactly what
+            # round 222 shipped. ⚠️ They scale the CARD, because that is where
+            # 攻撃力/守備力 live at all -- a fighter has no attack of their own
+            # to scale.
+            pct = (attacker.attack_pct, target.defence_pct)
+            attack = attack_base * attacker.attack_pct // clubbattle.PERCENT_BASE
+            shield = shield * target.defence_pct // clubbattle.PERCENT_BASE
+            hit = clubbattle.damage(
+                attack, shield, mastery, target_attacking=not target.defending
+            )
+            taken = target.hurt(hit)
+            band = clubbattle.damage_band(taken, target.max_vitality)
+            print(f"[{self.tag}] battle damage: charaId={attacker.chara_id:#x} "
+                  f"{label} → charaId={target.chara_id:#x} "
+                  f"({'防御' if target.defending else '攻撃'} {shield_label}) "
+                  + ("" if pct == (clubbattle.PERCENT_BASE,
+                                   clubbattle.PERCENT_BASE)
+                     else f"[攻{pct[0]}% 守{pct[1]}%] ")
+                  + f"= {taken} 体力 {target.vitality + taken}→{target.vitality}"
+                  f"/{target.max_vitality} band={band}"
+                  f"{' ⇒ リタイヤ' if target.retired else ''}")
+            out += self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                clubbattle.effect_params(
+                    target.chara_id, clubbattle.EFFECT_DAMAGE, taken, band
+                ),
+                everyone,
+            )
+        return out
 
     def _battle_skill_cast(
         self, actor: "clubbattle.Fighter", row: "dict", label: str,
@@ -5842,12 +5852,11 @@ class MpsServer:
                   + (f", 成功率 {rate}% passed" if rate < 100 else ""))
         return True
 
-    def _battle_skill_effects(
-        self, session: "_Session", battle: "clubbattle.Battle",
-        actor: "clubbattle.Fighter", row: "dict", label: str,
-        target_id: int, everyone: "list[int]",
-    ) -> bytes:
-        """Everything a 部活奥義 does that is not damage: ±%, the two heals, 異常.
+    def _battle_skill_targets(
+        self, battle: "clubbattle.Battle", actor: "clubbattle.Fighter",
+        row: "dict", target_id: int,
+    ) -> "list[clubbattle.Fighter]":
+        """Who one 部活奥義 lands on. ⭐⭐ THE TABLE DECIDES, not the client.
 
         ⭐⭐ WHO IT LANDS ON IS THE TABLE'S: ``side`` (+0xc2, 0 敵 / 1 味方) and
         ``target`` (+0xb4, bit0 味方 / bit1 全体) agree with each other on all
@@ -5858,10 +5867,53 @@ class MpsServer:
         ally-side buffs, so they read as 全体 without having to name the other
         two bits.
 
+        ⚠️⚠️ AND THE CLIENT'S ``targetId`` CANNOT BE TAKEN AT FACE VALUE.
+        0x5C0A carries one, and round 227 read what it actually holds off three
+        real casts: 敵単体 (`1:4`) named the opponent, 味方単体 (`1:3`) named the
+        caster -- and 敵全体 (`1:0`) ALSO named the caster. A 全体 skill has no
+        single target to name, so the field falls back to the sender's own id;
+        reading it as 「hit this one」 aimed 重いコンダラ at its own caster, and
+        _battle_strike's 「never the attacker」 guard then swallowed the whole
+        attack in silence. ⇒ the field is a HINT for the single-target case and
+        nothing at all for 全体.
+
         ⚠️ A single-target ally skill uses the targetId the client chose, and
         falls back to the caster when that names nobody on the right side. In
         練習 the player's side is one character, so the two are the same thing;
         the fallback is for 自主トレ, where they need not be.
+
+        ⚠️⚠️ NOT ``battle.active()``. That roster answers 「who may the fight
+        wait for」 and an NPC is ``gone`` from birth (see the 練習 builder:
+        ``foe.gone = True``, because an NPC never sends 0x5C07 or 0x5C16), so
+        asking it 「who is on the field」 leaves every 練習 opponent out. An
+        奥義 aimed at the other side then found an EMPTY list here and returned
+        before printing a line, which is why no ±% or ステータス異常 ever
+        reached a screen from a real card. 「Still standing」 is 体力, and that
+        is ``retired``.
+        """
+        friendly = bool(row.get("side"))
+        whole = bool(int(row.get("target") or 0) & 2)
+        side = [f for f in battle.fighters
+                if not f.retired and (f.team == actor.team) == friendly]
+        if whole:
+            return side
+        chosen = battle.find(target_id)
+        if chosen in side:
+            return [chosen]
+        return [actor] if friendly else []
+
+    def _battle_skill_effects(
+        self, session: "_Session", battle: "clubbattle.Battle",
+        actor: "clubbattle.Fighter", row: "dict", label: str,
+        targets: "list[clubbattle.Fighter]", everyone: "list[int]",
+    ) -> bytes:
+        """Everything a 部活奥義 does that is not damage: ±%, the two heals, 異常.
+
+        ⭐ ``targets`` is _battle_skill_targets' answer -- 誰に is the table's
+        question and is settled there, together with why the client's own
+        targetId cannot be taken at face value. The same list drives the damage
+        half (_battle_strike), so one card cannot hit one set of people and
+        buff another.
 
         ⚠️⚠️ WHICH COLUMNS ARE APPLIED SILENTLY, and why it is not an omission:
         a ±% ABOVE 100 and a clubstatus 0 CURE both lack a 0x5C11 type. The
@@ -5871,16 +5923,15 @@ class MpsServer:
         this server's own numbers move -- and the screen simply does not
         narrate it. See the SKILL EFFECTS block in clubbattle.
         """
-        friendly = bool(row.get("side"))
-        whole = bool(int(row.get("target") or 0) & 2)
-        side = [f for f in battle.active()
-                if (f.team == actor.team) == friendly]
-        if whole:
-            targets = side
-        else:
-            chosen = battle.find(target_id)
-            targets = [chosen] if chosen in side else ([actor] if friendly else [])
         if not targets:
+            # ⚠️⚠️ THIS LINE IS THE LESSON OF ROUND 227. An empty roster used to
+            # return from here in silence, and 「a card that lands on nobody」
+            # then looks EXACTLY like 「a card with no effect column」 -- which
+            # is a sentence that gets written into documentation. A skill that
+            # aims at nobody is always worth a line.
+            print(f"[{self.tag}] battle skill: {label} lands on nobody "
+                  f"(side={row.get('side')} target={row.get('target')}) — "
+                  f"nothing sent")
             return b""
         out = b""
         for target in targets:
@@ -6196,10 +6247,12 @@ class MpsServer:
             # action's own stream, which is the only place a 0x5C11 reaches a
             # client at all (round 90: a second stream sent into an
             # already-played turn is ignored outright).
-            # ⚠️ Skipped when a probe has doctored the card: /cb card swaps the
-            # deckItem 0x5C0E names precisely so a kind no deck here can hold
-            # can be put on screen, and computing damage from the swapped card
-            # would make the probe move gameplay.
+            # ⚠️ Skipped when a probe has doctored the card: /cb card swaps
+            # the deckItem 0x5C0E names, and computing damage from the swapped
+            # card would make the probe move gameplay. ⭐ Its old reason for
+            # existing ("no deck here can hold a kind=1") expired in round 227
+            # — a real deck holds them now — but the probe still puts a card on
+            # screen without spending a turn, which is what it is for.
             # ⭐⭐ THE 奥義's OWN GATES, ahead of the hit: 消費気力 has to be paid
             # and 成功率 has to be rolled before anything lands, and a skill
             # that fails does no damage either. A キーワード has neither column
@@ -6207,17 +6260,22 @@ class MpsServer:
             # did for both kinds.
             skill = self._battle_skill_row(kind, payload)
             landed = True
+            # ⭐ A 奥義 aims itself (its own 対象 columns); a キーワード has no
+            # such column and lands on the one target 0x5C0A named.
+            targets = ([battle.find(target_id)] if skill is None else
+                       self._battle_skill_targets(
+                           battle, fighter, skill, target_id))
             if skill is not None and battle.card_probe is None:
                 landed = self._battle_skill_cast(
                     fighter, skill, club.describe_deck_item(kind, payload))
             if is_attck and landed and battle.card_probe is None:
                 out += self._battle_strike(
-                    session, battle, fighter, kind, payload, target_id, everyone
+                    session, battle, fighter, kind, payload, targets, everyone
                 )
             if skill is not None and landed and battle.card_probe is None:
                 out += self._battle_skill_effects(
                     session, battle, fighter, skill,
-                    club.describe_deck_item(kind, payload), target_id, everyone,
+                    club.describe_deck_item(kind, payload), targets, everyone,
                 )
             # ⭐ 【練習に参加すると】 — credited for the play, not for the win.
             # ⚠️ Behind the same probe guard as the two above and behind the
@@ -6979,13 +7037,16 @@ class MpsServer:
                            then one 0x5C11 per type goes into the same stream.
         ``/cb card <kind> <12 hex digits> | off``  arm the NEXT turn so every
                            0x5C0E ActionBegin in it names THIS deckItem instead
-                           of the card actually played. ⭐ The one way to ask
-                           what ``kind`` = 1 (部活奥義) does, since no deck here
-                           can hold one — see Battle.card_probe. ⚠️ The six
-                           bytes are the client's own little-endian struct and
-                           go out verbatim; for a クラブスキル that is
-                           ``categoryId u16, id u16`` and two bytes nothing has
-                           read yet, so 野球部 1:0 重いコンダラ is
+                           of the card actually played. ⭐ It was once the
+                           ONLY way to ask what ``kind`` = 1 (部活奥義) does,
+                           because no deck here could hold one; round 227 ended
+                           that (奥義合成 → 部活デッキ → 練習), so this is now a
+                           way to skip the ten minutes rather than the only
+                           door — see Battle.card_probe. ⚠️ The six bytes are
+                           the client's own little-endian struct and go out
+                           verbatim: ``categoryId u16, id u16, 完成度 u8, 0 u8``
+                           (round 227 read a real one off the wire), so 野球部
+                           1:0 重いコンダラ at 完成度 100 is
                            ``/cb card 1 010000006400``.
 
         ⭐ Every one of them is a message this server already knows how to
