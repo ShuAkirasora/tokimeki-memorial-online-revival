@@ -27,6 +27,12 @@ per member and the rest left open for whoever walks in.
                                          dramaActorInfo[u16]
     0xE00A MsgSvNotifyDramaPartyPart     actorId u16, reason u8,
                                          actorIdLeader u16, password[u16]
+    0xE017 MsgClCastDramaPartyReady      prepare u8
+    0xE018 MsgSvNotifyDramaPartyReady    actorId u16, prepare u8
+    0xE019 MsgSvErrorDramaPartyReady     reason u8
+    0xE01A MsgClCastDramaPartyStart      ()
+    0xE01B MsgSvNotifyDramaPartyStart    ()
+    0xE01C MsgSvErrorDramaPartyStart     reason u8
 
 Field names are the client's own (``the field-name extractor DramaParty``), shapes
 and buffer sizes are read out of its deserialisers, and every limit below is
@@ -90,6 +96,16 @@ MSG_SV_NG_JOIN = 0xE013
 MSG_CL_REQUEST_PART = 0xE014
 MSG_SV_OK_PART = 0xE015
 MSG_SV_NG_PART = 0xE016
+# The two buttons the room itself has, once there is somebody standing in it.
+# ⚠️ Neither of the Sv halves is an "Ok": a Cast is answered by a Notify that
+# goes to the whole room, because 準備ＯＫ and 開始 are things the room learns,
+# not things the presser is told. The Error halves are for the presser alone.
+MSG_CL_CAST_READY = 0xE017
+MSG_SV_NOTIFY_READY = 0xE018
+MSG_SV_ERROR_READY = 0xE019
+MSG_CL_CAST_START = 0xE01A
+MSG_SV_NOTIFY_START = 0xE01B
+MSG_SV_ERROR_START = 0xE01C
 
 # Cast slots per drama, from `drama_event.bin`'s four (sex, keyword) pairs.
 # All 22 events in this build fill the first two and leave slots 2 and 3 empty,
@@ -128,6 +144,8 @@ NG_ACTOR_TAKEN = 14         # 選択された登場人物は、他のキャラ�
 NG_NO_ROOM = 15             # この場所では、これ以上パーティを登録できません。
 NG_NOT_IN_PARTY = 16        # パーティに参加していません。
 NG_ALREADY_IN_PARTY = 17    # 既にパーティに参加しています。
+NG_NOT_LEADER = 19          # リーダー権限がありません。
+NG_NOT_ALL_READY = 20       # パーティの参加者全員が「準備OK」の状態に…
 NG_ALREADY_STARTED = 23     # 既にドラマイベントが開始されています。
 NG_DUPLICATE_NAME = 26      # 同名のパーティが存在しています。
 
@@ -207,10 +225,14 @@ class Actor:
     chara_id: int
     family: bytes
     first: bytes
-    #: The per-actor ``state`` byte. 0xE017 CastDramaPartyReady carries a
-    #: ``prepare`` u8 and 0xE018 answers with (actorId, prepare), so this is
-    #: read as that flag — ⚠️ nothing has confirmed it on screen, and the
-    #: ready half of this subsystem is not implemented at all yet.
+    #: The per-actor ``state`` byte, which is 準備ＯＫ. 0xE017
+    #: CastDramaPartyReady carries a ``prepare`` u8 and 0xE018 answers with
+    #: (actorId, prepare), and this is the value both of them mean: whatever
+    #: the client last said about this actor goes back out in every roster
+    #: (`actor_record`), so a member who arrives late sees who is already
+    #: waiting. ⚠️ The byte is echoed rather than interpreted — this end reads
+    #: only "nonzero is ready" (`Party.everyone_ready`), because the button is
+    #: a toggle and nothing says its off value is anything but 0.
     ready: int = 0
 
 
@@ -253,6 +275,26 @@ class Party:
 
     def has(self, chara_id: int) -> bool:
         return any(actor.chara_id == chara_id for actor in self.actors)
+
+    def actor_of(self, chara_id: int) -> Actor | None:
+        return next((a for a in self.actors if a.chara_id == chara_id), None)
+
+    def everyone_ready(self) -> bool:
+        """Whether 0xE01A 開始 is allowed to go through.
+
+        Refusal 20 says 「パーティの参加者全員が『準備OK』の状態になっていま
+        せん」, and 全員 is the one word in it this end has to read: everybody
+        in the room, the leader included.
+
+        ⭐ Not a guess — the client says so three times over (round 230). The
+        leader's own cell carries an ［OK!］ button like everyone else's; with
+        it unpressed the ［イベントスタート］ button is drawn grey and pressing
+        it sends nothing at all; and the byte that greys it is this one, since
+        a hand-sent 0xE018 (actorId=0, prepare=1) lights the button up on its
+        own. So the client gates 開始 on every actor's prepare bit, and this
+        end refusing on the same rule only makes the two agree.
+        """
+        return all(actor.ready for actor in self.actors)
 
 
 class Board:
@@ -403,6 +445,11 @@ def join_params(party: Party) -> bytes:
 
 def del_params(party_id: int) -> bytes:
     return struct.pack(">Q", party_id)
+
+
+def ready_params(actor_id: int, prepare: int) -> bytes:
+    """A MsgSvNotifyDramaPartyReady body: which cell, and what it now says."""
+    return struct.pack(">HB", actor_id, prepare)
 
 
 def part_params(actor_id: int, reason: int, leader_actor_id: int,

@@ -2591,6 +2591,12 @@ class MpsServer:
                 self._drama_push_members(party, drama.MSG_SV_NOTIFY_UPDATE, record)
             return reply
 
+        if msg_type == drama.MSG_CL_CAST_READY:
+            return self._drama_party_ready(session, seen, params)
+
+        if msg_type == drama.MSG_CL_CAST_START:
+            return self._drama_party_start(session, seen)
+
         if msg_type == script.MSG_CL_CAST_DRAMA_EVENT_MATCHING_END:
             # 「やめる」. A Cast takes no answer by the naming convention, and
             # that convention is wrong here: round 217 pressed the button with
@@ -2601,9 +2607,9 @@ class MpsServer:
                 session, seen, script.MSG_SV_NOTIFY_DRAMA_EVENT_MATCHING_END, b"",
             )
 
-        # The rest of the 0xE0xx family — ready, start, kick, surrogate, party
-        # chat — needs a drama actually running, so it is logged rather than
-        # answered until there is one. (⭐ Join left this list in round 229.)
+        # The rest of the 0xE0xx family — kick, surrogate, party chat, party
+        # env — is logged rather than answered for now. (⭐ Join left this list
+        # in round 229, ready and start in round 230.)
         return None
 
     def _drama_select_actor(self, session: "_Session", events: list[dict]):
@@ -2720,6 +2726,120 @@ class MpsServer:
             + self._answer(
                 session, seen, drama.MSG_SV_NOTIFY_JOIN, drama.join_params(party),
             )
+        )
+
+    def _drama_party_ready(
+        self, session: "_Session", seen: int, params: bytes
+    ) -> bytes | None:
+        """0xE017 ［OK!］ -> 0xE018 to the whole room, or 0xE019 to the presser.
+
+        ⚠️ A Cast that is answered — an earlier lesson's shape, and the message says
+        so itself: 0xE018 carries an `actorId`, which a reply meant for the
+        presser alone would not need. It is addressed to the room, and the
+        presser's own cell is one of the cells that has to stop saying
+        「ちょっと待ってね」.
+
+        ⚠️ A body with no byte in it is read as "not ready" rather than
+        refused: the family's 27 sentences have nothing that means "I could
+        not parse that", and inventing a refusal to say it would put a wrong
+        sentence on screen. The log line is the finding.
+        """
+        prepare = params[0] if params else 0
+        if not params:
+            print(f"[{self.tag}] drama party ready: empty body, reading 0")
+        party = self.dramaparties.party_of(session.chara_id)
+        if party is None:
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_READY,
+                struct.pack(">B", drama.NG_NOT_IN_PARTY),
+            )
+        if party.state != drama.STATE_RECRUITING:
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_READY,
+                struct.pack(">B", drama.NG_ALREADY_STARTED),
+            )
+        actor = party.actor_of(session.chara_id)
+        assert actor is not None  # party_of found them by the same list
+        actor.ready = prepare
+        print(f"[{self.tag}] drama party ready: #{party.party_id} "
+              f"actorId={actor.actor_id} prepare={prepare}")
+        notice = drama.ready_params(actor.actor_id, prepare)
+        self._drama_push_members(
+            party, drama.MSG_SV_NOTIFY_READY, notice, skip=session.chara_id,
+        )
+        return self._answer(session, seen, drama.MSG_SV_NOTIFY_READY, notice)
+
+    def _drama_party_start(
+        self, session: "_Session", seen: int
+    ) -> bytes | None:
+        """0xE01A ［イベントスタート］ -> 0xE01B to the room, or 0xE01C.
+
+        Empty both ways: which party is starting is the server's to know, and
+        the room it is starting for is the only place the answer goes.
+
+        The three refusals are ordered the way the presser meets them — not in
+        a party at all, not the one who may press this, not everybody is
+        ready — with 「既に開始されています」 in front of the ready check
+        because a second press is a more specific thing to be told than a
+        member who has not answered.
+
+        ⚠️⚠️ WHAT 0xE01B DOES NOT DO, measured (round 230): it does not close
+        the パーティメンバー room. The client answers it by asking for the
+        roster one more time (0xE00E) and then sits on 「サーバーと通信して
+        います」 waiting for the drama itself. Nothing in the 0xE0xx family
+        moves it from there — 0xE006 (which closes this screen from the list
+        level) was pushed twice and changed nothing, and 0xE008 emptied the
+        room's cells without leaving it. 0x5701, by contrast, is taken by a
+        *different* procedure of the client's (#DramaEvent# rather than
+        #DramaEventMatching#) ⇒ the screen change belongs to the drama, not to
+        the lobby.
+
+        ⛔️ So 0x5700 RequestDramaEventStart is deliberately NOT sent from here:
+        lighting the drama is the next block, and this one is only the lobby's
+        last message.
+        """
+        party = self.dramaparties.party_of(session.chara_id)
+        if party is None:
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_START,
+                struct.pack(">B", drama.NG_NOT_IN_PARTY),
+            )
+        actor = party.actor_of(session.chara_id)
+        assert actor is not None
+        reason = None
+        if actor.actor_id != party.leader_actor_id:
+            reason = drama.NG_NOT_LEADER
+        elif party.state != drama.STATE_RECRUITING:
+            reason = drama.NG_ALREADY_STARTED
+        elif not party.everyone_ready():
+            reason = drama.NG_NOT_ALL_READY
+        if reason is not None:
+            print(f"[{self.tag}] drama party start refused, reason {reason}")
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_START,
+                struct.pack(">B", reason),
+            )
+
+        party.state = drama.STATE_RUNNING
+        print(f"[{self.tag}] drama party start: #{party.party_id}, "
+              f"now {self.dramaparties.summary()}")
+        # ⭐ The first time `state` has ever gone out as 1: every party this
+        # server has put on the wire so far was 参加者募集中, and イベント中 is
+        # the other half of the byte the client's own debug printer captions.
+        # The row goes first for the reason 0xE015 goes before 0xE008: the
+        # record is about the room they are still standing in, and 0xE01B is
+        # the message that says that room is now running something. ⚠️ It does
+        # NOT take them out of it — see this method's docstring.
+        record = drama.party_record(party)
+        self._drama_push_members(
+            party, drama.MSG_SV_NOTIFY_UPDATE, record, skip=session.chara_id,
+        )
+        self._drama_push_members(
+            party, drama.MSG_SV_NOTIFY_START, b"", skip=session.chara_id,
+        )
+        return (
+            self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
+            + self._answer(session, seen, drama.MSG_SV_NOTIFY_START, b"")
         )
 
     def _drama_push_members(
