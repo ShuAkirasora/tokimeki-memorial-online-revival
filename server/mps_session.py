@@ -83,6 +83,7 @@ import clubdata
 import codes
 import couple
 import curriculum
+import drama
 import exam
 import facing
 import friends
@@ -1230,6 +1231,10 @@ class MpsServer:
         # フリー対戦 reach the same 0x5C** messages without one, and this server
         # only lacks those doors because it cannot place their NPCs yet.
         self.battles = clubbattle.Board()
+        # ドラマイベント bookings, on the board for the same reason the 看板 is:
+        # a party is something other players look at, so it cannot live on the
+        # session that made it. See drama.Board.
+        self.dramaparties = drama.Board()
         # Every connection currently up on this port. Kept so that a Notify can
         # find a player by charaId rather than only being able to answer the
         # connection it is standing on -- which is all a one-player server ever
@@ -2493,13 +2498,16 @@ class MpsServer:
 
         if msg_type == script.MSG_CL_REQUEST_DRAMA_EVENT_MATCHING_START:
             kept = keys[: script.DRAMA_EVENT_MAX]
-            # The party list goes out empty: there is only ever one player on
-            # this server, so an entry would have to be invented, and an
-            # invented party is a second thing that can be wrong.
+            # ⭐ The party list used to go out empty on the grounds that an
+            # invented party is a second thing that can be wrong. It is not
+            # invented any more: whatever is on the board is what goes out, and
+            # on a one-player server that is exactly the parties this player
+            # made and has not left.
+            parties = list(self.dramaparties.parties.values())[: drama.PARTY_MAX]
             return (
                 self._answer(
                     session, seen, script.MSG_SV_OK_DRAMA_EVENT_MATCHING_START,
-                    script.matching_start_params(len(kept), 0),
+                    script.matching_start_params(len(kept), len(parties)),
                 )
                 + self._answer(
                     session, seen, script.MSG_SV_NOTIFY_DRAMA_EVENT_LIST,
@@ -2507,9 +2515,60 @@ class MpsServer:
                 )
                 + self._answer(
                     session, seen, script.MSG_SV_NOTIFY_DRAMA_PARTY_LIST,
-                    struct.pack(">H", 0),
+                    drama.party_list_params(parties),
                 )
             )
+
+        if msg_type == drama.MSG_CL_REQUEST_CREATE:
+            return self._drama_party_create(session, seen, params, events)
+
+        if msg_type == drama.MSG_CL_REQUEST_INFO:
+            party = None
+            if len(params) >= 8:
+                (party_id,) = struct.unpack_from(">Q", params, 0)
+                party = self.dramaparties.find(party_id)
+            if party is None:
+                return self._answer(
+                    session, seen, drama.MSG_SV_NG_INFO,
+                    struct.pack(">B", drama.NG_BAD_PARTY),
+                )
+            return self._answer(
+                session, seen, drama.MSG_SV_OK_INFO, drama.info_params(party),
+            )
+
+        if msg_type == drama.MSG_CL_REQUEST_PART:
+            # 「離脱」. Empty body: the party a character is in is the server's
+            # to know. ⚠️ The Ok has to come before the Del, or the row the
+            # client is being told to drop is the one it is still standing in.
+            party = self.dramaparties.party_of(session.chara_id)
+            if party is None:
+                return self._answer(
+                    session, seen, drama.MSG_SV_NG_PART,
+                    struct.pack(">B", drama.NG_NOT_IN_PARTY),
+                )
+            actor_id = party.leader_actor_id
+            for actor in party.actors:
+                if actor.chara_id == session.chara_id:
+                    actor_id = actor.actor_id
+            self.dramaparties.part(session.chara_id)
+            print(f"[{self.tag}] drama party part: #{party.party_id}, "
+                  f"now {self.dramaparties.summary()}")
+            reply = self._answer(session, seen, drama.MSG_SV_OK_PART, b"")
+            reply += self._answer(
+                session, seen, drama.MSG_SV_NOTIFY_PART,
+                drama.part_params(actor_id, drama.PART_SELF, party.leader_actor_id),
+            )
+            if party.party_id not in self.dramaparties.parties:
+                reply += self._answer(
+                    session, seen, drama.MSG_SV_NOTIFY_DEL,
+                    drama.del_params(party.party_id),
+                )
+            else:
+                reply += self._answer(
+                    session, seen, drama.MSG_SV_NOTIFY_UPDATE,
+                    drama.party_record(party),
+                )
+            return reply
 
         if msg_type == script.MSG_CL_CAST_DRAMA_EVENT_MATCHING_END:
             # 「やめる」. A Cast takes no answer by the naming convention, and
@@ -2521,10 +2580,104 @@ class MpsServer:
                 session, seen, script.MSG_SV_NOTIFY_DRAMA_EVENT_MATCHING_END, b"",
             )
 
-        # The rest of the 0xE0xx family — party create/join/ready/start — is
-        # only reachable once a party exists, so it is logged rather than
-        # answered until we have seen one form.
+        # The rest of the 0xE0xx family — join, ready, start, kick, surrogate,
+        # party chat — needs a second player or a drama actually running, so it
+        # is logged rather than answered until one of those exists.
         return None
+
+    def _drama_party_create(
+        self, session: "_Session", seen: int, params: bytes, events: list[dict]
+    ) -> bytes | None:
+        """0xE00B 「パーティ作成」 -> 0xE00C with an id, or 0xE00D with a reason.
+
+        ⭐ Every refusal here picks a sentence the client already carries
+        (`error_message.bin`, pseudo id 0xFF01, 27 of them) rather than a
+        silence: a create that vanishes looks exactly like a create the server
+        never got, and telling those two apart on screen costs a client run.
+
+        ⚠️ What is NOT checked: the cast slot's 性別 gate (reason 22) and its
+        キーワード gate. Both are in `drama_events.json`, and both are checked
+        by the client before it ever sends — so a refusal from this end would
+        only ever fire on a request the client would not make.
+        """
+        parsed = drama.parse_create(params)
+        if parsed is None:
+            print(f"[{self.tag}] drama party create: short body {params.hex()}")
+            return self._answer(
+                session, seen, drama.MSG_SV_NG_CREATE,
+                struct.pack(">B", drama.NG_BAD_EVENT),
+            )
+        genre, index, actor_id, name, password = parsed
+        print(f"[{self.tag}] drama party create: {genre}:{index} "
+              f"actorId={actor_id} name={name!r} password={password!r}")
+
+        event = next(
+            (e for e in events if e["genre"] == genre and e["index"] == index), None
+        )
+        # ⭐ `full_name` is the character lookup: it returns None for a
+        # connection that has not selected one, which is the same "no such
+        # character" this refusal is about.
+        full = self._chars(session).full_name(session.chara_id)
+        # ⚠️ The order these are tested in is the order the player would hit
+        # them in, so the first sentence they see is about the thing they just
+        # did — not about a character lookup they never asked for.
+        reason = None
+        if event is None:
+            reason = drama.NG_BAD_EVENT
+        elif full is None:
+            reason = drama.NG_BAD_CHARACTER
+        elif actor_id >= drama.CAST_MAX or actor_id not in [
+            slot["slot"] for slot in event.get("cast", [])
+        ]:
+            reason = drama.NG_BAD_ACTOR
+        elif self.dramaparties.party_of(session.chara_id) is not None:
+            reason = drama.NG_ALREADY_IN_PARTY
+        elif len(self.dramaparties.parties) >= drama.PARTY_MAX:
+            reason = drama.NG_NO_ROOM
+        elif self.dramaparties.named(name) is not None:
+            reason = drama.NG_DUPLICATE_NAME
+        if reason is not None:
+            print(f"[{self.tag}] drama party create refused, reason {reason}")
+            return self._answer(
+                session, seen, drama.MSG_SV_NG_CREATE, struct.pack(">B", reason),
+            )
+        assert event is not None and full is not None
+
+        party = self.dramaparties.create(drama.Party(
+            party_id=0,
+            genre=genre,
+            index=index,
+            name=name,
+            password=password,
+            leader_actor_id=actor_id,
+            cast_slots=tuple(slot["slot"] for slot in event.get("cast", [])),
+        ))
+        party.actors.append(drama.Actor(
+            actor_id=actor_id,
+            chara_id=session.chara_id,
+            family=full[0],
+            first=full[1],
+        ))
+        print(f"[{self.tag}] drama party created: {self.dramaparties.summary()}")
+        # Ok first (it is what carries the id everything else is addressed by),
+        # then the row for the list the player is standing on, then the roster
+        # for the room they are about to be standing in. ⚠️ The last of the
+        # three is a guess about *when* the client wants it: 0xE009 is the
+        # message that fills a party's member list, and nothing says the
+        # creator gets one. An arrival too early costs a line in the client's
+        # log ("受信ハンドラが設定されていません") and nothing else.
+        return (
+            self._answer(
+                session, seen, drama.MSG_SV_OK_CREATE,
+                struct.pack(">Q", party.party_id),
+            )
+            + self._answer(
+                session, seen, drama.MSG_SV_NOTIFY_UPDATE, drama.party_record(party),
+            )
+            + self._answer(
+                session, seen, drama.MSG_SV_NOTIFY_JOIN, drama.join_params(party),
+            )
+        )
 
     def _script_incoming(
         self, session: "_Session", seen: int, msg_type: int, params: bytes
@@ -3002,6 +3155,15 @@ class MpsServer:
                 )
                 print(f"[{self.tag}] trainingroom dropped on disconnect, "
                       f"now {self.trainingrooms.summary()}")
+            # ⭐ A ドラマイベント party comes down the same way, and 0xE00A's own
+            # third reason -- 「切断による」, beside 「自分自身の要求による」 and
+            # 「リーダーに排除された」 -- is the protocol saying it should. No
+            # Notify goes anywhere: the only listeners a party can have are its
+            # own members, and on this server that is the connection that just
+            # went away.
+            if session.chara_id and self.dramaparties.part(session.chara_id):
+                print(f"[{self.tag}] drama party dropped on disconnect, "
+                      f"now {self.dramaparties.summary()}")
             writer.close()
             try:
                 await writer.wait_closed()
@@ -3452,6 +3614,14 @@ class MpsServer:
                     )
                     print(f"[{self.tag}] trainingroom dropped at logout, "
                           f"now {self.trainingrooms.summary()}")
+                # Same for a party, and for the same structural reason rather
+                # than a quote of our own: clearing chara_id below is what would
+                # strand it, so it has to go before that line and not only on a
+                # disconnect. ⚠️ No manual sentence says a 「中断」 drops a
+                # ドラマイベント party the way p07_06 says it drops a 看板.
+                if session.chara_id and self.dramaparties.part(session.chara_id):
+                    print(f"[{self.tag}] drama party dropped at logout, "
+                          f"now {self.dramaparties.summary()}")
                 session.chara_id = 0
                 return self._answer(session, sequence, MSG_SV_OK_SCHOOL_LOGOUT, b"")
             if msg_type == MSG_CL_QUERY_POOL_MESSAGE:
