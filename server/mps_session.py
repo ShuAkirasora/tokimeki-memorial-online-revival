@@ -1827,7 +1827,8 @@ class MpsServer:
     # was read off a log against a screen for rounds before it was allowed to
     # matter, which is the only reason a machine that follows is trusted to
     # answer anything at all.
-    def _shadow_start(self, session: "_Session", script_id: int) -> None:
+    def _shadow_start(self, session: "_Session", script_id: int,
+                      registers: dict | None = None) -> None:
         """Arm a follower for the scenario about to play, if we have it.
 
         The cells come from the player's own 恋愛 record and nowhere else --
@@ -1854,7 +1855,7 @@ class MpsServer:
         # the walk goes to the wrong floor -- which is exactly what happened
         # while nobody supplied it at all.
         cells[("PC", script.PC_IN_CLASS)] = IN_CLASS
-        runner.shadow = gs3vm.follow(script_id, cells)
+        runner.shadow = gs3vm.follow(script_id, cells, registers)
         if runner.shadow is None:
             print(f"[{self.tag}] vm: id={script_id} is not in runtime/scripts "
                   f"— no shadow for this one")
@@ -2908,10 +2909,33 @@ class MpsServer:
         print(f"[{self.tag}] drama light: {found.file} id={found.script_id} "
               f"cast={[a for a, _ in cast]} to {len(sessions)} member(s)")
         out = b""
+        # ⭐⭐⭐ **One register file, several cursors.** Every member walks the
+        # same scenario over the same `B`/`F`/`S` registers, and that is read
+        # off the scripts rather than chosen here (round 233, the protocol notes 2.188):
+        #
+        #   * `un081` sets `B1 = 3` on the main line, decrements it inside an
+        #     `OP_BA 01` bracket -- 役柄 0 only -- and later gates 春日's debut
+        #     on `B1 == 2`. With a file per member the 役柄-1 copy is stuck at 3
+        #     forever, so the `OP_JS 06` that writes `PC[0x3901]` is reachable
+        #     by nobody -- and `the script data reader slots` says `un081` is the only
+        #     writer of that cell in all 683 scenarios.
+        #   * `B1` is a number **both** players read: ip=4652 says 「ベルトの
+        #     数字も $v01 になってるし……」 over it. Guarding its decrement with
+        #     `OP_BA` is the ordinary "let one writer do it" idiom over shared
+        #     state; over a private copy it would simply be a bug.
+        #   * `PLAYER_SYNC` brackets that decrement (ip=270 and ip=289). A
+        #     barrier around a private register would synchronise nothing.
+        #
+        # ⚠️ Registers only. Cells stay per member, and that is read off the
+        # scripts too: `PC_KEYWORD_UPDATE` names **which player** in its first
+        # operand (`80`/`81`, granted back to back in `un081`) while
+        # `PC_DATA_REFER`/`UPDATE` carry no such field -- so the data family
+        # means "this member" and the keyword family means "that one".
+        party_registers: dict = {}
         for other in sessions:
             other.script = script.Runner(found, 0, [])
             other.talking_choice = None
-            self._shadow_start(other, found.script_id)
+            self._shadow_start(other, found.script_id, party_registers)
             if other is presser:
                 out = self._answer(
                     other, seen, script.MSG_SV_REQUEST_SCRIPT_READY, params)
@@ -3198,9 +3222,51 @@ class MpsServer:
                         target = found.wire_ip(goes_to)
                     why = f"サイコロ (OP_RAND -> {'成立' if heads else '不成立'})"
                 elif (verdict is not None and not gs3vm._unknown(verdict) and verdict
-                        and shadow.decided_road()):
+                        and (shadow.decided_road() or shadow.in_party)):
+                    # ⭐⭐⭐ INVENTED (scope, not answer): inside a ドラマパーティ
+                    # this end answers every branch it can compute, instead of
+                    # only the ones whose road decides nothing anyone can see.
+                    #
+                    # The road test (`gs3vm._decided_road`) is scaffolding around
+                    # a register file that was not trusted yet, and for a party's
+                    # scenario round 233 removed both of the things it was
+                    # standing in for:
+                    #
+                    #   * the file is the **party's** now, one for all its
+                    #     members, which is what the scripts compute over
+                    #     (see `_drama_light`); and
+                    #   * `_undecidable` forbids an `OP_BA` on the road as "a
+                    #     役柄 test whose result only the client holds" -- and in
+                    #     a party this end is the side that **handed out** the
+                    #     役柄, so that sentence is simply not true here.
+                    #
+                    # ⭐⭐ And refusing is not abstaining (the argument
+                    # `_undecidable` already makes about 台詞 and キーワード):
+                    # nothing else answers a branch this end declines, so the
+                    # client gets fall-through every run. For a drama that is not
+                    # a cautious default, it is a broken scene -- played offline
+                    # with both roles walking, all 22 ドラマイベント reach `OP_END`
+                    # when the branches are answered and `un081` loops on its
+                    # own intro when they are not
+                    # (`the party sweep`, `the drama replay`).
+                    #
+                    # ⭐ `un081` is the case that shows what the fence was
+                    # costing: ip=714 tests `B1 == 2`, this end computes it
+                    # exactly, and the road it guards is the one the manual
+                    # describes -- 「特定のドラマイベントの、ある役柄をプレイ
+                    # すると、その中で登場するようになっています」, i.e. 春日
+                    # joining the cast. Declining it is declining the documented
+                    # outcome of the event.
+                    #
+                    # ⚠️ Still fenced three ways: the standing "no" has to be
+                    # what it is replacing (a forced branch and a choice chain
+                    # outrank it), the verdict has to be definite -- an
+                    # unsupplied cell reads ⊤ and refuses on its own -- and the
+                    # follower has to be a party's (`Follower.in_party`). A solo
+                    # script, a 日常会話 and the tutorial are untouched.
                     target = found.wire_ip(goes_to)
-                    why = f"表現のみ (vm cond={verdict})"
+                    why = (f"表現のみ (vm cond={verdict})" if shadow.decided_road()
+                           else f"ドラマの帳簿 (vm cond={verdict})")
             other = "" if taken is None else f" 分岐先は ip={found.local_ip(taken)}"
             print(f"[{self.tag}] script branch -> wire {target} "
                   f"(ip={found.local_ip(target)}, {why}){other}")
@@ -3330,21 +3396,55 @@ class MpsServer:
     def _player_wait(
         self, session: "_Session", seen: int, wire_ip: int, op: int, local: int
     ) -> bytes | None:
-        """OP_PLAYER_WAIT_TIME / OP_PLAYER_SYNC: hold until everybody is here.
+        """OP_PLAYER_SYNC: hold until the party is together. OP_PLAYER_WAIT_TIME:
+        let this one member go on.
 
-        ⭐⭐⭐ This is the one instruction that makes a ドラマイベント a thing two
-        people are in rather than two people watching the same file. Each
-        client walks its own copy of the .ssb and reports the stop; the release
-        is a 0x721D echoing the Begin's {ip, op}, and it is the server that
-        decides when to send it. Round 231 measured the release itself by hand
-        against one client; what this method adds is who has to arrive first.
+        ⭐⭐⭐ `OP_PLAYER_SYNC` is the instruction that makes a ドラマイベント a
+        thing two people are in rather than two people watching the same file.
+        Each client walks its own copy of the .ssb and reports the stop; the
+        release is a 0x721D echoing that client's own Begin, and it is the
+        server that decides when to send it.
 
-        ⭐ The barrier counts the party members who **took** the script -- who
-        answered 0x7201 (`Runner.started`). Somebody who never accepted it is
-        not in the play and cannot arrive at its instructions, so waiting for
-        them would be waiting forever. ⚠️ A member who accepted it and then
-        stops answering does hold the others: this end has no timeout, and
-        inventing one would be inventing the pacing of a scene.
+        ⭐ Who has to arrive: the party members **holding this script** -- the
+        ones 0x7200 went out to who have not refused it with 0x7202. Somebody
+        who is not in the play cannot arrive at its instructions, so waiting for
+        them would be waiting forever. ⚠️ A member who is in it and stops
+        answering does hold the others: this end has no timeout, and inventing
+        one would be inventing the pacing of a scene.
+
+        ⚠️⚠️ **Holding it, not having answered 0x7201.** Round 233 counted the
+        ones that had answered, and the first barrier of every two-player run
+        released with one member in it: 0x7200 goes out to both, and whoever
+        answers first is already reporting instructions while the other's
+        0x7201 is still on the wire. The whole intro then ran single-handed --
+        which is the same failure as having no second member at all, arriving
+        one round-trip later.
+
+        ⚠️⚠️ **Arriving is not arriving at the same ip.** Round 232 released
+        only when every member reported the identical `{ip, op}`, which round
+        233 found to be wrong twice over:
+
+          * 5 of the 22 ドラマイベント write the two roles a `PLAYER_SYNC` each,
+            about 30 ips apart -- `un009` ip=21023/21053, and the same shape in
+            `un010`, `un066`, `un130`, `un146`. Under an ip-matched rule those
+            parties deadlock by construction, since neither role can ever reach
+            the other's copy.
+          * Played offline over all 22 with both roles walking
+            (`the party sweep`), an ip-matched rule gets 18 of 22
+            to `OP_END`; arriving at *a* `PLAYER_SYNC` gets 22 of 22.
+
+        ⚠️⚠️ **And `OP_PLAYER_WAIT_TIME` is not a rendezvous at all**, which is
+        where round 232's other half was wrong. Its operand is a duration that
+        differs at every site (0x02-0xc8, mostly 0x32) where `PLAYER_SYNC`'s is
+        the constant 3 in all 88 of its occurrences; and 1663 of the 3764
+        `PLAYER_WAIT_TIME` sites across the 22 events sit inside a bracket only
+        one 役柄 can reach, starting with `un081` ip=780 -- the first one the
+        round-232 run would have hit had a second member ever taken the script.
+        So it is the client's own timer, and this end just says go on.
+        ⭐ Round 232 did not see any of this because its second member never
+        answered 0x7201: with one member in the play every rule releases at
+        once, and `un111` -- the one event it played through -- happens to be
+        one of the two whose `PLAYER_WAIT_TIME` sites are all shared anyway.
 
         ⚠️ Outside a party (`/sc` on a solo script) there is nobody to wait
         for and the release goes out at once, which is what the tutorial and
@@ -3352,39 +3452,61 @@ class MpsServer:
         """
         if session.script is None:
             return None
+        if op != script.OP_PLAYER_SYNC:
+            return self._player_release([session], session, seen)
         party = self.dramaparties.party_of(session.chara_id)
+        playing = session.script.script.script_id
         waiting = [session]
         if party is not None:
             for actor in party.actors:
                 other = self._session_of(actor.chara_id)
                 if other is None or other is session:
                     continue
-                if other.script is not None and other.script.started:
+                # ⚠️ Same scenario, not just "has a script": a member could be
+                # in a party and running something else off /sc.
+                if (other.script is not None
+                        and other.script.script.script_id == playing):
                     waiting.append(other)
         missing = [
             s for s in waiting
-            if s.script is None or s.script.begun != (wire_ip, op)
+            if s.script is None or s.script.begun is None
+            or s.script.begun[1] != script.OP_PLAYER_SYNC
         ]
         if missing:
             print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
                   f"{len(waiting) - len(missing)}/{len(waiting)} 到着、待たせたまま")
             return None
+        print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
+              f"{len(waiting)} 人そろった、解除")
+        return self._player_release(waiting, session, seen)
+
+    def _player_release(
+        self, waiting: list["_Session"], session: "_Session", seen: int
+    ) -> bytes:
+        """Send each of these members the 0x721D that lets it go on.
+
+        ⚠️ **Each gets its own Begin echoed back**, not the one that happened to
+        arrive last: two members can be stopped on two different `PLAYER_SYNC`
+        instructions (see `_player_wait`), and the client matches the release
+        against the ip it is sitting on.
+        """
         out = b""
         for other in waiting:
-            shadow = self._shadow_at(other, local, op)
+            if other.script is None or other.script.begun is None:
+                continue
+            begun_ip, begun_op = other.script.begun
+            local = other.script.script.local_ip(begun_ip)
+            shadow = self._shadow_at(other, local, begun_op)
             if shadow is not None:
                 shadow.flowed()
-            if other.script is not None:
-                other.script.begun = None
+            other.script.begun = None
             reply = self._answer(other, seen if other is session else 0,
                                  script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
-                                 script.command_end_params(wire_ip, op))
+                                 script.command_end_params(begun_ip, begun_op))
             if other is session:
                 out = reply
             else:
                 self._push(other, reply)
-        print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
-              f"{len(waiting)} 人そろった、解除")
         return out
 
     def _script_select(self, session: "_Session", seen: int, local_ip: int) -> bytes:

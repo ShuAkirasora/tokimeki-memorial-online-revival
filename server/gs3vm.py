@@ -1107,8 +1107,23 @@ class Follower(Machine):
     it. Finding out which holes there are is most of what this mode is for.
     """
 
-    def __init__(self, script: Script, cells: dict | None = None) -> None:
+    def __init__(self, script: Script, cells: dict | None = None,
+                 registers: dict | None = None) -> None:
         super().__init__(script, cells or {})
+        # ⭐⭐⭐ **Whose register file this is.** Passed in and kept by reference
+        # -- not copied -- so that every member of a ドラマパーティ computes over
+        # one file while each keeps its own cursor, stack and data cells. That
+        # split is read off the scripts, not chosen here; the argument is in
+        # `mps_session._drama_light` and in round 233's section of the protocol notes.
+        # ⚠️ None is a file of this follower's own, which is what a solo script
+        # wants and what every caller before round 233 got.
+        if registers is not None:
+            self.registers = registers
+        #: ⭐ True when this follower is one of a ドラマパーティ's, computing over
+        #: the party's own register file rather than a private one. Read at the
+        #: one place a branch is answered (`mps_session._script_incoming`);
+        #: the argument for why that changes anything is there.
+        self.in_party = registers is not None
         self.pos = 0
         # Why this end lost its place, once it has. A shadow that no longer
         # knows where it is must stop talking rather than start guessing, so
@@ -1344,15 +1359,19 @@ class Follower(Machine):
                    else "every cell it asked for was supplied"))
 
 
-def follow(script_id: int, cells: dict | None = None) -> Follower | None:
+def follow(script_id: int, cells: dict | None = None,
+           registers: dict | None = None) -> Follower | None:
     """A follower for the scenario the client just asked to play, or None.
 
     None means this machine has no export for that id, which is the ordinary
     case for every copy of this server but the one that made them -- the same
     way `mapgraph`'s graph and the branch table are optional.
+
+    `registers` is a file to share with the other members of the same party;
+    see `Follower.__init__`.
     """
     script = by_script_id(script_id)
-    return Follower(script, cells) if script is not None else None
+    return (Follower(script, cells, registers) if script is not None else None)
 
 
 def run(name: str, cells: dict[tuple[str, int], int]) -> Result | None:

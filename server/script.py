@@ -877,7 +877,17 @@ def variable_entry(category: int, number: int, value) -> bytes:
         # client reads it back as a C string out of a fixed-width field.
         block = raw[: width - 1].ljust(width, b"\x00")
     else:
-        block = int(value or 0).to_bytes(width, "little", signed=False)
+        # ⚠️⚠️ **Truncated into the field, two's complement and all**, rather
+        # than range-checked. A script register is a machine word on the far
+        # side -- the client reads a 16BIT back with `mov cx, [esi]` -- so a
+        # negative is not an error to reject, it is a bit pattern to hand over.
+        # ⛔️ `to_bytes(..., signed=False)` raised on one, which is not a
+        # cautious refusal: it threw out of the message handler and took the
+        # connection with it, and the scene stopped dead with the client still
+        # waiting to be told. Round 233 hit it in `un185` ip=29880 (`B0 = -30`,
+        # the script's own arithmetic) and lost both members of the party.
+        block = (int(value or 0) & ((1 << (8 * width)) - 1)).to_bytes(
+            width, "little", signed=False)
     return struct.pack(">BBH", category & 0xFF, number & 0xFF, width) + block
 
 
