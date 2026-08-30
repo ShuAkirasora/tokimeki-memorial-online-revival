@@ -253,13 +253,18 @@ OP_JS = 0x9085
 OP_INPUT_SELECT = 0x7000
 
 # The other command that stops the client dead, and the one that makes a
-# ドラマイベント playable at all. ⚠️ Its name is PLAYER_WAIT_TIME and not
-# PLAYER_SYNC: the two are neighbours (0x9100 is PLAYER_SYNC) and the one the
-# client actually stops on is this one. It carries a count -- un111 asks for
-# 0x32 twice in its opening -- and there is a PLAYER_WAIT_TIME_LOCAL beside it
+# ドラマイベント playable at all. It carries a count -- un111 asks for 0x32
+# twice in its opening -- and there is a PLAYER_WAIT_TIME_LOCAL beside it
 # in the same opcode table, which is the reason to read this one as "wait, and
 # let the server decide when the wait is over": the local variant is the one
 # that does not need anybody.
+#
+# ⚠️⚠️ **Round 232 withdraws half of what used to stand here.** This comment
+# said 0x9100 PLAYER_SYNC was merely a neighbour and that "the one the client
+# actually stops on is this one". That was true of un111 and of nothing else:
+# un111 opens on a 0x9101, so it was the only stop round 231 ever saw. un081
+# opens on a **0x9100** at ip 270 and the client sits there exactly as dead,
+# with the same 0x721c Begin -- see OP_PLAYER_SYNC below.
 #
 # It arrives as a 0x721c Begin exactly the way INPUT_SELECT does, so what
 # releases it is the same closing bracket, 0x721d carrying the Begin's {ip, op}.
@@ -274,6 +279,45 @@ OP_INPUT_SELECT = 0x7000
 # told apart from "the wait has not elapsed yet", and the screen has now said
 # which it was.
 OP_PLAYER_WAIT_TIME = 0x9101
+
+# ⭐⭐⭐ The other half of the same lock, and the one a ドラマイベント actually
+# opens on (round 232). un081 stops on this at ip 270 before it has drawn
+# anything at all; a 0x721d echoing that Begin's {ip, op} was sent by hand and
+# the client walked straight on to the next one at ip 289. ⇒ the Begin/End
+# bracket is not specific to PLAYER_WAIT_TIME: both of these stop, both report
+# through 0x721c, and both are released by the same closing 0x721d.
+#
+# ⭐⭐ What tells the two apart is their operand, and it is a clean split
+# across all four exported dramas (88 SYNC + 606 WAIT_TIME, no exceptions):
+#
+#   0x9101 PLAYER_WAIT_TIME   a number that varies -- 0x02..0xc8, mostly 0x32
+#   0x9100 PLAYER_SYNC        **always 3**, in all 88 occurrences
+#
+# ⇒ the count 0x9101 carries is per-site and means something; the 3 on this one
+# is a constant and cannot be "how many players to wait for" (un081 is a
+# two-hander). ⚠️ What it *is* has not been read -- booked as unknown rather
+# than assumed to be zero-information, and nothing here branches on it.
+#
+# Both go through the same barrier (`mps_session._player_wait`): every party
+# member who took the script has to report the same {ip, op} before anybody is
+# released. For SYNC that is what the name says it is; for WAIT_TIME it is
+# round 231's reading.
+OP_PLAYER_SYNC = 0x9100
+
+
+def stop_name(op: int) -> str:
+    """The name of a stop the client is sitting on, for the log.
+
+    Two instructions share the barrier and they are not interchangeable, so a
+    line that says which one is holding the play is worth the three lines it
+    costs -- "un081 never reaches a WAIT_TIME" is exactly the kind of thing the
+    log had no way to say before round 232.
+    """
+    return {
+        OP_PLAYER_WAIT_TIME: "PLAYER_WAIT_TIME",
+        OP_PLAYER_SYNC: "PLAYER_SYNC",
+    }.get(op, f"stop 0x{op:04x}")
+
 
 # ⭐⭐ Where the season of a background comes from. `"clock"` is the factory
 # answer here: the school clock's own quarter (`curriculum.season`). `"script"`

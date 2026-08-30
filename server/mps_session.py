@@ -3238,7 +3238,7 @@ class MpsServer:
             found = session.script.script
             local = found.local_ip(wire_ip)
             session.script.begun = (wire_ip, op)
-            if op == script.OP_PLAYER_WAIT_TIME:
+            if op in (script.OP_PLAYER_WAIT_TIME, script.OP_PLAYER_SYNC):
                 return self._player_wait(session, seen, wire_ip, op, local)
             if op != script.OP_INPUT_SELECT:
                 print(f"[{self.tag}] script begin ip={local} op=0x{op:04x} "
@@ -3330,7 +3330,7 @@ class MpsServer:
     def _player_wait(
         self, session: "_Session", seen: int, wire_ip: int, op: int, local: int
     ) -> bytes | None:
-        """OP_PLAYER_WAIT_TIME: hold the play until every player has got here.
+        """OP_PLAYER_WAIT_TIME / OP_PLAYER_SYNC: hold until everybody is here.
 
         ⭐⭐⭐ This is the one instruction that makes a ドラマイベント a thing two
         people are in rather than two people watching the same file. Each
@@ -3366,7 +3366,7 @@ class MpsServer:
             if s.script is None or s.script.begun != (wire_ip, op)
         ]
         if missing:
-            print(f"[{self.tag}] PLAYER_WAIT_TIME ip={local} — "
+            print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
                   f"{len(waiting) - len(missing)}/{len(waiting)} 到着、待たせたまま")
             return None
         out = b""
@@ -3383,7 +3383,7 @@ class MpsServer:
                 out = reply
             else:
                 self._push(other, reply)
-        print(f"[{self.tag}] PLAYER_WAIT_TIME ip={local} — "
+        print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
               f"{len(waiting)} 人そろった、解除")
         return out
 
