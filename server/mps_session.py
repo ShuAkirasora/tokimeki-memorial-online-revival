@@ -2789,14 +2789,23 @@ class MpsServer:
         います」 waiting for the drama itself. Nothing in the 0xE0xx family
         moves it from there — 0xE006 (which closes this screen from the list
         level) was pushed twice and changed nothing, and 0xE008 emptied the
-        room's cells without leaving it. 0x5701, by contrast, is taken by a
-        *different* procedure of the client's (#DramaEvent# rather than
-        #DramaEventMatching#) ⇒ the screen change belongs to the drama, not to
-        the lobby.
+        room's cells without leaving it.
 
-        ⛔️ So 0x5700 RequestDramaEventStart is deliberately NOT sent from here:
-        lighting the drama is the next block, and this one is only the lobby's
-        last message.
+        ⛔️ A line that used to stand here read the client's debug log as saying
+        0x5701 goes to a *different* state machine (#DramaEvent# rather than
+        #DramaEventMatching#) and concluded the ignition was 0x5700/0x5701.
+        Round 231 took that apart: every *MessageProcedure holds the message
+        id's HIGH BYTE and nothing else (0x42/0x56/0x57/0x6C/0x72/0xE0, all six
+        decompiled), so "0x57xx lands in #DramaEvent#" is true at all times and
+        says nothing about who is listening.
+
+        ⭐⭐⭐ WHAT DOES MOVE THE SCREEN, measured (round 231): the next message
+        after 0xE01B is 0x7200 MsgSvRequestScriptReady -- the ordinary script
+        bracket, carrying the drama's own .ssb and the party as ``pcInfo[]``.
+        The client answers 0x7201, the パーティメンバー room goes away and the
+        drama's first background is drawn. Nothing in the 0x57xx family is
+        involved: 0x5700 RequestDramaEventStart is a door the *client* knocks
+        on, and it does not knock on it here. See `_drama_light`.
         """
         party = self.dramaparties.party_of(session.chara_id)
         if party is None:
@@ -2840,7 +2849,76 @@ class MpsServer:
         return (
             self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
             + self._answer(session, seen, drama.MSG_SV_NOTIFY_START, b"")
+            + self._drama_light(party, session, seen)
         )
+
+    def _drama_script(self, party: "drama.Party") -> "script.Script | None":
+        """The .ssb a party's drama plays, if this machine has an export of it.
+
+        The name comes from `drama_events.json` -- `drama_event.bin` keeps it
+        at record +0x35 and the client opens `Data/Script/<name>.arc` off the
+        same field, so the two ends are reading one table. A drama whose script
+        has not been exported returns None rather than an error: the party is
+        real either way, and what is missing is this machine's copy of the play.
+        """
+        for event in script.drama_events():
+            if event.get("genre") == party.genre and event.get("index") == party.index:
+                name = str(event.get("ssb") or "")
+                return script.load(name) if name else None
+        return None
+
+    def _drama_light(
+        self, party: "drama.Party", presser: "_Session", seen: int
+    ) -> bytes:
+        """Start the drama itself: 0x7200 to everybody in the room.
+
+        ⭐⭐⭐ This is the whole of C7d's ignition, and it is the ordinary
+        script bracket rather than anything drama-shaped. Measured in round 231
+        by hand (`/sc un111` typed at a party that had just pressed
+        ［イベントスタート］): the client answered 0x7201, left the
+        パーティメンバー room and drew the 体育祭 ground un111 opens on.
+
+        ⭐ ``pcInfo[]`` is the party, and the two numberings line up on their
+        own: an `Actor.actor_id` is the cast slot out of `drama_event.bin`, and
+        a script speaks as `PC#n` and writes `$m0n` for the same n. So the cast
+        goes out in slot order with nothing to translate -- which is also why
+        all 22 ドラマイベント name no actors of their own (`script.ready_params`).
+
+        ⚠️ A member whose connection has gone gets no 0x7200 and no entry: the
+        alternative is naming a `pcInfo` slot the client would then draw an
+        empty balloon for.
+        """
+        found = self._drama_script(party)
+        if found is None or found.script_id is None:
+            print(f"[{self.tag}] drama {party.genre}:{party.index}: no script "
+                  f"exported for it, the room stays up")
+            return b""
+        cast: list[tuple[int, bytes]] = []
+        sessions: list["_Session"] = []
+        for actor in sorted(party.actors, key=lambda a: a.actor_id):
+            other = self._session_of(actor.chara_id)
+            if other is None:
+                continue
+            info = self._chars(other).find(actor.chara_id)
+            if info is None:
+                continue
+            cast.append((actor.actor_id, info))
+            sessions.append(other)
+        params = script.ready_params(found.script_id, [], cast)
+        print(f"[{self.tag}] drama light: {found.file} id={found.script_id} "
+              f"cast={[a for a, _ in cast]} to {len(sessions)} member(s)")
+        out = b""
+        for other in sessions:
+            other.script = script.Runner(found, 0, [])
+            other.talking_choice = None
+            self._shadow_start(other, found.script_id)
+            if other is presser:
+                out = self._answer(
+                    other, seen, script.MSG_SV_REQUEST_SCRIPT_READY, params)
+            else:
+                self._push(other, self._answer(
+                    other, 0, script.MSG_SV_REQUEST_SCRIPT_READY, params))
+        return out
 
     def _drama_push_members(
         self, party: "drama.Party", msg_type: int, params: bytes, skip: int = 0,
@@ -3160,19 +3238,8 @@ class MpsServer:
             found = session.script.script
             local = found.local_ip(wire_ip)
             session.script.begun = (wire_ip, op)
-            if op == script.OP_PLAYER_WAIT_TIME and script.RELEASE_PLAYER_WAIT:
-                # ⭐ The wait a ドラマイベント is paced by. With one player in
-                # the script there is nobody to wait for, so the release goes
-                # out at once, as the same closing bracket a choice box gets.
-                shadow = self._shadow_at(session, local, op)
-                if shadow is not None:
-                    shadow.flowed()
-                session.script.begun = None
-                print(f"[{self.tag}] PLAYER_WAIT_TIME ip={local} — 参加者は 1 人、"
-                      f"その場で解除")
-                return self._answer(session, seen,
-                                    script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
-                                    script.command_end_params(wire_ip, op))
+            if op == script.OP_PLAYER_WAIT_TIME:
+                return self._player_wait(session, seen, wire_ip, op, local)
             if op != script.OP_INPUT_SELECT:
                 print(f"[{self.tag}] script begin ip={local} op=0x{op:04x} "
                       f"— 応答未実装、待たせたまま")
@@ -3259,6 +3326,66 @@ class MpsServer:
         return self._answer(session, seen,
                             script.MSG_SV_NOTIFY_SCRIPT_COMMAND_VARIABLE,
                             script.command_variable_params(entries))
+
+    def _player_wait(
+        self, session: "_Session", seen: int, wire_ip: int, op: int, local: int
+    ) -> bytes | None:
+        """OP_PLAYER_WAIT_TIME: hold the play until every player has got here.
+
+        ⭐⭐⭐ This is the one instruction that makes a ドラマイベント a thing two
+        people are in rather than two people watching the same file. Each
+        client walks its own copy of the .ssb and reports the stop; the release
+        is a 0x721D echoing the Begin's {ip, op}, and it is the server that
+        decides when to send it. Round 231 measured the release itself by hand
+        against one client; what this method adds is who has to arrive first.
+
+        ⭐ The barrier counts the party members who **took** the script -- who
+        answered 0x7201 (`Runner.started`). Somebody who never accepted it is
+        not in the play and cannot arrive at its instructions, so waiting for
+        them would be waiting forever. ⚠️ A member who accepted it and then
+        stops answering does hold the others: this end has no timeout, and
+        inventing one would be inventing the pacing of a scene.
+
+        ⚠️ Outside a party (`/sc` on a solo script) there is nobody to wait
+        for and the release goes out at once, which is what the tutorial and
+        every 会話 have always got.
+        """
+        if session.script is None:
+            return None
+        party = self.dramaparties.party_of(session.chara_id)
+        waiting = [session]
+        if party is not None:
+            for actor in party.actors:
+                other = self._session_of(actor.chara_id)
+                if other is None or other is session:
+                    continue
+                if other.script is not None and other.script.started:
+                    waiting.append(other)
+        missing = [
+            s for s in waiting
+            if s.script is None or s.script.begun != (wire_ip, op)
+        ]
+        if missing:
+            print(f"[{self.tag}] PLAYER_WAIT_TIME ip={local} — "
+                  f"{len(waiting) - len(missing)}/{len(waiting)} 到着、待たせたまま")
+            return None
+        out = b""
+        for other in waiting:
+            shadow = self._shadow_at(other, local, op)
+            if shadow is not None:
+                shadow.flowed()
+            if other.script is not None:
+                other.script.begun = None
+            reply = self._answer(other, seen if other is session else 0,
+                                 script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
+                                 script.command_end_params(wire_ip, op))
+            if other is session:
+                out = reply
+            else:
+                self._push(other, reply)
+        print(f"[{self.tag}] PLAYER_WAIT_TIME ip={local} — "
+              f"{len(waiting)} 人そろった、解除")
+        return out
 
     def _script_select(self, session: "_Session", seen: int, local_ip: int) -> bytes:
         """Answer a stopped INPUT_SELECT with MsgSvQueryScriptCommandSelect.

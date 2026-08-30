@@ -263,13 +263,17 @@ OP_INPUT_SELECT = 0x7000
 #
 # It arrives as a 0x721c Begin exactly the way INPUT_SELECT does, so what
 # releases it is the same closing bracket, 0x721d carrying the Begin's {ip, op}.
+#
+# ⭐⭐⭐ Measured in round 231, on the first ドラマイベント this server ever lit:
+# un111 stops on it at ip 398, a 0x721D echoing that Begin's {ip, op} was sent
+# by hand, and the client walked straight on to the next one at ip 441 -- and
+# drew the 体育祭 ground it had been holding back. So the closing bracket is
+# the release, and the wait really is the server's to end.
+# ⇒ ⛔️ The `RELEASE_PLAYER_WAIT` switch that used to sit here is gone: it
+# existed only because "it sits on the Begin and nothing happens" could not be
+# told apart from "the wait has not elapsed yet", and the screen has now said
+# which it was.
 OP_PLAYER_WAIT_TIME = 0x9101
-
-# Whether to send that closing bracket at all. ⚠️ Off is the state the client
-# was measured in first: it sits on the Begin and nothing happens, which is
-# indistinguishable from "the wait has not elapsed yet" until somebody waits
-# longer than the count asks for.
-RELEASE_PLAYER_WAIT = False
 
 # ⭐⭐ Where the season of a background comes from. `"clock"` is the factory
 # answer here: the school clock's own quarter (`curriculum.season`). `"script"`
