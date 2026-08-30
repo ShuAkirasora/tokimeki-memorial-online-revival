@@ -185,6 +185,42 @@ OP_RESULT_MULTI_PLAYER_EVENT = 0x9200
 # a bitmask, one bit per option, and the options' own on/off flags are the
 # `SELITEM_DISP_FLAG` registers the script writes just before it. See
 # `Follower.select`.
+#
+# ⭐⭐⭐ Its three operands, read in round 236 off the decoding slot's own field
+# list (`the field table`, slot 153 at 0x734fc5: accesses at
+# +2, +4 and +16, and the debug format string 「選択肢数：%1%\n制限時間(秒)：
+# %2%\n選択者数(自分含む)：%3%」):
+#
+#   +2   u16  `(choosers << 12) | seconds` -- 選択者数(自分含む) and 制限時間.
+#              Three values in the whole export: 0x1000 (1 chooser, no limit)
+#              on all 31 boxes of the 10 solo scenarios, 0x103C (1 chooser,
+#              60s) and 0x203C (2 choosers, 60s) in the ドラマイベント.
+#   +4   u16  ⭐⭐⭐ **Which 役柄 is being asked** -- the same mask `OP_BA` uses,
+#              bit n for 役柄 n. Not in the format string; the command object
+#              carries it to the executor.
+#   +16  u32  `(auxiliary word offset << 12) | option count`. See `select`.
+#
+# ⭐⭐ The mask at +4 is read, not guessed, and two independent alignments say
+# so over the 709 boxes of the 37 exported scenarios, both with no exceptions:
+#
+#   * **Reachability.** A box only 役柄 0 can walk to never carries a mask
+#     without bit 0 (54 of them are `1`, 42 are `3`), and a box only 役柄 1 can
+#     reach never carries one without bit 1 (52 `2`, 42 `3`). All 31 boxes of
+#     the solo scenarios -- where the only player is 役柄 0 -- are `1`.
+#   * **Where the answer is read back.** The `OP_STR const; OP_EQ; OP_BR` chain
+#     a script spells a selection out as reads `E<n>` for exactly the bit set:
+#     mask 1 -> E0 on all 321 of them, mask 2 -> E1 on all 304, and the 84 with
+#     mask 3 read both. E2 does not occur anywhere in the export.
+#   * And the chooser count at +2 agrees on its own: mask 3 says two choosers
+#     on all 84 of them, and every other box says one.
+#
+# ⇒ **A player's answer belongs in `E<their 役柄>`**, which is what `chose`
+# does. ⛔️ Writing every answer into E0 -- what this end did before round 236
+# -- leaves E1 empty for good, so every chain over a 役柄-1 box reads 0 and
+# resolves to option 0 no matter what was clicked. Offline over the 22
+# ドラマイベント that is not a subtle wrong answer: `un010`, `un117` and
+# `un127` each have a 役柄-1 menu whose option 0 loops back to itself, so the
+# play never ends (`the party sweep <name> --sweep 20`).
 OP_INPUT_SELECT = 0x7000
 
 # ⭐⭐ The three commands that make a 日常会話's setting: which background is
@@ -236,10 +272,13 @@ SEASON_NAMES = ("春", "夏", "秋", "冬")
 # Two register categories this end has to name, out of the eight the operand
 # encoding allows. 5 is SELITEM_DISP_FLAG -- one register per option of the
 # next choice box, and the low five bits of the number are the option number
-# (round 175). 6 is SELECT, where the client's answer lands: every one of the
-# 683 scenarios uses E0 for it, and the 38 that also use E1 are all multi-player
-# events -- which is a hint about where E1 comes from and not a reading of it,
-# so nothing here writes E1.
+# (round 175). 6 is SELECT, where the client's answer lands.
+#
+# ⭐⭐⭐ **E<n> is 役柄 n's answer**, which round 236 read off the choice box's
+# own 役柄 mask -- see `OP_INPUT_SELECT` above for the alignment. That is where
+# the old note here ("the 38 scenarios that also use E1 are all multi-player
+# events, which is a hint and not a reading") comes out: E1 is the second
+# player's click, and this end now writes it.
 CAT_SELITEM = 5
 CAT_SELECT = 6
 
@@ -1156,8 +1195,14 @@ class Follower(Machine):
     """
 
     def __init__(self, script: Script, cells: dict | None = None,
-                 registers: dict | None = None) -> None:
+                 registers: dict | None = None, actor: int = 0) -> None:
         super().__init__(script, cells or {})
+        #: ⭐ Which 役柄 of the play this follower's player is. Only `chose`
+        #: uses it, and only to put the answer in the right `E<n>` -- see
+        #: `OP_INPUT_SELECT`. ⚠️ 0 for a solo script, which is not a fallback:
+        #: the single player of a 日常会話 *is* 役柄 0, and all 31 choice boxes
+        #: of the exported solo scenarios carry the mask that says so.
+        self.actor = actor
         # ⭐⭐⭐ **Whose register file this is.** Passed in and kept by reference
         # -- not copied -- so that every member of a ドラマパーティ computes over
         # one file while each keeps its own cursor, stack and data cells. That
@@ -1436,12 +1481,19 @@ class Follower(Machine):
         return mask, unknown, options
 
     def chose(self, option: int) -> str | None:
-        """The player clicked a line: it lands in E0 and the box is over."""
+        """The player clicked a line: it lands in `E<this player's 役柄>`.
+
+        ⚠️⚠️ Not E0. In a ドラマパーティ the register file is one per party
+        (`__init__`), so putting both members' clicks in E0 would have the
+        second one overwrite the first and leave E1 -- which is where every
+        役柄-1 box's chain looks -- empty for the whole play. The reading of the
+        box's own 役柄 mask that settles this is at `OP_INPUT_SELECT`.
+        """
         if self.lost:
             return self.lost
         if self.script.code[self.pos][1] != OP_INPUT_SELECT:
             return self._lose("a choice came back but this end is not on a box")
-        self.registers[(CAT_SELECT, 0)] = option
+        self.registers[(CAT_SELECT, self.actor)] = option
         self.pos += 1
         return None
 
@@ -1458,18 +1510,19 @@ class Follower(Machine):
 
 
 def follow(script_id: int, cells: dict | None = None,
-           registers: dict | None = None) -> Follower | None:
+           registers: dict | None = None, actor: int = 0) -> Follower | None:
     """A follower for the scenario the client just asked to play, or None.
 
     None means this machine has no export for that id, which is the ordinary
     case for every copy of this server but the one that made them -- the same
     way `mapgraph`'s graph and the branch table are optional.
 
-    `registers` is a file to share with the other members of the same party;
-    see `Follower.__init__`.
+    `registers` is a file to share with the other members of the same party and
+    `actor` this player's 役柄 in it; see `Follower.__init__`.
     """
     script = by_script_id(script_id)
-    return (Follower(script, cells, registers) if script is not None else None)
+    return (Follower(script, cells, registers, actor)
+            if script is not None else None)
 
 
 def run(name: str, cells: dict[tuple[str, int], int]) -> Result | None:

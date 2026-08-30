@@ -1828,7 +1828,7 @@ class MpsServer:
     # matter, which is the only reason a machine that follows is trusted to
     # answer anything at all.
     def _shadow_start(self, session: "_Session", script_id: int,
-                      registers: dict | None = None) -> None:
+                      registers: dict | None = None, actor: int = 0) -> None:
         """Arm a follower for the scenario about to play, if we have it.
 
         The cells come from the player's own 恋愛 record and nowhere else --
@@ -1855,7 +1855,7 @@ class MpsServer:
         # the walk goes to the wrong floor -- which is exactly what happened
         # while nobody supplied it at all.
         cells[("PC", script.PC_IN_CLASS)] = IN_CLASS
-        runner.shadow = gs3vm.follow(script_id, cells, registers)
+        runner.shadow = gs3vm.follow(script_id, cells, registers, actor)
         if runner.shadow is None:
             print(f"[{self.tag}] vm: id={script_id} is not in runtime/scripts "
                   f"— no shadow for this one")
@@ -2954,11 +2954,14 @@ class MpsServer:
         # operand (`80`/`81`, granted back to back in `un081`) while
         # `PC_DATA_REFER`/`UPDATE` carry no such field -- so the data family
         # means "this member" and the keyword family means "that one".
+        # ⚠️ The 役柄 goes with the register file. One file, but a choice box
+        # names which 役柄 it is asking and the answer belongs in that player's
+        # own `E<n>` -- see `gs3vm.OP_INPUT_SELECT` and `gs3vm.Follower.chose`.
         party_registers: dict = {}
-        for other in sessions:
+        for (actor_id, _), other in zip(cast, sessions):
             other.script = script.Runner(found, 0, [])
             other.talking_choice = None
-            self._shadow_start(other, found.script_id, party_registers)
+            self._shadow_start(other, found.script_id, party_registers, actor_id)
             if other is presser:
                 out = self._answer(
                     other, seen, script.MSG_SV_REQUEST_SCRIPT_READY, params)
