@@ -34,6 +34,7 @@ import ability
 import career
 import club
 import curriculum
+import dramarecord
 import facing
 import item
 import options
@@ -1374,6 +1375,32 @@ class CharacterStore:
             if int(record["charaId"]) != chara_id:
                 continue
             record["career"] = state.to_json()
+            self._save()
+            return True
+        return False
+
+    def drama_records(self, chara_id: int) -> "dramarecord.DramaRecords | None":
+        """This character's ドラマイベント records, or None if it is not ours.
+
+        Same treatment as ``career`` and ``posts``: rebuilt from the stored
+        dict on every ask, so nothing here can go stale behind a cached copy.
+        ⚠️ Asked about a peer's charaId as well, because the character-menu
+        list is built out of whoever is being looked at.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            saved = record.get("dramaEvents")
+            return dramarecord.DramaRecords(saved if isinstance(saved, dict) else None)
+        return None
+
+    def set_drama_records(self, chara_id: int,
+                          played: "dramarecord.DramaRecords") -> bool:
+        """Write one character's ドラマイベント records back. False if not ours."""
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            record["dramaEvents"] = played.to_json()
             self._save()
             return True
         return False

@@ -293,16 +293,44 @@ OP_PLAYER_WAIT_TIME = 0x9101
 #   0x9101 PLAYER_WAIT_TIME   a number that varies -- 0x02..0xc8, mostly 0x32
 #   0x9100 PLAYER_SYNC        **always 3**, in all 88 occurrences
 #
-# ⇒ the count 0x9101 carries is per-site and means something; the 3 on this one
-# is a constant and cannot be "how many players to wait for" (un081 is a
-# two-hander). ⚠️ What it *is* has not been read -- booked as unknown rather
-# than assumed to be zero-information, and nothing here branches on it.
+# ⭐⭐⭐ Round 234 read both halves out of the client's own decoder slots, which
+# settles two things round 233 left open and neither of them by pattern:
+#
+#   0x9101 (slot 0x736704) converts its operand with `fild` and then
+#   `fmul [0xBC3B58]`, and that constant is 0.01, before printing it as
+#   「待ち時間：%1%」 ⇒ **the number is hundredths of a second** (0x32 = half a
+#   second, 0xC8 = two). Round 231's reading of it as a duration is confirmed,
+#   and it now has a unit.
+#
+#   0x9100 (slot 0x7364FB) does `movzx eax, word [instr+2]`, builds `1 <<
+#   現在の役柄ID`, and tests one against the other -- the same 役柄 bitmask
+#   OP_BA uses, down to printing 「非対称キャラクター」 and falling through 4
+#   bytes when it misses ⇒ **the constant 3 is 「both 役柄 stop here」**, not a
+#   head count. ⛔️ So it never was "how many players to wait for", and a
+#   one-role drama would carry a 1 here.
+#
+# ⚠️ Nothing here branches on either number: this end releases both stops, and
+# the client is the one that owns the clock.
 #
 # Both go through the same barrier (`mps_session._player_wait`): every party
 # member who took the script has to report the same {ip, op} before anybody is
 # released. For SYNC that is what the name says it is; for WAIT_TIME it is
 # round 231's reading.
 OP_PLAYER_SYNC = 0x9100
+
+# ⭐⭐⭐ The last stop of a ドラマイベント: the instruction sitting immediately in
+# front of `OP_END` on every one of its endings, and the one that says what the
+# play came to. Round 233 found it by playing un081 to the end for the first
+# time and watching the client sit on it; round 234 read its operand out of the
+# client's own decoder slot -- 評価ポイント名, 評価文, and how many keywords and
+# items this ending hands out. The layout and the evidence are in
+# `gs3vm.OP_RESULT_MULTI_PLAYER_EVENT`; `gs3vm.Follower.event_result` reads it.
+#
+# ⚠️⚠️ It is released by the same closing bracket as the other two stops, and
+# that is exactly what makes it easy to get wrong: a 0x721d on sight plays the
+# scenario through and throws the result away. What this end does with it is in
+# `mps_session._drama_result`.
+OP_RESULT_MULTI_PLAYER_EVENT = 0x9200
 
 
 def stop_name(op: int) -> str:
@@ -316,6 +344,7 @@ def stop_name(op: int) -> str:
     return {
         OP_PLAYER_WAIT_TIME: "PLAYER_WAIT_TIME",
         OP_PLAYER_SYNC: "PLAYER_SYNC",
+        OP_RESULT_MULTI_PLAYER_EVENT: "RESULT_MULTI_PLAYER_EVENT",
     }.get(op, f"stop 0x{op:04x}")
 
 
@@ -1298,32 +1327,59 @@ def drama_events() -> list[dict]:
         return []
 
 
-def drama_event_record(genre: int, index: int, select_actor: int = 0) -> bytes:
-    """One 20-byte entry: the key, ``flgSelectActor``, and four still-zero fields.
+def drama_event_key(file_name: str) -> "tuple[int, int] | None":
+    """The `(genre, index)` a .ssb is the script of, or None if it is no drama.
+
+    The inverse of what `_drama_script` walks the same table for. Two callers
+    want opposite directions of one mapping and neither should own it: a party
+    knows its key and wants the file, while a script that has just ended knows
+    its file and wants the key.
+    """
+    for event in drama_events():
+        if str(event.get("ssb") or "") == file_name:
+            return int(event["genre"]), int(event["index"])
+    return None
+
+
+def drama_event_record(genre: int, index: int, select_actor: int = 0,
+                       max_point: int = 0, keyword: int = 0) -> bytes:
+    """One 20-byte entry: the key and the six fields beside it.
 
     ``nPartyNum, flgSelectActor, orderOpen, orderLast, maxPoint,
-    flgAcquiredKeyword`` — the names are the client's own (dump 0x90C3A0).
-    ⭐ Round 229 measured the second of the six and nothing else: it is the
-    mask of cast slots this character may take, and the パーティ参加 screen is
-    dead without it (`drama.selectable_actors`). ⚠️ `nPartyNum` was measured
-    in round 228 and is deliberately still zero — the client counts the
-    parties on its own list and never reads ours (2.183 四).
+    flgAcquiredKeyword`` — the names are the client's own (dump 0x90C3A0) and
+    the widths are its own deserializer's (2,2,2,1,2,8,1,2 after the count).
+    ⭐ Round 229 measured `flgSelectActor`: it is the mask of cast slots this
+    character may take, and the パーティ参加 screen is dead without it
+    (`drama.selectable_actors`). ⚠️ `nPartyNum` was measured in round 228 and
+    is deliberately still zero — the client counts the parties on its own list
+    and never reads ours (2.183 四).
+
+    ⭐⭐ Round 234 fills the last two out of what a finished play reported
+    (`dramarecord`): `maxPoint` is the best 評価ポイント this character has come
+    away with, `flgAcquiredKeyword` whether any ending here handed it a keyword.
+    ⚠️ A character with no record still sends the all-zero entry this end sent
+    from round 35 to 233, so nothing changes for an event never played.
     """
-    return struct.pack(">HHHBHQBH", genre, index, 0, select_actor, 0, 0, 0, 0)
+    return struct.pack(">HHHBHQBH", genre, index, 0, select_actor, 0, 0,
+                       max_point & 0xFF, keyword & 0xFFFF)
 
 
 def drama_event_list_params(keys: list[tuple[int, int]], limit: int = DRAMA_EVENT_MAX,
-                            select_actor=None) -> bytes:
+                            select_actor=None, played=None) -> bytes:
     """A MsgSvNotifyDramaEventList / …CharaMenu… body from `(genre, index)` pairs.
 
     ``select_actor(genre, index) -> int`` fills ``flgSelectActor`` per event;
     without it every event goes out as zero, which is what the callers that
     have no character in hand want and what this end sent until round 229.
+    ``played(genre, index) -> (maxPoint, flgAcquiredKeyword)`` does the same for
+    the two fields a finished play leaves behind, and is absent for the same
+    reason: a caller with no character to answer for has nothing to put there.
     """
     kept = keys[:limit]
     return struct.pack(">H", len(kept)) + b"".join(
         drama_event_record(genre, index,
-                           select_actor(genre, index) if select_actor else 0)
+                           select_actor(genre, index) if select_actor else 0,
+                           *(played(genre, index) if played else (0, 0)))
         for genre, index in kept
     )
 

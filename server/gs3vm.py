@@ -151,6 +151,36 @@ OP_RTN, OP_END, OP_JS = 0x9083, 0x9084, 0x9085
 OP_BA_END = 0x90C0
 OP_EVENT_CALL = 0x9180
 
+# ⭐⭐⭐ The last thing a ドラマイベント does before OP_END: it reports its own
+# 結果. Round 234 read the 14-byte operand out of the client's decoder slot for
+# it (0x7369BA), and the four fields are named by the client's own debug format
+# 「評価ポイント名：%1%\n評価文：%2%\n入手キーワード数：%3%\n入手アイテム数：%4%\n」:
+#
+#     +2   u16   ⚠️ the client never reads these two bytes
+#     +4   u32   (string-pool word offset << 12) | word length -> 評価文  (%2%)
+#     +8   u32   the same encoding                             -> 評価ポイント名 (%1%)
+#     +12  u32   bits 0-3 = 入手キーワード数 (%3%), bits 4-7 = 入手アイテム数 (%4%)
+#
+# ⚠️ %1% and %2% are the other way round from the operand: the slot feeds +8
+# to the format first. ⛔️ Do not name them by offset order.
+#
+# ⭐ Three self-checks over all 296 occurrences in the 683 scenarios, no
+# exceptions: both pool references' lengths match what the pool actually holds
+# there; the second string always starts exactly where the first one ends; and
+# +12 is zero everywhere ⇒ **this build hands out no keyword and no item here**.
+#
+# ⭐⭐ The unread +2, split the way every other register field is split (number
+# in bits 0-6, category in bits 7-9), is always a 16BIT register -- and it is
+# either one the scenario's own DECL_VARIABLE declared (16 of the 38 scenarios;
+# B1..B12, written by the script and then compared with OP_GT/OP_LT to pick
+# which ending plays) or B99, the temporary the compiler hands out from the top
+# down (the other 22). ⇒ read as "which register holds this play's 評価ポイント",
+# with B99 meaning the author bound no variable to it.
+# ⚠️⚠️ That last one is a reading, not a measurement: the client never looks at
+# the field, so this end is the only side that can use it -- and the only side
+# that can ever prove it wrong.
+OP_RESULT_MULTI_PLAYER_EVENT = 0x9200
+
 # The choice box. The client stops dead on it and asks (0x721c); the answer is
 # a bitmask, one bit per option, and the options' own on/off flags are the
 # `SELITEM_DISP_FLAG` registers the script writes just before it. See
@@ -608,6 +638,20 @@ class Script:
         # out of. Computed here because it is a property of the instruction
         # stream and nothing else, and asked for at most once per script.
         self.season_register = self._season_register()
+        # ⭐ How big this scenario's register file is, per category, out of its
+        # own DECL_VARIABLE prologue. Read here rather than off `Machine`'s
+        # registers because presence there cannot tell a declared register from
+        # a compiler temporary: both have been written by the time anything
+        # asks. The one caller is `Follower.event_result`, which has to tell
+        # exactly those two apart.
+        self.declared: dict[int, int] = {}
+        for _, op, args in self.code:
+            if op != OP_DECL_VARIABLE:
+                break                      # the prologue, and nothing after it
+            field = int.from_bytes(args[0:2], "little")
+            self.declared[field & DECL_CAT_MASK] = (
+                (field & DECL_COUNT_MASK) >> DECL_COUNT_SHIFT
+            )
 
     def _season_register(self) -> tuple[int, int] | None:
         """The register a four-armed 春夏秋冬 switch tests here, or None.
@@ -1068,7 +1112,11 @@ class Machine:
 # amm_e001, once on a black screen and once on a fully drawn page of dialogue
 # that would not turn (round 189). So a walk that steps over an unreported one
 # has gone somewhere the client did not.
-STOPS = {OP_END, OP_INPUT_SELECT, OP_SYNC_VARIABLE}
+# ⭐ RESULT_MULTI_PLAYER_EVENT joins them as of round 234, on the same evidence
+# the other three are here on: the client sends a 0x721c Begin for it and sits
+# there until the server answers (measured round 233, un081 ip=23606). So a walk
+# that steps over an unreported one has gone somewhere the client did not.
+STOPS = {OP_END, OP_INPUT_SELECT, OP_SYNC_VARIABLE, OP_RESULT_MULTI_PLAYER_EVENT}
 
 
 class Follower(Machine):
@@ -1278,6 +1326,56 @@ class Follower(Machine):
                 value = None
             out.append((category, number, value))
         return out
+
+    def event_result(self) -> dict | None:
+        """What the `RESULT_MULTI_PLAYER_EVENT` the client is stopped on says.
+
+        ⭐⭐⭐ The second place this shadow *speaks* rather than follows, and for
+        the same reason `sync_values` does: the operand names a register, and
+        the register exists only on this end. ⛔️ Nothing is decided here --
+        the caller records the number and releases the client either way.
+
+        ``None`` when this end is not standing on one. Otherwise::
+
+            {"point": 評価ポイント名 or None, "text": 評価文 or None,
+             "register": (category, number), "bound": bool,
+             "value": int or None, "keywords": int, "items": int}
+
+        ``bound`` is False for the compiler temporary (B99 and its neighbours),
+        which is the operand's way of saying the author tied no variable to this
+        ending's score. ⚠️ ``value`` is then None *even though the temporary
+        holds a number*: the number is whatever the last expression left there,
+        and reporting it would be inventing a score out of scratch space.
+
+        ⚠️ ``point``/``text`` are None when the export carries no string for the
+        reference. That is a scenario exported before round 234 (`the script evaluator
+        export` collects them as of then), ⛔️ not a scenario without a result.
+        """
+        if self.lost:
+            return None
+        _, op, args = self.script.code[self.pos]
+        if op != OP_RESULT_MULTI_PLAYER_EVENT:
+            return None
+        register = _register(int.from_bytes(args[0:2], "little"))
+        category, number = register
+        bound = number < self.script.declared.get(category, 0)
+        value = None
+        if bound:
+            try:
+                held = self._get(register)
+            except UnsupportedOp:
+                held = TOP
+            value = None if _unknown(held) else held
+        counts = int.from_bytes(args[10:14], "little")
+        return {
+            "point": self.script.strings.get(int.from_bytes(args[6:10], "little")),
+            "text": self.script.strings.get(int.from_bytes(args[2:6], "little")),
+            "register": register,
+            "bound": bound,
+            "value": value,
+            "keywords": counts & 0xF,
+            "items": (counts >> 4) & 0xF,
+        }
 
     def branch(self) -> tuple:
         """`(condition, where it would go)` for the OP_BR the client is on.

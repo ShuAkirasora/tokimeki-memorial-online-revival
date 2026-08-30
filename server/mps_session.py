@@ -2497,6 +2497,7 @@ class MpsServer:
                 script.drama_event_list_params(
                     kept, script.CHARA_MENU_DRAMA_MAX,
                     self._drama_select_actor(session, events),
+                    self._drama_played(session),
                 ),
             )
 
@@ -2518,6 +2519,7 @@ class MpsServer:
                     script.drama_event_list_params(
                         kept, script.DRAMA_EVENT_MAX,
                         self._drama_select_actor(session, events),
+                        self._drama_played(session),
                     ),
                 )
                 + self._answer(
@@ -2634,6 +2636,20 @@ class MpsServer:
             return drama.selectable_actors(event, sex, owns) if event else 0
 
         return select_actor
+
+    def _drama_played(self, session: "_Session"):
+        """``maxPoint``/``flgAcquiredKeyword`` per event, or None for nobody.
+
+        The other half of `_drama_select_actor`, and absent under the same
+        condition: a connection with no character has no record to report, and
+        gets the all-zero entry this end sent before round 234.
+        """
+        if not session.chara_id:
+            return None
+        played = self._chars(session).drama_records(session.chara_id)
+        if played is None:
+            return None
+        return played.wire
 
     def _drama_party_create(
         self, session: "_Session", seen: int, params: bytes, events: list[dict]
@@ -3306,6 +3322,8 @@ class MpsServer:
             session.script.begun = (wire_ip, op)
             if op in (script.OP_PLAYER_WAIT_TIME, script.OP_PLAYER_SYNC):
                 return self._player_wait(session, seen, wire_ip, op, local)
+            if op == script.OP_RESULT_MULTI_PLAYER_EVENT:
+                return self._drama_result(session, seen, op, local)
             if op != script.OP_INPUT_SELECT:
                 print(f"[{self.tag}] script begin ip={local} op=0x{op:04x} "
                       f"— 応答未実装、待たせたまま")
@@ -3479,6 +3497,79 @@ class MpsServer:
         print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
               f"{len(waiting)} 人そろった、解除")
         return self._player_release(waiting, session, seen)
+
+    def _drama_result(
+        self, session: "_Session", seen: int, op: int, local: int
+    ) -> bytes | None:
+        """0x9200 RESULT_MULTI_PLAYER_EVENT: book what the play came to, then go.
+
+        ⭐⭐⭐ The instruction in front of every ドラマイベント's `OP_END`, and
+        the only one that says what the play was *worth*. Round 233 released it
+        by hand with a bare 0x721d and the scenario finished, which is exactly
+        why it is worth doing properly: a release on sight plays the whole thing
+        through and drops the result on the floor.
+
+        ⭐ Three things happen here and they are deliberately separable:
+
+          1. the operand is read (`gs3vm.Follower.event_result` — what the score
+             is called, which register holds it, the 評価文 this ending prints,
+             and how many keywords and items it hands out);
+          2. the number is booked against this character's record of the event
+             (`dramarecord`, which is where `maxPoint` on the ドラマイベント list
+             comes from);
+          3. the client is released.
+
+        ⚠️⚠️ **Step 3 happens whatever steps 1 and 2 managed.** A shadow that
+        lost its place, a scenario nobody exported, an event this machine cannot
+        key — each of those costs the *record*, and none of them may cost the
+        player the end of the play. ⛔️ The failure mode of the alternative is
+        the one round 233 measured: the client sits on a finished scenario
+        forever, with a black screen that looks exactly like a crash.
+
+        ⚠️ It releases this member only. Unlike `PLAYER_SYNC` there is nothing
+        to rendezvous on: each 役柄 reaches its own ending on its own path, and
+        `un081`'s two roles do not even reach the same 0x9200.
+        """
+        shadow = self._shadow_at(session, local, op)
+        result = shadow.event_result() if shadow is not None else None
+        if result is None:
+            print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
+                  f"結果が読めない（shadow なし）、解除だけする")
+            return self._player_release([session], session, seen)
+        point = result["point"] or "?"
+        scored = ("—" if result["value"] is None
+                  else str(result["value"]))
+        print(f"[{self.tag}] ⭐ ドラマの結果 ip={local}: 「{point}」"
+              f"={scored} ({gs3vm.register_name(result['register'])}"
+              + ("" if result["bound"] else "、変数なし") + ")"
+              + f" キーワード{result['keywords']}／アイテム{result['items']}")
+        if result["text"]:
+            print(f"[{self.tag}]   評価文: "
+                  + result["text"].replace("\n", " / "))
+        self._book_drama_result(session, result)
+        return self._player_release([session], session, seen)
+
+    def _book_drama_result(self, session: "_Session", result: dict) -> None:
+        """Put one finished ending into this character's record of the event.
+
+        ⚠️ Silent about every reason it cannot: each one is a missing *record*
+        and not a broken play, and the line that matters — what the ending
+        scored — has already been printed by the caller.
+        """
+        runner = session.script
+        if runner is None or not session.chara_id:
+            return
+        key = script.drama_event_key(runner.script.file)
+        if key is None:
+            return
+        store = self._chars(session)
+        played = store.drama_records(session.chara_id)
+        if played is None:
+            return
+        row = played.finished(*key, result["value"], result["keywords"])
+        store.set_drama_records(session.chara_id, played)
+        print(f"[{self.tag}]   記帳 {key[0]}:{key[1]} maxPoint={row['maxPoint']}"
+              f" 通算 {row['plays']} 回")
 
     def _player_release(
         self, waiting: list["_Session"], session: "_Session", seen: int
