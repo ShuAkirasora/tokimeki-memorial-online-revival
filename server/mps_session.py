@@ -2542,7 +2542,8 @@ class MpsServer:
                     struct.pack(">B", drama.NG_BAD_PARTY),
                 )
             return self._answer(
-                session, seen, drama.MSG_SV_OK_INFO, drama.info_params(party),
+                session, seen, drama.MSG_SV_OK_INFO,
+                drama.info_params(party, session.chara_id),
             )
 
         if msg_type == drama.MSG_CL_REQUEST_JOIN:
@@ -2585,10 +2586,16 @@ class MpsServer:
                 # `actorIdLeader` so that a room whose leader just walked out
                 # learns who leads it now (drama.Board.part moved it), and the
                 # row they are looking at just got a free slot back.
+                # ⚠️ The password rides along for the people still in the
+                # room and NOT on the leaver's copy above: the client assigns
+                # it unconditionally once `actorIdLeader` is its own actorId,
+                # so a blank here wipes the leader's copy — and leadership may
+                # have just moved to somebody who never typed it.
                 self._drama_push_members(
                     party, drama.MSG_SV_NOTIFY_PART,
                     drama.part_params(
                         actor_id, drama.PART_SELF, party.leader_actor_id,
+                        party.password,
                     ),
                 )
                 self._drama_push_members(party, drama.MSG_SV_NOTIFY_UPDATE, record)
@@ -2998,7 +3005,8 @@ class MpsServer:
             return
         self._drama_push_members(
             party, drama.MSG_SV_NOTIFY_PART,
-            drama.part_params(actor_id, reason, party.leader_actor_id),
+            drama.part_params(actor_id, reason, party.leader_actor_id,
+                              party.password),
         )
         self._drama_push_members(
             party, drama.MSG_SV_NOTIFY_UPDATE, drama.party_record(party),

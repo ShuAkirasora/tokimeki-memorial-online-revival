@@ -419,18 +419,38 @@ def actor_list_params(party: Party, limit: int = ACTOR_MAX) -> bytes:
     return struct.pack(">H", len(kept)) + b"".join(actor_record(a) for a in kept)
 
 
-def info_params(party: Party) -> bytes:
-    """A MsgSvOkDramaPartyInfo body.
+def info_params(party: Party, viewer_chara_id: int) -> bytes:
+    """A MsgSvOkDramaPartyInfo body, for one named viewer.
 
-    ⚠️ The password goes back out as the client asked for it to. That is what
-    the field is for — the leader's own screen shows it — but it means anyone
-    who can send 0xE00E for a party id gets its password, and this server does
-    not check membership before answering. Fine for one player on one machine;
-    ⛔️ not fine the day this listens to strangers.
+    ⭐⭐⭐ THE PASSWORD IS FOR MEMBERS, AND ONLY FOR MEMBERS. 0xE00E is sent by
+    people who are *not* in the party — pressing ［パーティ参加］ on somebody
+    else's row is what makes the client ask (round 229), and the roster that
+    comes back is what the パーティ情報 dialog draws its 「募集中」/「⊛試験 次郎」
+    cells from. So refusing a stranger outright would break 参加; what a
+    stranger must not get is the one field that is a credential.
+
+    ⭐⭐ Two readings out of the client say the field is a member's, and that
+    withholding it changes nothing on screen:
+
+    * The 0xE00F consumer (`FUN_0074a6d7` -> `FUN_006564d4`) hands the password
+      to `std::string::assign` **only** after `actorIdLeader == my own actorId`
+      — the receiver keeps it if it is the leader and drops it otherwise. Its
+      own gate is tighter than membership, so a blank for a non-member lands in
+      code that was going to throw the value away.
+    * 0xE00A NotifyDramaPartyPart carries the password too, to a whole room at
+      once, with the same leader test on the far end (`FUN_006559e8`). A
+      departure notice would have no reason to carry a credential unless the
+      credential belonged to whoever is still standing there.
+
+    ⭐ And a member learning it is not a disclosure at all: every member either
+    made the party (they typed the password) or got past `NG_BAD_PASSWORD` in
+    `_drama_party_join` (they typed it too). Membership is the line because
+    everyone on the far side of it already knows the answer.
     """
+    password = party.password if party.has(viewer_chara_id) else ""
     return (
         struct.pack(">QH", party.party_id, party.leader_actor_id)
-        + counted(party.password, PASSWORD_MAX)
+        + counted(password, PASSWORD_MAX)
         + actor_list_params(party)
     )
 
@@ -454,7 +474,27 @@ def ready_params(actor_id: int, prepare: int) -> bytes:
 
 def part_params(actor_id: int, reason: int, leader_actor_id: int,
                 password: str = "") -> bytes:
-    """A MsgSvNotifyDramaPartyPart body: who left, why, and who leads now."""
+    """A MsgSvNotifyDramaPartyPart body: who left, why, and who leads now.
+
+    ⭐⭐ WHY A DEPARTURE CARRIES A PASSWORD. One body goes to the whole room and
+    the client sorts out whose business it is: `FUN_006559e8` compares
+    `actorIdLeader` with the receiver's own actorId, records the answer as its
+    「am I the leader」 flag, and assigns the password into its own slot only
+    when that matched. So this field is how a room whose leader just walked out
+    hands the password to whoever leads it now — `drama.Board.part` moves
+    leadership, and this message is where the new leader hears about both.
+
+    ⚠️ Which is why the default is a bad default for members: assign is not
+    conditional on the string being non-empty, so a Notify that leaves this
+    blank *wipes* the leader's copy. The empty default is for the one recipient
+    who must not have it — the person who just left the party.
+
+    ⚠️ `leader_actor_id == 0xFF` is the client's 「no leader in this message」
+    sentinel (`FUN_006559e8` takes the not-leader branch on it without so much
+    as a comparison). This end never sends it: `Board.part` always leaves
+    somebody in charge of a party that still exists, and a party that does not
+    is announced with 0xE008 instead.
+    """
     return (
         struct.pack(">HBH", actor_id, reason, leader_actor_id)
         + counted(password, PASSWORD_MAX)
