@@ -3294,6 +3294,23 @@ class MpsServer:
                     target = found.wire_ip(goes_to)
                     why = (f"表現のみ (vm cond={verdict})" if shadow.decided_road()
                            else f"ドラマの帳簿 (vm cond={verdict})")
+            elif shadow is None and why == script.STANDING_NO:
+                # ⭐⭐⭐ The same answer as the block above, for a server that
+                # cannot run that block: `script.SEASON_SWITCH` is the four-armed
+                # season switch projected into a table, and it exists because the
+                # exports the shadow needs are the game's own content and do not
+                # ship. ⚠️ Without it those four arms all fall through and the
+                # client plays the switch's default arm, which is KONAMI's own
+                # debug line — see `script._load_season_switch`.
+                #
+                # ⭐ `shadow is None` here is the right test rather than "no
+                # export": a follower that has lost its place is None too, and
+                # a table lookup is still better than falling through.
+                arm = script.season_arm(found.script_id, local, _season())
+                if arm is not None:
+                    goes_to, season = arm
+                    target = found.wire_ip(goes_to)
+                    why = f"季節 {gs3vm.SEASON_NAMES[season]} の枝 (season_switch)"
             other = "" if taken is None else f" 分岐先は ip={found.local_ip(taken)}"
             print(f"[{self.tag}] script branch -> wire {target} "
                   f"(ip={found.local_ip(target)}, {why}){other}")

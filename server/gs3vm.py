@@ -262,9 +262,18 @@ OP_SD_ENV_PLAY = 0x6080
 # the four branches itself; whatever overrode `B0` lived in its code, which
 # nobody has.
 # ⛔️ So the constant in the .ssb is a development-time default, not the way the
-# game looked: within one build the two tutorials pin 冬 and three daily
-# conversations pin 夏, and the switch's default arm -- reachable only when `B0`
-# is *not* 0..3 -- carries a `SYNC_VARIABLE B0` and the line 「季節＝＝$v00」.
+# game looked: within one build the two tutorials pin 冬 and the three daily
+# conversations pin 春, and the switch's default arm -- reachable only when `B0`
+# is *not* 0..3 -- carries a `SYNC_VARIABLE B0` and the line 「季節＝＝$v00」
+# under the speaker name 「デバッグ表示」.
+#
+# ⚠️⚠️ **That default arm is not hypothetical, and a player is what finds it.**
+# A server with no exports gives all four arms the standing "no"
+# (`script.Runner.resolve_branch`), the client walks past them into the debug
+# line, and the `SYNC_VARIABLE` it carries is answered with an empty list, so
+# the number it prints is the client's own untouched 0. `reference/
+# season_switch.json` exists so that no copy of this server does that -- see
+# `script._load_season_switch`.
 # See `Script.season_register` and `Follower.season`.
 SEASONS = 4
 SEASON_NAMES = ("春", "夏", "秋", "冬")

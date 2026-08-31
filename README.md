@@ -89,7 +89,7 @@ program reach a server again.
 
 It contains no code, artwork, audio or text taken from KONAMI's software. It does contain
 small tables of integers, read mechanically out of the client's data files, because there
-are decisions this server is asked to make that it cannot make without them. Four of them
+are decisions this server is asked to make that it cannot make without them. Seven of them
 are files under `reference/`; the smaller ones — a week's timetable, a set of key ranges, a
 shop's bills — are written into the modules that read them. See
 [Reference data](#reference-data) for both. Message names, map names and structure offsets
@@ -143,7 +143,8 @@ belonged, since the client's own arithmetic instructions are logging stubs that 
 nothing. Most of those answers come off the branch table; one narrow family of them — the
 switch that picks which backdrop a conversation opens on — comes from `server/gs3vm.py`,
 which runs the script's arithmetic alongside the client and so holds the register file the
-client never had. Between them: right-click conversations with the candidates who have
+client never had, or, on a copy with no script exports to run, from `season_switch.json`.
+Between them: right-click conversations with the candidates who have
 appeared, the choice boxes inside them and the intimacy each answer is worth, the opening
 tutorial, the letter in the classroom lockers, the drama events, and the ending with its
 staff roll. Two of the scripts running here are the *original server's* own — the pair
@@ -655,15 +656,15 @@ puts them on the wire, so those names are unavailable no matter what the server 
 
 ## Reference data
 
-`reference/` holds four tables of integers, and each is something this server has to know in
+`reference/` holds seven tables of integers, and each is something this server has to know in
 order to decide something.
 
 **`mapgraph.json`** — grid size, collision and doorways for the 78 maps. Without it the map
 graph is empty, the log says `warps go unchecked`, and moving between maps stops working.
 
-All four come out of the client's own data files. `mapgraph.json` is the one the wire can
+All of them come out of the client's own data files. `mapgraph.json` is the one the wire can
 confirm — the client decides where a door leads and this end only agrees, so the graph is a
-check on that agreement rather than the source of it. The other three are here because
+check on that agreement rather than the source of it. The rest are here because
 watching the protocol cannot recover what they hold at all:
 
 **`branches.json`** — where a cut-scene goes when the player picks option k, for the 209
@@ -672,6 +673,16 @@ on the wire. Without it every branch falls through: scenes still play, choices s
 It holds 5125 of the game's 15586 branches, and the other two thirds are left out on purpose:
 their conditions are script variables this end will always answer no to, and a no needs no
 target. It carries no text, no option wording, no cast and no instruction stream.
+
+**`season_switch.json`** — 2.5 KiB: the other kind of branch a table can answer. Five
+scenarios open a scene by testing one register against 0, 1, 2 and 3 and picking a backdrop
+for spring, summer, autumn or winter, and the season those four arms ask about is decided
+here, not in the script. The table says which arm is which season and where it goes; this end
+supplies the season. It matters more than a backdrop: the switch has a default arm for a
+register holding none of the four, and what that arm plays is debug output the developers
+left in the shipped data. Answer no to all four — which is what a server with nothing to say
+does — and the player is shown it. It carries no text and no instruction stream, only which
+branch a decision this end already makes is the answer to.
 
 **`intimacy.json`** — under 9 KiB: what one conversation with a romance candidate is worth.
 The game has 327 of them and this end has to keep the score, because intimacy never crosses
@@ -698,6 +709,16 @@ shuffles those itself and already knows where it dealt the right one. Without th
 lesson draws the room and then asks nothing. It carries no question text, no choice wording
 and no subject names.
 
+**`npc_events.json`** — 44 KiB: which event key belongs to which NPC, and which script id it
+starts. The client asks for an event by number and this end has to know whose it is; the keys
+and the ids are both the game's own numbering. It carries the `.ssb` file names, which are
+identifiers rather than content, and no dialogue, no cast and no event titles.
+
+**`reserved_names.json`** — 15 KiB of SHA-256, and nothing else. Two of the game's tables
+list names a new character may not be given, and this end is the one that refuses them, so
+what it needs is the ability to answer "is this exact name on the list". A digest answers
+exactly that question and no other, so the file holds no names at all.
+
 **Not every table is a file.** A few are small enough to live in the module that reads them
 instead: the week's timetable and which abilities each subject moves in `server/curriculum.py`,
 the ranges of item keys in `server/item.py`, and the five rows of the school store's barter
@@ -716,10 +737,17 @@ There is a second kind of export, for the same reason. `branches.json` answers a
 of a table; `server/gs3vm.py` answers one by running the script's own arithmetic alongside
 the client, which is where that arithmetic always ran — the client's instructions for it are
 logging stubs that evaluate nothing. Running it needs the instruction stream rather than a
-lookup, so it is an export too, and optional in the same way: without one, every branch of
-that kind falls through and the scene keeps whichever backdrop it opened with — and a scene
-that opens with none stays black. What the interpreter cannot work out it declines to answer
-rather than guessing at.
+lookup, so it is an export too, and optional in the same way. What the interpreter cannot
+work out it declines to answer rather than guessing at.
+
+What running without it costs is worth stating plainly, because it is more than a backdrop.
+Every branch of that kind falls through, so a scene keeps whichever setting it opened with, a
+candidate's daily conversations stop moving with her story, and the tutorial's walk home
+takes the wrong stairs. At the end of a script it costs the rest: the debut a tutorial should
+credit and the keywords a scene should hand out are written from the register file, so
+without one they are not written at all. The one part of this a table can carry is the season
+switch, which is why `season_switch.json` is here; the rest needs the instruction stream and
+has no smaller form.
 
 Two gaps are worth naming rather than leaving to be found. What `branches.json` leaves out is
 nothing you can see. What is missing from a lesson is: the six ability parameters it should
@@ -736,7 +764,7 @@ the grade it awards is this server's own curve over the running score.
 | `set_auth_address.py` | the four-byte address change described above |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services themselves; `run_all.py` binds them all in one asyncio loop and `mps_session.py`, the packet layer, is the bulk of it |
-| `reference/` | the four tables above |
+| `reference/` | the tables above |
 | `runtime/` | created on the first run: the log, the certificate, your characters, any script exports you make, and the answers `play.py` remembers |
 | `screenshots/` | the eight pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |

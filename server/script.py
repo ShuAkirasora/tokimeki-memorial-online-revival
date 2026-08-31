@@ -138,6 +138,78 @@ def _load_branches() -> dict[int, dict]:
 
 BRANCHES = _load_branches()
 
+SEASON_PATH = (
+    Path(__file__).resolve().parent.parent / "reference" / "season_switch.json"
+)
+
+
+def _load_season_switch() -> dict[int, dict]:
+    """``{scriptId: {"codeBase", "pin", "arms": {ip: (season, target)}}}``, ips local.
+
+    ⭐⭐⭐ **The other half of `branches.json`, for the one family of branches a
+    table can answer that a choice chain cannot.** Five scenarios open a scene
+    by testing one register against 0, 1, 2, 3 and picking a backdrop —
+    `gs3vm.SEASONS` has the reading and `gs3vm.Script.season_register` the
+    criterion — and the season those four arms are asking about is decided on
+    this side (`SEASON_SOURCE`), not in the script. A server that runs
+    `server/gs3vm.py` over an export answers them by arithmetic; this table is
+    the same answer for a server that has no export, which is every copy of
+    this one but the one that made them.
+
+    ⚠️ **It is not a convenience.** Without it all four arms get the standing
+    "no" and the client walks into the switch's default arm, which is
+    development-time debug output KONAMI left in the shipped data: a talk line
+    whose speaker is 「デバッグ表示」. That arm is unreachable whenever the
+    register holds 0..3, so the original never showed it and neither should
+    this — falling through four arms is the one way to reach it.
+
+    Silent when absent, the same way `_load_branches` is: no table means the
+    behaviour this server had before the table existed.
+    """
+    try:
+        raw = json.loads(SEASON_PATH.read_text(encoding="utf-8"))["scripts"]
+    except (OSError, ValueError, KeyError):
+        return {}
+    return {
+        int(script_id): {
+            "codeBase": entry["codeBase"],
+            "pin": entry["pin"],
+            "arms": {int(ip): (arm[0], arm[1])
+                     for ip, arm in entry["arms"].items()},
+        }
+        for script_id, entry in raw.items()
+    }
+
+
+SEASON_SWITCH = _load_season_switch()
+
+
+def season_arm(script_id: int | None, local_ip: int,
+               season: int | None) -> tuple[int, int] | None:
+    """``(target, season)`` if this OP_BR is the arm the season picks, else None.
+
+    None covers all three ways this end has nothing to say: the script has no
+    such switch, this branch is not one of its arms, or it is an arm of a season
+    other than the one in force. The third is not a refusal — three of the four
+    arms are meant to fall through, and the caller's standing "no" is already
+    the right answer for them.
+
+    ``season`` is `SEASON_SOURCE` already resolved: an int, or None for
+    ``"script"``, which asks for whatever constant the scenario writes into the
+    register itself. That constant is `pin`, and it is in the table for exactly
+    that case — ⚠️ without it, "leave the script's own answer standing" would
+    fall through all four arms and land in the debug arm, which is the one thing
+    the script's own answer certainly is not.
+    """
+    entry = SEASON_SWITCH.get(script_id if script_id is not None else -1)
+    if entry is None:
+        return None
+    arm = entry["arms"].get(local_ip)
+    chosen = entry["pin"] if season is None else season
+    if arm is None or chosen is None or arm[0] != chosen:
+        return None
+    return arm[1], arm[0]
+
 # {scriptId: {local ip: local target}} — branches answered "yes" no matter what,
 # set from `/scb` and empty on every start, so the factory answer is the one the
 # shipped table gives and a forced answer never outlives the session that typed
