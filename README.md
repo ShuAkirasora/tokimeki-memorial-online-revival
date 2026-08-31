@@ -245,24 +245,20 @@ python3 start_servers.py --advertise-ip 192.168.1.5   # game on another machine
 python3 stop_servers.py
 ```
 
-You should see `started pid=…` and a few lines of log ending in `[system] all services
-started`. It runs detached, so the terminal can be closed; it keeps going until stopped.
-Stopping goes by which ports are held rather than by the recorded process id, so it works
-even if that record is stale or was never written.
+It runs detached, so the terminal can be closed; `[system] all services started` in the log
+means it came up. Stopping goes by which ports are held rather than by a recorded process id,
+so a stale record does not strand a running server.
 
 **`--advertise-ip` is needed whenever the game is not on the server's own machine.** Logging
-in is a chain of hops and each one answers with the address of the next. Those answers
-default to `127.0.0.1`, which is right for a game on the same machine and sends every remote
-player back to their own computer. The address cannot be worked out from the socket, because
-behind a router the address a client must dial is not one this machine can see on any
-interface of its own. `TMO_ADVERTISE_IP` in the environment does the same thing, and the
-startup log says which is in use.
+in is a chain of hops, each answering with the address of the next; unset, those answers are
+`127.0.0.1`, which sends every remote player back to their own computer. It cannot be worked
+out from the socket — behind a router, the address a client must dial is not one this machine
+can see on any interface of its own. `TMO_ADVERTISE_IP` in the environment does the same, and
+the startup log says which is in use.
 
-It also decides what the server listens on, so that is not a second thing to get right:
-without it the listeners are on `127.0.0.1` and a game on another machine reaches nothing;
-with it they are on every interface. `--bind` overrides that when the derivation is wrong for
-you. [Ports](#ports) has the detail, including the two rows that stay on `127.0.0.1` either
-way.
+The flag also decides what the server listens on, so that is not a second thing to get right.
+`--bind` overrides it; [Ports](#ports) has the detail, including the three rows that stay on
+`127.0.0.1` either way.
 
 ## Installing the game
 
