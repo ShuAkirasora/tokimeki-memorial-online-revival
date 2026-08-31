@@ -391,7 +391,7 @@ Nothing inside the game's own folder has to be edited for this. The update check
 configurable, as `SERVER_ADDRESS` in the client's `update.ini`, but that file ships with the
 hostname in it — so the hosts entry covers it too.
 
-### 3. The four bytes
+### 3. The address inside tmo.exe
 
 The client's third destination is not a name at all: it opens a connection straight to a
 fixed numeric address that was KONAMI's, and no amount of name resolution can redirect an
