@@ -426,54 +426,91 @@ and writes nothing, `--no-lookup` skips the hostname check.
 
 ### 4. A registration code and a KONAMI ID
 
-The login screen asks for three things — a KONAMI ID, a personal key, and a twenty-character
-registration code in five groups — and this server means all three. **Anything typed there
-will not do:** a code it did not issue is refused with the client's own
-「入力されたレジストレーションコードは存在しません」, which is the right answer and an
-opaque one if you were not expecting it.
+The login screen asks for three things, and this server means all three:
 
-Open **http://127.0.0.1:12013/** in a browser on the machine running the *server* (or
-`http://<server>:12013/` from elsewhere), pick a KONAMI ID and a personal key, and the page
-hands back a code already bound to them. Type all three into the login screen and you are in.
+| The box on the login screen | What goes in it |
+|---|---|
+| KONAMI ID | an account name — up to 64 of `A-Z a-z 0-9 . _ -`, and not case-sensitive |
+| パーソナルキー | its password — 4 to 64 of `A-Z a-z 0-9`, and case-sensitive |
+| レジストレーションコード | twenty characters in five groups of four, which this server has to have issued |
 
-Coming back to that page with the same id and key shows the same code again rather than
-issuing a second one, so a lost code is not a lost account, and a reloaded page is not an
-error.
+Those two alphabets are the client's rather than this server's: the login screen accepts
+nothing else, so a value outside them is one that cannot be typed into the box it belongs in.
 
-Plain HTTP unless you give it something better, and the certificate the game insists on is
-no help: 1024-bit RSA signed with SHA-1, which no current browser will open. So by default
-the personal key crosses that connection in the clear — nothing when the browser is on the
-server's own machine, a password in plaintext when it is not. **Pick one you do not use
-anywhere else.** A server people reach over the internet can put an ordinary modern
-certificate in front of that one page with `--registration-cert fullchain.pem
---registration-key privkey.pem`; it is a separate certificate from the one the game speaks
-to, and it changes nothing about the game's own connection.
+**A code that was made up rather than issued will not do.** The client refuses it in its own
+words, 「入力されたレジストレーションコードは存在しません」 — the right answer, and an opaque
+one if you were not expecting it. All three values come from one page.
 
-Originally the code came printed in the box and the player bound it to their KONAMI ID on
-KONAMI's website, and both halves are still here separately: `issue_code.py` is the
-printing, and **http://127.0.0.1:12013/register** is the binding. That is the way in for a
-code somebody issued by hand and gave you.
+#### The page that hands them out
+
+Open **http://127.0.0.1:12013/** in a browser on the machine running the *server*, or
+`http://<server>:12013/` from anywhere that can reach it. One form: a KONAMI ID, a personal
+key typed twice, **Create**. What comes back is the code, already bound to that id and laid
+out in the same five groups as the login screen. Type all three into the client and you are
+in.
+
+⚠️ **Write the code down. Nothing mails it to you** — there is no email step here at all —
+and the page holding it stops working fifteen minutes after it is drawn. Losing it costs
+nothing: the same form, with the same id and the same key, gives the same code back instead
+of issuing a second one. A reload does the same, so a form sent twice is not a second code
+and not an error.
+
+A form that will not go through says which box was wrong, in plain English. The one refusal
+that also arrives in the client's own words is 「ユーザ情報が正しくありません」: on this form it
+means the id is already somebody's and this is not their key, so pick another id.
+
+#### A code somebody gave you
+
+Originally a code came printed in the box and the player bound it to their KONAMI ID on
+KONAMI's website. Both halves are still here, apart, at **http://127.0.0.1:12013/register** —
+one form makes a KONAMI ID, the other binds a code to one. That page is the way in for a code
+an operator issued by hand, and it is what answers the client's other refusal,
+「レジストレーションコードが登録されていません」: a real code that no id has claimed yet.
 
 ```sh
-python3 issue_code.py --unregistered      # prints something like WJUH-RTDC-M39X-HCDN-U26X
+python3 issue_code.py --unregistered   # WJUH-RTDC-M39X-HCDN-U26X, for /register to bind
+python3 issue_code.py                  # the same, but usable as it stands
+python3 issue_code.py --list           # every code, its state, and who registered it
+python3 issue_code.py --revoke CODE    # withdraw one, leaving the characters saved under it
 ```
 
-Two limits sit on that page, and only one of them ever says so. Answers to an address that
-has asked a lot in the last hour, or been given a lot of codes today, start arriving a few
-seconds late and are otherwise unchanged — an address can be a whole building, so nothing
-here refuses on the strength of one. The exception is fifty self-issued codes in a day,
-which closes the self-serve form until tomorrow and tells you it has; `/register` and
-`issue_code.py` are unaffected, so a code issued by hand still works on the day it happens.
-Login answers slow down the same way after five wrong personal keys in a row for the same
-account, and the right key is never held back for a moment. Through a held login the client
-shows the same 「接続処理を行っています」 it shows through an ordinary one, so this reads as
-a slow network rather than as anything having gone wrong — see `server/throttle.py`, which
-also explains why none of this is a security boundary.
+⚠️ **The second line makes a code with no owner, and a code with no owner is one anybody can
+log in with.** It is for handing to somebody at the same machine. `--count`, `--note` and
+`--expires` are on the issuing side and `--restore` undoes a revoke; `--help` has the rest.
 
-Handing a code straight to somebody at the same machine is `issue_code.py` with no flag —
-it comes out ready to use, but with no owner, and a code with no owner is one anybody can
-log in with. `issue_code.py --list` shows every code, its state, and who registered it;
-`--revoke` withdraws one without touching the characters saved under it.
+Nothing about an account differs between the two pages. `/` runs both steps in one request
+because there is no printed box here to wait for.
+
+#### It is not an encrypted page
+
+Plain HTTP unless you give it something better. It cannot borrow the certificate the game
+insists on — 1024-bit RSA signed with SHA-1, which no current browser will open — so by
+default the personal key crosses in the clear: nothing when the browser is on the server's
+own machine, a password in plaintext when it is not. **Pick a key you do not use anywhere
+else.** A server that people reach over the internet, under a name of its own, can put an
+ordinary modern certificate in front of that one page:
+
+```sh
+python3 start_servers.py --registration-cert fullchain.pem --registration-key privkey.pem
+```
+
+It is a separate certificate from the one the game speaks to and changes nothing about the
+game's own connection. Given it, the page serves over TLS and stops warning about clear text.
+
+#### The limits
+
+Two kinds sit on that page, and only one of them ever says so. An address that has sent a lot
+of forms in the last hour, or been given a lot of codes today, gets its answers a few seconds
+late and otherwise unchanged — an address can be a whole building, so nothing here refuses on
+the strength of one, and a browser on the server's own machine is exempt entirely. The
+exception is fifty codes handed out by the form in a day, which closes it until tomorrow and
+says that it has; `/register` and `issue_code.py` count towards nothing and are stopped by
+nothing, so a code issued by hand still works on the day it happens. Login answers slow down
+the same way after five wrong personal keys in a row for one account, and a right key is
+never held back for a moment. Through a held login the client shows the same
+「接続処理を行っています」 it shows through an ordinary one, so a slowed answer reads as a slow
+network rather than as anything having gone wrong. `server/throttle.py` has the numbers, and
+explains why none of this is a security boundary.
 
 ### 5. Start the game
 
