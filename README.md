@@ -199,79 +199,43 @@ git clone https://github.com/ShuAkirasora/tokimeki-memorial-online-revival.git
 cd tokimeki-memorial-online-revival
 ```
 
-Without git, use the green **Code** button on that page → **Download ZIP** and unpack it
-anywhere. There is nothing to build and nothing to install; the folder is the program, and
-every command below is run from inside it.
+Or **Code** → **Download ZIP** and unpack it anywhere. There is nothing to build: the folder
+is the program, and every command below runs from inside it.
 
-Then install Python, which is the only per-platform part.
+Python is the only per-platform part.
 
-### Windows
+- **Windows** — the [python.org](https://www.python.org/downloads/) installer, with **Add
+  python.exe to PATH** ticked; without it none of the commands below are found. **Every
+  `python3` in this README is `py` here**, and that is the only difference. `openssl` is not
+  part of Windows, but Git for Windows carries a complete copy and this server looks there
+  directly, so with Git installed there is nothing to do; failing that, `winget install
+  openssl`.
+- **macOS** — `brew install python`, or the python.org installer. **Not the `python3` that
+  ships with macOS**: it is built against LibreSSL and cannot start this server's TLS
+  listeners. `python3 -c "import ssl; print(ssl.OPENSSL_VERSION)"` says which one is first in
+  your PATH; `LibreSSL` in the answer means the wrong one is, and the cure is to call the one
+  you installed by its full path, under `brew --prefix python`. `openssl` is already there.
+- **Linux** — your distribution's own `python3` and `openssl`, as they come.
 
-Get the installer from [python.org](https://www.python.org/downloads/) and tick **Add
-python.exe to PATH** on the first screen — without it the commands below are not found. Open
-a *new* Command Prompt and check with `py --version`.
+Three things about the first start, none of them fatal:
 
-**On Windows, every `python3` in this README is `py`.** That is the only difference.
+- **A firewall asks once** on Windows and macOS; answering no leaves a game on this machine
+  working and every game elsewhere unable to arrive. With `ufw` or `firewalld` you open the
+  [ports](#ports) yourself.
+- **443, 80 and 50 are often already held**, and `[authhttp] skip :443 (...)` in the log says
+  so rather than failing. On Linux they are privileged as well, so either start as root or
+  `sudo sysctl -w net.ipv4.ip_unprivileged_port_start=50` (a file in `/etc/sysctl.d/` makes
+  that survive a reboot). On Windows they need no privileges, so a skip there means something
+  else — usually IIS or another HTTP.sys service — has the port.
+- **Windows reserves blocks of ports at boot** when Hyper-V or WSL is installed, and a block
+  covering 25573–25575 stops the server dead instead of being skipped. `netsh int ipv4 show
+  excludedportrange protocol=tcp` lists them.
 
-`openssl` is not part of Windows, but Git for Windows carries a complete copy and this server
-looks there directly, **so if you have Git you need do nothing**. Failing that,
-`winget install openssl` (or scoop, or chocolatey).
-
-Two more things, neither of which stops the first run:
-
-- **The firewall asks once**, at the first start. Answering no leaves a game on this machine
-  working and every game anywhere else unable to arrive.
-- **Low ports are free here, and taken anyway.** Binding 443, 80 or 50 needs no privileges on
-  Windows, so `[authhttp] skip` means something else already holds the port — usually IIS or
-  another HTTP.sys service. Hyper-V and WSL also reserve blocks of ports at boot, and a block
-  covering 25573–25575 stops the server dead rather than being skipped; list them with
-  `netsh int ipv4 show excludedportrange protocol=tcp`.
-
-### macOS
-
-```sh
-brew install python
-```
-
-or the installer from [python.org](https://www.python.org/downloads/). `openssl` is already
-there.
-
-**Do not use the `python3` that comes with macOS.** It is built against LibreSSL and cannot
-start this server's TLS listeners. To see which one you have:
-
-```sh
-python3 -c "import ssl; print(ssl.OPENSSL_VERSION)"
-```
-
-If that says `LibreSSL`, the wrong one is first in your PATH — call the one you just
-installed by its full path, which the python.org installer reports at the end and Homebrew
-prints under `brew --prefix python`.
-
-### Linux
-
-You almost certainly have Python; `python3 --version` says so. If not, your distribution's
-own package (`sudo apt install python3`, `sudo dnf install python3`) is fine as it comes.
-Check `openssl version` too. Nothing else has to be installed: what holds a port is read out
-of `/proc`, not out of `lsof`.
-
-**Low ports are privileged, and 443 and 50 are the two the authentication step is most likely
-to want.** `[authhttp] skip :443 (...)` in the log is exactly that, and the server carries on
-without them. Either start it as root, or lift the restriction once:
-
-```sh
-sudo sysctl -w net.ipv4.ip_unprivileged_port_start=50
-```
-
-A file in `/etc/sysctl.d/` makes that survive a reboot. Check what already holds 80 and 443
-before blaming privileges — on a machine with a web server installed, something usually does.
-If `ufw` or `firewalld` is running, open the [ports](#ports) there as well.
-
-**The authentication certificate has to be SHA-1, and your distribution may refuse to make
-one.** The client accepts no other kind, while RHEL, Fedora and their derivatives run every
-OpenSSL process under a system-wide crypto policy that since RHEL 9 will not *produce* a
-SHA-1 signature. The first run notices that refusal and repeats the command with the policy
-overridden for that one process — nothing about the machine's own policy changes. If even
-that fails, the server stops and prints what openssl said.
+One thing is handled for you and is only worth knowing when it still goes wrong: the
+authentication certificate has to be SHA-1, which RHEL, Fedora and their derivatives refuse
+to produce under their system-wide crypto policy. The first run notices the refusal and
+repeats that one command with the policy overridden, changing nothing about the machine. If
+even that fails it stops and prints what openssl said.
 
 ## Running the server
 
@@ -832,11 +796,11 @@ the grade it awards is this server's own curve over the running score.
 | the log stops after `[authhttp]`, no `[mpslogin25573]` | the game could not reach port 25573 at the address the lookup gave it: a firewall in between, or the server was started without the right `--advertise-ip` |
 | every remote player is sent back to their own computer | the server was started without `--advertise-ip` |
 | a game on another machine reaches nothing at all, and the server's log is empty | the same cause: without `--advertise-ip` the listeners are on `127.0.0.1` only, which the startup log says |
-| `ssl.SSLError: ('No cipher can be selected.',)` | the LibreSSL-backed Python; see [macOS](#macos) |
+| `ssl.SSLError: ('No cipher can be selected.',)` | the LibreSSL-backed Python; see [Installation](#installation) |
 | `openssl is not on PATH` | nothing to generate the authentication certificate with |
-| `openssl did not produce the auth certificate` | it refused, and the retry did too — usually a crypto policy that forbids SHA-1; see [Linux](#linux) |
+| `openssl did not produce the auth certificate` | it refused, and the retry did too — usually a crypto policy that forbids SHA-1; see [Installation](#installation) |
 | `already running pid=N` | a previous instance is still up; leave it, or run `stop_servers.py` |
-| `[WinError 10013]` on a bind, and the server exits | that port is reserved or already held; see [Windows](#windows) |
+| `[WinError 10013]` on a bind, and the server exits | that port is reserved or already held; see [Installation](#installation) |
 | `warps go unchecked` in the log | `reference/mapgraph.json` missing |
 | every branch logs `fall-through`, choices do nothing | `reference/branches.json` missing |
 | `no question bank, no questions`, a lesson asks nothing | `reference/quizkeys.json` missing |
