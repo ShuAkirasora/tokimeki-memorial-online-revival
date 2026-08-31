@@ -601,9 +601,8 @@ encryption, which stays on from the first packet to the last.
 | 12013 | the registration page | a browser |
 | 50, 8011, 12011 | the same auth service on other ports, TLS | nothing, ever |
 | 80, 12012 | the same auth service, plaintext | nothing, ever |
-| 12010, 12020 | early stubs; the current login flow does not use them | nothing, ever |
 
-**The last three rows have never had a connection**, across every log this project has kept,
+**The last two rows have never had a connection**, across every log this project has kept,
 and the client's authentication URL has no port in it, so it uses 443 and only 443. They stay
 bound to `127.0.0.1` whatever `--bind` says: they exist for this project's own tests, and
 there is no configuration under which somebody else should reach them.

@@ -38,12 +38,10 @@ from auth_http_server import AuthHttpServer
 from common import PACKET_LOG_ENV, ServiceConfig, packet_log_enabled, parse_ipv4
 from konami_id import TokenDesk
 from llb_server import LlbServer
-from login_server import LoginServer
 from mps_session import GAME_PORT, SCHOOL_PORT, MpsServer
 from registration_site import RegistrationSite
 from throttle import Throttle
 from updater_server import UpdaterServer
-from world_server import WorldServer
 
 # Login-lobby ports from tmo.exe config defaults (0x406A40): 0x8AF5 / 0x63E5.
 # 35573 answers the MsgClQueryLoginServer lookup; 25573 is the login server the
@@ -208,10 +206,6 @@ async def main(
             " these too."
         )
     updater = UpdaterServer(root, ServiceConfig(host=open_host, port=12000))
-    login = LoginServer(
-        root, ServiceConfig(host=LOOPBACK, port=12010), advertise_ip=advertise_ip
-    )
-    world = WorldServer(root, ServiceConfig(host=LOOPBACK, port=12020))
     llb = LlbServer(
         root,
         ServiceConfig(host=open_host, port=LLB_QUERY_PORT),
@@ -297,8 +291,6 @@ async def main(
 
     servers = [
         await updater.run(),
-        await login.run(),
-        await world.run(),
         await auth_8011.run(),
         await auth_12011.run(),
         await auth_plain.run(),
