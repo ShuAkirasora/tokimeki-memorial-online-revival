@@ -180,8 +180,10 @@ are inventions, and the comments say so where they appear.
 - **`openssl` on PATH.** Used once, on the first run, to generate the certificate the
   authentication endpoint needs into `runtime/certs/`.
 - **Your own copy of the original client.** This repository distributes no part of it. The
-  original disc has been publicly archived on the Internet Archive; whether you may obtain
-  and use a copy is a question of the law where you are, not one this project answers.
+  original disc has been publicly archived on the Internet Archive, as
+  [tokimekimemorialonlinejapan](https://archive.org/details/tokimekimemorialonlinejapan);
+  whether you may obtain and use a copy is a question of the law where you are, not one this
+  project answers.
 
 The server runs on Windows, macOS or Linux. The game is a Windows program and also works
 under Wine.
@@ -298,25 +300,59 @@ with it they are on every interface. `--bind` overrides that when the derivation
 you. [Ports](#ports) has the detail, including the two rows that stay on `127.0.0.1` either
 way.
 
+## Installing the game
+
+The disc installs the game. This repository carries no part of it and installs nothing; what
+follows is only the places where a machine that is not Japanese has to be told something, and
+none of it is specific to this server.
+
+The [archived copy](https://archive.org/details/tokimekimemorialonlinejapan) comes down as a
+`.7z` holding the disc image. Unpack it with [7-Zip](https://www.7-zip.org/), then open the
+`.iso` — Windows mounts one on a double-click and gives it a drive letter — and run the
+installer on that drive.
+
+**The game is a Japanese program from 2006.** It predates Unicode being universal, so it and
+its installer read their own text through the single Windows setting called the *language for
+non-Unicode programs* — one machine-wide value, unrelated to the language Windows itself is
+displayed in. Setting it to Japanese makes every question below go away:
+
+> Settings → Time & language → Language & region → Administrative language settings →
+> Change system locale → **Japanese (Japan)**, then restart.
+
+That is a stock Windows setting, present in every edition and language, and it behaves the
+same on Arm. While you are there, leave **Beta: Use Unicode UTF-8 for worldwide language
+support** unticked: it points the other way and leaves this game worse off, not better. This
+is also the route the whole of this project's own testing has been done on, and the only one
+known to work end to end.
+
+**If you would rather not change the whole machine**, a per-application locale tool will put
+one program into a Japanese locale and leave the rest of Windows alone.
+[Locale_Remulator](https://github.com/InWILL/Locale_Remulator) does that, and works on
+Windows 11 on Arm for both 32- and 64-bit programs; the older and better known Locale
+Emulator does not work on Arm at all — it starts the program, changes nothing, and reports no
+error while doing it. Two things are worth knowing before relying on one:
+
+- **It does not reach the installer.** The disc carries an InstallShield package whose wizard
+  is drawn by a separate process that the tool never launches, so the wizard's text stays
+  garbled whatever you start it with. That is only text — the buttons stay readable, and
+  every file and folder inside the package has a plain ASCII name bar one shortcut to a web
+  page, so what lands on disk does not depend on any of this.
+- **Give the installer an ASCII destination** — `C:\TMO` will do. The path it offers by
+  default is Japanese text, which on a machine that is not Japanese becomes a folder with a
+  garbled name; an ASCII path removes the question instead of answering it.
+
+Once the game is installed, `Play.cmd` below is what starts it.
+
 ## Connecting a client
 
 Three destinations inside the client have to end up here: two hostnames, which your `hosts`
 file redirects, and one fixed numeric address, which is four bytes inside `tmo.exe`.
 
-```sh
-# 1. two lines in the hosts file of the machine the *game* runs on:
-#      <server>  tmollb.tokimekionline.com
-#      <server>  tmoupd.tokimekionline.com
-# 2. python3 set_auth_address.py /path/to/tmo.exe <server>
-# 3. run BootFirst.exe (as administrator on Windows)
-```
-
-### All three at once
-
-`play.py` does exactly those three and then starts the game. On Windows it is a double-click
-on **`Play.cmd`**, which is the same thing with the administrator prompt in front of it;
-elsewhere it is `python3 play.py`. It asks where the server is the first time and remembers
-the answer, so the second time is the double-click and nothing else.
+**None of it has to be done by hand.** On Windows, double-click **`Play.cmd`**. It asks for
+the administrator rights the game already needed, asks once where the server is and remembers
+the answer, writes the two hosts lines, patches the four bytes, checks that the server is
+answering before it starts anything, and then starts the game. After the first time it is the
+double-click and nothing else. Everywhere else the same thing is `python3 play.py`.
 
 This folder has to be on the **machine the game is on**, which on a two-computer setup is not
 the one running the server. Copying the whole folder there is fine, and so is copying only
@@ -342,7 +378,18 @@ Linux only the hosts file does, and only that one step goes through `sudo`; the 
 started as root. There, `--launch-with` names the command that runs Windows programs
 (`wine` by default).
 
-The rest of this section is the same three steps by hand, and why each of them is there.
+### The same three steps by hand
+
+```sh
+# 1. two lines in the hosts file of the machine the *game* runs on:
+#      <server>  tmollb.tokimekionline.com
+#      <server>  tmoupd.tokimekionline.com
+# 2. python3 set_auth_address.py /path/to/tmo.exe <server>
+# 3. run BootFirst.exe (as administrator on Windows)
+```
+
+The rest of this section is those three steps in full, and why each of them is there. None of
+it is needed when `Play.cmd` worked.
 
 ### 1. Your server address
 
