@@ -273,6 +273,20 @@ away:
 > Settings → Time & language → Language & region → Administrative language settings →
 > Change system locale → **Japanese (Japan)**, then restart.
 
+Or, from an administrator PowerShell, the same thing in one line and without the menus:
+
+```powershell
+Set-WinSystemLocale ja-JP
+```
+
+Then restart from inside Windows — a reset that cuts the power can lose a registry
+change that has not been flushed yet, and the setting quietly comes back as it was.
+
+Windows names that setting in whatever language it is displaying, so the words above are the
+English ones: on a Japanese Windows the same line reads **Unicode 対応ではないプログラムの言語**,
+which is worth knowing because installing this game is a good reason to have made Windows
+Japanese already — and doing so does not set it.
+
 **Making Windows Japanese is not the same thing.** The display language, the regional format,
 the country under *Region*, and the keyboard you type with are four other settings, and none of
 them moves this one. A machine that is Japanese in every visible way can still be running an
