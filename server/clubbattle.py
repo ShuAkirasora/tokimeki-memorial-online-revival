@@ -1015,7 +1015,7 @@ def action_end_params(chara_id: int) -> bytes:
 #:    needs reaction=1 to draw 反撃 — the screen drew 反射, and 反撃 came at 2.
 #:    The defence table (無し / 回避 / 反射 / 反撃 / 奥義耐性) fits all four
 #:    with nothing swapped. ⚠️ The old text here said in so many words 「DO NOT
-#:    go back to keyword_defense_characteristic.bin」. an earlier lesson.
+#:    go back to keyword_defense_characteristic.bin」.
 #:
 #: 2. msg_text 717-752 is a list of NAMES, not of sentences — which is why it
 #:    could fit and still be wrong. What gives it away is its own neighbours:

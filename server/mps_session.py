@@ -5896,7 +5896,7 @@ class MpsServer:
             )
 
         if msg_type == gousei.MSG_CL_REQUEST_GOUSEI_END:
-            # ⚠️⚠️ THE CLOSING HALF IS NOT OPTIONAL. an earlier lesson's shape: a bracket
+            # ⚠️⚠️ THE CLOSING HALF IS NOT OPTIONAL. That shape again: a bracket
             # whose End goes unanswered costs nothing now and everything the
             # next time the window is opened, because the client is still
             # waiting on the last one. The body is empty in both directions.
