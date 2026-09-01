@@ -312,8 +312,8 @@ def season(when: datetime | None = None) -> int:
     (3-5, 6-8, 9-11, 12-2). The original had a season and moved with it -- the
     manual says the school backgrounds correspond to it and the beta-2 report
     was written in snow -- but *where it cut the year* is not in any table on
-    this disk, so that much is an invention (the smallest-invention rule). ⛔️ Do not read
-    the invention as covering the season itself.
+    this disk, so that much is an invention (the smallest-invention rule).
+    ⛔️ Do not read the invention as covering the season itself.
 
     Off the same wall clock as `clock()`, for the same reason: one clock or the
     calendar contradicts the timetable.

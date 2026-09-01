@@ -495,7 +495,7 @@ KEYWORD_FULL_SCALE = {
 #   record: 8 battles to master one keyword if it is played every single turn,
 #   about 22 at three plays a battle.
 #
-# ⭐ WHAT WOULD OVERTURN IT (the invention rule asks for this in writing): any operator-era
+# ⭐ WHAT WOULD OVERTURN IT (the rule asks for this in writing): any operator-era
 # source that counts plays or battles to a 習熟度 MAX; a surviving server-side
 # table; or a client build that displays 習熟度 as a number instead of a gauge.
 USE_COUNT_PER_USE = 1
@@ -520,7 +520,7 @@ CLUB_SKILL_COUNT = sum(CLUB_SKILL_PER_CLUB)  # 57
 # ``completeness`` apart on one screen rather than to walk a range: the manual
 # calls it a level from 1 to 10, so the run 1/2/5/9/10 shows whether the byte
 # is drawn as itself, 0 and 11 sit just outside it, 100 is what every probe so
-# far has sent, and 255 is the whole byte. ⚠️ Values, not steps — the ruler rule: ask
+# far has sent, and 255 is the whole byte. ⚠️ Values, not steps: ask
 # what it drives before asking how to convert it.
 CLUB_SKILL_RULER = (1, 2, 5, 9, 10, 0, 11, 50, 100, 255)
 
@@ -571,7 +571,7 @@ DECK_ITEM_CLUB_SKILL = 1
 # taken out. The number here is STILL LEFT AS IT WAS: eight is the window's
 # rule and the window enforces it, so an over-long deck cannot arrive from a
 # real client, and writing 8 in here would be this end legislating for the
-# client rather than refusing an absurd count. See the protocol notes 2.182 三.
+# client rather than refusing an absurd count.
 DECK_CAPACITY = 25
 
 # error_message.bin 462: the sentence counts 日.

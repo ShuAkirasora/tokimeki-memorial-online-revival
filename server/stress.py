@@ -236,7 +236,7 @@ def after_gousei(sheet) -> "tuple[int, int]":
                           怪我      … クラブ活動を行なうと
 
     Three sources, two ways to break, and 合成 is not one of the two. That is
-    an earlier lesson -- an absence is a value that gets read -- taken the careful way
+    the rule that an absence is a value that gets read, taken the careful way
     rather than the lazy one: it does not rest on the silence alone, because
     `error_message.bin` says the same thing from the other side. The 練習 door
     has a 怪我 code (0x5D02 reason 11

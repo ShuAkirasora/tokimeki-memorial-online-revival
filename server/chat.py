@@ -787,7 +787,7 @@ def respond(
         #
         # ``ruler`` is the one that matters. A blank 通知表 is all zeros, and a
         # screen of zeros cannot tell "the client did not fill this in" apart
-        # from "the client filled it in with 0" — an earlier lesson. The pattern below
+        # from "the client filled it in with 0". The pattern below
         # makes every cell identifiable at a glance:
         #
         #   出席回数  11, 22, 33 … 88   unique per subject, and unlike any of
@@ -1095,7 +1095,7 @@ def respond(
         # ``add`` takes 習熟度 and クラブの素 so both can be read off the client:
         # 習熟度 is drawn as a gauge whose full-scale value nothing states, and
         # クラブの素 is only a guess at what clubSource holds. Sixteen keywords
-        # carrying sixteen different values is the ruler trick the ruler rule describes.
+        # carrying sixteen different values is the ruler trick.
         if member is None:
             return Reply(["クラブが読めない (キャラ未選択?)"])
         words = rest.split()
@@ -1177,7 +1177,7 @@ def respond(
         # ⭐⭐ ``ruler`` is the one to reach for first, and it is why this
         # command exists: it hands over one 奥義 per value in CLUB_SKILL_RULER,
         # so the whole scale reads off ONE list rather than one probe per
-        # value — the same ruler trick the ruler rule describes and /kw add uses for
+        # value — the same ruler trick /kw add uses for
         # 習熟度. That is how the レベル column was settled (see club.py); keep
         # it around, because every other field in `clubskill.bin` that the
         # window draws can be read the same way.

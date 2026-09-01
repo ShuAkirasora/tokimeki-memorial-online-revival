@@ -34,7 +34,7 @@ per member and the rest left open for whoever walks in.
     0xE01B MsgSvNotifyDramaPartyStart    ()
     0xE01C MsgSvErrorDramaPartyStart     reason u8
 
-Field names are the client's own (``the field-name extractor DramaParty``), shapes
+Field names are the client's own (its ``DramaParty`` formatter), shapes
 and buffer sizes are read out of its deserialisers, and every limit below is
 a number the client would overrun rather than clamp.
 
@@ -58,7 +58,7 @@ with a caption::
 cast slots nobody has taken** — printed in hex because that is what a mask is
 for. Which cast slots exist is in the game's own ``drama_event.bin``: four
 slots per drama, and all 22 in this build use exactly the first two
-(``the drama-event export cast``), so a fresh party with its leader in slot 0
+(read off the drama-event table), so a fresh party with its leader in slot 0
 leaves 0b10.
 
 ⚠️ The mask's width is one byte and the slot count is four, so bits 4-7 have

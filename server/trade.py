@@ -24,8 +24,8 @@ the boy, ときめきリング for the girl. トレード is the door C3 stands 
 
 THE HANDSHAKE, read off the client's own message classes
 --------------------------------------------------------
-Shapes from the shape reader (the client's deserialisers), names from each
-class's dump function (the field-name extractor). Nothing here is guessed:
+Shapes from the client's own deserialisers, names from each class's dump
+function. Nothing here is guessed:
 
     0x5100 Cl RequestTradeRequest   targetId u32      SEEN (round 151)
     0x5101 Sv OkTradeRequest        --                the asker's receipt
@@ -123,7 +123,7 @@ Three sentences in the list need a number this project has not read:
 
 Sending a cap this end invented would refuse a trade the original allowed, which
 is worse than allowing one it refused; so these stay unsent and stay written
-down. See the smallest-invention rule.
+down. That is the smallest invention available.
 
 NOTHING HERE IS SAVED
 ---------------------

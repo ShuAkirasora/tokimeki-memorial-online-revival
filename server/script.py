@@ -44,7 +44,7 @@ announced from an export and once with nothing announced at all, and the client
 answered ``OkScriptReady`` and ran to ``OP_END`` both times. The ``.ssb``
 declares its own actors and that is enough for it. ``ctrl`` is still a guess,
 and stays a ``/sc`` argument rather than a constant, because a wrong guess
-costs a whole client run (an earlier lesson).
+costs a whole client run.
 
 Two sources, and the difference between them is the whole shape of this module
 --------------------------------------------------------------------------
@@ -90,7 +90,7 @@ what an invitation followed by a trip to the 生徒会室 looks like. Answering
 player has never met. So the standing "no" is back, and the confession waits
 for its own entrance to be found.
 
-``runtime/scripts/<name>.json``, written by ``the script exporter``, is the
+``runtime/scripts/<name>.json``, written by the script exporter, is the
 other source and is *not* shipped: it carries the instruction stream, the cast
 and a choice box's own prompt and option text, all of it read straight out of
 the game's content. That file is for driving a script by name from ``/sc``
@@ -320,7 +320,7 @@ OP_BR = 0x9081
 OP_JS = 0x9085
 
 # The choice box, reported through 0x721c rather than 0x721b because the client
-# stops dead on it. `the script exporter` carries its prompt and its options
+# stops dead on it. The export carries its prompt and its options
 # along in the JSON, so this end can name what it is answering.
 OP_INPUT_SELECT = 0x7000
 
@@ -427,12 +427,12 @@ def stop_name(op: int) -> str:
 # int 0..3 forces one arm, which is how all four get looked at without waiting
 # a year.
 #
-# ⚠️ **Booked carefully** (the smallest-invention rule): that the switch moves with the
-# calendar is *restored* -- the manual, the beta-2 report and the client's own
-# `SeasonName` property all say the original had a live season (`gs3vm.SEASONS`
-# has the citations). **The inventions are the mechanism and the boundaries**:
-# the original server overrode that register from code nobody has, and where it
-# cut the year is in no table on this disk.
+# ⚠️ **Booked carefully** (the smallest-invention rule): that the switch
+# moves with the calendar is *restored* -- the manual, the beta-2 report and
+# the client's own `SeasonName` property all say the original had a live
+# season (`gs3vm.SEASONS` has the citations). **The inventions are the
+# mechanism and the boundaries**: the original server overrode that register
+# from code nobody has, and where it cut the year is in no table on this disk.
 #
 # ⚠️ It reaches the client through `gs3vm.Follower.season` and therefore only
 # where the shadow already decides -- a four-armed switch whose every arm is
@@ -522,7 +522,7 @@ DEFAULT_NPC_EVENT = (16, 1)
 
 
 def available() -> list[str]:
-    """The scripts `the script exporter` has laid down, newest listing first."""
+    """The scripts the export has laid down, newest listing first."""
     if not SCRIPT_DIR.is_dir():
         return []
     return sorted(p.stem for p in SCRIPT_DIR.glob("*.json"))
@@ -609,7 +609,7 @@ def _load_npc_events() -> dict[tuple[int, int], list[dict]]:
     ⭐ It did not need guessing: **every event record names its own NPC.** Two
     u16 at record +0x38 and +0x3A are the (kind, roster index) pair, and on all
     423 rows of the four tables the kind equals the table's own arm --
-    `the NPC-event check check` is that assertion. So "what event does this NPC
+    The NPC-event check is that assertion. So "what event does this NPC
     have" is a lookup. 2:9 (理事長秘書) owns exactly one: `common_npc_event 9:1`,
     which is hsy_c002.ssb.
 
@@ -1255,7 +1255,7 @@ MSG_SV_NOTIFY_DRAMA_EVENT_LIST = 0xE003
 MSG_SV_NOTIFY_DRAMA_PARTY_LIST = 0xE004
 # The closing half of the same bracket, and it is not a formality: 「やめる」
 # sends the cast and then the client sits on 「サーバーと通信しています」 until
-# the notify comes back. Both are empty (`the shape reader`), so the whole
+# the notify comes back. Both are empty (the shape reader), so the whole
 # exchange is the pair of ids. Measured in round 217, the first time this
 # screen was ever open.
 MSG_CL_CAST_DRAMA_EVENT_MATCHING_END = 0xE005
@@ -1316,8 +1316,8 @@ MSG_SV_OK_NPC_EVENT_START = 0x5601
 #   0x6C03 RequestTitleEventEnd    (empty)          -> 0x6C04 Ok (empty)
 #                                                   -> 0x6C05 Ng (u8 reason)
 #
-# Field names from the client's own dumps (`the field-name extractor TitleEvent`),
-# shapes from `the shape reader`. ⭐ `npcEventId` is the same u16 0x5600
+# Field names from the client's own dumps (its ``TitleEvent`` formatter),
+# shapes from the shape reader. ⭐ `npcEventId` is the same u16 0x5600
 # carries and it means the same thing there: a scriptId, resolved through
 # `by_script_id`.
 MSG_CL_REQUEST_TITLE_EVENT_START = 0x6C00
@@ -1340,7 +1340,7 @@ MSG_SV_OK_NPC_EVENT_END = 0x5604
 MSG_SV_NG_NPC_EVENT_END = 0x5605
 # `info = { npcId: u16, eventFlag[MAX_GALLERY_ROUTE_FLAG_COUNT]: u32 x 2 }` --
 # ten bytes, read field by field out of the client's own deserialiser. Not the
-# counted list `the shape reader` classifies it as: the 2 it sees is a
+# counted list the shape reader classifies it as: the 2 it sees is a
 # `mov ebx,2` constant loop bound, not a count on the wire.
 MSG_SV_NOTIFY_NPC_EVENT_CLEAR_CHARACTER_INFO = 0x5606
 # ⭐ This message is the only server-driven way out of an NPC event that was
@@ -1386,7 +1386,7 @@ DRAMA_EVENTS = Path(__file__).resolve().parent.parent / "runtime" / "drama_event
 
 
 def drama_events() -> list[dict]:
-    """The `(genre, index)` keys `the drama-event export export` laid down.
+    """The `(genre, index)` keys the drama-event export laid down.
 
     Same indirection as `available()` above and for the same reason: the keys
     live in the game's `drama_event.bin`, and `server/` does not read the game's

@@ -105,7 +105,7 @@ CLUB_POST_COUNTS = (1, 6, 6, 4, 4, 3, 3, 10, 3)
 #: and out of it.
 #:
 #: ⭐ INVENTED — the 部活役職 key sent for a member who has no post at all.
-#: The smallest invention available (the smallest-invention rule): the table has no 「無職」
+#: The smallest invention available: the table has no 「無職」
 #: row for clubs 1-8 -- every club's row 0 is a real rank -- so the original game
 #: most likely gave every member a post on 入部 and never had this state at all.
 #: This server has members with no post because it has no post system, and
@@ -169,7 +169,7 @@ class Posts:
     default to 0, which is what every character has been sent since round 1, so
     a record with no "posts" key is byte-identical to how it always was.
 
-    ⚠️⚠️ INVENTED that anything sets these at all (the smallest-invention rule). A
+    ⚠️⚠️ INVENTED that anything sets these at all. A
     クラス委員 is elected -- the client has the whole 立候補／推薦／演説／投票
     UI for it and this server has none of it -- and a 部活 post is awarded by
     the club. `/post` is a knob of the same kind as `/career title`: it opens

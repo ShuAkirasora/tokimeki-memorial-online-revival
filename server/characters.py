@@ -139,8 +139,8 @@ SPAWN_POS = (106, 84)
 # which is a thing the script says out loud.
 #
 # `amm_e001`/`skr_e001`'s second-to-last block (label 21, ip=3898) is 「and this
-# is your own classroom」: it reads PC[0x301c] (自分のクラス, see the protocol notes
-# 2.143), dispatches on it through a binary comparison tree, walks PC#0 along one
+# is your own classroom」: it reads PC[0x301c] (自分のクラス), dispatches on it
+# through a binary comparison tree, walks PC#0 along one
 # MAP_ROUTE per class, and every arm merges into the same three instructions --
 # MAP_CHARA_MOVE_WAIT PC#0, MAP_CHARA_DIRECTION PC#0 dir=9, SCREEN_BLACK_OUT.
 # So the last waypoint of that route is where the event ends, and dir 9 (右上,
@@ -156,7 +156,7 @@ SPAWN_POS = (106, 84)
 # 2's first waypoint is (85,15). Read as 1-based, neither lines up with anything.
 #
 # Walking all 26 values of PC[0x301c] through the dispatch tree with the
-# evaluator (`the script evaluator`'s Eval, so the tree is executed rather than eyed)
+# evaluator (the project's own, so the tree is executed rather than eyed)
 # gives the table below, with no exceptions and nothing left over:
 #
 #   0-9   A-J組  map  2 一般教室校舎1F  y=12  x = 22 34 46 58 70 111 123 135 147 159
@@ -176,7 +176,7 @@ SPAWN_POS = (106, 84)
 #     that this sentence cannot say where a tutorial *starts*; it is being used
 #     here for where one *ends*, which is what it actually reports.
 #
-# ⚠️ INVENTED, and it is one decision rather than a number (the smallest-invention rule):
+# ⚠️ INVENTED, and it is one decision rather than a number:
 # that a character who has not had its 初登校 yet is placed at the end of the walk
 # rather than at the start. Nothing says what the original sent in the 0x480F that
 # precedes the tutorial. Placing them at the end is what makes the two versions of
@@ -1457,12 +1457,13 @@ class CharacterStore:
         flags +0x90/+0x91) has both. ⚠️ That is a fact about the *store*, not
         about the value: the heart proves something reads coupleFlag, and it
         reads it off the 0x6501 message rather than out of the store. So "no
-        getter here" is never a reason to call a field inert -- see PROTOCOL
-        2.104 and an earlier lesson.
+        getter here" is never a reason to call a field inert: the reader may
+        simply live somewhere else.
 
         What is *not* here is deliberate: how a couple forms, what breaks one,
         and whether either side may refuse are rules the manual states no
-        numbers for and the client cannot be asked about (the smallest-invention rule).
+        numbers for and the client cannot be asked about (the smallest-invention
+        rule).
         The knob sets the field; it does not invent a 交際 system around it.
         """
         for record in self.records:

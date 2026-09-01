@@ -28,8 +28,8 @@ Two things follow, and both are why this family is shaped the way it is:
 
 THE HANDSHAKE, read off the client's own message classes
 --------------------------------------------------------
-Shapes from the shape reader (the client's deserialisers), names from each
-class's dump function (the field-name extractor). Nothing here is guessed:
+Shapes from the client's own deserialisers, names from each class's dump
+function. Nothing here is guessed:
 
     0x5000 Cl RequestTwoshotRequest  targetId u32       SEEN (round 151)
     0x5001 Sv OkTwoshotRequest       --                 the asker's receipt
@@ -79,7 +79,7 @@ be exactly that, literally:
 図書室受付, and all 26 classroom maps into the single place named 教室. Not one
 value in all 126555 cells falls outside the table, and the 48 places whose keys
 are ≥256 -- 通学路, 駅, 海, 遊園地 -- appear nowhere, exactly as they should,
-being off campus. `the map exporter`'s docstring has the four checks; the server
+being off campus. The map exporter documents the four checks; the server
 reads it through mapgraph.region, and `the map exporter regions` prints it.
 
 ⇒ The place is the target's cell, and a cell with no place is what reason 11
@@ -300,7 +300,7 @@ def start_params(place_id: int) -> bytes:
     """0x5006's u16 ``placeId``.
 
     One u16 and nothing else: deserializer 0x8DB8E0 makes a single call through
-    the stream's ``vt+0x28`` slot, which the read-slot table (the read-slot table)
+    the stream's ``vt+0x28`` slot, which the read-slot table
     names uint16, and stores it at the object's +4.
     """
     return struct.pack(">H", place_id & 0xFFFF)

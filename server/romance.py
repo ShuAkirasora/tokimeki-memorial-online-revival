@@ -29,7 +29,7 @@ it twice over, on both sides of the old client/server line:
     ``PC[0x3920+i] >= 72 * progress`` (the opcode table gates);
   * the client's own SSC 日常会話 scripts **add to that very same slot**, and
     implement the manual's 「一日に何度も…あまり上がりません」 themselves
-    (the script data reader intimacy).
+    (read off the scripts' own intimacy writes).
 
 Same slot on both sides, so no unit conversion is needed or wanted. The
 numbers are under RESTORED below; how they were read out is written up on the
@@ -65,7 +65,7 @@ class Candidate(NamedTuple):
     many メインイベント she has (その１…その１２, minus the ones she does not
     start with; the two おまけ are not counted).
 
-    All of it is checked against the game's tables by the candidate cross-check, which
+    All of it is checked against the game's tables in the other tree, which
     is the reason it can live here as constants instead of as a file to load.
     """
 
@@ -95,7 +95,7 @@ CIBI_SCRIPT_COUNT = 223  # 4:0–4:178 these five, 4:179–4:222 teachers and st
 # runs over the same five people in the same order as CANDIDATES: 0–4 are their
 # メインイベント (その１…その１２ plus two おまけ) and 16–20 their 日常会話
 # (c01x…c10x). Each record also carries the owning capture_npc index at +22,
-# which is what lets the candidate cross-check check these two numbers rather than take
+# which is what lets that check verify these two numbers rather than take
 # them on faith.
 MAIN_EVENT_CATEGORY_BASE = 0
 TALK_CATEGORY_BASE = 16
@@ -286,7 +286,7 @@ NO_LETTER_EVENT = -1       # what sys_s000 -- the new-game reset -- writes there
 # two behind. `<name>_s102` fires `<name>_e0k` when `c000[0xd900] == k`, and
 # that script then writes k, so a k in this cell means the ladder now stands at
 # k+1. The three same-shaped readings were measured against each other rather
-# than argued about: walk the real ladder (`the script evaluator` running all five `_s102` and
+# than argued about: walk the real ladder (running all five `_s102` and
 # `lck_s103` for every rung) and feed each rung's outcome back through the
 # corpus's own writes:
 #

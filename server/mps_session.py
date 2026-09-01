@@ -112,7 +112,7 @@ import twoshot
 from common import ServiceConfig, ensure_runtime_dirs, inet_u32, write_packet_log
 
 # All 675 ids, recovered from tmo.exe's parser tables and the category base each
-# message's own debug string prints. Regenerate with the id extractor --python.
+# message's own debug string prints. Regenerate with the id extractor.
 from message_names import MESSAGE_NAMES
 
 #: How long a connection may say nothing before this server closes it.
@@ -398,7 +398,7 @@ MSG_SV_NG_CHARA_WARP = 0x4802
 MSG_CL_CAST_NORMAL_CHAT = 0x4900
 MSG_SV_NOTIFY_NORMAL_CHAT = 0x4901
 # The other things the player can say, and why none of them is answered.
-# Marked in the form the message audit reads, so that the audit counts them as
+# Marked in the form the message audit reads, so that it counts them as
 # decided rather than as forgotten.
 # UNANSWERED 0x4A00 -- ひそひそ話 is addressed at one character, and nothing has
 #   ever been seen selecting a target; answering it as a broadcast would be the
@@ -2379,7 +2379,7 @@ class MpsServer:
             )
 
         if msg_type == script.MSG_CL_REQUEST_TITLE_EVENT_END:
-            # The closing half. Empty both ways (`the shape reader`), and
+            # The closing half. Empty both ways (the shape reader), and
             # unlike the NPC-event end there is no ClearCharacterInfo to send
             # after it: this event was never started off a map object, so the
             # client is not waiting to be given a field back -- it is waiting to
@@ -2757,7 +2757,7 @@ class MpsServer:
     ) -> bytes | None:
         """0xE017 ［OK!］ -> 0xE018 to the whole room, or 0xE019 to the presser.
 
-        ⚠️ A Cast that is answered — an earlier lesson's shape, and the message says
+        ⚠️ A Cast that is answered — that shape exactly, and the message says
         so itself: 0xE018 carries an `actorId`, which a reply meant for the
         presser alone would not need. It is addressed to the room, and the
         presser's own cell is one of the cells that has to stop saying
@@ -2934,13 +2934,13 @@ class MpsServer:
         out = b""
         # ⭐⭐⭐ **One register file, several cursors.** Every member walks the
         # same scenario over the same `B`/`F`/`S` registers, and that is read
-        # off the scripts rather than chosen here (round 233, the protocol notes 2.188):
+        # off the scripts rather than chosen here (round 233):
         #
         #   * `un081` sets `B1 = 3` on the main line, decrements it inside an
         #     `OP_BA 01` bracket -- 役柄 0 only -- and later gates 春日's debut
         #     on `B1 == 2`. With a file per member the 役柄-1 copy is stuck at 3
         #     forever, so the `OP_JS 06` that writes `PC[0x3901]` is reachable
-        #     by nobody -- and `the script data reader slots` says `un081` is the only
+        #     by nobody -- and the script data says `un081` is the only
         #     writer of that cell in all 683 scenarios.
         #   * `B1` is a number **both** players read: ip=4652 says 「ベルトの
         #     数字も $v01 になってるし……」 over it. Guarding its decrement with
@@ -3275,7 +3275,7 @@ class MpsServer:
                     # with both roles walking, all 22 ドラマイベント reach `OP_END`
                     # when the branches are answered and `un081` loops on its
                     # own intro when they are not
-                    # (`the party sweep`, `the drama replay`).
+                    # (the party sweep and the drama replay).
                     #
                     # ⭐ `un081` is the case that shows what the fence was
                     # costing: ip=714 tests `B1 == 2`, this end computes it
@@ -3413,7 +3413,7 @@ class MpsServer:
         ⭐ **An empty list still releases it**, and that is the fallback here
         rather than silence: 0x9f0048 skips its apply loop when the count is
         zero and goes straight to the wait-flag clear at the bottom. So a script
-        with no shadow — nobody ran `the script exporter` for it — plays on
+        with no shadow — nobody exported it — plays on
         with an unfilled placeholder instead of stopping dead. ⚠️ Which is worth
         seeing in the log, because "the text has a hole in it" and "the script
         hung" look nothing alike on screen and identical from here.
@@ -3476,7 +3476,7 @@ class MpsServer:
             parties deadlock by construction, since neither role can ever reach
             the other's copy.
           * Played offline over all 22 with both roles walking
-            (`the party sweep`), an ip-matched rule gets 18 of 22
+            (the party sweep), an ip-matched rule gets 18 of 22
             to `OP_END`; arriving at *a* `PLAYER_SYNC` gets 22 of 22.
 
         ⚠️⚠️ **And `OP_PLAYER_WAIT_TIME` is not a rendezvous at all**, which is
@@ -5828,7 +5828,7 @@ class MpsServer:
         `stress.py` carried a comment saying this message goes unanswered
         「because the door to it is the 顧問's 交流メニュー, which this server
         cannot draw」, which was true when it was written and stopped being true
-        the moment `/cid 2:0` put a 顧問 on the map. The same shape as an earlier lesson:
+        the moment `/cid 2:0` put a 顧問 on the map. The same shape as ever:
         a comment explaining why something is not done does not update itself
         when the reason goes away.
 
@@ -7200,7 +7200,7 @@ class MpsServer:
         # place of it. The turn has to run — a stream the client never animates
         # would answer a different question — so this adds to that stream, and
         # the roster it names differs from the one the turn itself just sent so
-        # that a repaint is a value change rather than an absence (an earlier lesson).
+        # that a repaint is a value change rather than an absence.
         tail = battle.tail_probe
         if tail is not None:
             battle.tail_probe = None
@@ -7220,7 +7220,7 @@ class MpsServer:
                 # right in front of the appended roster, which is the shape
                 # 2.62 step 5 had and the plain append does not. Everything
                 # else stays exactly as the plain append leaves it, so the two
-                # runs differ by this message and nothing else (an earlier lesson).
+                # runs differ by this message and nothing else.
                 out += demo_start()
             out += self._tr_cast(
                 session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_ACTION_ORDER,
@@ -7650,7 +7650,7 @@ class MpsServer:
         トレルームを作成できません。」 — so a player who had practised once
         could not put up a second 看板 without dropping the connection first.
 
-        ⚠️ INVENTED, and it cannot be otherwise (the invention rule): nothing in the 0x58xx
+        ⚠️ INVENTED, and it cannot be otherwise: nothing in the 0x58xx
         family says 「the room let you go because the fight ended」. The three
         restored PART_REASONs are 自分自身の要求 / リーダーに排除された /
         切断による, this is none of them, and putting one of them on the wire
@@ -8323,7 +8323,7 @@ class MpsServer:
             # ever sent carried eight zeros. A field whose only value so far is
             # its neutral one has not been measured at all — the reading 「the
             # client ignores these」 and the reading 「they drive the lamps」 fit
-            # the same evidence (an earlier lesson).
+            # the same evidence.
             #
             # ⭐ Not one-shot, for turn_start_hp's reason: the question is what
             # a turn OPENS with. It restores itself for turn_start_hp's other
@@ -10158,7 +10158,7 @@ class MpsServer:
         behind it and 部活デッキ are all here -- and nothing re-read it, so two
         of the four 体調 stayed unreachable for sixty rounds. Round 149 found it
         by reading the manual instead of the message table.
-        ⭐ The general form (an earlier lesson): a rule's stated reason
+        ⭐ The general form: a rule's stated reason
         does not re-evaluate itself when the premise underneath it expires.
         """
         sheet = self._chars(session).ability(session.chara_id)

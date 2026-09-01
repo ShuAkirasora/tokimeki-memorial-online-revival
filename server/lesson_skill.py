@@ -30,8 +30,8 @@ absent from 直感, 明鏡止水 and そっと応援, the three it does not. 直
 still miss: 「必ずしも正解を選ぶとは限りません」 is a wrong answer, not a failure,
 and the wire draws that distinction too.
 
-Field names are the client's own, from the debug formatters (`the field-name extractor`
-in the reverse-engineering tree); no disassembly was needed for any of it.
+Field names are the client's own, from the debug formatters (extracted in
+the reverse-engineering tree); no disassembly was needed for any of it.
 """
 
 import random

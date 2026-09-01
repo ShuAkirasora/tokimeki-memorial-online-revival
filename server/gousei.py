@@ -52,7 +52,7 @@ restoration and it is worth being able to see which parts are not:
            same sentence (msg_text 501 「合成に失敗しました！\\n登録アイテムは、
            すべてなくなりました」), so this is two witnesses and not one.
         -- ⚠️ That paragraph is in the 正式 manual and NOT in the β one, which
-           is the asymmetry the invention rule�� warns about: β is an abridged edition, not
+           is the asymmetry to watch for: β is an abridged edition, not
            an older one, and only the client can prove an absence. Here the
            client proves the presence.
 
@@ -71,8 +71,8 @@ by the codes it does NOT have, some it did not:
       ストレス BUT DOES NOT BREAK YOU, AND BEING BROKEN DOES NOT BAR IT. So
       stress.after_gousei charges without a break, and nothing here consults
       stress.barred_from_club. ⚠️ This is deliberately not symmetric with
-      trainingroom.py and _npcbattle, both of which do bar 怪我 -- see an earlier lesson:
-      the missing code is a reading, and the reading has a second witness.
+      trainingroom.py and _npcbattle, both of which do bar 怪我 -- the missing
+      code is a reading, and the reading has a second witness.
   * 0x5308 reason 6 (「登録された合成アイテムを所持していない…」) is marked
     未使用 in the table, so the original never sent it. That is legible: the
     合成 window is filled from the player's own inventory, so 「you do not hold
@@ -191,7 +191,7 @@ LEVEL_MAX = 10
 #: said Lv.1 for a 完成度 of 4, which is the whole reason this constant exists.
 #: ⭐ The lesson generalises: a manual's number is in the PLAYER's units and a
 #: measured conversion outranks it for the wire -- the manual is still the
-#: semantic authority (an earlier lesson), it is simply not talking about bytes.
+#: semantic authority, it is simply not talking about bytes.
 COMPLETENESS_PER_LEVEL = 10
 COMPLETENESS_MIN = LEVEL_MIN * COMPLETENESS_PER_LEVEL
 COMPLETENESS_MAX = LEVEL_MAX * COMPLETENESS_PER_LEVEL
@@ -210,7 +210,7 @@ BOOSTER_KINDS_MAX = 3
 #: +0xc3 is this game's own idea of a percentage success rate and its 57 rows
 #: take six values: 40, 50, 60, 70, 80, 100. So 40 is the lowest odds this game
 #: is willing to offer a player and 100 is the top, and a 合成 rate outside that
-#: range would be in a unit the game does not use (the invention rule��).
+#: range would be in a unit the game does not use.
 #: ⭐ INEQUALITIES it has to satisfy, in the order they bind: rate rises with
 #: 部活レベル (the manual's only statement about it) · rate ∈ [40, 100] (the
 #: ruler) · a brand-new member (部活レベル 0) can still succeed sometimes,
@@ -218,7 +218,7 @@ BOOSTER_KINDS_MAX = 3
 #: be used is a dead item · a maxed club reaches certainty, because the ruler's
 #: top value is 100 and 44 of its 57 rows sit there.
 #: ⭐ The straight line between the two ends is the smallest thing that
-#: satisfies all four (the invention rule��). The tightest of them is the ruler.
+#: satisfies all four. The tightest of them is the ruler.
 #: ⭐ What would overturn it: any account, screenshot or 攻略 page naming an
 #: observed 合成 success rate at a known 部活レベル.
 #: Knob: TMO_CLUB_GOUSEI_RATE_MIN / TMO_CLUB_GOUSEI_RATE_MAX.
@@ -249,7 +249,7 @@ GOUSEI_RATE_MAX = max(0, min(100, int(
 #: which is exactly the 3-kind registration limit being fully used.
 #: ⚠️ The manual's 「適切な個数」 hints that the original had a right ANSWER per
 #: book rather than a monotone ramp. That is a different shape, not a different
-#: number, and it stays unbuilt rather than half-built -- the invention rule��'s Ⅲ.
+#: number, and it stays unbuilt rather than half-built.
 #: ⚠️ In DISPLAY levels, not in wire units -- the invented rule is stated in the
 #: units the manual and the player use, and completeness() converts once at the
 #: end. Stating it in percent would make the 1-10 range invisible in the number.

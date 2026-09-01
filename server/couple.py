@@ -19,7 +19,7 @@ names, their widths, and the row limit.
                      ardent=%d, match=%d, date={year=%d,month=%d,day=%d,}}}
 
 ⭐ THE WIDTHS COME OUT OF Input_MsgSvNotifyCoupleList::deserialize (0x9BAB60),
-read through the stream vtable's slots (the read-slot table table) -- the same way
+read through the stream vtable's slots (the read-slot table) -- the same way
 career.py's card was read, and through the same fixed-string helper 0xA49610:
 
     u16  nCoupleNum                     vt+0x28 -> +0xB04
@@ -101,8 +101,7 @@ layout, and the screen that draws it.
 moved by /couple probe, a knob of the same kind as career's.
 ⚠️ Their NAMES are the client's; what they MEAN is not read anywhere. `ardent`
 and `match` are one byte each and nothing has probed either range, so do not
-write a guessed gloss next to them (an earlier lesson: a field's range is
-not its meaning).
+write a guessed gloss next to them -- a field's range is not its meaning.
 ⭐ WHO is on the list is NOT invented: it is read off loverCharaId, the field
 /couple has been setting since round 154, so a pair this server actually holds
 is a row this message actually carries.

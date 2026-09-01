@@ -407,8 +407,8 @@ class Bell:
         down and asked to come in (0x6001) exactly as it does with the option
         ON, and sat through the whole lesson. So the client does not enforce its
         own setting, and this is the only place the manual's 「出席しない」 can
-        be honoured. See an earlier lesson: a reason nobody has measured is
-        a guess wearing a comment's clothes.
+        be honoured. A reason nobody has measured is a guess wearing a
+        comment's clothes.
 
         ⚠️ 試験の有無, the row underneath it on the same screen, goes the other
         way: the client declines 0x6601 by itself. Same window, same wording in
@@ -662,7 +662,7 @@ END_ABILITY_AFTER: "list[int] | None" = None
 END_ABILITY_BEFORE: "list[int] | None" = None
 
 # The default ruler, chosen so one screenshot is readable under any of the
-# three ways the screen could draw these (an earlier lesson). ceil(値/250) maps them to
+# three ways the screen could draw these. ceil(値/250) maps them to
 # 1 2 4 8 16 32, so the row a value landed in is recoverable if the screen
 # prints the レベル; the values themselves are equally distinct if it prints the
 # number; and against a `before` of zeros the difference is the value again.

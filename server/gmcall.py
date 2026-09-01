@@ -188,7 +188,7 @@ NG_CANCEL_NOT_CALLING = 4  # GMコールをしていません。
 NG_CANCEL_IN_HAND = 6      # 現在、ＧＭが対応中ですので、…取り消すことはできません。
 
 #: The pull-down's ids minus 「非選択」. Read off `gm_call_type`; the private
-#: tree's the GM-call check re-derives this from the table and says so if the two
+#: tree re-derives this from the table and says so if the two
 #: ever part company.
 REPORT_TYPES = frozenset({1, 2, 3, 4, 5, 6, 7, 10, 11})
 

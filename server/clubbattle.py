@@ -139,7 +139,7 @@ MSG_CL_NOTIFY_BATTLE_TURN_END = 0x5C16
 #:   +46..+52, and each successor carries a sex tag beside it (+54..+60, 0
 #:   male / 1 female / 2 either). ⚠️ What is missing is WHICH successor to
 #:   grant when a chain still offers two or three, and the user is holding that
-#:   question open on purpose — see the methodology in the private tree.
+#:   question open on purpose.
 #:   ⚠️ 習熟度 is not only this gate: `p07_02` says it also raises a キーワード's
 #:   attack and defence, so filling it moves more than this message.
 #: * 0x5C19 GetClubSkill is NOT sent because 練習 has no restored trigger for
@@ -526,8 +526,8 @@ def damage_band(value: int, max_vitality: int) -> int:
 # own — 消費気力, 成功率, the three ±%, the two heals, the ステータス異常 key.
 # What IS decided here is only which 0x5C11 ``type`` narrates each column, and
 # every one of those was measured on a real client in rounds 97 and 98 (see the
-# EFFECT template table above). ⭐ So this is wiring, not invention, and the invention rule's
-# ledger gains no row from any of it.
+# EFFECT template table above). ⭐ So this is wiring, not invention, and the
+# invention ledger gains no row from any of it.
 #
 # ⚠️ The two asymmetries worth knowing before reading the code:
 #
@@ -1349,7 +1349,7 @@ def result_params(
     ⭐ The two ability loops are ``mov ebp, 6`` immediates in the instruction
     stream, which is the same count ``chara_ability_type.bin`` has records and
     the same six 0x4310 already draws (ability.ABILITIES). Two witnesses, so
-    the 6 is a decode rather than a length fitted to a buffer (an earlier lesson).
+    the 6 is a decode rather than a length fitted to a buffer.
 
     ⚠️⚠️ THIS MESSAGE IS PER-RECIPIENT. ``beforeAblity``/``afterAblity`` are one
     character's six numbers and the fight holds several characters, so it
@@ -1664,7 +1664,7 @@ class Fighter:
     ⚠️ All of that is MEASUREMENT (which message moves a current value). The
     INVENTION next to it — how much a hit takes off, and whether this server
     should remember it between turns — is a separate account with no restored
-    source, and round 97 deliberately left it untouched. the invention rule.
+    source, and round 97 deliberately left it untouched.
     """
 
     def __init__(self, chara_id: int, team: int, club_id: int, info: bytes) -> None:
@@ -1689,7 +1689,7 @@ class Fighter:
         #: message existed carried eight zeros. That makes the whole field
         #: UNMEASURED rather than known-inert — zero is its neutral value, and
         #: 「the client ignores these」 fits the evidence exactly as well as
-        #: 「they drive the lamps」 does (an earlier lesson). ``/cb states`` is the one
+        #: 「they drive the lamps」 does. ``/cb states`` is the one
         #: writer, and it is a probe.
         self.states = [0] * NUM_OF_CLUB_STATUS
         #: Set by 0x5C07 — 「my battle scene is up」, not 「I am ready to play」.
@@ -2018,7 +2018,7 @@ class Battle:
         #: OPENS with, so it has to still be there when the next turn starts;
         #: not an environment knob because it must be switchable mid-fight —
         #: the control and the probe belong in one fight, the way round 97's
-        #: undoctored turn had to sit next to its doctored one (an earlier lesson).
+        #: undoctored turn had to sit next to its doctored one.
         #: Living on the Battle is what makes it restore itself: no fight
         #: outlives its board, so nothing has to remember to put it back.
         self.turn_start_hp: "tuple[int, int] | None" = None
@@ -2061,7 +2061,7 @@ class Battle:
         #: 0x5C16 from the last fighter carries the next 0x5C09 (or the result)
         #: out in the same batch, and a turn start is itself a candidate for
         #: repainting the widget — so that batch cannot answer this question
-        #: either way (an earlier lesson). Firing is therefore something the fight has
+        #: either way. Firing is therefore something the fight has
         #: to be arranged for: somebody else must still owe a 0x5C16 when the
         #: armed client sends its own.
         self.order_probe: "tuple[int, list[int]] | None" = None

@@ -573,7 +573,7 @@ class GroupBook:
         that tries to go 非公開. Doing it here at the moment of promotion is what
         keeps that sentence from ever being needed.
         ⚠️ Whoever answers 0x620A next has to refuse 非公開 on a 同好会 with that
-        very reason, or this half is decorative -- see the methodology.
+        very reason, or this half is decorative.
 
         ⚠️ The caller checks the rules; this only writes. That split is the same
         one create/join keep, and it is what lets the refusals quote the

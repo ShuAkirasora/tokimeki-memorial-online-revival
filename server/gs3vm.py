@@ -21,7 +21,7 @@ Both are GSC files: the *original server's* own scripts, same bytecode as the
 the thresholds, the character ordering and the two-group split all stay in the
 game's data where they were found.
 
-The code they run over is written by `the script exporter` into
+The code they run over is written by the script exporter into
 `runtime/scripts/<name>.gs3.json`, which -- like every other file under
 `runtime/` -- is a local feed and reaches no repository.
 
@@ -187,7 +187,7 @@ OP_RESULT_MULTI_PLAYER_EVENT = 0x9200
 # `Follower.select`.
 #
 # ⭐⭐⭐ Its three operands, read in round 236 off the decoding slot's own field
-# list (`the field table`, slot 153 at 0x734fc5: accesses at
+# list (the field table, slot 153 at 0x734fc5: accesses at
 # +2, +4 and +16, and the debug format string 「選択肢数：%1%\n制限時間(秒)：
 # %2%\n選択者数(自分含む)：%3%」):
 #
@@ -220,7 +220,7 @@ OP_RESULT_MULTI_PLAYER_EVENT = 0x9200
 # resolves to option 0 no matter what was clicked. Offline over the 22
 # ドラマイベント that is not a subtle wrong answer: `un010`, `un117` and
 # `un127` each have a 役柄-1 menu whose option 0 loops back to itself, so the
-# play never ends (`the party sweep <name> --sweep 20`).
+# play never ends (a 20-follower sweep over the scripts).
 OP_INPUT_SELECT = 0x7000
 
 # ⭐⭐ The three commands that make a 日常会話's setting: which background is
@@ -233,7 +233,7 @@ OP_INPUT_SELECT = 0x7000
 OP_EVENT_BG_LOAD = 0x5100
 # ⭐⭐ 台詞. Round 192 put it in `_undecidable`, round 193 took it back out
 # (there: refusing a branch is not abstaining from it). ⚠️ Kept as a name
-# because `the road-gate study` imports it from here (round 193 -- it had
+# because the road-gate study imports it from here (round 193 -- it had
 # copied the literal) and its variants C/D still measure the set that forbids
 # it. ⛔️ Deleting it would leave the tool that audits this decision unable to
 # state the alternative it was weighed against.
@@ -496,7 +496,7 @@ def _scenery_road(script: "Script", index: int) -> bool:
 #: end simply does not know (`OP_INPUT_SELECT` is the player's answer, `OP_BA`
 #: is a 役柄 test whose result only the client holds).
 #: ⚠️ 台詞 used to be a fourth reason and is not one any more -- see the
-#: docstring, and `the road-gate study` for what that cost and bought.
+#: docstring, and the road-gate study for what that cost and bought.
 def _undecidable(op: int) -> bool:
     """Does this instruction put the branch that reaches it out of reach here?
 
@@ -550,7 +550,7 @@ def _undecidable(op: int) -> bool:
     starting value and not an assumption made here) plus cells this end actually
     supplied -- an unsupplied cell reads ⊤ and refuses on its own.
 
-    ⭐ `the road-gate study` prints all of it: variant E is the set before
+    ⭐ The road-gate study prints all of it: variant E is the set before
     this change, F the whole family dropped, G this one. ⚠️ Re-run, do not quote.
     """
     if op == OP_KEYWORD_UPDATE:
@@ -597,7 +597,7 @@ def _decided_road(script: "Script", index: int):
     ⭐⭐⭐ The gate `_scenery_road` used to be, done properly. Same principle --
     judge the *destination*, not the condition -- and two fixes to how the
     destination is bounded, both measured in round 192 (2.147 八, and
-    `the road-gate study` reproduces the numbers):
+    the road-gate study reproduces the numbers):
 
     ⚠️ **`OP_JP` used to end the walk**, on the reading 「that is where the
     switch arm rejoins the scenario」. True for the 進行度 switch and false in
@@ -972,7 +972,7 @@ class Machine:
                 raise UnsupportedOp(
                     f"{self.script.name}: SYNC_VARIABLE at ip={ip} -- its "
                     f"register list lives in the .ssb's auxiliary table, which "
-                    f"this export does not carry (re-run the script exporter)"
+                    f"this export does not carry (re-run the export)"
                 )
             return i + 1
 
@@ -1179,9 +1179,9 @@ class Follower(Machine):
     same run -- which is how a register file appears on this end without the
     client ever sending one.
 
-    ⭐ **The walk is not new here and was not fitted here.** ``the script evaluator
-    replay`` drove exactly it over 48 real traces out of this server's own logs,
-    2051 reported instructions, and 36 of the 48 matched the client's own ip
+    ⭐ **The walk is not new here and was not fitted here.** A replay drove
+    exactly it over 48 real traces out of this server's own logs, 2051
+    reported instructions, and 36 of the 48 matched the client's own ip
     sequence from the first instruction to the last. (The other 12 are log
     fragments that do not begin at the top of a script, not disagreements.)
 
@@ -1216,7 +1216,7 @@ class Follower(Machine):
         # -- not copied -- so that every member of a ドラマパーティ computes over
         # one file while each keeps its own cursor, stack and data cells. That
         # split is read off the scripts, not chosen here; the argument is in
-        # `mps_session._drama_light` and in round 233's section of the protocol notes.
+        # `mps_session._drama_light`.
         # ⚠️ None is a file of this follower's own, which is what a solo script
         # wants and what every caller before round 233 got.
         if registers is not None:
@@ -1242,8 +1242,8 @@ class Follower(Machine):
         # write sits after the script starts and before the switch, so a value
         # pushed down the wire ahead of it would be overwritten.
         # ⚠️ *That* this end overrides at all, and where the year is cut into
-        # four, are inventions (the smallest-invention rule); that the switch moves with the
-        # calendar is not. See `Script.season_register`.
+        # four, are inventions (the smallest-invention rule); that the switch
+        # moves with the calendar is not. See `Script.season_register`.
         self.season: int | None = None
 
     # -- the two rules that differ from a machine running on its own -------
@@ -1402,8 +1402,8 @@ class Follower(Machine):
         and reporting it would be inventing a score out of scratch space.
 
         ⚠️ ``point``/``text`` are None when the export carries no string for the
-        reference. That is a scenario exported before round 234 (`the script evaluator
-        export` collects them as of then), ⛔️ not a scenario without a result.
+        reference. That is a scenario exported before round 234 (the
+        exporter collects them as of then), ⛔️ not a scenario without a result.
         """
         if self.lost:
             return None

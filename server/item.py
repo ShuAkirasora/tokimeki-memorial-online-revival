@@ -90,8 +90,8 @@ What can be done to a row
 -------------------------
 0x4D04..0x4D0F are the same family and are what the buttons under the list send.
 Four operations, each a request and a pair of answers, and every shape below is
-read off the client's own reader (the shape reader) with the field names off
-each class's dump function (the field-name extractor) -- none of them is guessed:
+read off the client's own reader with the field names off each class's dump
+function -- none of them is guessed:
 
     0x4D04 MsgClCastItemEquip           itemId{cat u16, id u16} equip u8
         -> 0x4D06 MsgSvNotifyItemEquip  charaId u32 itemId equip u8
@@ -398,7 +398,7 @@ ITEM_COUNT = sum(last - first + 1
 #
 # ⭐⭐⭐ RESTORED, AND MACHINE-CHECKED RATHER THAN TRUSTED. Every number below
 # is transcribed out of the game's own table, and a transcription drifts --
-# silently, and while still reading perfectly. `the item-effect check check` in
+# silently, and while still reading perfectly. A drift check in
 # the other tree re-reads `item.bin` and compares this dict to it key by key,
 # the same drift check `shop.GOODS` has for `store_item.bin`.
 #

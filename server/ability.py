@@ -27,7 +27,7 @@ deserializer at 0x008CEB80 with the names out of the client's own dump string:
 Both array lengths are confirmed away from the wire: `chara_ability_type.bin`
 has exactly six records (文系 理系 芸術 雑学 運動 スタミナ) and `club.bin`
 exactly sixteen, so the 6 and the 16 are decodes rather than counts fitted to a
-buffer — the mistake an earlier lesson is about. The same u16×6 / u8[16] / u8[16] trio
+buffer — the mistake to avoid here. The same u16×6 / u8[16] / u8[16] trio
 is the head of the 238-byte character list entry in 2.10, which is a second
 sighting of the same three arrays in the same order.
 
@@ -208,7 +208,7 @@ class AbilitySheet:
         return out
 
     def ruler(self) -> None:
-        """Make every field on the screen identifiable at a glance — an earlier lesson.
+        """Make every field on the screen identifiable at a glance.
 
         A sheet of zeros cannot tell "the client did not draw this" apart from
         "the client drew a 0", and six fields that all read the same cannot say
