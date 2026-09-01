@@ -166,7 +166,7 @@ MAX_COMMENT = 64
 # ⚠️ Only ROOM is ever sent: the list and the details box are readable by
 # anyone, so the two 「情報が取得できません」 codes have no case here. They are
 # named anyway because a reason table with holes in it reads like a table
-# nobody finished reading -- the error-message table has all five, and these are the two this
+# nobody finished reading -- the error-message table has all five, and these
 # end deliberately does not use.
 BOOKING_NG_ROOM = 0
 BOOKING_NG_CHARACTER = 1

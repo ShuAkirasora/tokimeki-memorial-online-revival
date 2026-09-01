@@ -308,7 +308,7 @@ TURN_START_ROW_SIZE = 23
 #: ⭐⭐ It sets what turn 1 opens with; ``/cb timeout`` moves the same number
 #: mid-fight, which is what turned one fight into four questions rather than
 #: one (Battle.turn_timeout_ms).
-#: ⚠️⚠️ Leaving it set makes the room smoke test's turn-start assertions RED without
+#: ⚠️⚠️ Leaving it set makes the room smoke test's turn-start assertions RED
 #: anything being wrong: that script computes its expectation from its own
 #: process's TURN_TIMEOUT_MS, which is not this process's.
 TURN_TIMEOUT_MS_STOCK = 60_000
@@ -1503,7 +1503,7 @@ def parse_npc_battle_start(params: bytes) -> "int | None":
     """0x5D00's npcId -- which 顧問/キャプテン the player right-clicked.
 
     ⚠️⚠️ TWO BYTES, not four, and this is the one field in the flow the dump
-    string got read wrong from. `the field-name extractor` prints ``npcId=%d`` and every
+    string got read wrong from. The dump prints ``npcId=%d`` and every
     other npcId in this protocol is a u32 charaId, so four was the obvious
     reading; the deserializer at 0x8DB8E0 makes ONE call through the stream
     vtable's ``+0x28``, which is uint16. MEASURED the same round: a real client

@@ -96,7 +96,7 @@ two messages, so every width below was taken from the reader itself:
     0x5308 MsgSvNgGousei             u8  reason
     0x5309 MsgSvNotifyGouseiEnd      (empty)
 
-⭐⭐⭐ 0x5306's ENTRY IS FIVE BYTES, not the nine `the shape reader` reports. 0x910F90
+⭐⭐⭐ 0x5306's ENTRY IS FIVE BYTES, not the nine the shape reader reports. 0x910F90
 reads two u16 into [msg+4] and [msg+6], one u16 into [msg+0x44], and then loops
 (u16, u16, u8) six bytes apart from [msg+8] -- so the 9 is this classifier adding
 the four-byte prefix to the five-byte entry, the same kind of mistake it made on
@@ -304,7 +304,7 @@ def parse_request(params: bytes) -> "tuple[tuple[int, int], list[tuple[int, int,
 
     None for a body that does not hold what its own count says it does. See the
     module docstring for where the five-byte entry came from and why it is not
-    the nine `the shape reader` reports.
+    the nine the shape reader reports.
 
     ⚠️ Duplicate keys are NOT merged. The client sends one row per registered
     kind, so two rows naming the same item is a probe or a bug, and merging them

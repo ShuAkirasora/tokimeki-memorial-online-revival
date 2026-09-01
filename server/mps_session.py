@@ -7798,7 +7798,7 @@ class MpsServer:
                            repaints that widget. ⚠️ It skips a 0x5C16 that is
                            the fight's last one — see Battle.order_probe — so
                            somebody else has to still owe one, which on a
-                           partner fight means ``the partner-fight driver --end-delay``.
+                           partner fight means the partner-fight driver's ``--end-delay``.
                            ⭐⭐ With ``by=i`` naming a SPARRING PARTNER it
                            reaches the moment 2.63 could not: the partner's
                            0x5C16 arrives about half a second into the real

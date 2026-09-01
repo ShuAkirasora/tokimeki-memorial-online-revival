@@ -408,7 +408,7 @@ def _refer_register(args: bytes):
 
 # The letters the client's own debug strings use for the eight operand
 # categories, so that a log line here reads the same as one out of
-# `the opcode table` next door: F0 is a flag, B2 a 16-bit, S0 a short string.
+# the opcode table next door: F0 is a flag, B2 a 16-bit, S0 a short string.
 REGISTER_LETTERS = {0: "F", 1: "B", 2: "D", 3: "S", 4: "L", 5: "P", 6: "E"}
 
 

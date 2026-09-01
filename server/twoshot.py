@@ -80,7 +80,7 @@ be exactly that, literally:
 value in all 126555 cells falls outside the table, and the 48 places whose keys
 are ≥256 -- 通学路, 駅, 海, 遊園地 -- appear nowhere, exactly as they should,
 being off campus. The map exporter documents the four checks; the server
-reads it through mapgraph.region, and `the map exporter regions` prints it.
+reads it through mapgraph.region, and the map exporter's ``regions`` prints it.
 
 ⇒ The place is the target's cell, and a cell with no place is what reason 11
 refuses. 33% of all cells are such cells.

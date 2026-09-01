@@ -26,7 +26,7 @@ searched. The manual gives no figures, `capture_npc` has no threshold field and
 it twice over, on both sides of the old client/server line:
 
   * the original server's GS3 scripts gate each メインイベント on
-    ``PC[0x3920+i] >= 72 * progress`` (the opcode table gates);
+    ``PC[0x3920+i] >= 72 * progress`` (the opcode table's gates);
   * the client's own SSC 日常会話 scripts **add to that very same slot**, and
     implement the manual's 「一日に何度も…あまり上がりません」 themselves
     (read off the scripts' own intimacy writes).

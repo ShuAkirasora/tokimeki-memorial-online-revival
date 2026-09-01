@@ -140,7 +140,7 @@ MSG_SV_NOTIFY_CHARA_GROUP_KICK = 0x6229
 #: 21-byte fixed field the character record spends on its own catchCopy. See
 #: MAX_CATCHCOPY for why nothing pads it.
 
-#: The 勧誘 handshake, measured with the shape reader and the field-name extractor:
+#: The 勧誘 handshake, measured off the client's readers and dumps:
 #:
 #:   0x6218 targetId u32   the 「グループ登録申込み」 icon in the PC 交流メニュー
 #:   0x6219 (empty)        the inviter's receipt
@@ -736,7 +736,7 @@ def group_list_params(listed: "list[Group]") -> bytes:
     the stream's +0x28 slot and hands it to the counted-string reader at
     0xA49610) and steps 0x3C bytes to the next entry. That 0x3C is the size of
     the *struct*, not of anything on the wire; nothing pads to it.
-    ⭐ the shape reader calls this entry=6B, which is the same reading counted a
+    ⭐ The shape reader calls this entry=6B, which is the same reading counted a
     different way: 2 + 2 for the two lengths and 1 + 1 for the two bytes.
 
     ⭐ ``entry`` and ``clublikeGroupFlag`` are one byte each, so a 同好会 at its
@@ -760,7 +760,7 @@ def group_list_params(listed: "list[Group]") -> bytes:
 def result_params(group: Group, roster: "list[tuple[int, bytes, bytes, int, int]]") -> bytes:
     """MsgSvResultCharaGroupInfo (0x6208).
 
-    ⭐ The reader's slot widths, off the shape reader, are what settles the shape --
+    ⭐ The reader's slot widths are what settle the shape --
     and they disagree with the field list alone in one place:
 
         1 + 1 + 2 + 0 + 2 + 4 + 11 + 11 + 2 + 1 + 4

@@ -136,7 +136,7 @@ Invented, because no table and no sentence carries a number for it:
 
 MISREPORTED
 -----------
-⚠️ `the shape reader` is wrong about this family in two different ways, and the
+⚠️ The shape reader is wrong about this family in two different ways, and the
 standing rule — count the calls in the deserializer before sending anything
 that matters — caught both:
 
