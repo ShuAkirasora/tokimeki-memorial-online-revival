@@ -345,6 +345,11 @@ installer on that drive.
 Japanese text, which on a machine that is not Japanese becomes a folder with a garbled name; an
 ASCII path removes the question instead of answering it.
 
+**If you installed before fixing the code page, install again.** A folder whose name was made
+out of the old code page is spelled in characters the new one may not have, and the game reaches
+its own files through the same ANSI calls as everything else; an install that worked yesterday
+can stop finding itself. Uninstall, set the locale, and let it land in `C:\TMO`.
+
 Once the game is installed, `Play.cmd` below is what starts it.
 
 ## Connecting a client
