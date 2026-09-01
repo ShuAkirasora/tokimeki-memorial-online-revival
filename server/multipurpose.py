@@ -12,7 +12,7 @@ which is why this family sat unanswered for two hundred rounds without ever
 looking broken. What it could not do is show a single booking.
 
 ⭐⭐⭐ The row layout is read out of the client's own deserializer at 0x8DB930,
-not guessed from the field names, and the two would have disagreed. the shape reader
+not guessed from the field names, and the two would have disagreed. The shape reader
 calls 0x0901 ``counted entry=27B``; the entry is 25 bytes and the 2 it added is
 the roomId, which sits *in front of* the count and belongs to no row:
 

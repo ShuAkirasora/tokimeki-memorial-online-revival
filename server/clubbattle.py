@@ -1152,7 +1152,8 @@ def reaction_params(target_id: int, reaction: int) -> bytes:
 
     Reader at 0x9BB390: two calls and then ``ret 8`` — ``[edi+0x04]`` through
     the stream vtable's ``+0x24`` (unsigned 32) and ``[edi+0x08]`` through
-    ``+0x2c`` (unsigned 8). the shape reader agrees at ``4+1``, and the dump names the
+    ``+0x2c`` (unsigned 8). The shape reader agrees at ``4+1``, and the dump
+    names the
     two ``targetId`` and ``reaction``.
 
     ⚠️ It is ``targetId``, NOT ``charaId``. 0x5C0E/0x5C0F next door name theirs

@@ -248,7 +248,7 @@ FIXED_REPLIES = {
     # scene is up, and nothing visibly waits on it — the client went on walking
     # and warping while it went unanswered. Cheap to satisfy anyway.
     #
-    # the shape reader called the reply empty; it is not. Input_MsgSvResultGMCallList's
+    # The shape reader called the reply empty; it is not. Input_MsgSvResultGMCallList's
     # vtable[0] (0x8E0700) makes exactly one call, through the stream's +0x14
     # slot, and that reader (0xA49A00) checks four bytes of headroom and names
     # itself "operator >> (int32_t)" when it runs out. The dump (0x8DF590) prints
@@ -5374,7 +5374,7 @@ class MpsServer:
                     # 18 bytes, not the 10 the shape reader reports: after charaId, the
                     # two coordinates, status and direction comes arrivalTime,
                     # read through the stream vtable's +0x10 slot, which 0xA49A50
-                    # shows taking eight bytes. the shape reader does not know that slot,
+                    # shows taking eight bytes. The shape reader does not know that slot,
                     # the same blind spot that made it call the one-byte messages
                     # empty.
                     #

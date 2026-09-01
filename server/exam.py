@@ -28,7 +28,7 @@ and `p06_01` settles the difficulty:
 THE WIRE
 --------
 Thirteen messages, in two blocks, all thirteen already named in the id table
-and shaped in the frozen the shape reader dump. The 0x66xx block is the doorway and
+and shaped in the frozen shape dump. The 0x66xx block is the doorway and
 mirrors 授業's 0x60xx one exactly; the 0x6Axx block is the paper itself.
 
     0x6600 MsgSvNotifyBeforeExamStart   u16 subjectId          ≙ 0x6005 予鈴
