@@ -186,7 +186,9 @@ are inventions, and the comments say so where they appear.
   project answers.
 
 The server runs on Windows, macOS or Linux. The game is a Windows program and also works
-under Wine.
+under Wine. On a Windows machine that is not Japanese it wants one system setting before it
+will install or accept a name; see [Japanese, and one Windows
+setting](#japanese-and-one-windows-setting).
 
 Run end to end here in two shapes: the game on Windows 11 talking to a server on the same
 host, and the game under Wine on macOS talking to a server on a different machine
@@ -260,6 +262,74 @@ The flag also decides what the server listens on, so that is not a second thing 
 `--bind` overrides it; [Ports](#ports) has the detail, including the three rows that stay on
 `127.0.0.1` either way.
 
+## Japanese, and one Windows setting
+
+**The game is a Japanese program from 2006** and predates Unicode being universal. It, its
+installer, and everything you type into it go through a single Windows setting — the *language
+for non-Unicode programs*: one machine-wide value deciding which code page such programs are
+handed. This game wants Japanese, code page 932. Setting it makes everything in this section go
+away:
+
+> Settings → Time & language → Language & region → Administrative language settings →
+> Change system locale → **Japanese (Japan)**, then restart.
+
+**Making Windows Japanese is not the same thing.** The display language, the regional format,
+the country under *Region*, and the keyboard you type with are four other settings, and none of
+them moves this one. A machine that is Japanese in every visible way can still be running an
+English or Chinese code page underneath — installer garbled, and Japanese typed into the game
+arriving blank. One command says which one you have:
+
+```
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\Nls\CodePage" /v ACP
+```
+
+`932` is the answer this game needs, and the only one known to work end to end. `1252`, `936` or
+anything else is the cause of both problems below. `65001` means **Beta: Use Unicode UTF-8 for
+worldwide language support** is ticked — it sits on the same dialog as the setting above, it
+points the other way, and it leaves this game worse off rather than better; untick it.
+
+That is a stock Windows setting, present in every edition and language, and it behaves the same
+on Arm. It is the route this project's own testing has taken throughout.
+
+### What it looks like when it is wrong
+
+**The installer's text is garbled, and so is every window the client puts up.** Those are
+ordinary Windows dialogs printing bytes read back in the wrong code page. The game's own screens
+are drawn by the game and hold out longer, which is misleading: the error boxes, the ones you
+most need to read, are not the game's.
+
+**Japanese typed into a character's name arrives blank.** This one deserves spelling out,
+because nothing on screen points at a locale — the keystrokes land, the field takes them, and
+the characters are simply not there. `tmo.exe` asks the IME for what you typed through the ANSI
+half of the old `IMM32` interface, so what comes back is code-page bytes and not Unicode; and
+the game carries its own bitmap fonts, covering the Japanese set and nothing else, asking
+Windows for no font at all. Under the wrong code page those two ends disagree and the glyph
+looked up does not exist. Installing Japanese fonts changes nothing, because no Windows font is
+in the path.
+
+### If the IME still misbehaves
+
+Konami supported exactly one. The original system requirements name *Windows 標準 (MS-IME)* and
+say outright that nothing else is guaranteed. Windows 11 still ships it but rewrote it, and
+programs of this age that drive `IMM32` themselves are what its compatibility switch exists for:
+
+> Settings → Time & language → Language & region → **日本語** → Language options → Keyboard →
+> **Microsoft IME** → Options → General → **Use previous version of Microsoft IME**
+
+### Changing one program instead of the machine
+
+If you would rather not change the whole machine, a per-application locale tool will put one
+program into a Japanese locale and leave the rest of Windows alone.
+[Locale_Remulator](https://github.com/InWILL/Locale_Remulator) does that, and works on Windows 11
+on Arm for both 32- and 64-bit programs; the older and better known Locale Emulator does not work
+on Arm at all — it starts the program, changes nothing, and reports no error while doing it.
+
+**It does not reach the installer.** The disc carries an InstallShield package whose wizard is
+drawn by a separate process that the tool never launches, so the wizard's text stays garbled
+whatever you start it with. That is only text — the buttons stay readable, and every file and
+folder inside the package has a plain ASCII name bar one shortcut to a web page, so what lands on
+disk does not depend on any of this.
+
 ## Installing the game
 
 The disc installs the game. This repository carries no part of it and installs nothing; what
@@ -271,35 +341,9 @@ The [archived copy](https://archive.org/details/tokimekimemorialonlinejapan) com
 `.iso` — Windows mounts one on a double-click and gives it a drive letter — and run the
 installer on that drive.
 
-**The game is a Japanese program from 2006.** It predates Unicode being universal, so it and
-its installer read their own text through the single Windows setting called the *language for
-non-Unicode programs* — one machine-wide value, unrelated to the language Windows itself is
-displayed in. Setting it to Japanese makes every question below go away:
-
-> Settings → Time & language → Language & region → Administrative language settings →
-> Change system locale → **Japanese (Japan)**, then restart.
-
-That is a stock Windows setting, present in every edition and language, and it behaves the
-same on Arm. While you are there, leave **Beta: Use Unicode UTF-8 for worldwide language
-support** unticked: it points the other way and leaves this game worse off, not better. This
-is also the route the whole of this project's own testing has been done on, and the only one
-known to work end to end.
-
-**If you would rather not change the whole machine**, a per-application locale tool will put
-one program into a Japanese locale and leave the rest of Windows alone.
-[Locale_Remulator](https://github.com/InWILL/Locale_Remulator) does that, and works on
-Windows 11 on Arm for both 32- and 64-bit programs; the older and better known Locale
-Emulator does not work on Arm at all — it starts the program, changes nothing, and reports no
-error while doing it. Two things are worth knowing before relying on one:
-
-- **It does not reach the installer.** The disc carries an InstallShield package whose wizard
-  is drawn by a separate process that the tool never launches, so the wizard's text stays
-  garbled whatever you start it with. That is only text — the buttons stay readable, and
-  every file and folder inside the package has a plain ASCII name bar one shortcut to a web
-  page, so what lands on disk does not depend on any of this.
-- **Give the installer an ASCII destination** — `C:\TMO` will do. The path it offers by
-  default is Japanese text, which on a machine that is not Japanese becomes a folder with a
-  garbled name; an ASCII path removes the question instead of answering it.
+**Give the installer an ASCII destination** — `C:\TMO` will do. The path it offers by default is
+Japanese text, which on a machine that is not Japanese becomes a folder with a garbled name; an
+ASCII path removes the question instead of answering it.
 
 Once the game is installed, `Play.cmd` below is what starts it.
 
@@ -816,6 +860,8 @@ the grade it awards is this server's own curve over the running score.
 
 | Symptom | Cause |
 |---|---|
+| the installer's text is garbled, or the client's error boxes are | the system locale is not Japanese; see [Japanese, and one Windows setting](#japanese-and-one-windows-setting) |
+| Japanese typed into a character's name shows as blank | the same setting. It is not the IME, and not a missing font |
 | 「レジストレーションコードは存在しません」 | the code was not issued here — `issue_code.py`, step 4 |
 | 「レジストレーションコードが登録されていません」 | the code exists but nobody has bound it on port 12013 |
 | 「ユーザ情報が正しくありません」 | that code is registered to a different KONAMI ID, or the personal key is wrong |
