@@ -307,11 +307,16 @@ Windows for no font at all. Under the wrong code page those two ends disagree an
 looked up does not exist. Installing Japanese fonts changes nothing, because no Windows font is
 in the path.
 
-### If the IME still misbehaves
+### The IME itself
 
-Konami supported exactly one. The original system requirements name *Windows 標準 (MS-IME)* and
-say outright that nothing else is guaranteed. Windows 11 still ships it but rewrote it, and
-programs of this age that drive `IMM32` themselves are what its compatibility switch exists for:
+Konami supported exactly one, and said so: the system requirements name *Windows 標準 (MS-IME)*
+and guarantee nothing else. Windows 11 still ships it, rewritten, and it works — a Japanese name
+typed into the creation sheet with the stock Windows 11 Japanese IME goes in, with nothing done
+beyond the code page above. So when names will not go in, that is what to fix; it is not the
+IME.
+
+If you have some other reason to suspect it, Windows keeps a compatibility switch for programs
+of this age that drive `IMM32` themselves, which this one does:
 
 > Settings → Time & language → Language & region → **日本語** → Language options → Keyboard →
 > **Microsoft IME** → Options → General → **Use previous version of Microsoft IME**
