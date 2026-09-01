@@ -123,11 +123,11 @@ from message_names import MESSAGE_NAMES
 #: with 「通信が断たれました」 on screen and 「battle dropped on disconnect」 in
 #: the log. The mechanism is not that a single pause ran long. It is that the
 #: client's 30-second timesync runs on the CLIENT's clock, which the pause stops,
-#: while this timeout runs on real time, which it does not: waking the machine for
-#: two seconds at a time never accumulates the 30 seconds of client-side time one
-#: heartbeat needs, so the socket goes quiet in real time no matter how short
-#: each individual pause was. Freezing the client therefore requires stretching
-#: this too — the two knobs are one technique, not two.
+#: while this timeout runs on real time, which it does not: waking the machine
+#: for two seconds at a time never accumulates the 30 seconds of client-side
+#: time one heartbeat needs, so the socket goes quiet in real time no matter
+#: how short each individual pause was. Freezing the client therefore requires
+#: stretching this too — the two knobs are one technique, not two.
 #:
 #: ⚠️ Unset is the shipping 300, so an interrupted measuring session leaves
 #: nothing behind. ⚠️ Do not leave it set while testing reconnect behaviour.

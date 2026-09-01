@@ -268,8 +268,8 @@ def resolve_server(given: str | None, remembered: str | None) -> str | None:
     if not chosen:
         say("  Which machine runs the server?")
         say("    - the same one as the game (including the game under Wine): 127.0.0.1")
-        say("    - a different machine from the game: that machine's")
-        say("      local address, usually starting 192.168. or 10.")
+        say("    - a different machine from the game: that machine's local")
+        say("      address, usually starting 192.168. or 10.")
         chosen = ask("  server address", "127.0.0.1")
     try:
         auth.parse_ipv4(chosen)

@@ -327,13 +327,13 @@ TURN_TIMEOUT_MS = int(os.environ.get("TMO_TURN_TIMEOUT_MS")
 #: to stop counting.
 #:
 #: ⚠️⚠️ It does NOT buy the client's own countdown any more time, and this
-#: comment used to claim it did — 「pausing the machine the client runs on freezes the counter
-#: the client draws」 was measured false in round 118. That machine's clock is
-#: resynchronised to real time when it resumes, so wall time spent paused is
-#: charged in full to a deadline the client computes locally: after a few
-#: minutes paused, a window two seconds old already read 「あと 3 秒」. Pause
-#: the client and this knob keeps the SERVER from resolving the turn; nothing
-#: keeps the CLIENT from closing the window.
+#: comment used to claim it did — 「pausing the machine the client runs on
+#: freezes the counter the client draws」 was measured false in round 118. That
+#: machine's clock is resynchronised to real time when it resumes, so wall time
+#: spent paused is charged in full to a deadline the client computes locally:
+#: after a few minutes paused, a window two seconds old already read 「あと 3 秒」.
+#: Pause the client and this knob keeps the SERVER from resolving the turn;
+#: nothing keeps the CLIENT from closing the window.
 #:
 #: ⚠️⚠️ IT CHANGES NO BYTE ON THE WIRE. turn_start_params still sends
 #: TURN_TIMEOUT_MS, because 600_000 was measured to make the client's counter

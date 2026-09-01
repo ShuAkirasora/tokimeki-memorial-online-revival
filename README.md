@@ -279,8 +279,8 @@ Or, from an administrator PowerShell, the same thing in one line and without the
 Set-WinSystemLocale ja-JP
 ```
 
-Then restart from inside Windows — a reset that cuts the power can lose a registry
-change that has not been flushed yet, and the setting quietly comes back as it was.
+Then restart Windows from its own Start menu — a reset that cuts the power instead can lose a
+registry change that has not been flushed yet, and the setting quietly comes back as it was.
 
 Windows names that setting in whatever language it is displaying, so the words above are the
 English ones: on a Japanese Windows the same line reads **Unicode 対応ではないプログラムの言語**,
@@ -427,7 +427,7 @@ the game runs:
 | Your setup | `<server>` |
 |---|---|
 | **One computer** — server and game on the same machine, including the game under Wine, since Wine uses that machine's own network | `127.0.0.1` |
-| **Two computers** — a second PC, or another machine on your network | the server machine's local address, usually starting `192.168.` or `10.` |
+| **Two computers** — the game on one machine, the server on another | the server machine's local address, usually starting `192.168.` or `10.` |
 
 To find it, ask the **machine that will run the server**: `ipconfig` on Windows and read the
 `IPv4 Address` line; `ipconfig getifaddr en0` on macOS (try `en1` if that is empty);
@@ -444,9 +444,8 @@ decides where those lead — your computer's `hosts` file does:
 ```
 
 ⚠️ **The file to edit is on the machine the *game* runs on, not the machine the server runs
-on.** If the game runs on a different machine, it is that machine's file. If the game runs
-under Wine, Wine has no name resolution of its own, so it is the Mac's or Linux box's
-`/etc/hosts` — not anything inside the Wine folder.
+on.** If the game runs under Wine, Wine has no name resolution of its own, so the file is the
+Mac's or Linux box's `/etc/hosts` — not anything inside the Wine folder.
 
 - **Windows:** Start → type `notepad` → right-click **Notepad** → **Run as administrator**
   (opening the file any other way will not be allowed to save it). **File → Open**, paste
