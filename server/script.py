@@ -261,6 +261,22 @@ MSG_SV_QUERY_SCRIPT_COMMAND_SELECT = 0x7213
 MSG_CL_RESULT_SCRIPT_COMMAND_SELECT = 0x7214
 MSG_CL_NOTIFY_SCRIPT_COMMAND_SELECT_DEFAULT = 0x7223
 
+# ⭐ The free-text box's own three, the twins of the three above. 0x7215 opens
+# it, 0x7216 brings back what was typed, and the answer is either 0x7217 --
+# which echoes the string rather than acknowledging it -- or 0x7218, whose only
+# reason is 禁止語. 0x7224 arrives unasked, the way 0x7223 does.
+#
+# ⚠️⚠️ 0x7215 is the message round 37 crashed the client with (`page fault on
+# read access to 00000018 at 0052DF77`), by sending it in place of 0x7213 while
+# the client was stopped on an INPUT_SELECT. That is not evidence about this
+# message; it is evidence that the two are not interchangeable. Sent when the
+# client is stopped on an INPUT_STRING it is the one it is waiting for.
+MSG_SV_NOTIFY_SCRIPT_COMMAND_INPUT = 0x7215
+MSG_CL_REQUEST_SCRIPT_COMMAND_INPUT = 0x7216
+MSG_SV_OK_SCRIPT_COMMAND_INPUT = 0x7217
+MSG_SV_NG_SCRIPT_COMMAND_INPUT = 0x7218
+MSG_CL_NOTIFY_SCRIPT_COMMAND_INPUT_DEFAULT = 0x7224
+
 # ⭐ What lets the client go again. A 0x721c Begin is a full stop, and answering
 # what the command asked for is not enough to end it: after 0x7214 came back the
 # client sat on the box doing nothing but heartbeats until this went out with
@@ -323,6 +339,32 @@ OP_JS = 0x9085
 # stops dead on it. The export carries its prompt and its options
 # along in the JSON, so this end can name what it is answering.
 OP_INPUT_SELECT = 0x7000
+
+# ⭐ The free-text box, and the third command that stops the client dead. Same
+# bracket as INPUT_SELECT -- a 0x721c Begin, an answer, a 0x721d to release --
+# but what comes back is a string the player typed rather than a line number,
+# and this end has to say whether it may be kept.
+#
+# ⚠️ It is not a rarity: 21 of the game's 683 scenarios reach one, across eight
+# files, and four of those eight are ドラマイベント this server already serves.
+# The boxes ask for the sort of thing a player types in free text -- 「パート
+# ナーの趣味は？（８字以内）」, 「バンド名を決めよう！（10字以内）」 -- and until
+# round 245 every one of them left the client waiting forever.
+#
+# ⚠️⚠️ The prompt, the length limit and the timer are all in the INSTRUCTION,
+# not on the wire: the client draws the box out of its own copy of the script.
+# So this end never sees what was asked, only what came back.
+OP_INPUT_STRING = 0x7001
+# Two more of the same family that no scenario in this build uses (0 sites in
+# 683). Named so that a Begin carrying one is recognised rather than logged as
+# an unknown; they are answered exactly like OP_INPUT_STRING, which is what the
+# shared name in their own opcode table says they are.
+OP_INPUT_STRING_PAGE = 0x7002
+OP_INPUT_STRING_LOVE = 0x7003
+
+#: Every op that opens a text box, i.e. every op MSG_SV_NOTIFY_SCRIPT_COMMAND_INPUT
+#: is the answer to.
+OP_INPUT_STRING_ALL = (OP_INPUT_STRING, OP_INPUT_STRING_PAGE, OP_INPUT_STRING_LOVE)
 
 # The other command that stops the client dead, and the one that makes a
 # ドラマイベント playable at all. It carries a count -- un111 asks for 0x32
@@ -950,6 +992,66 @@ def select_params(select: int, timer_count: int) -> bytes:
 def command_end_params(wire_ip: int, op: int) -> bytes:
     """A MsgSvNotifyScriptCommandEnd body: the Begin's own {ip, op}, echoed."""
     return struct.pack(">IH", wire_ip, op)
+
+
+def input_params(timer_count: int) -> bytes:
+    """A MsgSvNotifyScriptCommandInput body: u32 dummy, i64 timerCount.
+
+    ⭐ The same two reads as MsgSvQueryScriptCommandSelect, in the same order
+    and at the same widths -- which is the trap script.py's twins note is
+    about, and also why nothing new had to be measured to build one.
+
+    ⚠️ The first field is called `dummy` by the client itself, in the debug
+    line the message prints of its own body. It goes out zero: a field whose
+    own name says it is not read has no value this end could choose better.
+    """
+    return struct.pack(">IQ", 0, timer_count)
+
+
+def input_ok_params(text: bytes) -> bytes:
+    """A MsgSvOkScriptCommandInput body: u16 length, then that many bytes.
+
+    ⭐⭐ It carries the STRING back, not an acknowledgement -- the accept and
+    the refusal have different shapes, and this one has exactly the shape of
+    the request. A drama is played by two, and what one player types has to
+    reach the other's screen from somewhere; this is the only message in the
+    family that could carry it.
+
+    ⚠️ NUL-terminated and counted with the terminator in, which is how every
+    counted string on this wire is written (see groups.info_params).
+    """
+    body = text.split(b"\x00")[0] + b"\x00"
+    return struct.pack(">H", len(body)) + body
+
+
+def input_ng_params(timer_count: int, reason: int) -> bytes:
+    """A MsgSvNgScriptCommandInput body: i64 timerCount, then i8 reason.
+
+    ⚠️⚠️ The timer comes FIRST and the reason last, which is the opposite of
+    every other Ng in this server -- those are a bare reason byte. Read off the
+    client's deserialiser, in the order it reads them, and its own debug line
+    prints the pair the same way round.
+
+    ⭐ The timer is sent again because the box stays up: a refusal is not the
+    end of the command, it is "type something else", and the client is still
+    stopped on the same Begin afterwards.
+    """
+    return struct.pack(">Qb", timer_count, reason)
+
+
+def input_text(params: bytes) -> bytes:
+    """What a MsgClRequestScriptCommandInput carries: u16 count, then bytes.
+
+    The terminator is inside the count and comes out with the string, the same
+    convention every counted string on this wire keeps. Short or truncated
+    bodies answer b"" rather than raising, for the reason groups.read_counted
+    gives: a malformed message is a refusal to compose, not a connection to
+    drop.
+    """
+    if len(params) < 2:
+        return b""
+    length = struct.unpack_from(">H", params, 0)[0]
+    return params[2:2 + length]
 
 
 def variable_entry(category: int, number: int, value) -> bytes:

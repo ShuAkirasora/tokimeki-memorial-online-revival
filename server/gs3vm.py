@@ -223,6 +223,26 @@ OP_RESULT_MULTI_PLAYER_EVENT = 0x9200
 # play never ends (a 20-follower sweep over the scripts).
 OP_INPUT_SELECT = 0x7000
 
+# ⭐ The free-text box, and its two unused twins. The client stops on one the
+# same way it stops on INPUT_SELECT -- a 0x721c Begin, and it sits there -- so
+# a walk that steps over an unreported one has gone somewhere the client did
+# not, which is the only thing STOPS is for.
+#
+# ⚠️⚠️ **What comes out of one is not readable here.** The client's own debug
+# line for the answer prints 「選択肢番号：%1% = %2%」: the typed string is
+# matched against a list of answers the .ssb carries beside the prompt, and the
+# script gets the NUMBER of the one that matched. Two things this end has not
+# got are needed to reproduce it -- the answer list is not in the export, and
+# the operand does not say where the number lands (`+2` decodes to the same
+# register in all 21 sites in the game, with only a 役柄 bit varying, so it is
+# a fixed slot rather than a destination this end can read off). ⇒ `Follower`
+# stands down at one rather than walking on with a register it filled in by
+# guessing; see `typed`.
+OP_INPUT_STRING = 0x7001
+OP_INPUT_STRING_PAGE = 0x7002
+OP_INPUT_STRING_LOVE = 0x7003
+INPUT_STRING_OPS = (OP_INPUT_STRING, OP_INPUT_STRING_PAGE, OP_INPUT_STRING_LOVE)
+
 # ⭐⭐ The three commands that make a 日常会話's setting: which background is
 # loaded, which ambient loop plays over it, and the fade-in. They are the whole
 # of what a 進行度 switch's taken road contains, which is why `_scenery_road`
@@ -1164,7 +1184,10 @@ class Machine:
 # the other three are here on: the client sends a 0x721c Begin for it and sits
 # there until the server answers (measured round 233, un081 ip=23606). So a walk
 # that steps over an unreported one has gone somewhere the client did not.
-STOPS = {OP_END, OP_INPUT_SELECT, OP_SYNC_VARIABLE, OP_RESULT_MULTI_PLAYER_EVENT}
+# ⭐ The three INPUT_STRING ops join them as of round 245, on the same evidence:
+# the client sends a 0x721c Begin for one and waits (see OP_INPUT_STRING).
+STOPS = ({OP_END, OP_INPUT_SELECT, OP_SYNC_VARIABLE, OP_RESULT_MULTI_PLAYER_EVENT}
+         | set(INPUT_STRING_OPS))
 
 
 class Follower(Machine):
@@ -1505,6 +1528,30 @@ class Follower(Machine):
         self.registers[(CAT_SELECT, self.actor)] = option
         self.pos += 1
         return None
+
+    def typed(self) -> str | None:
+        """A free-text box was answered: this follower stops here.
+
+        ⚠️⚠️ **Standing down, not stepping over.** What the script gets out of
+        one of these is the number of whichever answer the typed string matched
+        (see OP_INPUT_STRING), and this end has neither the answer list nor a
+        readable destination for the number. Walking on would leave a register
+        holding the zero DECL_VARIABLE gave it, and a later OP_BR would then be
+        answered **confidently and wrongly** -- which is worse than not being
+        answered, because the standing "no" is a road the caller already knows
+        how to take.
+
+        ⭐ So it degrades to exactly the behaviour of a server with no export
+        at all: every choice mask goes out with all bits set and every branch
+        falls through. `un111` loses its shadow at the first of its twelve
+        boxes, and that is the honest price until the answer lists are exported.
+        """
+        if self.lost:
+            return self.lost
+        if self.script.code[self.pos][1] not in INPUT_STRING_OPS:
+            return self._lose("typed text came back but this end is not on a box")
+        return self._lose("a text box was answered; the number the script gets "
+                          "out of it is not computable here")
 
     def describe(self) -> str:
         """One line for the log: what this shadow has and has not got."""

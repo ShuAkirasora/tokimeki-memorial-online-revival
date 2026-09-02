@@ -62,9 +62,13 @@ people's names is not this repository's to publish; a set of opaque values is.
 
 ⚠️ This does not generalise into a trick for shipping other lists. It works here
 because the rule compares WHOLE STRINGS -- hash the input, look it up, done. A
-rule that has to ask whether some substring occurs, which is what a chat word
-filter is, cannot be built out of hashes at all. So nothing follows from this
-file about any other table.
+rule that has to ask whether some substring occurs cannot be built out of hashes
+at all. So nothing follows from this file about any other table.
+
+⭐ The 禁止用語 filter is exactly that other kind, and it is why the sentence
+above is a limit rather than an aside: ngwords.py ships the words themselves,
+because a digest cannot answer "does this contain one of them". Two rules, two
+tables, two shapes -- and a 氏名 that is on neither list still has to pass both.
 
 An operator may put a second file at `runtime/reserved_names.json` to reserve
 names of their own. It is read the same way and merged on top, and it may be

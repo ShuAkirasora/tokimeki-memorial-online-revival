@@ -105,6 +105,7 @@ import item
 import konami_id
 import multipurpose
 import naming
+import ngwords
 from characters import CharacterStore
 
 # The two fixed-length fields of MsgClRequestLoginServerLogin, in the order the
@@ -240,6 +241,14 @@ class AccountStore:
         self.reserved = naming.ReservedNames(
             root / "reference" / naming.RESERVED_FILE,
             root / "runtime" / naming.RESERVED_FILE,
+        )
+        # ⭐ Beside it and for the same reason: 禁止用語 is one dictionary for
+        # the whole server, and the two places that ask about it -- a script's
+        # text box and a group's name -- are in different subsystems. See
+        # ngwords.py.
+        self.ngwords = ngwords.NgWords(
+            root / "reference" / ngwords.NGWORDS_FILE,
+            root / "runtime" / ngwords.NGWORDS_FILE,
         )
         self._seed_codes()
         if adopt_code is not None:

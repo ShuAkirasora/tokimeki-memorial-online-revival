@@ -99,6 +99,7 @@ import mapgraph
 import mps_cipher
 import multipurpose
 import naming
+import ngwords
 import options
 import posts
 import quiz
@@ -3352,6 +3353,8 @@ class MpsServer:
                 return self._player_wait(session, seen, wire_ip, op, local)
             if op == script.OP_RESULT_MULTI_PLAYER_EVENT:
                 return self._drama_result(session, seen, op, local)
+            if op in script.OP_INPUT_STRING_ALL:
+                return self._script_input(session, seen, local, op)
             if op != script.OP_INPUT_SELECT:
                 print(f"[{self.tag}] script begin ip={local} op=0x{op:04x} "
                       f"— 応答未実装、待たせたまま")
@@ -3388,6 +3391,18 @@ class MpsServer:
             return self._answer(session, seen,
                                 script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
                                 script.command_end_params(begun_ip, begun_op))
+        if msg_type == script.MSG_CL_REQUEST_SCRIPT_COMMAND_INPUT:
+            # ⭐ What the player typed into a free-text box, and the one place
+            # in the whole 0x72xx family where this end judges content rather
+            # than routing it. The client cannot do the judging: it never loads
+            # the 禁止用語 dictionary (see ngwords.py).
+            return self._script_input_result(session, seen, params)
+        if msg_type == script.MSG_CL_NOTIFY_SCRIPT_COMMAND_INPUT_DEFAULT:
+            # Arrives unasked, the way 0x7223 does for the choice box —
+            # presumably as the field is edited. Logged only, same reason.
+            typed = script.input_text(params)
+            print(f"[{self.tag}] script input default={typed!r}")
+            return None
         if msg_type == script.MSG_CL_NOTIFY_SCRIPT_COMMAND_SELECT_DEFAULT:
             # Arrives unasked, presumably as the highlight moves. Logged only:
             # answering something the client did not stop for is how rounds
@@ -3627,6 +3642,83 @@ class MpsServer:
             else:
                 self._push(other, reply)
         return out
+
+    def _script_input(self, session: "_Session", seen: int,
+                      local_ip: int, op: int) -> bytes:
+        """Open the free-text box the client is stopped on (0x7215).
+
+        ⭐ 21 of the game's 683 scenarios reach one and four of the eight files
+        holding them are ドラマイベント this server serves, so until round 245
+        those four had a point past which the client waited forever -- the
+        stop was logged as 「応答未実装、待たせたまま」 and that was the end of
+        the play.
+
+        ⚠️ Nothing about the box is decided here. The prompt, the character
+        limit and the answers are all in the instruction, which the client has
+        its own copy of; what goes out is only "the box is yours, and here is
+        how long you have". The one judgement this end makes about a text box
+        is on the way back -- see _script_input_result.
+
+        ⚠️⚠️ The shadow is walked to the stop and then stood down: the number a
+        script gets out of a text box is not computable here (gs3vm.typed), and
+        a shadow that walked on would answer later branches out of a register
+        it had filled in by guessing.
+        """
+        shadow = self._shadow_at(session, local_ip, op)
+        if shadow is not None:
+            print(f"[{self.tag}] vm at 入力ボックス ip={local_ip}")
+        print(f"[{self.tag}] 入力ボックス ip={local_ip} op=0x{op:04x}"
+              f"（文面は台本にしかない）")
+        return self._answer(session, seen,
+                            script.MSG_SV_NOTIFY_SCRIPT_COMMAND_INPUT,
+                            script.input_params(script.DEFAULT_SELECT_TIMER))
+
+    def _script_input_result(self, session: "_Session", seen: int,
+                             params: bytes) -> "bytes | None":
+        """What the player typed (0x7216): keep it, or refuse it as 禁止語.
+
+        ⭐⭐ This is the whole reason the 禁止用語 dictionary is on this side of
+        the wire. The client never loads it, and 0x7218's only reason is
+        「入力された文字列に禁止語が含まれています。」 -- a sentence it is
+        holding for somebody else to select. See ngwords.py.
+
+        ⚠️ A refusal does NOT release the client. The box stays up and the
+        player types again, so `begun` is deliberately left where it is; only
+        the accept goes on to the closing bracket. That is also why 0x7218
+        carries the timer again.
+
+        ⭐ The accept echoes the string rather than acknowledging it. In a
+        ドラマパーティ what one member types has to reach the other's screen,
+        and 0x7217 is the only message in the family shaped to carry it.
+        """
+        typed = script.input_text(params)
+        shown = typed.split(b"\x00")[0]
+        hit = self.accounts.ngwords.hit_bytes(shown)
+        if hit is not None:
+            print(f"[{self.tag}] ⚠️ 入力に禁止語「{hit}」 -> "
+                  f"NgScriptCommandInput reason={ngwords.SCRIPT_INPUT_REASON}")
+            return self._answer(
+                session, seen, script.MSG_SV_NG_SCRIPT_COMMAND_INPUT,
+                script.input_ng_params(script.DEFAULT_SELECT_TIMER,
+                                       ngwords.SCRIPT_INPUT_REASON))
+        text = shown.decode("cp932", "replace")
+        print(f"[{self.tag}] ⭐ 入力された文字列「{text}」")
+        if session.script.shadow is not None:
+            why = session.script.shadow.typed()
+            if why:
+                print(f"[{self.tag}] vm 影子ここまで: {why}")
+        reply = self._answer(session, seen, script.MSG_SV_OK_SCRIPT_COMMAND_INPUT,
+                             script.input_ok_params(shown))
+        # …and then the same closing bracket the choice box needs. Answering
+        # what the command asked for does not end it.
+        if session.script.begun is None:
+            print(f"[{self.tag}] 入力が届いたが Begin を覚えていない")
+            return reply
+        begun_ip, begun_op = session.script.begun
+        session.script.begun = None
+        return reply + self._answer(
+            session, seen, script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
+            script.command_end_params(begun_ip, begun_op))
 
     def _script_select(self, session: "_Session", seen: int, local_ip: int) -> bytes:
         """Answer a stopped INPUT_SELECT with MsgSvQueryScriptCommandSelect.

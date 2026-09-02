@@ -766,8 +766,8 @@ puts them on the wire, so those names are unavailable no matter what the server 
 
 ## Reference data
 
-`reference/` holds nine tables of integers, and each is something this server has to know in
-order to decide something.
+`reference/` holds ten tables, and each is something this server has to know in
+order to decide something. All but one are integers and table keys.
 
 **`mapgraph.json`** — grid size, collision and doorways for the 78 maps. Without it the map
 graph is empty, the log says `warps go unchecked`, and moving between maps stops working.
@@ -848,6 +848,17 @@ own numbering and it looks the `.ssb` up in its own copy; this end only has to n
 carries the file stems, which are identifiers rather than content, and no title, no synopsis
 and no cast names.
 
+**`ngwords.json`** — 25 KiB, and the one table here that is words rather than numbers: the
+game's own 禁止用語 dictionary, 1355 banned and 85 exemptions. Two places in the game refuse
+text for containing a banned word — a scenario's free-text box and a group's name — and the
+sentences for both are in the client while the dictionary is not: nothing in the client ever
+loads this file, so the filter is the server's to run or not to exist. The exemptions have to
+come with it, because the rule is a substring search and several innocent words contain a
+banned one: 「アホウドリ」 (albatross) contains 「アホウ」, and a ban list on its own refuses
+albatrosses. `server/ngwords.py` documents how the comparison is done and what the table
+itself says about it. Yours can extend it: `runtime/ngwords.json`, same shape, merged on top.
+Without the file the log says `no word list; 禁止用語 is not enforced` and nothing is refused.
+
 **Not every table is a file.** A few are small enough to live in the module that reads them
 instead: the week's timetable and which abilities each subject moves in `server/curriculum.py`,
 the ranges of item keys in `server/item.py`, and the five rows of the school store's barter
@@ -856,8 +867,8 @@ the same nothing — numbers and keys, with no name, no description and no wordi
 them. They are literals rather than files because a handful of integers each is not worth a
 file, not because they are a different kind of thing.
 
-Three of them take a second file. `reserved_names.json`, `clubbattle.json` and
-`drama_events.json` are each merged with a file of the same shape at the same name under
+Four of them take a second file. `reserved_names.json`, `ngwords.json`, `clubbattle.json`
+and `drama_events.json` are each merged with a file of the same shape at the same name under
 `runtime/`, if you put one there — row by row, so yours holds only what you changed and a row
 you did not mention keeps the shipped value. That is what makes them tunable without editing
 a file the next pull replaces; the shipped ones are generated and are not meant to be
@@ -974,6 +985,7 @@ the game's content, it came from your copy, and it stays on your machine.
 | every conversation credits the same 12 intimacy, whichever one played and whichever answer | `reference/intimacy.json` missing |
 | `no club tables`, and 練習 offers no opponents | `reference/clubbattle.json` missing |
 | every 登場人物 button on the party screen reads 「入れません」, and `/de` lists nothing | `reference/drama_events.json` missing |
+| `no word list; 禁止用語 is not enforced`, and a scenario's text box accepts anything | `reference/ngwords.json` missing |
 | a scene plays on a black screen, or never changes its backdrop | that script has no export under `runtime/scripts/`, so every background branch falls through; see [Exporting the scripts](#exporting-the-scripts) |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`
