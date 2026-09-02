@@ -6,14 +6,15 @@ Licensed under the Apache License, Version 2.0. See the LICENSE file.
 This is an independent implementation of a network protocol, produced by
 analysing how an existing client program communicates, for the purpose of
 interoperability. It contains no code, artwork, audio or text taken from
-KONAMI's software. It does contain small tables of integers -- branch
-targets, answer keys and similar rule values -- read mechanically out of
-the client's data files, because a server cannot arbitrate this protocol
-without them. They carry no question, no answer text, no line of
-dialogue, and no other text or imagery, and none is of any use without a
-lawfully obtained copy of the game. Message names, map names and
-structure offsets appear here because they are the identifiers the
-protocol itself uses.
+KONAMI's software. It does contain tables of integers read mechanically
+out of the client's data files, because a server cannot arbitrate this
+protocol without them: branch targets, answer keys, the values a club
+match is fought by, and the keys and gates a drama event is entered
+through. They carry no question, no answer text, no line of dialogue, no
+title, no character name, and no other text or imagery, and none is of
+any use without a lawfully obtained copy of the game. Message names, map
+names and structure offsets appear here because they are the identifiers
+the protocol itself uses.
 
 "Tokimeki Memorial" is a trademark of KONAMI. This project is not
 affiliated with, endorsed by, or connected to KONAMI, and distributes no

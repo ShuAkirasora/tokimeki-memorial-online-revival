@@ -1,0 +1,379 @@
+{
+ "events": [
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 0,
+   "index": 7,
+   "ssb": "un007.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 0,
+   "index": 9,
+   "ssb": "un009.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 1,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": 1,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 0,
+   "index": 10,
+   "ssb": "un010.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 625,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": 150,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 1,
+   "index": 10,
+   "ssb": "un030.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 1,
+   "index": 12,
+   "ssb": "un032.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 474,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": 474,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 2,
+   "index": 3,
+   "ssb": "un043.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 2,
+   "index": 8,
+   "ssb": "un048.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 602,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": 473,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 3,
+   "index": 6,
+   "ssb": "un066.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 4,
+   "index": 1,
+   "ssb": "un081.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 4,
+   "index": 15,
+   "ssb": "un095.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 316,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": 35,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 5,
+   "index": 8,
+   "ssb": "un108.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 5,
+   "index": 11,
+   "ssb": "un111.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 5,
+   "index": 17,
+   "ssb": "un117.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 6,
+   "index": 7,
+   "ssb": "un127.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 6,
+   "index": 8,
+   "ssb": "un128.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 155,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": 155,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 6,
+   "index": 9,
+   "ssb": "un129.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 615,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": 615,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 6,
+   "index": 10,
+   "ssb": "un130.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 2,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": 2,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 7,
+   "index": 6,
+   "ssb": "un146.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 7,
+   "index": 11,
+   "ssb": "un151.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": null,
+     "sex": 0,
+     "slot": 1
+    }
+   ],
+   "genre": 9,
+   "index": 1,
+   "ssb": "un181.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 462,
+     "sex": 0,
+     "slot": 0
+    },
+    {
+     "keyword": 462,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 9,
+   "index": 4,
+   "ssb": "un184.ssb"
+  },
+  {
+   "cast": [
+    {
+     "keyword": 338,
+     "sex": 1,
+     "slot": 0
+    },
+    {
+     "keyword": 338,
+     "sex": 1,
+     "slot": 1
+    }
+   ],
+   "genre": 9,
+   "index": 5,
+   "ssb": "un185.ssb"
+  }
+ ],
+ "note": "Which (genre, index) keys MsgSvNotifyDramaEventList may carry, which .ssb each one names, and the cast slots each drama has. Per slot: its sex gate and the keyword it requires, which is all flgSelectActor is computed from -- see drama.selectable_actors. Keys, file stems and integers only: no titles, no synopses, no instructions. An operator may put a file of the same shape at runtime/drama_events.json; entries there win on the key and new keys are added."
+}

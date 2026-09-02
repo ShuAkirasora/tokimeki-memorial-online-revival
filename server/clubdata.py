@@ -1,9 +1,9 @@
-"""The club tables a 練習 needs, read out of a local feed rather than kept.
+"""The club tables a 練習 needs, read out of a table file rather than kept inline.
 
-`runtime/clubbattle.json` is written by a tool in the private tree out of the
-client's own data files, and -- like `runtime/drama_events.json` and everything
-else under `runtime/` -- it is a LOCAL FEED that reaches no repository. Nothing
-in here carries a number of its own.
+`reference/clubbattle.json` ships with this server. Nothing in this module
+carries a number of its own; every rule value a club battle is fought by is in
+that file, and an operator may override any row or add rows of their own at
+`runtime/clubbattle.json` (or point `TMO_CLUB_DATA` somewhere else).
 
     keyword    261 rows: attack, defence, the 習熟度 full scale, the 能力属性
                a play raises and the クラブの素 a play can yield
@@ -20,16 +20,22 @@ in here carries a number of its own.
                which round 226 added because 奥義合成 now consumes it
     npcdeck    200 rows: which キーワード and 部活奥義 an opponent brings
 
-⚠️ WHY THE FEED AND NOT A LITERAL IN HERE. Most of these are large tables of
-the game's own numbers rather than the handful of rule values this tree carries
-inline, and whether that changes what this repository is has not been decided.
-Reading them from a file that is never committed keeps the decision open and
-keeps the fight runnable in the meantime.
+⚠️ WHY A FILE AND NOT LITERALS IN HERE. Two reasons, and the second is the one
+that decides it. These are far too many numbers to read as code -- 1528 rows
+against the handful of constants the rest of this tree keeps inline. And they
+are the operator's to change: what a keyword hits for and who stands on which
+rung are the levers a running server is tuned with, and a lever belongs in a
+file that survives a pull rather than in a diff against the source.
 
-⚠️ THE SERVER RUNS WITHOUT IT. Every accessor answers None or an empty result
-when the file is absent, and the one caller that cannot proceed without a
-number says so in the log instead of substituting one. A missing feed makes
-練習 unavailable; it does not make the server unstartable, and it does not make
+⚠️ WHAT IS NOT IN IT. The opponents' names. Nothing in `server/` reads them --
+they were only ever printed in one log line -- so they are not carried, and the
+log names an opponent by its key. The shipped file is generated; edit
+`runtime/clubbattle.json` instead, which is merged over it row by row.
+
+⚠️ THE SERVER RUNS WITHOUT EITHER FILE. Every accessor answers None or an empty
+result when there are no rows, and the one caller that cannot proceed without a
+number says so in the log instead of substituting one. No tables makes 練習
+unavailable; it does not make the server unstartable, and it does not make
 自主トレ (which needs only the keyword rows) any worse than it was.
 """
 from __future__ import annotations
@@ -38,13 +44,14 @@ import json
 import os
 from pathlib import Path
 
-#: `runtime/` next to `server/`, the same anchor every other local feed uses.
-#: ⚠️ Off `__file__` rather than the working directory: run_all.py is started
-#: from several places and a relative path finds the file from only one of them.
-FEED = Path(
-    os.environ.get("TMO_CLUB_DATA")
-    or (Path(__file__).resolve().parent.parent / "runtime" / "clubbattle.json")
-)
+#: The shipped tables, then the operator's own, the same two directories
+#: `reserved_names.json` uses. ⚠️ Off `__file__` rather than the working
+#: directory: run_all.py is started from several places and a relative path
+#: finds the file from only one of them.
+#: ⚠️ Order matters -- the loader lets the later file win row by row.
+_ROOT = Path(__file__).resolve().parent.parent
+SHIPPED = _ROOT / "reference" / "clubbattle.json"
+FEED = Path(os.environ.get("TMO_CLUB_DATA") or (_ROOT / "runtime" / "clubbattle.json"))
 
 #: Category 7 of the charaId space is `training_npc.bin` -- the client reads
 #: `id >> 16` to pick which table a map object's appearance and right-click
@@ -57,37 +64,63 @@ _DATA: "dict | None" = None
 _LOADED = False
 
 
+#: Every table this module knows, and the order `summary()` prints them in.
+#: ⚠️ Every table, not a chosen few -- see summary().
+TABLES = ("keyword", "npc", "ladder", "training", "clubskill", "skillbook",
+          "npcdeck")
+
+
+def _read(path: Path) -> "dict | None":
+    """One file, or None. ⚠️ A file that is simply not there is silent: either
+    of the two may be absent legitimately, and only both being absent is worth
+    a line -- which _data says once it knows."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        print(f"[clubdata] {path} unreadable: {exc}")
+        return None
+
+
 def _data() -> dict:
+    """The shipped tables with the operator's merged over them, row by row.
+
+    Row by row rather than table by table so that an operator who wants one
+    opponent slower does not have to carry a copy of all 144 -- their file holds
+    only what they changed, and a row they did not mention keeps the shipped
+    value. A table nobody ships and nobody overrides is simply absent, which is
+    what every accessor's `.get(table, {})` already handles.
+    """
     global _DATA, _LOADED
     if not _LOADED:
         _LOADED = True
-        try:
-            _DATA = json.loads(FEED.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            print(f"[clubdata] no feed at {FEED} -- 練習 is unavailable")
-            _DATA = None
-        except (OSError, ValueError) as exc:
-            print(f"[clubdata] {FEED} unreadable: {exc}")
-            _DATA = None
+        merged: dict = {}
+        for source in (_read(SHIPPED), _read(FEED)):
+            for table in TABLES:
+                rows = (source or {}).get(table)
+                if isinstance(rows, dict):
+                    merged.setdefault(table, {}).update(rows)
+        if not merged:
+            print(f"[clubdata] no tables at {SHIPPED} -- 練習 is unavailable")
+        _DATA = merged or None
     return _DATA or {}
 
 
 def available() -> bool:
-    """Is there a feed at all? The one thing callers branch on."""
+    """Are there any tables at all? The one thing callers branch on."""
     return bool(_data())
 
 
 def summary() -> str:
     data = _data()
     if not data:
-        return f"no club feed ({FEED})"
+        return f"no club tables ({SHIPPED})"
     # ⚠️ Every table, not a chosen few: this line is what a log reader uses to
-    # tell 「the feed is stale」 from 「the feed is missing」, and a table left
+    # tell 「the tables are stale」 from 「they are missing」, and a table left
     # out of it is one that can go missing without anybody noticing.
-    return "club feed: " + " · ".join(
-        f"{name} {len(data.get(name, {}))}"
-        for name in ("keyword", "npc", "ladder", "training", "clubskill",
-                     "skillbook", "npcdeck")
+    return "club tables: " + " · ".join(
+        f"{name} {len(data.get(name, {}))}" for name in TABLES
     )
 
 
@@ -108,7 +141,7 @@ def keyword(keyword_id: int) -> "dict | None":
     ⭐ ``sozai`` is +0x36's eight slots as ``["32:1", …]`` -- the クラブの素 this
     card can yield, all 94 of them inside `item.bin` categories 32-40 with no
     exceptions (2.156 二). ⚠️ Every one of the 261 rows has at least one slot,
-    so an empty list means the feed is old, not that this card yields nothing.
+    so an empty list means the table is old, not that this card yields nothing.
     """
     return _data().get("keyword", {}).get(str(keyword_id))
 

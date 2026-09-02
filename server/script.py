@@ -1382,7 +1382,15 @@ MSG_SV_NG_DRAMA_EVENT_START = 0x5702
 DRAMA_EVENT_MAX = 32
 CHARA_MENU_DRAMA_MAX = 16
 
-DRAMA_EVENTS = Path(__file__).resolve().parent.parent / "runtime" / "drama_events.json"
+#: The shipped table and the operator's optional one, in the two directories
+#: `reserved_names.json` already uses and for the same reason: the shipped file
+#: is generated and must not be hand-edited, so an operator who wants to change
+#: a drama writes their own rather than patching a file the next pull replaces.
+#: ⚠️ Shipped first, operator second — the merge below lets the second win.
+DRAMA_EVENT_FILES = (
+    Path(__file__).resolve().parent.parent / "reference" / "drama_events.json",
+    Path(__file__).resolve().parent.parent / "runtime" / "drama_events.json",
+)
 
 
 def drama_events() -> list[dict]:
@@ -1392,11 +1400,24 @@ def drama_events() -> list[dict]:
     live in the game's `drama_event.bin`, and `server/` does not read the game's
     content. Missing file means "none known", not an error — the keys are only
     needed to *name* an event, and `/de 0:7` works without them.
+
+    Two files, merged on the key: `reference/` ships the 22 this build has, and
+    an operator may override an entry or add one at `runtime/`. Order within a
+    genre is preserved because it is the order the list goes on the wire in, and
+    entries only the operator has go on the end.
     """
-    try:
-        return json.loads(DRAMA_EVENTS.read_text(encoding="utf-8"))["events"]
-    except (OSError, ValueError, KeyError):
-        return []
+    merged: "dict[tuple[int, int], dict]" = {}
+    for path in DRAMA_EVENT_FILES:
+        try:
+            events = json.loads(path.read_text(encoding="utf-8"))["events"]
+        except (OSError, ValueError, KeyError):
+            continue
+        for event in events:
+            try:
+                merged[(int(event["genre"]), int(event["index"]))] = event
+            except (KeyError, TypeError, ValueError):
+                continue
+    return list(merged.values())
 
 
 def drama_event_key(file_name: str) -> "tuple[int, int] | None":

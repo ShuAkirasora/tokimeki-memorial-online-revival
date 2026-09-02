@@ -2305,7 +2305,7 @@ def respond(
         words = rest.split()
         if not words:
             if not known:
-                return Reply(["ドラマ表なし: runtime/drama_events.json が無い"])
+                return Reply(["ドラマ表なし: reference/drama_events.json が無い"])
             names = " ".join(f"{e['genre']}:{e['index']}={e['ssb'][:-4]}" for e in known)
             return Reply([f"{len(known)}件"] + [names[i:i + 90]
                                                 for i in range(0, len(names), 90)][:3])

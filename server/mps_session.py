@@ -5745,11 +5745,11 @@ class MpsServer:
                 return refuse(clubbattle.NPC_START_NO_CLUB, "not in a club")
             if not clubdata.available():
                 # ⚠️ Not a restored refusal for this situation — it is this
-                # server missing its feed, and reason 3 「今の状態では、部活に
+                # server missing its tables, and reason 3 「今の状態では、部活に
                 # 参加することはできません」 is the least wrong of the twelve.
                 # Said plainly in the log so it is not mistaken for a rule.
                 return refuse(clubbattle.NPC_START_BAD_STATE,
-                              "no club feed on this server (not a game rule)")
+                              "no club tables on this server (not a game rule)")
             if self._practice_deck(chara_id) is None:
                 return refuse(clubbattle.NPC_START_NO_DECK, "no 部活用 deck")
             member = store.club(chara_id) if store else None
@@ -5879,7 +5879,7 @@ class MpsServer:
                 # wrong of the five that are used. Said plainly so it is not
                 # mistaken for a rule.
                 return refuse_start(gousei.START_CANNOT_NOW,
-                                    "no club feed on this server (not a rule)")
+                                    "no club tables on this server (not a rule)")
             # ⚠️⚠️ 怪我 IS NOT CHECKED, on purpose and with two witnesses. See
             # stress.after_gousei; the short form is that 0x5302 has no code for
             # it where the 練習 door has one, and p05_09's 体調不良 list names
@@ -6143,9 +6143,11 @@ class MpsServer:
         if deck_id is not None:
             me.deck_id = deck_id
         place = clubdata.training_for_club(club_id)
+        # ⚠️ By key, not by name: the shipped tables do not carry the
+        # opponents' names (nothing else ever read them) and an operator's own
+        # file need not either, so the key is the one label always available.
         roster = " ｜ ".join(
-            f"{k} {clubdata.npc(k)['name']}"
-            f"(体{clubdata.npc(k)['vitality']} 速{clubdata.npc(k)['speed']})"
+            f"{k}(体{clubdata.npc(k)['vitality']} 速{clubdata.npc(k)['speed']})"
             for k in foes
         )
         print(f"[{self.tag}] 練習 対戦レベル{rung} (wire {level}): charaId={chara_id:#x} "

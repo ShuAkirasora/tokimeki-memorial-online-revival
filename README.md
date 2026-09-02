@@ -4,8 +4,8 @@ A from-scratch server for *Tokimeki Memorial ONLINE* (KONAMI, 2006–2007, servi
 written so that a surviving copy of the original client has something to connect to again.
 
 Run it on your own machine, point your own copy of the client at it, and you can log in,
-create a character, go to school, sit through a lesson, and play a club match against
-somebody on a second machine.
+create a character, go to school, sit through a lesson, and play a club match — against
+the practice opponents, or against somebody on a second machine.
 
 <!-- HTML rather than markdown for the width="50%": a markdown table would size its columns
      from the caption text instead. The shots are 800x600, which is what the client draws
@@ -88,8 +88,8 @@ how the client communicates, for the purpose of interoperability: letting an exi
 program reach a server again.
 
 It contains no code, artwork, audio or text taken from KONAMI's software. It does contain
-small tables of integers, read mechanically out of the client's data files, because there
-are decisions this server is asked to make that it cannot make without them. Seven of them
+tables of integers, read mechanically out of the client's data files, because there are
+decisions this server is asked to make that it cannot make without them. Nine of them
 are files under `reference/`; the smaller ones — a week's timetable, a set of key ranges, a
 shop's bills — are written into the modules that read them. See
 [Reference data](#reference-data) for both. Message names, map names and structure offsets
@@ -766,7 +766,7 @@ puts them on the wire, so those names are unavailable no matter what the server 
 
 ## Reference data
 
-`reference/` holds seven tables of integers, and each is something this server has to know in
+`reference/` holds nine tables of integers, and each is something this server has to know in
 order to decide something.
 
 **`mapgraph.json`** — grid size, collision and doorways for the 78 maps. Without it the map
@@ -829,6 +829,25 @@ list names a new character may not be given, and this end is the one that refuse
 what it needs is the ability to answer "is this exact name on the list". A digest answers
 exactly that question and no other, so the file holds no names at all.
 
+**`clubbattle.json`** — 166 KiB, and the largest of these: the rule values a club match is
+fought by. What a keyword hits and blocks for, how much of it a card has to learn before it
+is fully in hand, which of the six abilities it raises and which materials it can yield; the
+144 practice opponents' club, level, vitality, energy, speed and deck; which of them stand at
+each rung of each club's ladder; every club skill's attack power, cost, success rate, its
+three ±% modifiers, its two heals and the ailment it inflicts; and every skill book's recipe.
+None of it crosses the wire — the client sends a card and is told what happened — so a match
+cannot be fought without it. Integers and table keys throughout: it holds no name, not even
+the opponents', because nothing in `server/` reads them. Without it 練習 is unavailable and
+the log says so at startup; 自主トレ, which needs only the keyword rows, still runs.
+
+**`drama_events.json`** — 5 KiB: the 22 `(genre, index)` keys a drama event can be asked for
+by, the `.ssb` each one names, and the cast slots each has. Per slot: the sex it is for and
+the keyword it requires, which together are the whole of `flgSelectActor` — the byte without
+which every 登場人物 button on the party screen reads 「入れません」. The keys are the client's
+own numbering and it looks the `.ssb` up in its own copy; this end only has to name one. It
+carries the file stems, which are identifiers rather than content, and no title, no synopsis
+and no cast names.
+
 **Not every table is a file.** A few are small enough to live in the module that reads them
 instead: the week's timetable and which abilities each subject moves in `server/curriculum.py`,
 the ranges of item keys in `server/item.py`, and the five rows of the school store's barter
@@ -837,11 +856,17 @@ the same nothing — numbers and keys, with no name, no description and no wordi
 them. They are literals rather than files because a handful of integers each is not worth a
 file, not because they are a different kind of thing.
 
+Three of them take a second file. `reserved_names.json`, `clubbattle.json` and
+`drama_events.json` are each merged with a file of the same shape at the same name under
+`runtime/`, if you put one there — row by row, so yours holds only what you changed and a row
+you did not mention keeps the shipped value. That is what makes them tunable without editing
+a file the next pull replaces; the shipped ones are generated and are not meant to be
+hand-edited.
+
 None of them means anything without your own copy of the game. What is deliberately not here
-is the other half of each: script text, choice prompts, the cast, event keys. Those are the
+is the other half of each: script text, choice prompts, the cast, event titles. Those are the
 game's content rather than a rule this server applies, so `/scl` and `/sc <name>` need an
-export you make yourself and say so when there is none, and `/de` cannot name an event without
-its file, though a key given directly as `<genre>:<index>` is still sent.
+export you make yourself and say so when there is none.
 
 There is a second kind of export, for the same reason. `branches.json` answers a branch out
 of a table; `server/gs3vm.py` answers one by running the script's own arithmetic alongside
@@ -875,7 +900,7 @@ the grade it awards is this server's own curve over the running score.
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services themselves; `run_all.py` binds them all in one asyncio loop and `mps_session.py`, the packet layer, is the bulk of it |
 | `reference/` | the tables above |
-| `runtime/` | created on the first run: the log, the certificate, your characters, any script exports you make, and the answers `play.py` remembers |
+| `runtime/` | created on the first run: the log, the certificate, your characters, any script exports you make, the answers `play.py` remembers, and any of the three tables above you choose to override |
 | `screenshots/` | the eight pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
 
@@ -906,6 +931,8 @@ the grade it awards is this server's own curve over the running score.
 | every branch logs `fall-through`, choices do nothing | `reference/branches.json` missing |
 | `no question bank, no questions`, a lesson asks nothing | `reference/quizkeys.json` missing |
 | every conversation credits the same 12 intimacy, whichever one played and whichever answer | `reference/intimacy.json` missing |
+| `no club tables`, and 練習 offers no opponents | `reference/clubbattle.json` missing |
+| every 登場人物 button on the party screen reads 「入れません」, and `/de` lists nothing | `reference/drama_events.json` missing |
 | a scene plays on a black screen, or never changes its backdrop | that script has no export under `runtime/scripts/`, so every background branch falls through |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`

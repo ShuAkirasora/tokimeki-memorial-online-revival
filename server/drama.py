@@ -109,7 +109,7 @@ MSG_SV_ERROR_START = 0xE01C
 
 # Cast slots per drama, from `drama_event.bin`'s four (sex, keyword) pairs.
 # All 22 events in this build fill the first two and leave slots 2 and 3 empty,
-# which is why `runtime/drama_events.json` carries the per-event list rather
+# which is why `reference/drama_events.json` carries the per-event list rather
 # than this end assuming a pair.
 CAST_MAX = 4
 #: How many parties MsgSvNotifyDramaPartyList's reader has room for: entries of
