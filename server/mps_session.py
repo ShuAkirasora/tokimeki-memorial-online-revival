@@ -3877,8 +3877,23 @@ class MpsServer:
         not a failure — but it is also the only way this can quietly stop
         working, so the log says which of the two produced the number every
         time, rather than only when something looks wrong.
+
+        ⭐⭐⭐ **A box addressed to the other 役柄 is released, not asked.** A
+        scene written for two puts both players' boxes in one stream, and a
+        client that walks onto one of the other's reports the Begin like any
+        other stop -- it has no idea the box is not its own. Round 251 watched
+        what happens when this end answers that Begin with a question: on the
+        real client's screen `un111`'s ip=193 came up carrying **the previous
+        box's three lines**, and the click went into `E0`, overwriting the
+        answer the player had given the box before it. So the mask at
+        `OP_INPUT_SELECT` `+4` decides whether this is a question at all;
+        when it is not, the release goes out and the play walks on.
         """
         shadow = self._shadow_at(session, local_ip, gs3vm.OP_INPUT_SELECT)
+        asked = shadow.select_actors() if shadow is not None else None
+        if asked is not None and not asked >> shadow.actor & 1:
+            return self._script_select_others(session, seen, local_ip,
+                                              shadow, asked)
         computed = None
         if shadow is not None:
             mask, unknown, options = shadow.select()
@@ -3904,6 +3919,32 @@ class MpsServer:
         return self._answer(session, seen,
                             script.MSG_SV_QUERY_SCRIPT_COMMAND_SELECT,
                             script.select_params(select, timer))
+
+    def _script_select_others(self, session: "_Session", seen: int,
+                              local_ip: int, shadow, asked: int) -> bytes:
+        """Let a player walk past a choice box that is not addressed to it.
+
+        ⚠️ The release carries the Begin the client is sitting on, the same way
+        `_player_release` does: what the client matches is the ip, and this one
+        is nobody's rendezvous, so only this member is let go.
+
+        ⛔️ The shadow is stepped by hand (`passed_box`) and not by `flowed`:
+        `_step` refuses an `OP_INPUT_SELECT` on purpose, because a machine
+        running by itself has nobody to ask.
+        """
+        entry = session.script.script.selects.get(local_ip)
+        shown = (" / ".join(entry["options"])) if entry else "（文面は台本にしかない）"
+        print(f"[{self.tag}] 選択肢 ip={local_ip} は 役柄 "
+              f"{','.join(str(n) for n in range(8) if asked >> n & 1)} 宛て"
+              f"（{asked:#x}）— 役柄 {shadow.actor} には出さずに解除: {shown}")
+        shadow.passed_box()
+        begun = session.script.begun
+        session.script.begun = None
+        if begun is None:
+            return b""
+        return self._answer(session, seen,
+                            script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
+                            script.command_end_params(*begun))
 
     def _career_depart(self, session: "_Session") -> None:
         """Close the 登校 span this session opened, if it opened one.

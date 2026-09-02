@@ -1647,6 +1647,38 @@ class Follower(Machine):
         self.selects.append((ip, mask, unknown, options))
         return mask, unknown, options
 
+    def select_actors(self) -> int | None:
+        """Which 役柄 the choice box the client is stopped on is addressed to.
+
+        `OP_INPUT_SELECT`'s `+4`, bit n for 役柄 n -- the field read in round
+        236 to settle where an answer lands. None when this end is not on a
+        box, which is the caller's cue to leave the box alone.
+
+        ⚠️ This is not `select`'s mask: that one is over the box's *options*
+        and changes every time the box is redrawn, while this one is over the
+        *players* and is a constant of the instruction.
+        """
+        if self.lost or self.script.code[self.pos][1] != OP_INPUT_SELECT:
+            return None
+        return int.from_bytes(self.script.code[self.pos][2][2:4], "little")
+
+    def passed_box(self) -> str | None:
+        """Step over a choice box without an answer: it was somebody else's.
+
+        The other-役柄 counterpart of `chose`, and the same single step -- what
+        it leaves out is the register write, because nobody clicked anything
+        here. `_someone_elses_box` does this for a free-text box without ever
+        being told, since a client that draws nothing reports nothing; a choice
+        box is reported by everyone who walks onto it, so this end is told and
+        steps on demand.
+        """
+        if self.lost:
+            return self.lost
+        if self.script.code[self.pos][1] != OP_INPUT_SELECT:
+            return self._lose("asked to step over a box this end is not on")
+        self.pos += 1
+        return None
+
     def chose(self, option: int) -> str | None:
         """The player clicked a line: it lands in `E<this player's 役柄>`.
 
