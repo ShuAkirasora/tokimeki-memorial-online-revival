@@ -3657,18 +3657,26 @@ class MpsServer:
         limit and the answers are all in the instruction, which the client has
         its own copy of; what goes out is only "the box is yours, and here is
         how long you have". The one judgement this end makes about a text box
-        is on the way back -- see _script_input_result.
+        is on the way back -- see _script_input_result. ⭐ They are in the
+        export too as of round 248, so the log can at least say what the player
+        is being asked and where the answer is going to land.
 
-        ⚠️⚠️ The shadow is walked to the stop and then stood down: the number a
-        script gets out of a text box is not computable here (gs3vm.typed), and
-        a shadow that walked on would answer later branches out of a register
-        it had filled in by guessing.
+        ⭐ The shadow walks to the stop and waits there for the line itself
+        (`gs3vm.typed`), which is the whole of what a box gives a script: the
+        register it fills is named in the instruction, and round 248 exported
+        it.
         """
         shadow = self._shadow_at(session, local_ip, op)
+        box = (shadow.script.inputs.get(local_ip) if shadow is not None else None)
         if shadow is not None:
             print(f"[{self.tag}] vm at 入力ボックス ip={local_ip}")
-        print(f"[{self.tag}] 入力ボックス ip={local_ip} op=0x{op:04x}"
-              f"（文面は台本にしかない）")
+        if box is None:
+            print(f"[{self.tag}] 入力ボックス ip={local_ip} op=0x{op:04x}"
+                  f"（文面は台本にしかない）")
+        else:
+            print(f"[{self.tag}] 入力ボックス ip={local_ip} op=0x{op:04x} -> "
+                  f"{gs3vm.register_name(box['register'])} "
+                  f"{box['characters']}字以内 · 例：" + "／".join(box["answers"]))
         return self._answer(session, seen,
                             script.MSG_SV_NOTIFY_SCRIPT_COMMAND_INPUT,
                             script.input_params(script.DEFAULT_SELECT_TIMER))
@@ -3704,7 +3712,7 @@ class MpsServer:
         text = shown.decode("cp932", "replace")
         print(f"[{self.tag}] ⭐ 入力された文字列「{text}」")
         if session.script.shadow is not None:
-            why = session.script.shadow.typed()
+            why = session.script.shadow.typed(text)
             if why:
                 print(f"[{self.tag}] vm 影子ここまで: {why}")
         reply = self._answer(session, seen, script.MSG_SV_OK_SCRIPT_COMMAND_INPUT,

@@ -21,8 +21,9 @@ out of here goes no further than the disk it was written on.
 
 Two files come out per script, because this server reads a script twice over.
 `<name>.json` carries the cast, the instruction stream in a form meant to be
-read by a person, the branch targets and each choice box's own wording; it is
-what `/sc` drives a scene from. `<name>.gs3.json` carries the same stream in
+read by a person, the branch targets, each choice box's own wording and each
+free-text box's answers; it is what `/sc` drives a scene from.
+`<name>.gs3.json` carries the same stream in
 the form the interpreter in `server/gs3vm.py` runs, which is the register
 machine the original server had and the client never did -- the client's own
 instructions for the arithmetic are logging stubs that evaluate nothing. The
@@ -615,6 +616,76 @@ def select_options(b: bytes, pool: dict, a: int) -> tuple[str, list[str]] | None
     return entry[1].decode("cp932", "replace"), out
 
 
+#: The free-text box, and the two twins of it that no scenario uses. Only
+#: 0x7001 carries a list of answers: the client decodes 0x7002's `+12` as a
+#: single pool reference and calls it a default line -- its own debug print
+#: says 「デフォルト文」 where 0x7001's says 「選択肢数」 -- so the two are not
+#: the same command with a flag, and neither twin occurs in the 683 scenarios.
+OP_INPUT_STRING = 0x7001
+OP_INPUT_STRING_PAGE = 0x7002
+OP_INPUT_STRING_LOVE = 0x7003
+
+
+def input_box(b: bytes, sec: dict | None, pool: dict, a: int) -> dict | None:
+    """A free-text box: its prompt, its limits and the answers it accepts.
+
+    Every field is read off the client's own decoder for the command rather
+    than matched against the data: `+2`'s low byte is the time limit in
+    seconds and its top nibble the part whose box this is -- the decoder
+    compares that nibble against the player's own part and puts up nothing when
+    they differ -- `+4` is an ordinary register field shifted left by five with
+    the character limit in the five bits underneath, `+8` is the prompt as a
+    pool reference, and `+12` is `(auxiliary word offset << 12) | count` with
+    the count five bits wide. Each auxiliary entry is one dword and is itself a
+    pool reference: one answer the box accepts.
+
+    ⭐⭐ **The register is the point of exporting this at all.** What the
+    player typed goes into it verbatim, and the scenarios then compare that
+    register -- against a literal of their own (`un122` asks for a surname and
+    follows the box with `S31 = #<城崎>` / `F99 = S1 == S31`) or against the
+    other player's box (`un111` fills S0 with one player's guess at their
+    partner's hobby and S1 with the partner's own answer, then compares the
+    two). The client can do neither: its arithmetic slots are logging stubs, so
+    that comparison only ever ran on a server.
+
+    ⚠️ **The answers are what the box offers, not what the register may hold.**
+    They are suggestions on the client's side and the player is free to type
+    something else -- which is exactly what `un122` is built around, since the
+    surname it is fishing for (城崎) is not one of the two it offers. So they
+    are exported to be read, and nothing decides anything by them.
+
+    None when the prompt's length does not match the pool's own or an answer
+    does not resolve, which is the same check `select_options` makes.
+    """
+    if sec is None:
+        return None
+    head = _u32(b, a + 8)
+    prompt = pool.get(head >> 12)
+    if prompt is None or prompt[0] != (head & 0xFFF):
+        return None
+    listed = _u32(b, a + 12)
+    word, count = listed >> 12, listed & 0x1F
+    answers = []
+    for k in range(count):
+        at = sec["aux"] + 2 * (word + 2 * k)
+        if at + 4 > len(b):
+            return None
+        ref = _u32(b, at)
+        entry = pool.get(ref >> 12)
+        if entry is None or entry[0] != (ref & 0xFFF):
+            return None
+        answers.append((ref, entry[1].decode("cp932", "replace")))
+    limits = _u16(b, a + 4)
+    return {
+        "prompt": prompt[1].decode("cp932", "replace"),
+        "register": reg(limits >> 5),
+        "characters": limits & 0x1F,
+        "seconds": b[a + 2],
+        "actor": _u16(b, a + 2) >> 12,
+        "answers": answers,
+    }
+
+
 def event_result(b: bytes, pool: dict, a: int) -> dict | None:
     """What a multi-player scene awards, or None if it does not check out.
 
@@ -664,6 +735,13 @@ def operand_text(b: bytes, sec: dict | None, pool: dict, a: int,
             return f"<options do not check out> {b[a + 2:a + size].hex(' ')}"
         prompt, options = got
         return f"[{prompt}] " + " / ".join(t.replace("\n", "\\n") for t in options)
+    if op == OP_INPUT_STRING:                           # free-text box
+        got = input_box(b, sec, pool, a)
+        if got is None:
+            return f"<answers do not check out> {b[a + 2:a + size].hex(' ')}"
+        return (f"-> {regname(got['register'])} ({got['characters']} chars, "
+                f"{got['seconds']}s) [{got['prompt']}] "
+                + " / ".join(t.replace("\n", "\\n") for _ref, t in got["answers"]))
     if op == 0x9080:                                    # jump
         return f"-> ip={_u32(b, a + 4) >> 12}"
     if op == 0x9081:                                    # branch
@@ -758,6 +836,21 @@ class Script:
             return None
         return entry[1].decode("cp932", "replace")
 
+    def input_boxes(self) -> dict[int, dict]:
+        """`{byte offset: box}` for every free-text box this script puts up.
+
+        Empty for a GSC file: the original server's own scripts have neither an
+        auxiliary table nor a string pool, and none of them holds one of these.
+        """
+        out = {}
+        for off, op, _name, _args in self.instructions:
+            if op != OP_INPUT_STRING:
+                continue
+            got = input_box(self.b, self.sections, self.pool, self.code + off)
+            if got is not None:
+                out[off] = got
+        return out
+
     def string_literals(self) -> dict[int, str]:
         """`{literal: text}` for every literal moved into a string register.
 
@@ -806,6 +899,16 @@ def vm_doc(script: Script, script_id: int | None) -> dict:
         "sync": {str(off // 2): [list(r) for r in script.sync_registers(off)]
                  for off, op, _n, _a in script.instructions
                  if op == OP_SYNC_VARIABLE},
+        # The one thing a free-text box needs and the stream does not carry:
+        # which register the typed line goes into. It sits in the operand in
+        # the same encoding a data reference uses -- shifted five bits left,
+        # with the character limit underneath -- and the interpreter is given
+        # it already decoded, along with the answers the box offers so that a
+        # log line can say what the player was looking at.
+        "inputs": {str(off // 2): {"register": list(box["register"]),
+                                   "characters": box["characters"],
+                                   "answers": [t for _ref, t in box["answers"]]}
+                   for off, box in script.input_boxes().items()},
         "strings": {str(v): text for v, text in script.string_literals().items()},
     }
 
@@ -830,6 +933,13 @@ def script_doc(script: Script, script_id: int | None) -> dict:
             got = select_options(b, pool, a)
             if got is not None:
                 selects[str(off // 2)] = {"prompt": got[0], "options": got[1]}
+    inputs = {str(off // 2): {"prompt": box["prompt"],
+                              "register": regname(box["register"]),
+                              "characters": box["characters"],
+                              "seconds": box["seconds"],
+                              "actor": box["actor"],
+                              "answers": [t for _ref, t in box["answers"]]}
+              for off, box in script.input_boxes().items()}
     return {
         "file": f"{script.name}.ssb",
         "scriptId": script_id,
@@ -844,6 +954,9 @@ def script_doc(script: Script, script_id: int | None) -> dict:
         "instructions": instructions,
         "branches": branches,
         "selects": selects,
+        # A free-text box is the third thing the client stops to ask about,
+        # and the only one whose wording it does not decide by itself.
+        "inputs": inputs,
     }
 
 

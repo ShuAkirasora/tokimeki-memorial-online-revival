@@ -228,16 +228,20 @@ OP_INPUT_SELECT = 0x7000
 # a walk that steps over an unreported one has gone somewhere the client did
 # not, which is the only thing STOPS is for.
 #
-# ⚠️⚠️ **What comes out of one is not readable here.** The client's own debug
-# line for the answer prints 「選択肢番号：%1% = %2%」: the typed string is
-# matched against a list of answers the .ssb carries beside the prompt, and the
-# script gets the NUMBER of the one that matched. Two things this end has not
-# got are needed to reproduce it -- the answer list is not in the export, and
-# the operand does not say where the number lands (`+2` decodes to the same
-# register in all 21 sites in the game, with only a 役柄 bit varying, so it is
-# a fixed slot rather than a destination this end can read off). ⇒ `Follower`
-# stands down at one rather than walking on with a register it filled in by
-# guessing; see `typed`.
+# ⭐⭐⭐ **What comes out of one is the typed line itself, and the operand does
+# say where it goes.** Round 248 read the client's own decoder for the command
+# (0x73537a) rather than the operand's shape: `+2`'s low byte is the time limit
+# in seconds and its top nibble the 役柄 whose box it is, `+4` is a register
+# field shifted five bits left with the character limit in the five bits
+# underneath, `+8` is the prompt and `+12` the answers the box offers.
+#
+# ⛔️ The 「選択肢番号：%1% = %2%」 line that round 245 read as *the result* is
+# not one: it is printed in a loop over the answer list, once per answer, as
+# part of the command's own dump. Nothing anywhere hands the script a number.
+# ⭐ The scenarios settle it by themselves -- `un111` fills S0 with one player's
+# guess at their partner's hobby and S1 with the partner's own answer and then
+# compares the two registers, and `un122` compares its box's register against a
+# surname of its own. ⇒ `typed` puts the line in the register and walks on.
 OP_INPUT_STRING = 0x7001
 OP_INPUT_STRING_PAGE = 0x7002
 OP_INPUT_STRING_LOVE = 0x7003
@@ -394,6 +398,10 @@ ARITHMETIC = {
     0x900D: lambda a, b: 1 if a < b else 0,
     0x900E: lambda a, b: 1 if a <= b else 0,
 }
+
+#: The two of them that mean anything over text: `==` and `!=`. See
+#: `Machine._as_text`.
+STRING_COMPARISONS = (0x9009, 0x900A)
 
 # OP_NOT is the one that reads a single operand out of the same block.
 OP_NOT = 0x900F
@@ -702,6 +710,17 @@ class Script:
         self.sync = {int(ip): [tuple(r) for r in regs]
                      for ip, regs in doc.get("sync", {}).items()}
         self.strings = {int(v): text for v, text in doc.get("strings", {}).items()}
+        # ⭐ The free-text boxes, by ip: `{"register": (category, number),
+        # "characters": limit, "answers": [what the box offers]}`. Optional the
+        # same way `sync` and `strings` are -- an export made before round 248
+        # has none, and a follower then stands down at a box rather than
+        # inventing a destination for what was typed (`Follower.typed`).
+        self.inputs = {
+            int(ip): {"register": tuple(box["register"]),
+                      "characters": box.get("characters", 0),
+                      "answers": list(box.get("answers", ()))}
+            for ip, box in doc.get("inputs", {}).items()
+        }
         # ⭐ Which register, if any, this script picks its backgrounds' season
         # out of. Computed here because it is a property of the instruction
         # stream and nothing else, and asked for at most once per script.
@@ -906,6 +925,39 @@ class Machine:
                 f"{self.script.name}: read of undeclared register {reg}"
             ) from None
 
+    def _as_text(self, op: int, value):
+        """One side of a comparison a player's own words are on the other of.
+
+        ⭐⭐ A string register normally holds a reference into the .ssb's string
+        pool, and two of them are equal when the references are. A line the
+        player typed has no reference -- it never was in the pool -- so it is
+        kept as the text it is (`Follower.typed`), and the moment one turns up
+        in a comparison the *other* side has to be read as text too or a
+        scenario would be told its own literal is not what was typed no matter
+        what was typed. `un122` is exactly that comparison and `un111`'s is the
+        one with a typed line on both sides.
+
+        ⚠️ Only equality. Nothing orders two strings on this wire, and a `<`
+        over one would be this end inventing a collation; TOP says so instead.
+        ⚠️ A reference the export carries no text for is TOP for the same
+        reason -- the answer is knowable and this copy does not know it.
+
+        ⚠️⚠️ INVENTED: that two strings are the same one when their characters
+        are, exactly, with nothing folded. The original server is the only side
+        that ever ran this comparison -- the client's arithmetic slots are
+        stubs -- so its rule went with it, and this is the smallest thing that
+        can stand in its place. ⭐ It matters in play: it decides whether a
+        player who typed カフェテリア for 「おいおい、それは○○だろう？」 is told
+        they are right. ⛔️ The competing reading is one call away and was NOT
+        taken -- `ngwords.fold` folds kana and case for the banned-word table,
+        on evidence from that table itself, and there is no such evidence here.
+        """
+        if op not in STRING_COMPARISONS:
+            return TOP
+        if isinstance(value, str):
+            return value
+        return self.script.strings.get(value, TOP)
+
     def _cell(self, family: str, address) -> int:
         try:
             return self.cells[(family, address)]
@@ -941,6 +993,9 @@ class Machine:
             result, left, right = _arith_registers(args)
             a, b = self._get(left), self._get(right)
             unknown = _merge_unknown(a, b)
+            if unknown is None and (isinstance(a, str) or isinstance(b, str)):
+                a, b = self._as_text(op, a), self._as_text(op, b)
+                unknown = _merge_unknown(a, b)
             self.registers[result] = (
                 unknown if unknown is not None else ARITHMETIC[op](a, b)
             )
@@ -1398,7 +1453,15 @@ class Follower(Machine):
             except UnsupportedOp:
                 value = TOP
             if category in STRING_CATEGORIES:
-                value = None if _unknown(value) else self.script.strings.get(value)
+                # ⭐ A line the player typed is already the text; anything else
+                # is a pool reference this end has to read back. Sending the
+                # typed line on is the point of the synchronisation that
+                # follows a box in `un183`: the other member of the party never
+                # saw it typed and its client has nothing in that register.
+                if _unknown(value):
+                    value = None
+                elif not isinstance(value, str):
+                    value = self.script.strings.get(value)
             elif _unknown(value):
                 value = None
             out.append((category, number, value))
@@ -1442,7 +1505,7 @@ class Follower(Machine):
                 held = self._get(register)
             except UnsupportedOp:
                 held = TOP
-            value = None if _unknown(held) else held
+            value = None if _unknown(held) or isinstance(held, str) else held
         counts = int.from_bytes(args[10:14], "little")
         return {
             "point": self.script.strings.get(int.from_bytes(args[6:10], "little")),
@@ -1529,29 +1592,35 @@ class Follower(Machine):
         self.pos += 1
         return None
 
-    def typed(self) -> str | None:
-        """A free-text box was answered: this follower stops here.
+    def typed(self, text: str) -> str | None:
+        """A free-text box was answered: the line goes into its register.
 
-        ⚠️⚠️ **Standing down, not stepping over.** What the script gets out of
-        one of these is the number of whichever answer the typed string matched
-        (see OP_INPUT_STRING), and this end has neither the answer list nor a
-        readable destination for the number. Walking on would leave a register
-        holding the zero DECL_VARIABLE gave it, and a later OP_BR would then be
-        answered **confidently and wrongly** -- which is worse than not being
-        answered, because the standing "no" is a road the caller already knows
-        how to take.
+        ⭐⭐⭐ **Verbatim, and that is the whole of it.** The box does not turn
+        what was typed into a number -- see `OP_INPUT_STRING` for the reading
+        that says so -- so there is nothing here to match, look up or score.
+        The scenario does its own comparing afterwards, over the same register,
+        and `Machine._as_text` is what lets a line that never was in the string
+        pool be compared against a literal that was.
 
-        ⭐ So it degrades to exactly the behaviour of a server with no export
-        at all: every choice mask goes out with all bits set and every branch
-        falls through. `un111` loses its shadow at the first of its twelve
-        boxes, and that is the honest price until the answer lists are exported.
+        ⚠️ Still stands down when this copy's export has no box at this ip: an
+        export made before round 248 carries no destination, and a follower
+        that walked on would leave the register holding the zero
+        `DECL_VARIABLE` gave it and then answer a later `OP_BR` **confidently
+        and wrongly**. That is worse than not answering, because the standing
+        "no" is a road the caller already knows how to take.
         """
         if self.lost:
             return self.lost
-        if self.script.code[self.pos][1] not in INPUT_STRING_OPS:
+        ip, op, _ = self.script.code[self.pos]
+        if op not in INPUT_STRING_OPS:
             return self._lose("typed text came back but this end is not on a box")
-        return self._lose("a text box was answered; the number the script gets "
-                          "out of it is not computable here")
+        box = self.script.inputs.get(ip)
+        if box is None:
+            return self._lose(f"a text box was answered at ip={ip}, and this "
+                              f"export does not say which register it fills")
+        self.registers[box["register"]] = text
+        self.pos += 1
+        return None
 
     def describe(self) -> str:
         """One line for the log: what this shadow has and has not got."""
