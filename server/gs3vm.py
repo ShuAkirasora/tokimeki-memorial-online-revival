@@ -1606,6 +1606,53 @@ class Follower(Machine):
                     if category == CAT_SELECT}
         return set()
 
+    #: What a ladder rung is made of: the constant into the compare register
+    #: and the comparison itself. ⭐ Nothing in here writes a save cell or
+    #: sends anything, which is what makes running one a second time safe.
+    RUNG_OPS = frozenset({OP_STR}) | frozenset(ARITHMETIC)
+
+    def recompute_condition(self) -> str | None:
+        """Run the rung in front of this `OP_BR` again, on today's registers.
+
+        ⭐⭐⭐ **Holding the branch is one instruction too late** (round 252).
+        A rung is `OP_STR B99 = #k; OP_EQ P31 = (E<n> == B99); OP_BR P31`, and
+        the comparison is *already done* by the time the client reports the
+        `OP_BR` -- `_shadow_at` has walked the shadow over it. So a member that
+        arrives before the click it reads has been given bakes the stale answer
+        into `P31`, and `mps_session._click_fence` holding the branch until the
+        click arrives does not undo that: `branch()` only re-reads `P31`.
+
+        ⭐⭐ `un010` ip=703/707/710 caught it: 役柄 1 walked past 役柄 0's box at
+        ip=687, compared `E0` against 0 while `E0` still held the previous
+        round's answer, was held at the branch, and on release read back its
+        own stale comparison -- while 役柄 0, running the same three
+        instructions after clicking, got the other road. Two members, one
+        shared register, the same rung, two verdicts.
+
+        ⚠️ Bounded by the same `CONDITION_LOOKBACK` window and the same idiom
+        `branch_clicks` reads, and it re-runs **only** `OP_STR`/arithmetic, so
+        it cannot re-fire anything that reaches the save or the wire. ⛔️ It is
+        not a general re-execution: a rung written some other way is left
+        exactly as it was.
+        """
+        if self.lost or self.script.code[self.pos][1] != OP_BR:
+            return None
+        stop = max(0, self.pos - self.CONDITION_LOOKBACK)
+        start = self.pos
+        while start > stop and self.script.code[start - 1][1] in self.RUNG_OPS:
+            start -= 1
+        if start == self.pos:
+            return None
+        here = self.pos
+        try:
+            for j in range(start, here):
+                self._step(j)
+        except (UnsupportedOp, UnknownCell, Runaway) as exc:
+            self.pos = here
+            return self._lose(str(exc))
+        self.pos = here
+        return None
+
     def decided_road(self) -> bool:
         """May this end answer the `OP_BR` the client is stopped on?
 

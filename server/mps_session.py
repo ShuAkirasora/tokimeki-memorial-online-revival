@@ -3424,6 +3424,8 @@ class MpsServer:
             if session.script.begun is None:
                 print(f"[{self.tag}] 選択が届いたが Begin を覚えていない")
                 return None
+            box = session.script.script.local_ip(session.script.begun[0])
+            session.script.answered[box] = session.script.answered.get(box, 0) + 1
             out = self._player_release([session], session, seen)
             # ⭐ …and now the rest of the party may be able to move: a member
             # held at `_click_fence` was waiting for exactly this answer.
@@ -3563,6 +3565,12 @@ class MpsServer:
         if missing:
             print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
                   f"{len(waiting) - len(missing)}/{len(waiting)} 到着、待たせたまま")
+            # ⭐ Arriving here is the third thing that can change `_click_fence`'s
+            # answer (round 252): a member parked at a rendezvous cannot go and
+            # click anything, so a branch held on that click has to be let go
+            # or the two of us sit here forever.
+            self._release_held_branches(
+                self.dramaparties.party_of(session.chara_id))
             return None
         print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
               f"{len(waiting)} 人そろった、解除")
@@ -3625,6 +3633,16 @@ class MpsServer:
         different ways on two runs. ⛔️ Redemption criterion: a screen where one
         member visibly walks on past a line that reads the other's answer before
         that answer exists would say the original did something else entirely.
+
+        ⚠️⚠️ INVENTED as well, round 252, and for the same reason -- there is no
+        restored source for either: **the two ways out**. Whoever this member
+        would wait for is let through when they are held on a rung themselves,
+        or parked at a `PLAYER_SYNC` that `_player_wait` will not open while we
+        sit here: in both, the one we wait for is waiting for us. ⛔️ A gate
+        that can deadlock is worse than one that occasionally reads a stale
+        answer, so the escape is deliberate and its cost is known. ⭐ Falsified
+        by a screen where a member visibly walks on in either of those two
+        situations having clearly been meant to wait.
         """
         needs = shadow.branch_clicks() - {shadow.actor}
         if not needs:
@@ -3636,8 +3654,31 @@ class MpsServer:
             theirs = other.script.shadow
             if theirs is None or theirs.actor not in needs:
                 continue
+            if (other.script.held_branch is not None
+                    or (other.script.begun is not None
+                        and other.script.begun[1] == script.OP_PLAYER_SYNC)):
+                # ⚠️⚠️ The two things that would turn this fence into a wedge,
+                # and both say the same thing: whoever we would wait for cannot
+                # reach a box, because they are held on a rung of their own or
+                # parked at a rendezvous `_player_wait` will not open until
+                # everybody is at one -- which cannot happen while we sit here.
+                # ⛔️ A stale answer is recoverable; a deadlocked play is not.
+                continue
             if (other.script.begun is not None
                     and other.script.begun[1] == gs3vm.OP_INPUT_SELECT):
+                out.append(other)
+                continue
+            # ⭐⭐⭐ Round 252: they are not on the box *yet*, and we have
+            # already walked past it. `un010` ip=23852 is addressed to 役柄 0
+            # and sits on the shared road, so 役柄 1 is released past it and
+            # reads `E0` eleven instructions later at ip=23875 -- before the
+            # box has been seen, let alone answered. The two roles then took
+            # different arms of the same ladder and played out two different
+            # halves of the scenario, one ending the play while the other stood
+            # at a `PLAYER_SYNC` waiting for somebody who had left.
+            box = session.script.awaiting.get(theirs.actor)
+            if box is not None and (other.script.answered.get(box, 0)
+                                    < session.script.walked_by.get(box, 0)):
                 out.append(other)
         return out
 
@@ -3664,6 +3705,13 @@ class MpsServer:
             if held is None:
                 continue
             other.script.held_branch = None
+            # ⭐⭐⭐ …and the rung in front of the branch runs again first
+            # (round 252). The click this branch was held for landed in a
+            # register the *comparison* already read, and the comparison ran
+            # before the hold: without this the release hands back the stale
+            # verdict it was held to avoid. `Follower.recompute_condition`.
+            if other.script.shadow is not None:
+                other.script.shadow.recompute_condition()
             reply = self._script_incoming(
                 other, 0, script.MSG_CL_NOTIFY_SCRIPT_COMMAND, held)
             if reply:
@@ -3938,6 +3986,17 @@ class MpsServer:
               f"{','.join(str(n) for n in range(8) if asked >> n & 1)} 宛て"
               f"（{asked:#x}）— 役柄 {shadow.actor} には出さずに解除: {shown}")
         shadow.passed_box()
+        # ⭐⭐⭐ Round 252: walking past somebody else's box is the moment this
+        # member gets *ahead* of the answer the rungs just after it are about.
+        # `un010` ip=23852 is the box, ip=23875 the rung that reads `E0`, and
+        # the author put no barrier between them -- because the box is one:
+        # nobody can be past it before its addressee has answered it. Tallying
+        # the walk-past here is what lets `_click_fence` say so.
+        session.script.walked_by[local_ip] = (
+            session.script.walked_by.get(local_ip, 0) + 1)
+        for actor in range(8):
+            if asked >> actor & 1 and actor != shadow.actor:
+                session.script.awaiting[actor] = local_ip
         begun = session.script.begun
         session.script.begun = None
         if begun is None:

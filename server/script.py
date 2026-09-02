@@ -1250,6 +1250,21 @@ class Runner:
         # click that has not arrived yet (`mps_session._click_fence`). Outside a
         # party it is always None.
         self.held_branch: bytes | None = None
+        # ⭐⭐⭐ Two tallies per choice box, by the box's own ip, and the
+        # question `_click_fence` asks of the pair (round 252):
+        #   `answered[X]`  how often this member has answered the box at X;
+        #   `walked_by[X]` how often this member has walked *past* it because
+        #                  it was addressed to somebody else.
+        # A rung that reads 役柄 n's answer to the box at X is answerable only
+        # once `n.answered[X] >= my walked_by[X]` -- 「they have answered it as
+        # recently as I walked past it」. ⛔️ Counting rather than flagging is
+        # the whole point: a ladder inside a loop passes the same box every
+        # round, and the answer from the round before is not this round's.
+        self.answered: dict[int, int] = {}
+        self.walked_by: dict[int, int] = {}
+        # 役柄 -> the ip of the last box addressed to them that this member
+        # walked past. What `walked_by`/`answered` get looked up under.
+        self.awaiting: dict[int, int] = {}
         # ⭐ A `gs3vm.Follower` walking the same script alongside the client,
         # or None when this machine has no export of it.
         #
