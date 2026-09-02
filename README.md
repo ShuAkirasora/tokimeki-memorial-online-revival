@@ -866,14 +866,15 @@ hand-edited.
 None of them means anything without your own copy of the game. What is deliberately not here
 is the other half of each: script text, choice prompts, the cast, event titles. Those are the
 game's content rather than a rule this server applies, so `/scl` and `/sc <name>` need an
-export you make yourself and say so when there is none.
+export you make out of your own copy, and say so when there is none. Making one is
+`export_scripts.py`, below.
 
 There is a second kind of export, for the same reason. `branches.json` answers a branch out
 of a table; `server/gs3vm.py` answers one by running the script's own arithmetic alongside
 the client, which is where that arithmetic always ran — the client's instructions for it are
 logging stubs that evaluate nothing. Running it needs the instruction stream rather than a
-lookup, so it is an export too, and optional in the same way. What the interpreter cannot
-work out it declines to answer rather than guessing at.
+lookup, so it is an export too, optional in the same way, and written by the same script.
+What the interpreter cannot work out it declines to answer rather than guessing at.
 
 What running without it costs is worth stating plainly, because it is more than a backdrop.
 Every branch of that kind falls through, so a scene keeps whichever setting it opened with, a
@@ -890,6 +891,45 @@ move, stress and the breakdown that follows it, the reward items, and the hint s
 result screen reports no change to any of them because there is nothing there to change, and
 the grade it awards is this server's own curve over the running score.
 
+## Exporting the scripts
+
+`export_scripts.py` writes both kinds of export, out of your own copy of the game and onto
+your own disk:
+
+```
+python3 export_scripts.py
+```
+
+It finds the game the way `play.py` does — the folder you gave that one is remembered, and
+`--game-dir` overrides — reads the archives under `Data/script/`, and writes the 683 client
+scenarios and the 95 the original server ran into `runtime/scripts/`. That directory is not
+tracked and nothing sends it anywhere. A few seconds, about 50 MiB, standard library only,
+like everything else here. Naming scripts on the command line exports only those, and
+`--list` prints what your copy holds.
+
+Two files come out per scenario. `<name>.json` is what `/sc` drives a scene from: the cast,
+the instruction stream written out to be read, the branch targets, and each choice box's own
+prompt and options. `<name>.gs3.json` is what `server/gs3vm.py` runs, in a form that needs no
+parser for the game's own files on this side — the label table already resolved to
+instruction pointers, the operands as hex.
+
+`reference/ssc_ops.tsv` is the one thing the exporter takes from here: the 209 commands, each
+with its length and the name the client's own decoder logs it under. It is a table about the
+bytecode rather than any of the bytecode.
+
+The archives are enciphered, and neither the key nor the IV is written down in this
+repository. Both are in your copy of the game, and the exporter takes them from there. The
+key is built a byte at a time onto the stack in `tmo.exe`, so what can be searched for is the
+shape of the code that builds it rather than a run of bytes; two subsystems each keep one,
+and the one that opens a script is found by trying each against a payload you already have.
+The IV then follows from the single block whose plaintext is known in advance, every script
+beginning with its own version string. If a differently built copy turns up where that search
+comes out ambiguous the exporter stops and says so, and `--key` and `--iv` are the way past
+it.
+
+None of what comes out belongs to this repository and none of it is redistributed here. It is
+the game's content, it came from your copy, and it stays on your machine.
+
 ## Repository layout
 
 | Path | |
@@ -897,9 +937,10 @@ the grade it awards is this server's own curve over the running score.
 | `start_servers.py`, `stop_servers.py` | start and stop everything |
 | `Play.cmd`, `play.py` | the client half in one run: hosts, the four bytes, and the game started. `Play.cmd` is the Windows double-click and asks for the rights the other one needs |
 | `set_auth_address.py` | the four-byte address change described above |
+| `export_scripts.py` | write the script exports out of your own copy of the game |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services themselves; `run_all.py` binds them all in one asyncio loop and `mps_session.py`, the packet layer, is the bulk of it |
-| `reference/` | the tables above |
+| `reference/` | the tables above, and the opcode table the exporter reads |
 | `runtime/` | created on the first run: the log, the certificate, your characters, any script exports you make, the answers `play.py` remembers, and any of the three tables above you choose to override |
 | `screenshots/` | the eight pictures above; captures of a running client, not game files |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution that redistribution has to carry |
@@ -933,7 +974,7 @@ the grade it awards is this server's own curve over the running score.
 | every conversation credits the same 12 intimacy, whichever one played and whichever answer | `reference/intimacy.json` missing |
 | `no club tables`, and 練習 offers no opponents | `reference/clubbattle.json` missing |
 | every 登場人物 button on the party screen reads 「入れません」, and `/de` lists nothing | `reference/drama_events.json` missing |
-| a scene plays on a black screen, or never changes its backdrop | that script has no export under `runtime/scripts/`, so every background branch falls through |
+| a scene plays on a black screen, or never changes its backdrop | that script has no export under `runtime/scripts/`, so every background branch falls through; see [Exporting the scripts](#exporting-the-scripts) |
 
 The log is verbose and includes hex dumps of unrecognised packets. `no reply implemented`
 marks a message this server has seen but does not answer yet.
