@@ -3813,5 +3813,6 @@
     0
    ]
   }
- ]
+ ],
+ "note": "Which key each of the four NPC event tables has, the .ssb it names, its scriptId, and the roster entry (kind, index) that record belongs to -- which is what the npcId in 0x6305 is filled from; see script._load_npc_events. Keys, file stems and integers only: no event names, no dialogue, no conditions."
 }

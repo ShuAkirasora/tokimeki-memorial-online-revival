@@ -671,6 +671,14 @@ def _load_npc_events() -> dict[tuple[int, int], list[dict]]:
         return {}
     index: dict[tuple[int, int], list[dict]] = {}
     for table, entries in raw.items():
+        # ⚠️ Every other table file in `reference/` carries a `note` saying what
+        # it is and what is not in it, and this one now does too. It is a string
+        # rather than a list of rows, so a loader that walks the top level has
+        # to say which keys are rows -- the club tables name theirs in a TABLES
+        # tuple; here the shape is the test, which also means an operator's own
+        # added key cannot bring this down.
+        if not isinstance(entries, list):
+            continue
         for entry in entries:
             category, ident = (int(part) for part in entry["key"].split(":"))
             index.setdefault(tuple(entry["npc"]), []).append({
