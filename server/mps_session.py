@@ -3032,6 +3032,12 @@ class MpsServer:
         )
         self.dramaparties.part(chara_id)
         self._drama_part_notice(party, actor_id, drama.PART_DISCONNECTED)
+        # ⚠️ Whoever is left may be holding a branch on the click this member
+        # was going to make, and that click is not coming now -- see
+        # `_release_held_branches`. ⚠️ `party` is the object taken before the
+        # `part` above; `party_of` would answer None for a character who has
+        # just been removed.
+        self._release_held_branches(party)
         print(f"[{self.tag}] drama party dropped {why}, "
               f"now {self.dramaparties.summary()}")
 
@@ -3209,14 +3215,35 @@ class MpsServer:
             # The one it waits on. Both roads are logged every time, because
             # "which way did it go" and "which way could it have gone" is the
             # whole diagnostic for a script that plays but plays wrong.
+            if shadow is not None and shadow.in_party:
+                # ⭐⭐⭐ Round 250: a rung of a choice ladder is often about
+                # *another* member's click, so it cannot be answered until that
+                # member has clicked. Nothing is replied; the client sits on its
+                # 0x721b exactly as it sits on a Begin, and the click that
+                # arrives releases it (`_release_held_branches`).
+                held = self._click_fence(session, shadow)
+                if held:
+                    session.script.held_branch = params
+                    print(f"[{self.tag}] script at ip={local} — "
+                          f"{len(held)} 人がまだ選択中、待たせたまま")
+                    return None
             fall_through, taken = session.script.script.branch_roads(wire_ip)
-            target, why = session.script.resolve_branch(wire_ip)
+            # ⭐⭐⭐ Inside a party the choice-chain heuristic stands down for
+            # the shadow — the ladder it counts its way down is not necessarily
+            # about *this* member's click (`Runner.resolve_branch`), and the
+            # party's register file holds every member's. ⛔️ Only when there is
+            # a shadow to hand the question to: `_shadow_at` returns None for
+            # one that has lost its place, and a guess from the right idiom is
+            # worth more than an unconditional fall-through.
+            target, why = session.script.resolve_branch(
+                wire_ip, party=shadow is not None and shadow.in_party)
             if shadow is not None and why == script.STANDING_NO:
                 # ⭐⭐ The one place the shadow decides instead of reporting,
                 # and it is fenced twice over: the answer it replaces must be
-                # the standing "no" (a forced branch or a choice chain outranks
-                # it), and everything the branch decides must be invisible to
-                # the save and to the story -- see `gs3vm._decided_road`.
+                # the standing "no" (a forced branch outranks it, and outside a
+                # party so does a choice chain), and everything the branch
+                # decides must be invisible to the save and to the story --
+                # see `gs3vm._decided_road`.
                 #
                 # It started (round 185) as the 進行度 switch every 日常会話
                 # opens with -- 「恋愛候補生が立っている位置は、メインイベント
@@ -3287,11 +3314,22 @@ class MpsServer:
                     # outcome of the event.
                     #
                     # ⚠️ Still fenced three ways: the standing "no" has to be
-                    # what it is replacing (a forced branch and a choice chain
-                    # outrank it), the verdict has to be definite -- an
-                    # unsupplied cell reads ⊤ and refuses on its own -- and the
-                    # follower has to be a party's (`Follower.in_party`). A solo
-                    # script, a 日常会話 and the tutorial are untouched.
+                    # what it is replacing (a forced branch outranks it), the
+                    # verdict has to be definite -- an unsupplied cell reads ⊤
+                    # and refuses on its own -- and the follower has to be a
+                    # party's (`Follower.in_party`). A solo script, a 日常会話
+                    # and the tutorial are untouched.
+                    #
+                    # ⭐⭐⭐ Round 250 widened it by one family: a **choice
+                    # chain** used to outrank this and no longer does inside a
+                    # party, because the heuristic that answered it is about
+                    # 「the k-th branch after **my** click」 and a two-role
+                    # ladder is about somebody else's (`Runner.resolve_branch`).
+                    # ⛔️ Redemption criterion, and it is cheap: the log line
+                    # `vm cond=… ⚠️ NOT what was sent` should now only ever
+                    # appear on a forced branch. One playthrough of `un111`
+                    # printed 86 of them before this and 0 after; ⚠️ if it comes
+                    # back anywhere else, this widening is what to look at.
                     target = found.wire_ip(goes_to)
                     why = (f"表現のみ (vm cond={verdict})" if shadow.decided_road()
                            else f"ドラマの帳簿 (vm cond={verdict})")
@@ -3386,11 +3424,12 @@ class MpsServer:
             if session.script.begun is None:
                 print(f"[{self.tag}] 選択が届いたが Begin を覚えていない")
                 return None
-            begun_ip, begun_op = session.script.begun
-            session.script.begun = None
-            return self._answer(session, seen,
-                                script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
-                                script.command_end_params(begun_ip, begun_op))
+            out = self._player_release([session], session, seen)
+            # ⭐ …and now the rest of the party may be able to move: a member
+            # held at `_click_fence` was waiting for exactly this answer.
+            self._release_held_branches(
+                self.dramaparties.party_of(session.chara_id))
+            return out
         if msg_type == script.MSG_CL_REQUEST_SCRIPT_COMMAND_INPUT:
             # ⭐ What the player typed into a free-text box, and the one place
             # in the whole 0x72xx family where this end judges content rather
@@ -3515,19 +3554,7 @@ class MpsServer:
             return None
         if op != script.OP_PLAYER_SYNC:
             return self._player_release([session], session, seen)
-        party = self.dramaparties.party_of(session.chara_id)
-        playing = session.script.script.script_id
-        waiting = [session]
-        if party is not None:
-            for actor in party.actors:
-                other = self._session_of(actor.chara_id)
-                if other is None or other is session:
-                    continue
-                # ⚠️ Same scenario, not just "has a script": a member could be
-                # in a party and running something else off /sc.
-                if (other.script is not None
-                        and other.script.script.script_id == playing):
-                    waiting.append(other)
+        waiting = self._scenario_members(session)
         missing = [
             s for s in waiting
             if s.script is None or s.script.begun is None
@@ -3540,6 +3567,107 @@ class MpsServer:
         print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
               f"{len(waiting)} 人そろった、解除")
         return self._player_release(waiting, session, seen)
+
+    def _scenario_members(self, session: "_Session") -> list["_Session"]:
+        """`session` plus every party member playing the same scenario.
+
+        ⚠️ Same scenario, not just "has a script": a member could be in a party
+        and running something else off `/sc`. Outside a party the list is this
+        session alone, which is what makes every caller degrade to the solo
+        behaviour without a special case.
+        """
+        members = [session]
+        if session.script is None:
+            return members
+        party = self.dramaparties.party_of(session.chara_id)
+        playing = session.script.script.script_id
+        if party is not None:
+            for actor in party.actors:
+                other = self._session_of(actor.chara_id)
+                if other is None or other is session:
+                    continue
+                if (other.script is not None
+                        and other.script.script.script_id == playing):
+                    members.append(other)
+        return members
+
+    def _click_fence(self, session: "_Session", shadow) -> list["_Session"]:
+        """Whose click does the `OP_BR` in front of us need, that has not come yet.
+
+        ⭐⭐⭐ **The only question a party makes newly unanswerable.** A choice
+        ladder is `OP_STR B = #k; OP_EQ P = (E<n> == B); OP_BR P`, and in a
+        two-role scenario `n` is often **not** the member reporting the branch:
+        `un111` sends both roles through the ladder at ip=1358, every rung of
+        which reads `E0`. So whoever clicks first gets there while the other's
+        `E<n>` is still at the zero `DECL_VARIABLE` left in it, and this end
+        answers a question about an answer that does not exist yet. Round 249
+        watched that happen on the wire and the two roles spent the rest of the
+        play in different halves of the scenario.
+
+        ⭐⭐ What it waits on is **observable, not inferred**: the member whose
+        click the condition reads is *sitting on a box it has not answered*.
+        ⛔️ It is not a rule about the register being "unset" -- a ladder inside
+        a loop reads a register that was set last time round, and refusing that
+        would hang the play for a value that is already there and already right.
+
+        ⚠️ No deadlock: this end holds a branch on somebody who is stopped on a
+        box, and a box is a stop the *client* answers on its own. Nobody in the
+        cycle is waiting on us.
+
+        ⚠️⚠️ INVENTED (mechanism, not rule): **that the wait exists** is read off
+        the scenario -- the ladder at ip=1349 reads both clicks and the author
+        put no barrier between it and the two boxes -- but **holding the branch
+        reply** is this end's choice of lever, and the original server's is not
+        known. The alternative tried first, holding the boxes' own closing
+        brackets until everybody had answered, is withdrawn: the writing side
+        does not know who is waiting on it, so it couples any two boxes that
+        happen to be open at once, and the same scenario then came out two
+        different ways on two runs. ⛔️ Redemption criterion: a screen where one
+        member visibly walks on past a line that reads the other's answer before
+        that answer exists would say the original did something else entirely.
+        """
+        needs = shadow.branch_clicks() - {shadow.actor}
+        if not needs:
+            return []
+        out = []
+        for other in self._scenario_members(session):
+            if other is session or other.script is None:
+                continue
+            theirs = other.script.shadow
+            if theirs is None or theirs.actor not in needs:
+                continue
+            if (other.script.begun is not None
+                    and other.script.begun[1] == gs3vm.OP_INPUT_SELECT):
+                out.append(other)
+        return out
+
+    def _release_held_branches(self, party: "drama.Party | None") -> None:
+        """Re-ask every branch `_click_fence` is holding in this party.
+
+        ⚠️ It re-enters the same handler with the message the client actually
+        sent, rather than replaying a decision made earlier: everything the
+        branch reads may have moved since, and the second pass has to see it.
+        ⭐ It re-holds by itself if what it was waiting for is still missing.
+
+        ⚠️⚠️ Called from **two** places, and the second is the one that keeps a
+        held branch from becoming a wedge: a click arriving (what it was waiting
+        for) and a member leaving the play (nobody left to wait for). Nothing
+        else re-examines the fence, because nothing else changes its answer.
+        """
+        if party is None:
+            return
+        for actor in party.actors:
+            other = self._session_of(actor.chara_id)
+            if other is None or other.script is None:
+                continue
+            held = other.script.held_branch
+            if held is None:
+                continue
+            other.script.held_branch = None
+            reply = self._script_incoming(
+                other, 0, script.MSG_CL_NOTIFY_SCRIPT_COMMAND, held)
+            if reply:
+                self._push(other, reply)
 
     def _drama_result(
         self, session: "_Session", seen: int, op: int, local: int
@@ -3623,6 +3751,12 @@ class MpsServer:
         arrive last: two members can be stopped on two different `PLAYER_SYNC`
         instructions (see `_player_wait`), and the client matches the release
         against the ip it is sitting on.
+
+        ⚠️⚠️ **A choice box is the one stop whose shadow has already moved.**
+        `Follower.chose` steps past the box the moment the click arrives —
+        it has to, that is where the answer is written — so walking it again
+        here would be asking a follower that is one instruction further on to
+        stand on an `OP_INPUT_SELECT`, and losing it when it cannot.
         """
         out = b""
         for other in waiting:
@@ -3630,9 +3764,10 @@ class MpsServer:
                 continue
             begun_ip, begun_op = other.script.begun
             local = other.script.script.local_ip(begun_ip)
-            shadow = self._shadow_at(other, local, begun_op)
-            if shadow is not None:
-                shadow.flowed()
+            if begun_op != gs3vm.OP_INPUT_SELECT:
+                shadow = self._shadow_at(other, local, begun_op)
+                if shadow is not None:
+                    shadow.flowed()
             other.script.begun = None
             reply = self._answer(other, seen if other is session else 0,
                                  script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,

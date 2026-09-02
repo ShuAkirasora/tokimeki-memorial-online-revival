@@ -426,10 +426,12 @@ OP_PLAYER_WAIT_TIME = 0x9101
 # ⚠️ Nothing here branches on either number: this end releases both stops, and
 # the client is the one that owns the clock.
 #
-# Both go through the same barrier (`mps_session._player_wait`): every party
-# member who took the script has to report the same {ip, op} before anybody is
-# released. For SYNC that is what the name says it is; for WAIT_TIME it is
-# round 231's reading.
+# ⚠️ Both arrive at `mps_session._player_wait`, but only this one waits for
+# anybody: round 233 measured that a rendezvous on the identical {ip, op}
+# deadlocks 5 of the 22 dramas by construction, and that WAIT_TIME is a local
+# clock rather than a meeting point at all. What stands now is "every member
+# holding this script is stopped on *a* PLAYER_SYNC" — the reasoning, and what
+# each half of round 232's rule cost, is in `_player_wait`.
 OP_PLAYER_SYNC = 0x9100
 
 # ⭐⭐⭐ The last stop of a ドラマイベント: the instruction sitting immediately in
@@ -1243,6 +1245,11 @@ class Runner:
         # because the release has to echo it back verbatim, and the client is
         # the only one who knows which instruction it stopped on.
         self.begun: tuple[int, int] | None = None
+        # ⭐ The `MsgClNotifyScriptCommand` body of an OP_BR this end has taken
+        # in but not answered, because the condition reads a party member's
+        # click that has not arrived yet (`mps_session._click_fence`). Outside a
+        # party it is always None.
+        self.held_branch: bytes | None = None
         # ⭐ A `gs3vm.Follower` walking the same script alongside the client,
         # or None when this machine has no export of it.
         #
@@ -1273,7 +1280,7 @@ class Runner:
         self.choice = result
         self.since_choice = 0
 
-    def resolve_branch(self, wire: int) -> tuple[int, str]:
+    def resolve_branch(self, wire: int, party: bool = False) -> tuple[int, str]:
         """Which ip to answer an OP_BR at `wire` with, and why, for the log.
 
         Every OP_BR in the game asks the server the same thing — "does the
@@ -1293,6 +1300,24 @@ class Runner:
         not a reading of the condition. It is right for the chain idiom and
         says nothing about an OP_BR that is not part of one, which is why the
         counter is armed only by `chose` and disarmed the moment it fires.
+
+        ⚠️⚠️ **And in a ドラマパーティ it is simply wrong**, which is what
+        `party` turns it off for. The idiom the counter encodes is 「the k-th
+        OP_BR after **my** click is mine」, and a two-role scenario breaks the
+        second half of that sentence: `un111` sends both roles through the same
+        ladder at ip=1358, and every rung of it tests `E0` -- 役柄 0's click --
+        with 役柄 1's own ladder only starting at ip=1388, inside the arm that
+        ladder picks. So 役柄 1 counting its way down the first ladder answers a
+        question about somebody else's click with its own, and lands in an arm
+        of the scenario 役柄 0 is not in (round 249 watched both halves of that
+        play out on the wire). The party's shadow has both clicks in one
+        register file (`gs3vm.Follower.chose`) and computes the rung exactly, so
+        with `party` set this returns the standing "no" and lets `mps_session`
+        hand the question to the side that can answer it. ⚠️ The counter is
+        still consumed, so that a chain half-walked before anything went wrong
+        cannot fire late.
+        ⛔️ The caller passes `party` only when there *is* a usable shadow: with
+        none, a guess from the right idiom beats a fall-through every time.
 
         ⚠️ The standing "no" is still not a neutral default -- it is a
         decision, and for the `<キャラ>_e011` gate it is the decision that
@@ -1321,6 +1346,8 @@ class Runner:
         if self.choice is None or taken is None:
             return fall_through, STANDING_NO
         seen, self.since_choice = self.since_choice, self.since_choice + 1
+        if party:
+            return fall_through, STANDING_NO
         if seen != self.choice:
             return fall_through, f"fall-through (選択肢 {seen} ≠ {self.choice})"
         self.choice = None

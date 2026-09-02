@@ -1569,6 +1569,43 @@ class Follower(Machine):
             return None, None
         return condition, _jump_target(args)
 
+    #: How far back `branch_clicks` looks for the instruction that wrote the
+    #: condition. The ladder idiom puts it one or two instructions in front of
+    #: the `OP_BR`, and a short window is the point: this is a reading of that
+    #: idiom, ⛔️ not a general dataflow analysis.
+    CONDITION_LOOKBACK = 6
+
+    def branch_clicks(self) -> set[int]:
+        """Whose 選択肢 answer the `OP_BR` the client is on reads, by 役柄.
+
+        ⭐⭐⭐ Scripts spell a selection out as `OP_STR B = #k; OP_EQ P = (E<n>
+        == B); OP_BR P`, one rung per option, and **`n` says whose click the
+        rung is about** -- the same `(CAT_SELECT, 役柄)` register `chose` writes.
+        In a two-role scenario a rung is very often about the *other* member:
+        `un111` walks both roles down the ladder at ip=1358, and every rung of
+        it reads `E0`. Round 250 counted it over the 22 ドラマイベント: all 22
+        compare against both `E0` and `E1`, 991 sites and 1160 sites.
+
+        ⭐ Empty for every branch that is not one of these, which is what makes
+        it usable as a fence: the caller only has to wait when the answer it is
+        about to read belongs to somebody who has not given it yet.
+        """
+        if self.lost or self.script.code[self.pos][1] != OP_BR:
+            return set()
+        args = self.script.code[self.pos][2]
+        condition = _register(int.from_bytes(args[0:2], "little"))
+        stop = max(-1, self.pos - self.CONDITION_LOOKBACK)
+        for j in range(self.pos - 1, stop, -1):
+            _, op, operands = self.script.code[j]
+            if op not in ARITHMETIC or len(operands) < 4:
+                continue
+            result, left, right = _arith_registers(operands)
+            if result != condition:
+                continue
+            return {number for category, number in (left, right)
+                    if category == CAT_SELECT}
+        return set()
+
     def decided_road(self) -> bool:
         """May this end answer the `OP_BR` the client is stopped on?
 
