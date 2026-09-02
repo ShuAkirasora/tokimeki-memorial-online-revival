@@ -260,6 +260,7 @@ HELP = (
     "/scn 次の命令へ  /sce 台本終了  /scl 一覧",
     "/scb [<scriptId> <ip> <分岐先>|clear] OP_BR を強制 (無引数で一覧、既定なし)",
     "/sel [<select> [timer]] 選択肢を問い直す (無引数で既定に戻す)",
+    "/inp [timerCount] 文字入力欄の制限時間 (無引数で既定に戻す)",
     "/de [<genre>:<番号>|un007 …] ドラマ一覧通知",
     "/dms マッチング画面を開かせる (0xe002+0xe003+0xe004)",
     "/pwt [on|off] PLAYER_WAIT_TIME に 0x721d を返すか (既定 off)",
@@ -2199,6 +2200,27 @@ def respond(
             sends=[(script.MSG_SV_QUERY_SCRIPT_COMMAND_SELECT,
                     script.select_params(select, timer))],
         )
+
+    if word == "inp":
+        # ⭐ What goes into a text box's `timerCount`. The knob exists for one
+        # question -- what that field counts in -- and round 249 asked it:
+        # `/inp 5000`, open a box, and the box was still up fourteen seconds
+        # later. ⛔️ So it is not five seconds' worth of anything; the reading
+        # is still open (see script.INPUT_TIMER). ⚠️ It has to be set before
+        # the box opens; the duration goes out with the box and a second one
+        # does not reach it, the same way `/sel` cannot widen a box already
+        # drawn. No argument puts the shipped constant back.
+        words = rest.split()
+        if not words:
+            script.INPUT_TIMER = script.DEFAULT_SELECT_TIMER
+        else:
+            try:
+                script.INPUT_TIMER = int(words[0], 0)
+            except ValueError:
+                return Reply(["/inp <timerCount>  例: /inp 5000  (引数なしで既定)"])
+        return Reply([f"文字入力欄 timerCount={script.INPUT_TIMER}"
+                      + ("（既定）" if script.INPUT_TIMER
+                         == script.DEFAULT_SELECT_TIMER else "")])
 
     if word == "pwt":
         # ⭐ The knob that tells "the wait has not elapsed" apart from "nobody

@@ -907,6 +907,12 @@ def vm_doc(script: Script, script_id: int | None) -> dict:
         # log line can say what the player was looking at.
         "inputs": {str(off // 2): {"register": list(box["register"]),
                                    "characters": box["characters"],
+                                   # ⭐ Whose box it is. The client compares this
+                                   # against its own 役柄 and puts up nothing when
+                                   # they differ, so a scene played by two walks
+                                   # past the other one's boxes in silence and the
+                                   # interpreter has to do the same.
+                                   "actor": box["actor"],
                                    "answers": [t for _ref, t in box["answers"]]}
                    for off, box in script.input_boxes().items()},
         "strings": {str(v): text for v, text in script.string_literals().items()},

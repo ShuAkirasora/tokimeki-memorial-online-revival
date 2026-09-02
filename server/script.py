@@ -1129,10 +1129,30 @@ def command_variable_params(entries: Sequence[tuple[int, int, object]]) -> bytes
 
 
 # `timerCount` is a duration in units unknown, and stayed unknown: the box does
-# not close on its own within the minute anybody has watched it. 60000 is "a
-# minute if these are milliseconds". 0 is avoided because "0 = no limit" and
-# "0 = expire now" are equally plausible readings and one of them loses.
+# not close on its own within any span anybody has watched it, and round 249
+# put that on a screen -- see INPUT_TIMER below, which is the knob that tried.
+# 60000 is "a minute if these are milliseconds". 0 is avoided because "0 = no
+# limit" and "0 = expire now" are equally plausible readings and one of them
+# loses.
 DEFAULT_SELECT_TIMER = 60000
+
+# ⭐ The knob that asked that question, and the answer it got: not that.
+#
+# The milliseconds reading had one thing going for it -- the instruction itself
+# carries a limit in seconds (the client's own dump calls that field
+# 制限時間(秒), and it reads 60 for every INPUT_SELECT that declares one and 180
+# for every INPUT_STRING), so 60000 is what this end would send for a declared
+# 60 if the wire field were a thousand times finer. ⛔️ Round 249 put 5000 on a
+# real client's text box and watched it: the box was still up fourteen seconds
+# later with the typed line intact. Both kinds of box also draw a countdown
+# ring, and it read 0:00 the whole time -- at 5000 and at 60000 alike.
+#
+# ⇒ The unit stays unknown, 60000 stays what goes out, and ⛔️ nobody should
+# take "60000 = 60s × 1000" as licence to reinterpret the 775 INPUT_SELECT
+# boxes that declare 0. Reopen this when something makes that ring move.
+# Factory value is the constant above: a session that never touches the knob
+# sends exactly what every session before it sent.
+INPUT_TIMER = DEFAULT_SELECT_TIMER
 
 # Every bit set, for a select whose option count this end does not know.
 SELECT_ALL = 0xFFFFFFFF

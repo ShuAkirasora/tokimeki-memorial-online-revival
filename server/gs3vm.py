@@ -711,13 +711,17 @@ class Script:
                      for ip, regs in doc.get("sync", {}).items()}
         self.strings = {int(v): text for v, text in doc.get("strings", {}).items()}
         # ⭐ The free-text boxes, by ip: `{"register": (category, number),
-        # "characters": limit, "answers": [what the box offers]}`. Optional the
-        # same way `sync` and `strings` are -- an export made before round 248
-        # has none, and a follower then stands down at a box rather than
-        # inventing a destination for what was typed (`Follower.typed`).
+        # "characters": limit, "actor": whose box it is, "answers": [what the
+        # box offers]}`. Optional the same way `sync` and `strings` are -- an
+        # export made before round 248 has none, and a follower then stands down
+        # at a box rather than inventing a destination for what was typed
+        # (`Follower.typed`). ⚠️ `actor` arrived one round later still, so it is
+        # None rather than 0 when the export predates it: 0 would be a claim,
+        # and `Follower.at` reads the absence as "cannot say" (see there).
         self.inputs = {
             int(ip): {"register": tuple(box["register"]),
                       "characters": box.get("characters", 0),
+                      "actor": box.get("actor"),
                       "answers": list(box.get("answers", ()))}
             for ip, box in doc.get("inputs", {}).items()
         }
@@ -1377,7 +1381,8 @@ class Follower(Machine):
             return self._lose(f"ip={ip} is not an instruction start")
         while self.pos != target:
             here_ip, here_op, _ = self.script.code[self.pos]
-            if here_op in ALWAYS_REPORTED or here_op in STOPS:
+            if ((here_op in ALWAYS_REPORTED or here_op in STOPS)
+                    and not self._someone_elses_box(here_ip, here_op)):
                 return self._lose(
                     f"walked onto {here_op:#06x} at ip={here_ip} on the way to "
                     f"ip={ip}, and the client never reported it"
@@ -1394,6 +1399,36 @@ class Follower(Machine):
             return self._lose(f"ip={ip}: the client says {op:#06x}, "
                               f"the export says {here_op:#06x}")
         return None
+
+    def _someone_elses_box(self, ip: int, op: int) -> bool:
+        """Is this a free-text box addressed to one of the other 役柄?
+
+        ⭐⭐⭐ A scene written for two puts boxes in the stream for both of
+        them, and only the player it names ever sees one: the client compares
+        the 役柄 in the instruction against its own and draws nothing when they
+        differ (round 248 read that comparison out of the decoder at 0x73537a).
+        A client that draws nothing reports nothing, so for everybody else the
+        box is a straight-line command like any other and this walk has to step
+        over it -- exactly the way it already steps over an `OP_BA` whose mask
+        misses.
+
+        ⚠️⚠️ Round 249 measured what happens otherwise, on the screen. Playing
+        `un111` with the real client as 役柄 0, the shadow reached the box at
+        ip=10234 -- 役柄 1's -- treated it as a stop and gave up, so the
+        `SYNC_VARIABLE` twenty instructions later went out empty and the line
+        「俺のお気に入りの場所は「」です。」 was drawn with a hole where the
+        player's own answer belonged.
+
+        ⛔️ False when the export cannot say whose box it is (`actor` is None,
+        which every export made before round 249 is). Standing down there is
+        the older, louder failure and it stays: guessing 0 would silently step
+        over 役柄 0's own boxes on a stale export.
+        """
+        if op not in INPUT_STRING_OPS:
+            return False
+        box = self.script.inputs.get(ip)
+        return box is not None and box["actor"] is not None \
+            and box["actor"] != self.actor
 
     def flowed(self) -> str | None:
         """Follow the control-flow instruction the client resolved by itself."""

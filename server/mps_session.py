@@ -3679,7 +3679,7 @@ class MpsServer:
                   f"{box['characters']}字以内 · 例：" + "／".join(box["answers"]))
         return self._answer(session, seen,
                             script.MSG_SV_NOTIFY_SCRIPT_COMMAND_INPUT,
-                            script.input_params(script.DEFAULT_SELECT_TIMER))
+                            script.input_params(script.INPUT_TIMER))
 
     def _script_input_result(self, session: "_Session", seen: int,
                              params: bytes) -> "bytes | None":
@@ -3707,7 +3707,7 @@ class MpsServer:
                   f"NgScriptCommandInput reason={ngwords.SCRIPT_INPUT_REASON}")
             return self._answer(
                 session, seen, script.MSG_SV_NG_SCRIPT_COMMAND_INPUT,
-                script.input_ng_params(script.DEFAULT_SELECT_TIMER,
+                script.input_ng_params(script.INPUT_TIMER,
                                        ngwords.SCRIPT_INPUT_REASON))
         text = shown.decode("cp932", "replace")
         print(f"[{self.tag}] ⭐ 入力された文字列「{text}」")
