@@ -1327,6 +1327,20 @@ class Follower(Machine):
         # four, are inventions (the smallest-invention rule); that the switch
         # moves with the calendar is not. See `Script.season_register`.
         self.season: int | None = None
+        # ⭐⭐⭐ **This cursor's own copy of every register it wrote** (round
+        # 254). The register file is the party's, one for all its members, and
+        # that is right for the variables the script declares -- `un081`'s `B1`
+        # is decremented inside `OP_BA 01` and read by the other 役柄, and
+        # `un066`'s `B5`/`B6` are 「where did each of you say to go」. It is
+        # wrong for the compiler's temporaries, which belong to whoever
+        # computed them, and the corpus says an `OP_BR` condition is *always*
+        # one of those: over all 778 exported scenarios, all 16313 of them read
+        # `F99`/`F98`/`F97` or `F7`/`F6`/`F5` -- none of which the scenario
+        # declares -- or `P31`, which is written 5516 times, every one of them
+        # by the comparison in front of a branch, and read 5516 times, every
+        # one of them by that branch. ⛔️ Not one reads a declared register.
+        # See `branch`, which is the only reader.
+        self.own: dict[tuple[int, int], object] = {}
 
     # -- the two rules that differ from a machine running on its own -------
     def _cell(self, family: str, address) -> int:
@@ -1343,7 +1357,43 @@ class Follower(Machine):
         nxt = super()._step(i)
         if self.season is not None:
             self._reseason(i)
+        self._keep_own(i)
         return nxt
+
+    def _written_register(self, i: int) -> "tuple[int, int] | None":
+        """The register instruction `i` writes, or None if it writes none.
+
+        ⛔️ `OP_DECL_VARIABLE` is deliberately not here: the prologue's
+        zero-fill is the party's, not a cursor's.
+        """
+        op, args = self.script.code[i][1], self.script.code[i][2]
+        if op == OP_STR and len(args) >= 2:
+            return _register(int.from_bytes(args[0:2], "little"))
+        if op in (OP_NOT, OP_RAND) or op in ARITHMETIC:
+            return _arith_registers(args)[0] if len(args) >= 4 else None
+        return None
+
+    def _keep_own(self, i: int) -> None:
+        """Remember what this cursor just put in a register.
+
+        ⭐⭐⭐ Round 254: the shadow used to read an `OP_BR`'s condition at
+        *answer* time, and the comparison that produced it happened at *report*
+        time -- a network round trip earlier, with the other member's cursor
+        free to run in between. `un066` ip=3306 is the case: both 役柄 compute
+        `F99 = (B5 == B6)` just after the rendezvous at ip=3300, 役柄 1 is
+        answered first, walks on into ip=3823 `OP_STR F99 = 1` -- an unrelated
+        rung reusing the same scratch flag -- and 役柄 0's branch then reads
+        that 1 and leaves the 「息を合わせる」 loop while its partner stays in it.
+        ⇒ once they are a barrier apart the `any` release rule keeps them
+        there: measured off one fixture, 56 of 59 rendezvous released with the
+        two of them on different instructions, and only one of the two roles
+        reached `OP_END`. With this the play takes the road it was written
+        for: 52 rendezvous, every one released with both on the same
+        instruction, and both roles finish.
+        """
+        register = self._written_register(i)
+        if register is not None and register in self.registers:
+            self.own[register] = self.registers[register]
 
     def _reseason(self, i: int) -> None:
         """Overwrite the season constant this instruction just wrote, if it did.
@@ -1558,16 +1608,44 @@ class Follower(Machine):
         The condition is a number, or ``TOP`` when this end could not work it
         out. ⚠️ Reports only. `script.Runner.resolve_branch` still answers the
         client, byte for byte what it answered before this class existed.
+
+        ⭐⭐⭐ **The condition is this cursor's own** (round 254, see `own`):
+        the comparison in front of a branch runs a round trip before the branch
+        is answered, and in a party the other member's cursor runs in that gap
+        over rungs that reuse the same scratch flag. Falling back to the shared
+        file is not a special case -- it is what a cursor that has not written
+        the register itself has always read, which is every solo script and
+        every branch whose rung this end could not walk.
         """
         if self.lost or self.script.code[self.pos][1] != OP_BR:
             return None, None
         args = self.script.code[self.pos][2]
+        register = _register(int.from_bytes(args[0:2], "little"))
+        if register in self.own:
+            return self.own[register], _jump_target(args)
         try:
-            condition = self._get(_register(int.from_bytes(args[0:2], "little")))
+            condition = self._get(register)
         except UnsupportedOp as exc:
             self._lose(str(exc))
             return None, None
         return condition, _jump_target(args)
+
+    def stolen_condition(self) -> "tuple[object, object] | None":
+        """`(mine, the file's)` when somebody else overwrote this branch's flag.
+
+        ⭐ The detector for what `own` fixes, kept separate from the fix so the
+        disease stays countable: a party where this never fires is a party
+        whose members never trod on each other's scratch registers.
+        """
+        if self.lost or self.script.code[self.pos][1] != OP_BR:
+            return None
+        register = _register(int.from_bytes(
+            self.script.code[self.pos][2][0:2], "little"))
+        if register not in self.own:
+            return None
+        theirs = self.registers.get(register)
+        mine = self.own[register]
+        return None if theirs == mine else (mine, theirs)
 
     #: How far back `branch_clicks` looks for the instruction that wrote the
     #: condition. The ladder idiom puts it one or two instructions in front of

@@ -3359,6 +3359,17 @@ class MpsServer:
                 # same question, so that the two can be compared against a
                 # screen before any more of it is allowed to move.
                 condition, would = shadow.branch()
+                stolen = shadow.stolen_condition()
+                if stolen is not None:
+                    # ⭐⭐⭐ Round 254's detector: this cursor computed the
+                    # branch's flag, and by the time the client asked, another
+                    # member of the party had written the same register from a
+                    # rung of its own. The answer above is this cursor's, which
+                    # is the fix; the line is here so the disease stays
+                    # countable. ⛔️ If it fires outside a party, something is
+                    # sharing a register file that should not be.
+                    print(f"[{self.tag}] ⚠️ 帳簿の temp を横取りされた ip={local}: "
+                          f"自分の値 {stolen[0]}、いまの帳簿 {stolen[1]}")
                 if condition is gs3vm.DIE:
                     pass  # already said, and said with which way the coin fell
                 elif condition is gs3vm.TOP:
