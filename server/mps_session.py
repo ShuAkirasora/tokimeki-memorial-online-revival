@@ -1954,6 +1954,7 @@ class MpsServer:
             return (
                 self._answer(session, seen, script.MSG_SV_NOTIFY_SCRIPT_END, b"")
                 + self._romance_credit(session, seen)
+                + self._drama_party_end(session, seen)
             )
         return self._script_step(session, seen, "manual")
 
@@ -1970,6 +1971,7 @@ class MpsServer:
                 self._answer(session, seen, script.MSG_SV_NOTIFY_SCRIPT_END, b"")
                 + self._say(session, seen, "台本終了")
                 + self._romance_credit(session, seen)
+                + self._drama_party_end(session, seen)
             )
         ip, op, name, args = here
         print(f"[{self.tag}] script {why} -> ip={ip} op=0x{op:04x} {name} {args}")
@@ -1989,6 +1991,7 @@ class MpsServer:
             reply += self._answer(session, seen, script.MSG_SV_NOTIFY_SCRIPT_END, b"")
             reply += self._say(session, seen, "台本終了 (OP_END)")
             reply += self._romance_credit(session, seen)
+            reply += self._drama_party_end(session, seen)
         return reply
 
     def _run_locker(self, session: "_Session", menu_item: int):
@@ -2877,6 +2880,71 @@ class MpsServer:
             + self._drama_light(party, session, seen)
         )
 
+    def _drama_party_end(self, session: "_Session", seen: int) -> bytes:
+        """The mirror of ［イベントスタート］: the play is over, the party is not.
+
+        ⭐⭐⭐ It hangs off NotifyScriptEnd because the 0xE0xx family has no
+        message for 「the drama is over」 -- 0xE01B NotifyDramaPartyStart has no
+        counterpart, and 0xE008 Del means something else. The only thing on the
+        wire that can put a party back to 参加者募集中 is 0xE007, the same
+        record `_drama_party_start` sends to say イベント中, with the state byte
+        the other way round.
+
+        ⚠️ What went wrong without it, measured in round 263 by reading: `state`
+        was written once, at 開始, and never written back by any of the four
+        NotifyScriptEnd paths. So a party sat at イベント中 for the rest of the
+        session once it had played: ［イベントスタート］ -- which the client
+        draws lit, see below -- was refused 23 「既にドラマイベントが開始され
+        ています」, and a member who stepped out could not get back in, because
+        0xE011 Join reads the same byte. The only way to play a second time was
+        to disband and build another party.
+
+        ⭐⭐ Why the party comes back rather than going away, and it is the
+        client that says so: with nothing pushed at all it leaves the drama,
+        sends 0xE000 to open the マッチング screen again, and then 0xE00E about
+        the party it was in -- unprompted, in round 262's capture. A client that
+        asks after its own party is one that expects to find it there, which is
+        the evidence against the other reading, that a finished party is
+        dissolved.
+
+        ⚠️⚠️ INVENTED — a finished party keeps everybody's 準備ＯＫ, so the
+        leader can press start again without the room answering twice.
+        Deliberately the smaller half: the client keeps its own 準備ＯＫ across
+        a play -- round 262 watched both cells come back 準備ＯＫ with
+        ［イベントスタート］ lit, against a server that pushed nothing at all --
+        so leaving them set is what makes the screen the client is already
+        drawing true, while clearing
+        them would mean 0xE018 pushes to correct a display nobody asked us to
+        correct. ⛔️ Falsified by a capture where 準備ＯＫ goes out by itself
+        after a play; that would say the original cleared them and so should
+        this end.
+
+        ⚠️ It waits for the last member. Every member gets their own Runner in
+        `_drama_light` and drops it at their own OP_END, so a two-role play
+        arrives here twice; resetting on the first would put the party back on
+        the list as 参加者募集中 while somebody is still on stage.
+
+        ⚠️ A party whose drama has no exported script never lights a Runner and
+        so never arrives here at all. It stays イベント中, which is honest: this
+        machine has no copy of the play, and that is not a state to invent a way
+        out of.
+        """
+        party = self.dramaparties.party_of(session.chara_id)
+        if party is None or party.state != drama.STATE_RUNNING:
+            return b""
+        for actor in party.actors:
+            other = self._session_of(actor.chara_id)
+            if other is not None and other.script is not None:
+                return b""
+        party.state = drama.STATE_RECRUITING
+        print(f"[{self.tag}] drama party end: #{party.party_id} back to "
+              f"参加者募集中, now {self.dramaparties.summary()}")
+        record = drama.party_record(party)
+        self._drama_push_members(
+            party, drama.MSG_SV_NOTIFY_UPDATE, record, skip=session.chara_id,
+        )
+        return self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
+
     def _drama_script(self, party: "drama.Party") -> "script.Script | None":
         """The .ssb a party's drama plays, if this machine has an export of it.
 
@@ -3207,6 +3275,7 @@ class MpsServer:
                 return (
                     self._answer(session, seen, script.MSG_SV_NOTIFY_SCRIPT_END, b"")
                     + self._romance_credit(session, seen)
+                    + self._drama_party_end(session, seen)
                 )
             if op != script.OP_BR:
                 # A notification. The client resolved it itself and is already
