@@ -28,16 +28,33 @@ jobs:
         run: |
           python start_servers.py
           python - <<'PY'
-          import socket
+          import os, socket, sys, time
           # The ports the game and a browser reach; 443 and below need root on
           # Linux and start_servers.py reports them as skipped, so not those.
-          for port in (12000, 12013, 35573, 25573, 25574, 25575):
-              with socket.create_connection(("127.0.0.1", port), timeout=5):
+          ports = [12000, 12013, 35573, 25573, 25574, 25575]
+          pid = int(open("runtime/run_all.pid").read())
+          deadline = time.monotonic() + 60
+          while ports:
+              try:
+                  os.kill(pid, 0)
+              except OSError:
+                  sys.exit(f"server pid {pid} is gone before the ports answered")
+              for port in list(ports):
+                  try:
+                      with socket.create_connection(("127.0.0.1", port), timeout=2):
+                          pass
+                  except OSError:
+                      continue
                   print(f"port {port} answers")
+                  ports.remove(port)
+              if ports and time.monotonic() > deadline:
+                  sys.exit(f"still not answering after 60 s: {ports}")
+              if ports:
+                  time.sleep(1)
           PY
           python stop_servers.py | tee stop.txt
           grep -q '^stopped:' stop.txt
 
-      - name: Log tail on failure
-        if: failure()
+      - name: Log tail
+        if: always()
         run: tail -n 80 runtime/run_all.log || true
