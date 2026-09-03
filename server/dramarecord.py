@@ -85,9 +85,10 @@ class DramaRecords:
                  keywords: int = 0) -> dict:
         """Book one ending. Returns the row as it now stands.
 
-        ``point`` is the 評価ポイント this ending reported, or None when the
-        scenario tied no variable to it (the operand names the compiler's
-        temporary -- `gs3vm.Follower.event_result`). ⭐ A play with no score is
+        ``point`` is the 評価ポイント this ending reported, or None when this
+        end could not produce it -- an ending whose operand names a temporary
+        nobody wrote a constant into, or a shadow that lost its place
+        (`gs3vm.Follower.event_result`). ⭐ A play with no score is
         still a play: `plays` counts it, and only `maxPoint` is left alone.
         ⚠️ It is a *max*, which is the field's own name: a worse second run
         does not overwrite a better first one.

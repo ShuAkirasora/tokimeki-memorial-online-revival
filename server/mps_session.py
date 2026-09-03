@@ -3812,7 +3812,10 @@ class MpsServer:
 
           1. the operand is read (`gs3vm.Follower.event_result` — what the score
              is called, which register holds it, the 評価文 this ending prints,
-             and how many keywords and items it hands out);
+             and how many keywords and items it hands out). ⭐ Three endings out
+             of four keep that score in a temporary the scenario writes a
+             constant into rather than in a declared variable, which is
+             `Follower._literal_score`;
           2. the number is booked against this character's record of the event
              (`dramarecord`, which is where `maxPoint` on the ドラマイベント list
              comes from);
@@ -3840,7 +3843,9 @@ class MpsServer:
                   else str(result["value"]))
         print(f"[{self.tag}] ⭐ ドラマの結果 ip={local}: 「{point}」"
               f"={scored} ({gs3vm.register_name(result['register'])}"
-              + ("" if result["bound"] else "、変数なし") + ")"
+              + ("" if result["bound"]
+                 else "、台本の定数" if result["value"] is not None
+                 else "、変数なし") + ")"
               + f" キーワード{result['keywords']}／アイテム{result['items']}")
         if result["text"]:
             print(f"[{self.tag}]   評価文: "

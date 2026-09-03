@@ -1622,11 +1622,18 @@ class Follower(Machine):
              "register": (category, number), "bound": bool,
              "value": int or None, "keywords": int, "items": int}
 
-        ``bound`` is False for the compiler temporary (B99 and its neighbours),
-        which is the operand's way of saying the author tied no variable to this
-        ending's score. ⚠️ ``value`` is then None *even though the temporary
-        holds a number*: the number is whatever the last expression left there,
-        and reporting it would be inventing a score out of scratch space.
+        ``bound`` is False for the compiler temporary (B99 and its neighbours):
+        the ending's score is not held in a variable the scenario declared.
+
+        ⭐⭐⭐ ``value`` is filled in anyway when the temporary was written by a
+        literal on the way in -- see `_literal_score`, which is what 227 of the
+        corpus's 296 endings do. ⚠️ The earlier reading here was that an unbound
+        operand meant "no score", and it cost the record on three endings out of
+        four: an ending whose score is a constant has no reason to spend a
+        declared variable on it, so the compiler leaves the constant in scratch
+        and the operand names the scratch. ⛔️ It is still None for a temporary
+        nobody wrote a literal into -- that number really would be whatever the
+        last expression left behind.
 
         ⚠️ ``point``/``text`` are None when the export carries no string for the
         reference. That is a scenario exported before round 234 (the
@@ -1647,6 +1654,8 @@ class Follower(Machine):
             except UnsupportedOp:
                 held = TOP
             value = None if _unknown(held) or isinstance(held, str) else held
+        else:
+            value = self._literal_score(register)
         counts = int.from_bytes(args[10:14], "little")
         return {
             "point": self.script.strings.get(int.from_bytes(args[6:10], "little")),
@@ -1657,6 +1666,45 @@ class Follower(Machine):
             "keywords": counts & 0xF,
             "items": (counts >> 4) & 0xF,
         }
+
+    def _literal_score(self, register: tuple[int, int]) -> int | None:
+        """The constant an ending hands `RESULT_MULTI_PLAYER_EVENT`, if it does.
+
+        ⭐⭐⭐ The shape, which is why this is a reading and not a guess::
+
+            OP_STR        <r> = #k        k is 0..5, the five-star scale
+            SYNC_VARIABLE <r>             the same register, to the client
+            RESULT_MULTI_PLAYER_EVENT <r>
+
+        Measured over every exported scenario: **all 296** of the corpus's
+        `0x9200` are preceded by a `SYNC_VARIABLE` on the very register the
+        result names, and of the 227 whose register is a temporary, **227**
+        have that `OP_STR <r> = #k` two instructions back, with no exceptions
+        and no value outside 0..5. ⇒ The scratch register is where a
+        constant score lives, not where a stale one was left.
+
+        ⚠️ The whole shape is required, not just the write: a temporary this
+        scenario merely happened to leave a number in is exactly the case this
+        must keep saying None about, and the `SYNC_VARIABLE` in between is the
+        scenario's own statement that this number is the one it means.
+
+        ⚠️ It reads the instruction stream rather than the register file on
+        purpose. `self._get(register)` would answer for *any* temporary, which
+        is the failure this is guarding against.
+        """
+        i = self.pos
+        if i < 2:
+            return None
+        _, sync_op, sync_args = self.script.code[i - 1]
+        if sync_op != OP_SYNC_VARIABLE:
+            return None
+        _, str_op, str_args = self.script.code[i - 2]
+        if str_op != OP_STR or len(str_args) < 6:
+            return None
+        field = int.from_bytes(str_args[0:2], "little")
+        if _register(field) != register or (field >> 10) & 7 != CAT_IMMEDIATE:
+            return None
+        return int.from_bytes(str_args[2:6], "little")
 
     def branch(self) -> tuple:
         """`(condition, where it would go)` for the OP_BR the client is on.
