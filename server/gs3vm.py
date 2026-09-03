@@ -1354,11 +1354,67 @@ class Follower(Machine):
             # Stepped over rather than reported => its 役柄 test did not hit
             # => it fell through. `flowed` has the other half.
             return i + 1
+        if self.script.code[i][1] == OP_DECL_VARIABLE and self._prologue_done(i):
+            # ⭐⭐⭐ **The prologue's zero-fill is the party's, not a cursor's**,
+            # and a party has one register file with a cursor per member. Each
+            # member's client plays the scenario from the top, so without this
+            # the second cursor to start walking re-runs the zero-fill and
+            # wipes whatever the first one has already put in the declared
+            # registers.
+            #
+            # ⚠️ That is not hypothetical and not a tie-break between two
+            # readings: `un010` sets `B1`/`B2`/`B3` inside an `OP_BA 01`
+            # bracket -- 役柄 0 only, the same "let one writer do it" idiom
+            # `un081` uses for `B1` -- and *before* the first `PLAYER_SYNC`, so
+            # nothing orders it against the other member's first report. `B3`
+            # is the チョコ回収 round counter: set to 4, decremented once per
+            # round inside `OP_BA 01`, and the loop at ip=26984..27407 leaves
+            # only when it reaches 0 or the 3 chocolates are in. Zeroed behind
+            # 役柄 0's back it counts 0, -1, -2, ... and the loop never ends.
+            # Played out over one register file, 6 of 12 random runs hang in
+            # that loop with the zero-fill left per-cursor; with it done once
+            # all 6 of them count 4, 3, 2, 1, 0 and reach `OP_END`.
+            #
+            # ⚠️ It is not the only way that scenario hangs, and this does not
+            # claim to be: 3 of those 12 still end with one cursor waiting at a
+            # barrier while the other circles a loop of its own -- two members
+            # a barrier apart, which is `_keep_own`'s subject and not this one.
+            #
+            # ⚠️ Scenarios that write their shared registers on the main line
+            # are immune either way -- the second cursor wipes and rewrites
+            # them as it walks the same instructions -- which is why this stayed
+            # invisible: `un081` and `un066` play identically with and without
+            # it (12 random runs each, same endings, same counts).
+            return i + 1
         nxt = super()._step(i)
         if self.season is not None:
             self._reseason(i)
         self._keep_own(i)
         return nxt
+
+    def _prologue_done(self, i: int) -> bool:
+        """True when another cursor of this party already ran this zero-fill.
+
+        ⭐ Read off the file itself rather than kept as a flag: the zero-fill
+        writes `(category, 0 .. count-1)`, so `(category, 0)` being present is
+        exactly "somebody has been here". Nothing else can have written it
+        first -- the prologue is the run of `OP_DECL_VARIABLE` at the top of
+        the script, ahead of every other instruction.
+
+        ⭐ Both halves of that were checked over the corpus rather than
+        assumed: of all 778 exported scenarios, none declares the same
+        category twice -- so a second `OP_DECL_VARIABLE` for a category can
+        only be another cursor's -- and none carries an `OP_DECL_VARIABLE`
+        anywhere but that opening run.
+
+        ⚠️ A solo follower has a register file of its own and walks the
+        prologue exactly once, so this never fires for one; `in_party` says
+        which case this is.
+        """
+        if not self.in_party:
+            return False
+        field = int.from_bytes(self.script.code[i][2][0:2], "little")
+        return (field & DECL_CAT_MASK, 0) in self.registers
 
     def _written_register(self, i: int) -> "tuple[int, int] | None":
         """The register instruction `i` writes, or None if it writes none.
