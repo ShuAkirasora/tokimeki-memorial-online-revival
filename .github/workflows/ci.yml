@@ -1,0 +1,43 @@
+# The one thing a stranger's clone has to be able to do: compile, start, answer
+# on its ports, stop. No client is involved, so nothing here says anything about
+# the protocol -- a green run means the tree is intact, not that the game works.
+name: server starts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  start-stop:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Compile everything
+        run: python -m compileall -q .
+
+      - name: Start, confirm the ports answer, stop
+        run: |
+          python start_servers.py
+          python - <<'PY'
+          import socket
+          # The ports the game and a browser reach; 443 and below need root on
+          # Linux and start_servers.py reports them as skipped, so not those.
+          for port in (12000, 12013, 35573, 25573, 25574, 25575):
+              with socket.create_connection(("127.0.0.1", port), timeout=5):
+                  print(f"port {port} answers")
+          PY
+          python stop_servers.py | tee stop.txt
+          grep -q '^stopped:' stop.txt
+
+      - name: Log tail on failure
+        if: failure()
+        run: tail -n 80 runtime/run_all.log || true

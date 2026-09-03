@@ -946,6 +946,7 @@ the game's content, it came from your copy, and it stays on your machine.
 | Path | |
 |---|---|
 | `start_servers.py`, `stop_servers.py` | start and stop everything |
+| `.github/workflows/ci.yml` | on every push: compile everything, start the server, check its ports answer, stop it — on Python 3.11 and 3.14 |
 | `Play.cmd`, `play.py` | the client half in one run: hosts, the four bytes, and the game started. `Play.cmd` is the Windows double-click and asks for the rights the other one needs |
 | `set_auth_address.py` | the four-byte address change described above |
 | `export_scripts.py` | write the script exports out of your own copy of the game |
