@@ -3030,6 +3030,16 @@ class MpsServer:
         for (actor_id, _), other in zip(cast, sessions):
             other.script = script.Runner(found, 0, [])
             other.talking_choice = None
+            # ⭐ One `script start` per member, in the shape the solo door
+            # prints, plus the two fields that tell the members apart: the 役柄
+            # each of them walks the scenario as, and the party they share a
+            # register file with. The `drama light` line above says the play
+            # began; these say who is in it, one line each, so that a reader
+            # ends up with one walk per member rather than one per play.
+            print(f"[{self.tag}] script start {found.file} "
+                  f"id={found.script_id} actor={actor_id} "
+                  f"party={party.party_id} ctrl=0 npcInfo=[] "
+                  f"pcInfo={[a for a, _ in cast]} ({len(found)} instructions)")
             self._shadow_start(other, found.script_id, party_registers, actor_id)
             if other is presser:
                 out = self._answer(
@@ -3197,7 +3207,21 @@ class MpsServer:
     ) -> bytes | None:
         """Anything the client sends back in the 0x72xx range."""
         name = MESSAGE_NAMES.get(msg_type, "unknown")
-        print(f"[{self.tag}] script <- {name} (0x{msg_type:04x}) params={params.hex()}")
+        # ⭐⭐⭐ Which 役柄 is speaking, whenever there is more than one road to
+        # be on. A party plays one scenario down two different roads, and every
+        # member reports under this one process tag -- so a reader of the log
+        # with nothing but the tag to go on stitches the two walks into a third
+        # one that never happened. Everything printed below this line belongs to
+        # this member: the nested call in `_release_held_branches` re-enters
+        # here and prints its own header first.
+        # ⚠️ No field at all for a solo script, which is also every log written
+        # before round 272: a reader that has never seen `actor=` behaves the
+        # way it always did.
+        party = self.dramaparties.party_of(session.chara_id)
+        actor = party.actor_of(session.chara_id) if party is not None else None
+        print(f"[{self.tag}] script <- {name} (0x{msg_type:04x}) "
+              f"params={params.hex()}"
+              + (f" actor={actor.actor_id}" if actor is not None else ""))
         if session.script is None:
             print(f"[{self.tag}] script <- arrived with no script running")
             return None
