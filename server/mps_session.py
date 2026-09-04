@@ -139,6 +139,38 @@ IDLE_TIMEOUT_S = float(os.environ.get("TMO_IDLE_S") or 300.0)
 #: which is for reproducing a report and nothing else -- see `gs3vm._Die`.
 SCRIPT_DIE_SEED: int | None = None
 
+
+def _die_pins(spec: "str | None") -> "dict[int | None, bool]":
+    """Read `TMO_SCRIPT_DIE` into `{script ip: which arm}`, `None` meaning every site.
+
+    ⭐⭐ What it is for. A coin decides an arm that nobody chose, so walking a
+    scenario's branches one answer at a time can never be complete while a die
+    is on the road: the subtree under the arm the coin did not take is never
+    entered, and nothing reports that it was skipped -- every run still ends at
+    `OP_END` and every reply still matches what the shadow computed. Pinning
+    the die turns that layer back into an answer, which is the only thing an
+    enumeration can be exhaustive over.
+
+    `"1"` or `"0"` pins every site; `"14677=1,14685=0"` pins those sites by the
+    script ip the log prints and leaves every other site on the coin. `1` is
+    「成立」 (the branch is taken), `0` the fall-through.
+
+    ⚠️ Unset is a real coin at every site -- the shipping behaviour -- so an
+    interrupted measuring session leaves nothing pinned behind.
+    """
+    pins: "dict[int | None, bool]" = {}
+    for part in (spec or "").replace(",", " ").split():
+        site, _, arm = part.rpartition("=")
+        if arm not in ("0", "1") or (site and not site.isdigit()):
+            raise ValueError(
+                f"TMO_SCRIPT_DIE: {part!r} is neither <script ip>=0|1 nor 0|1")
+        pins[int(site) if site else None] = arm == "1"
+    return pins
+
+
+#: Which arm each `OP_RAND` branch takes when it is not left to the coin.
+SCRIPT_DIE_PINS = _die_pins(os.environ.get("TMO_SCRIPT_DIE"))
+
 TAG_TIMESYNC = 0x08
 TAG_MESSAGE = 0x30
 TAG_FRAGMENT = 0x31
@@ -2030,16 +2062,23 @@ class MpsServer:
             print(f"[{self.tag}] {name}: 書き戻せませんでした")
         return result
 
-    def _script_die(self, session: "_Session", wire_ip: int) -> bool:
+    def _script_die(self, session: "_Session", wire_ip: int, ip: int) -> bool:
         """Flip the coin an `OP_RAND` branch needs. True means「成立」.
 
         ⭐ A coin and not a roll: what `OP_RAND` draws from has never been read,
         and a two-armed `OP_BR` is a two-way choice whatever the range is. The
         reasoning, and the cost of it for an n-way ladder, are in `gs3vm._Die`.
+
+        ⭐⭐ Unless the site is pinned (`_die_pins`), in which case this is not a
+        coin at all. The line says which it was, because 「the run happened to
+        take the other arm」 and 「the run was told to take this arm」 are two
+        readings of the same road and only the log separates them.
         """
-        heads = self._script_dice.getrandbits(1) == 1
-        print(f"[{self.tag}] script die at wire {wire_ip}: "
-              f"{'成立' if heads else '不成立'}")
+        pinned = SCRIPT_DIE_PINS.get(ip, SCRIPT_DIE_PINS.get(None))
+        heads = self._script_dice.getrandbits(1) == 1 if pinned is None else pinned
+        print(f"[{self.tag}] script die at ip={ip} (wire {wire_ip}): "
+              f"{'成立' if heads else '不成立'}"
+              f"{'' if pinned is None else ' (pinned)'}")
         return heads
 
     def _script_keywords(self, session: "_Session", result) -> None:
@@ -3365,7 +3404,7 @@ class MpsServer:
                     # 「is there anybody else who could answer」 and always was.
                     # What still outranks it is the same thing that outranks the
                     # case below: `why == STANDING_NO`.
-                    heads = self._script_die(session, wire_ip)
+                    heads = self._script_die(session, wire_ip, local)
                     if heads:
                         target = found.wire_ip(goes_to)
                     why = f"サイコロ (OP_RAND -> {'成立' if heads else '不成立'})"
