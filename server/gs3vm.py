@@ -1859,6 +1859,18 @@ class Follower(Machine):
         that exists. A loop that redraws the same box gets a different answer
         the second time round, which is the whole reason this class walks along
         instead of a table having been built once.
+
+        ⚠️⚠️ **Option `k` is not register number `k`.** Only the low five
+        bits of a SELITEM number are the option number; the two bits above
+        them pick one of two banks, and a script that writes a computed flag
+        often writes it to the high bank -- 113 of the 1853 choice boxes in
+        the export do, 314 options across 24 scenarios, and a box mixes the
+        banks freely (`un007` ip=6803 writes options 0, 1, 2 to numbers 32, 1
+        and 34). Reading `(CAT_SELITEM, k)` for those does not read the flag
+        the script just wrote: it reads whatever the **previous** box left at
+        that number, which is a stale value and not a hole, so it does not
+        degrade into "offer the line" the way ⊤ does. `_selitem_numbers`
+        pairs each option with the number its own flag went to.
         """
         if self.lost or self.script.code[self.pos][1] != OP_INPUT_SELECT:
             return 0, 0, 0
@@ -1866,15 +1878,57 @@ class Follower(Machine):
         # `+16` in the instruction is `(auxiliary word offset << 12) | count`,
         # the same packing SYNC_VARIABLE uses; the operands here begin at `+2`.
         options = int.from_bytes(args[14:18], "little") & 0x3F
+        numbers = self._selitem_numbers(options)
         mask = unknown = 0
         for k in range(options):
-            value = self.registers.get((CAT_SELITEM, k), TOP)
+            number = numbers.get(k)
+            value = TOP if number is None else self.registers.get(
+                (CAT_SELITEM, number), TOP)
             if _unknown(value):
                 unknown |= 1 << k
             elif value:
                 mask |= 1 << k
         self.selects.append((ip, mask, unknown, options))
         return mask, unknown, options
+
+    def _selitem_numbers(self, options: int) -> dict[int, int]:
+        """Option index -> the SELITEM register number this box's flag is in.
+
+        The run of `OP_STR` writes immediately in front of an
+        `OP_INPUT_SELECT` is that box's flags, one per option, and the low
+        five bits of the number are the option number. Both halves of that are
+        measured rather than assumed: over the whole export every choice box
+        has exactly as many such writes in front of it as it declares options,
+        and their low five bits are exactly a permutation of `0..n-1` -- no
+        exceptions, no duplicates, no gaps, for counts from 2 to 21.
+
+        ⭐ Walking backwards from the box is the same rule read from the same
+        end, and it needs no state: a loop that comes round and rewrites the
+        flags rewrites them in the same place, so the answer is right for the
+        second pass over a box as well as the first.
+
+        ⚠️ An option whose write this cannot find is left out, and `select`
+        reads that as ⊤ -- "this end could not work out that line" is exactly
+        what a missing flag is, and ⊤ is the half of the two that degrades
+        into offering the line rather than hiding it.
+        """
+        numbers: dict[int, int] = {}
+        for j in range(self.pos - 1, -1, -1):
+            op, args = self.script.code[j][1], self.script.code[j][2]
+            if op == OP_INPUT_SELECT:
+                break
+            if op != OP_STR or len(args) < 2:
+                continue
+            category, number = _register(
+                int.from_bytes(args[0:2], "little"))
+            if category != CAT_SELITEM:
+                continue
+            option = number & 0x1F
+            if option < options:
+                numbers.setdefault(option, number)
+                if len(numbers) == options:
+                    break
+        return numbers
 
     def select_actors(self) -> int | None:
         """Which 役柄 the choice box the client is stopped on is addressed to.
