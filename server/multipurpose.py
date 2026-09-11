@@ -68,14 +68,29 @@ the only candidate left is the manual's sentence. A gate the client keeps is a
 gate the server never needs a reason code for.
 
 ⇒ This end does not invent it either: booking asks for a group, which is the
-least the request needs to name a booker at all. ⚠️ It is untested for exactly
-that reason -- 0x0906 has never been on the wire, because nothing in reach is a
-同好会 yet.
+least the request needs to name a booker at all.
+
+⭐⭐⭐ **Round 300 measured that gate, and it is the manual's sentence.** The
+same window, the same viewer, the same group, one byte apart: with the group an
+ordinary one every row drew grey and unclickable, and with it promoted the same
+fourteen rows all read 「予約可能」 and take a click. So the paragraph above is
+no longer a reading of an asymmetry -- it is a before-and-after with a single
+variable, and 0x0906 has been on the wire ever since.
 
 What a booking is, then: one group holds at most one across all seven rooms
 (reason 5 says so in one sentence), on one day inside the horizon (reason 6),
 and cancelling it is refused for somebody else's group (0x090B reason 4) or
 when there is none (reason 5).
+
+⭐⭐ **The first of those is this end's to keep, and round 300 watched the
+client fail to keep it.** Holding a booking in room 0, tab 2 still drew every
+day as 予約可能 and sent 0x0906 for one of them: the client greys only the room
+whose list it is looking at. The refusal came back as reason 5 -- and, worth
+writing down because the neighbouring family had just suggested otherwise, **the
+client drew it**: 「既に予約しています。同時に２件以上予約することはできません。」,
+word for word the error table's line, in a box with no button that closes itself
+after a few seconds. ⇒ Whether a family's refusals reach the screen is a fact
+about that family; do not carry a negative across from another one.
 
 ⭐⭐⭐ **What the list is, and what it is not.** 0x0901 carries the room's
 *bookings*, not its days. The window draws fourteen dated rows on its own --
@@ -91,10 +106,14 @@ that date:
 fell into: one row per day with the free ones left blank drew a full white list
 of fourteen days all apparently held by the viewer's group. See BookingBook.rows.
 
-⚠️ Where the window's own fourteen days start is **not identified**. It was
-2026-09-06 on every open of a session whose clock said 2026-08-28, across three
-different payloads, so it is the client's and not ours; whether it counts from
-the client's clock, a weekday, or something else has not been measured.
+⚠️ Where the window's own fourteen days start is **still not identified**, and
+round 300 sharpened the question without answering it. It was 2026-09-06 on
+every open of a session whose clock said 2026-08-28, across three different
+payloads; it was 2026-09-20 on a client whose clock said 2026-09-11. Both are
+the ninth day after that client's today -- and both of those todays were a
+Friday, so 「today + 9」 and 「the Sunday after next」 fit the two samples
+equally well. ⭐ The cheap way to tell them apart is to read the first row on a
+day that is not a Friday, not to design an experiment for it.
 
 ⚠️ The calendar is the school clock, i.e. wall-clock time, the same one
 curriculum.clock runs on. A booking that falls out of the horizon is expired
@@ -149,11 +168,14 @@ WINDOW_DAYS = 14
 #: ⚠️⚠️ Deliberately wider than WINDOW_DAYS, and the reason is an admission: the
 #: fourteen days the client draws did **not** start on its own today. Three
 #: different payloads on a client whose clock said 2026-08-28 all produced the
-#: same 2026-09-06 … 2026-09-19, so the start is the client's and computed from
-#: something this end has not identified. Refusing on a fortnight measured from
-#: *this* end's today would therefore refuse days the client is offering, which
-#: is a rule invented by accident. A horizon that covers the drawn window and
-#: nothing beyond a month is the smallest honest thing to check instead.
+#: same 2026-09-06 … 2026-09-19, and a second session (clock 2026-09-11) drew
+#: 2026-09-20 … 2026-10-03, so the start is the client's and computed from
+#: something this end has not identified -- ⚠️ both samples are the ninth day
+#: ahead, but both were read on a Friday, which leaves a weekday rule just as
+#: consistent. Refusing on a fortnight measured from *this* end's today would
+#: therefore refuse days the client is offering, which is a rule invented by
+#: accident. A horizon that covers the drawn window and nothing beyond a month
+#: is the smallest honest thing to check instead.
 HORIZON_DAYS = 30
 
 #: The longest comment 0x0906 is allowed to bring back out. The field is counted

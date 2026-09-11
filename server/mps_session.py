@@ -11374,6 +11374,15 @@ class MpsServer:
         it opens pre-filled with the asker's own group and name -- which is what
         the four fields are for on the way *in*: 0x0906 sends a comment and a
         publicFlag back, and they have to be shown before they can be edited.
+
+        ⚠️⚠️ **Round 300, with the days finally clickable, found that the free
+        day never asks.** Clicking 予約可能 puts up the ［予約］ form with
+        nothing on the wire at all -- the client fills the group name from what
+        it already knows -- and 0x0903 arrives only for a row that holds a
+        booking. So the free-day branch below answers a question the real client
+        does not ask. It stays: it is the honest answer to the message, it costs
+        nothing, and the reasoning above about 0x0905 is unchanged -- but do not
+        read its output as something a player can see.
         """
         room = struct.unpack_from(">H", params, 0)[0] if len(params) >= 2 else 0xFFFF
         day = multipurpose.read_date(params, 2)
@@ -11424,7 +11433,12 @@ class MpsServer:
         booking -- while the β manual says the room is something a 同好会 can
         book. This end does not invent that gate: it asks for a group, which is
         the least the request needs to name a booker at all, and leaves the
-        manual's sentence an open question rather than a check with no witness.
+        manual's sentence to the client, which round 300 watched enforce it.
+
+        ⭐⭐ Reason 5 is the one that earns its keep, and it is this end's alone:
+        the client greys days per room, so a group already holding one in room 0
+        is offered every day of room 1 and will happily ask for it. Round 300
+        did, got reason 5 back, and the client put the sentence on the screen.
         """
         room = struct.unpack_from(">H", params, 0)[0] if len(params) >= 2 else 0xFFFF
         day = multipurpose.read_date(params, 2)
