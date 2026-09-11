@@ -97,6 +97,19 @@ class _Die(_Top):
     two-way choice whatever the range is, so a coin at the branch needs no range.
     ⚠️ The cost, written down rather than hidden: an n-way ladder built out of
     two-armed branches comes out 1/2, 1/4, 1/4 … instead of uniform.
+
+    ⚠️⚠️ Round 306 found that the cost is not only a skew. The リーダー試験
+    picks its question with a fifteen-rung ladder wrapped in 「reroll while the
+    bit is already set」, so the geometric weights multiply: with only rung 11
+    still free, one station spent 2968 rerolls without ever reaching it (rung 10
+    came up twice, rung 11 never), and the tour stopped there. A skew delays a
+    branch; a skew inside a rejection loop stops a scenario. ⭐ What got past it
+    was `TMO_SCRIPT_DIE` pinning the rungs by site -- which is what pinning is
+    for -- ⛔️ not a change here.
+    ⭐ The reopen condition for settling the register after all is the sentence
+    above it: at these sites the range is not unread. `PC_LEADER_EXAM_DRAW`
+    writes down why this call site's operand can be read as a bound when a
+    corpus scan of all 143 cannot.
     """
 
     __slots__ = ()

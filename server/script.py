@@ -1597,14 +1597,37 @@ PC_LEADER_QUALIFIED = 0x3B00
 #: is the only place it can live. groups.ExamRecord is that place.
 PC_LEADER_EXAM_ANSWERED = 0xD13E
 
-#: Whatever the scenario's own サイコロ left in a register on the way out.
-#: Seventeen scenarios write it once and read it once (at the top of the body,
-#: against 255); the secretary writes it three times, twice to clear it.
-#: ⛔️ NOT 「which station is next」, which is what round 304 guessed from two
-#: samples: round 305 walked three stations and the tour is ordered by
-#: PC_LEADER_EXAM_ANSWERED instead -- kyt wrote 9 here and the next scenario to
-#: ask a question was number 2. ⚠️ What it actually drives has not been read,
-#: so the name says what was measured and nothing more.
+#: Which questions this run of the exam has already asked -- a BITMASK, one bit
+#: per question, and round 306 read it off the scenarios rather than guessing at
+#: it. ⛔️ It is not 「which station is next」 (round 304's guess from two
+#: samples, retired in round 305) and it is not a station number at all: the
+#: fourteen stations of one tour left 1, 9, 11, 15, 31, 159, 191, 255, 767,
+#: 4863, 5119, 6143, 8191, 16383 here, which is one new bit set each time.
+#:
+#: ⭐⭐ What each station does with it, in the order the code does it:
+#:   * read the mask;
+#:   * pick a pool by how full it is -- below 255, OP_RAND(7); below 16383,
+#:     OP_RAND(5) + 8; otherwise the constant 14;
+#:   * turn that number into a single bit through a fifteen-rung ladder of
+#:     `B2 == k -> B4 = 1 << k`, k running 0..14;
+#:   * test the bit the way a VM with no AND does, `(mask % (2*B4)) / B4`;
+#:   * if it is already set, throw the pick away and start over at the pool;
+#:   * otherwise add B4 to the mask and store it back, next to the counter.
+#: ⇒ ⭐⭐⭐ the exam has FIFTEEN questions and a tour draws FOURTEEN of them:
+#: the one the secretary asks when she opens it, plus one from each of the
+#: thirteen stations that ask (the fourteenth number is her own, and that visit
+#: judges). ⭐ Question 14 is therefore never asked by an ordinary tour -- its
+#: pool is the `otherwise` arm, which is only reached once the mask has reached
+#: 16383 -- so a finished tour leaves 16383 here and not 32767.
+#:
+#: ⚠️ The three pools partition the fifteen rungs exactly -- 8 + 6 + 1 -- if
+#: OP_RAND's operand is an inclusive upper bound. That is a reading of this call
+#: site, not a measurement of the opcode: the operand is two bytes wide and a
+#: corpus scan cannot tell a small constant from a register reference. The
+#: reading is offered because the register one leaves the pool gates, whose
+#: constants are exactly the all-ones of the first eight and of the first
+#: fourteen bits, with nothing to mean.
+#:
 #: ⚠️ Same lifetime as the counter above and for the same reason, so the same
 #: record holds it.
 PC_LEADER_EXAM_DRAW = 0xD13D
