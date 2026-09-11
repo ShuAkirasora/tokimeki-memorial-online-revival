@@ -11529,6 +11529,13 @@ class MpsServer:
         ⭐ There is no notify in this family, so the other members do not learn
         about a new キャッチコピー until they reopen the window (0x6207 asks
         every time it opens, measured in round 142).
+
+        ⭐⭐ 非公開 is refused on a 同好会, and the byte that says so is the
+        client's own: 0x620C's sentences are read out of the 0xFF07 table and
+        reason 27 there is 「同好会を非公開にはできません。（公開必須です）」.
+        groups.promote() forces 公開 on at the moment of promotion; this is the
+        other end of the same rule, because the dropdown in this window is where
+        a leader would otherwise put it back.
         """
         book = self.accounts.groups
         me = session.chara_id
@@ -11547,6 +11554,13 @@ class MpsServer:
                 struct.pack(">B", groups.REASON),
             )
         assert group is not None
+        if group.clublike and not public:
+            print(f"[{self.tag}] group update by charaId={me} on "
+                  f"{group.label()} refused: a 同好会 must stay 公開")
+            return self._answer(
+                session, seen, groups.MSG_SV_NG_CHARA_GROUP_UPDATE,
+                struct.pack(">B", groups.NG_CLUBLIKE_PUBLIC_REQUIRED),
+            )
         # ⭐ The length is logged raw because it is the cheapest reading of the
         # client's own edit-box limit: type as much as the box takes, press the
         # button, and the number is here. Nothing else measures it -- the wire

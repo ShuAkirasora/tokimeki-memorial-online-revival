@@ -280,6 +280,19 @@ MAX_MEMBERS = 15
 #: ⚠️ INVENTED, like every other reason byte here. See mps_session.NG_REASON.
 REASON = 0
 
+#: ⭐ NOT invented, unlike REASON above. 0x620C's sentences do not hang on its
+#: own id: the client looks them up under the pseudo id 0xFF07, the table the
+#: whole group family shares, and reason 27 there reads 「同好会を非公開には
+#: できません。（公開必須です）」. It is the other half of promote()'s forced
+#: public=1 -- that call makes a 同好会 公開 at the moment of promotion, and this
+#: is what stops its leader from putting it back through ［更 新］.
+#: ⚠️ Only 非公開 (0) is refused. The dropdown has two entries and 1 is 公開, but
+#: update() deliberately round-trips whatever byte arrives instead of clamping it
+#: (the reason is written there), and refusing everything that is not 1 would
+#: spend that measurement: a third state, if the client has one, still has to
+#: reach the store to become visible.
+NG_CLUBLIKE_PUBLIC_REQUIRED = 27
+
 #: ⚠️⚠️ NOT invented, and not what the message names suggest: the two buttons in
 #: the 「引継ぎ依頼」 box both send 0x6211 (the *Ok* message) and put the decision
 #: in its answer byte -- 1 from ［引き継ぐ］, 0 from ［断 る］. 0x6212, whose name
@@ -572,8 +585,10 @@ class GroupBook:
         （公開必須です）」, so the client already ships the sentence for a 同好会
         that tries to go 非公開. Doing it here at the moment of promotion is what
         keeps that sentence from ever being needed.
-        ⚠️ Whoever answers 0x620A next has to refuse 非公開 on a 同好会 with that
-        very reason, or this half is decorative.
+        ⚠️ The other half is in mps_session._group_update, which refuses 非公開
+        on a 同好会 with that very reason (NG_CLUBLIKE_PUBLIC_REQUIRED); without
+        it this one would be decorative, since ［更 新］ could put it straight
+        back.
 
         ⚠️ The caller checks the rules; this only writes. That split is the same
         one create/join keep, and it is what lets the refusals quote the
