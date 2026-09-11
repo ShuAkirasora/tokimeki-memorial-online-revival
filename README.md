@@ -135,7 +135,18 @@ locker the whole account shares. A training room goes up on the noticeboard, oth
 join it, and the match that follows runs its full eight turns: the cards each side plays,
 the order they resolve in, the effects and reactions they draw, status ailments that outlast
 the turn that caused them, a result screen, and a player who drops out halfway carried to
-the end rather than stranding everybody else.
+the end rather than stranding everybody else. Club special moves are made the way the
+recipe says, by laying the right materials out in the right places, and the one that comes
+out of it goes into a deck and fires in a match like any other card.
+
+**Things one player puts up and another walks into.** A notice written and planted on the
+ground, which everybody else sees as an icon above its owner's head and reads by
+right-clicking it. A chat room opened the same way, that other people join, talk in, and
+leave. The school newspaper, whose pages the client draws out of its own copy of the game
+once this side has said it may open them. Handing an item to another player face to face,
+with both sides confirming twice before it moves. And the two-person conversation behind
+the right-click menu, where each of you gets a waist-up view of the other, a line to say,
+and a row of expressions to say it with.
 
 **Scripted events.** The client plays a cut-scene out of its own copy of the game and stops
 at every branch to ask this end which way to go — which is where that decision always
@@ -147,7 +158,13 @@ client never had, or, on a copy with no script exports to run, from `season_swit
 Between them: right-click conversations with the candidates who have
 appeared, the choice boxes inside them and the intimacy each answer is worth, the opening
 tutorial, the letter in the classroom lockers, the drama events, and the ending with its
-staff roll. Two of the scripts running here are the *original server's* own — the pair
+staff roll. A drama can also be played by two people at once: one of them founds a party,
+the other joins it, both declare themselves ready, and the scene that follows gives each of
+them a part to play — a choice waits until both have answered and refuses to move on while
+they disagree, a loop counts down the tries it allows, and a box you type into turns what
+you typed into a line somebody says. What the pair of you end up with is written to the save
+as progress, and shows up as stars on the screen that tracks it.
+Two of the scripts running here are the *original server's* own — the pair
 behind the row of lockers that decides whether a letter is waiting — read out of the game's
 data and run on this side, which is the side they always ran on.
 
