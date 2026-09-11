@@ -657,6 +657,14 @@ def _load_npc_events() -> dict[tuple[int, int], list[dict]]:
     have" is a lookup. 2:9 (理事長秘書) owns exactly one: `common_npc_event 9:1`,
     which is hsy_c002.ssb.
 
+    ⭐ Three NPCs have now answered on screen, and the two added last picked
+    the lookup apart: 2:0 (the baseball captain) and 3:27 (the PE teacher) each
+    carry two events, so `id == 1` had to choose rather than be the only row,
+    and 3:27's exam is filed under key 91:1 while its roster index is 27 -- a
+    reading that derives the index from the key gets a different person there.
+    Both were written down from the table before the client was started and
+    both came back byte for byte.
+
     ⚠️ And it settles a trap the key alone walks into: an event's categoryId is
     *not* the roster index, it only usually equals it. common_npc_event's
     category 2 belongs to roster 2:3 and category 3 to roster 2:2 -- 内海 and

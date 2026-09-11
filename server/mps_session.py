@@ -2526,6 +2526,16 @@ class MpsServer:
             # this end: each .ssb names its actors, which is why 223 placement
             # scripts can all say NPC#1 and still be 223 different people.
             infos = [(actor["actorId"], actor["id"]) for actor in found.actors]
+            # ⚠️ This is the default key, not necessarily the one that was
+            # handed back: the ring's リーダー試験 and the locker's letter both
+            # pick their event into a local at 0x6304 and leave npc_event
+            # alone, so ending one of those is logged as the default 日常会話.
+            # Harmless today -- that one grants nothing, so nothing is written
+            # -- and ⛔️ writing the handed-back key here instead would be
+            # worse, because whose_event reads capture_npc_event categories and
+            # a common/general key means a different person in that numbering.
+            # The fix is to carry the key only while the answered npcId belongs
+            # to capture_npc_event (event_table_for) and None otherwise.
             session.talking_about = session.npc_event
             return reply + self._script_start(session, seen, found, 0, infos)
 
@@ -6083,6 +6093,16 @@ class MpsServer:
         Every refusal here is a sentence the client already has; see club.py for
         which index selects which, and for why 6 is the only one that means
         anything specific.
+
+        ⭐ Measured from the real menu at last: right-clicking a captain
+        offers 「入部」, which starts no event -- the client draws its own
+        「入部確認」 box inside a 0x4E00/0x4E03 bracket, and 「は い」 is what
+        sends this message. The clubId is the captain's own, read out of the
+        client's table rather than asked for. What confirms it landed is the
+        生徒情報 window: 所属部 goes from 無所属 to the club's name, and the
+        captain's ring redraws with 退部 in the same slot and the two items
+        that need membership no longer greyed. The refusals (and 0x5A03) have
+        still never been on screen.
         """
         club_id = club.parse_enter(params)
         state = self._chars(session).club(session.chara_id)
