@@ -279,7 +279,7 @@ TEAM_B = 1
 TEAMS = (TEAM_A, TEAM_B)
 
 
-def _string(raw: bytes) -> bytes:
+def counted_string(raw: bytes) -> bytes:
     """A counted string the way this protocol writes them: u16 length, then bytes.
 
     The count includes the NUL, matching chat.notify_params — the client's own
@@ -435,7 +435,7 @@ class Room:
         """0x5804: leaderId u32, headline, limit u8, team1 u8, team2 u8."""
         return (
             struct.pack(">I", self.leader_id)
-            + _string(self.headline)
+            + counted_string(self.headline)
             + struct.pack(
                 ">BBB",
                 self.limit & 0xFF,
@@ -448,7 +448,7 @@ class Room:
         """0x5807: the same head, without the two counts."""
         return (
             struct.pack(">I", self.leader_id)
-            + _string(self.headline)
+            + counted_string(self.headline)
             + struct.pack(">B", self.limit & 0xFF)
         )
 
@@ -594,7 +594,7 @@ def notify_chat_params(chara_id: int, family: bytes, first: bytes, text: bytes) 
         struct.pack(">I", chara_id)
         + family[:NAME_LEN].ljust(NAME_LEN, b"\x00")
         + first[:NAME_LEN].ljust(NAME_LEN, b"\x00")
-        + _string(text)
+        + counted_string(text)
     )
 
 

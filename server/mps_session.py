@@ -75,6 +75,7 @@ from characters import (
 )
 import ability
 import accounts
+import billboard
 import career
 import chat
 import club
@@ -1259,6 +1260,10 @@ class MpsServer:
         # while its leader is logged in, and 0x580D reason 2 (切断による) is the
         # protocol saying so.
         self.trainingrooms = trainingroom.Board()
+        # 看板（お知らせ）, on the board for the same reason and with the same
+        # lifetime: the whole point of a 看板 is that somebody else reads it,
+        # so it cannot live on the session that put it up. See billboard.py.
+        self.billboards = billboard.Board()
         # Fights in progress, opened by 0x5C06 and found by any participant.
         # Separate from the room board because a battle is not a room: 練習 and
         # フリー対戦 reach the same 0x5C** messages without one, and this server
@@ -1649,22 +1654,31 @@ class MpsServer:
           player is standing at the classroom lockers with a window up, and the
           map character stood there idle until round 210.
 
-        ⚠️ INVENTED: the order. Nothing says which icon wins when two apply, and
-        as written a lesson beats a fight beats a room beats a locker. Two of
-        these can now genuinely coincide -- a room leader can open a locker --
-        and the room wins on purpose: 「自主トレ募集中」 is the only door into
-        somebody else's room (p05_08 again), so replacing it with a purely
-        informational icon would take a working affordance off the screen. The
-        other pairs still cannot happen. What would overturn any of it is a
-        manual line or a capture showing a different icon on a character who
-        qualifies for two.
+        * 看板 while a 看板（お知らせ）is up. `p05_08`: 「看板を出しているプレ
+          イヤーのマップキャラに表示されます」 -- and like the room icon this
+          one is an affordance rather than a notice, because the map character
+          it is drawn on is what a reader right-clicks to send 0x4B06. See
+          billboard.py.
 
-        ⚠️ Six of the ten icons p05_08 names still cannot be sent, and none of
+        ⚠️ INVENTED: the order. Nothing says which icon wins when two apply, and
+        as written a lesson beats a fight beats a room beats a 看板 beats a
+        locker. Two of these can now genuinely coincide -- a room leader can
+        open a locker -- and the room wins on purpose: 「自主トレ募集中」 is the
+        only door into somebody else's room (p05_08 again), so replacing it with
+        a purely informational icon would take a working affordance off the
+        screen. ⭐ The 看板 sits where it does for the same reason and one step
+        down: it is a door too (0x4B06 has no other entry), so it outranks the
+        locker, and it yields to the room only because a character cannot have
+        both -- putting a 看板 up while in a room is refused at the other end.
+        What would overturn any of it is a manual line or a capture showing a
+        different icon on a character who qualifies for two.
+
+        ⚠️ Five of the ten icons p05_08 names still cannot be sent, and none of
         them is wiring: 会話中 / トレード中 / ドラマイベント中 / 校内新聞閲覧中 /
-        看板 / チャット募集中 each want a subsystem that is not here. The last
-        three have a message family apiece (0x0A00 newspaper, 0x4B00 billboard,
-        0x4C80 chatroom) and this server answers none of them, so the client has
-        never been seen sending one either.
+        チャット募集中 each want a subsystem that is not here. Two of those have
+        a message family apiece (0x0A00 newspaper, 0x4C80 chatroom) that this
+        server does not answer; the third family of that set, 0x4B00, is
+        answered now and its icon is the one above.
         """
         if other.lesson is not None:
             return ACTION_LESSON
@@ -1673,6 +1687,8 @@ class MpsServer:
         room = self.trainingrooms.rooms.get(other.chara_id)
         if room is not None:
             return ACTION_TRAINING_ROOM
+        if self.billboards.sign_of(other.chara_id) is not None:
+            return ACTION_SIGNBOARD
         return ACTION_LOCKER_OPEN if other.locker_open else ACTION_NONE
 
     def _presence_blocked(
@@ -4315,6 +4331,12 @@ class MpsServer:
                 )
                 print(f"[{self.tag}] trainingroom dropped on disconnect, "
                       f"now {self.trainingrooms.summary()}")
+            # ⭐ A 看板 goes the same way and needs no notice at all: nobody was
+            # ever told it was up except through the icon, and the 0x4810 above
+            # has already taken the whole character off everybody's map.
+            if session.chara_id and self.billboards.take_down(session.chara_id):
+                print(f"[{self.tag}] billboard dropped on disconnect, "
+                      f"now {self.billboards.summary()}")
             # ⭐ A ドラマイベント party comes down the same way, and 0xE00A's own
             # third reason -- 「切断による」, beside 「自分自身の要求による」 and
             # 「リーダーに排除された」 -- is the protocol saying it should.
@@ -4775,6 +4797,15 @@ class MpsServer:
                     )
                     print(f"[{self.tag}] trainingroom dropped at logout, "
                           f"now {self.trainingrooms.summary()}")
+                # ⚠️ And the お知らせ 看板 with it, on the structural reason
+                # rather than on the sentence above: that one is about leaving a
+                # room. Clearing chara_id below is what would strand this —
+                # afterwards nothing on this connection can name the 看板 to
+                # take it down, and its owner is not on the map to be looked at
+                # either.
+                if session.chara_id and self.billboards.take_down(session.chara_id):
+                    print(f"[{self.tag}] billboard dropped at logout, "
+                          f"now {self.billboards.summary()}")
                 # Same for a party, and for the same structural reason rather
                 # than a quote of our own: clearing chara_id below is what would
                 # strand it, so it has to go before that line and not only on a
@@ -5482,6 +5513,13 @@ class MpsServer:
                 # 「退部」, and the request is empty: a character is in at most
                 # one club, so there is nothing to name.
                 return self._club_part(session, sequence)
+            if msg_type >> 8 == 0x4B and msg_type <= billboard.MSG_SV_NG_INFO:
+                # 看板（お知らせ）. ⭐ The same 看板作成 window the 自主トレ room
+                # below comes out of -- its 看板の種類 dropdown is what picks
+                # between the two -- and the smallest of the three things that
+                # window can make: a line of text over a head, with nothing to
+                # join. See billboard.py.
+                return self._billboard(session, sequence, msg_type, params)
             if msg_type >> 8 == 0x58 and msg_type <= trainingroom.MSG_SV_ERROR_KICK:
                 # 自主トレ, the 看板 room. ⭐ This is クラブ対戦's only entry that
                 # is not a 顧問/キャプテン right-click, which is what makes it
@@ -9714,6 +9752,85 @@ class MpsServer:
                 trainingroom.MSG_SV_NOTIFY_PART,
                 params,
                 [m.chara_id for m in room.members],
+            )
+
+        print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
+        return None
+
+    def _billboard(
+        self, session: "_Session", sequence: int, msg_type: int, params: bytes
+    ) -> "bytes | None":
+        """看板（お知らせ）, 0x4B00-0x4B08. See billboard.py.
+
+        Nine messages and no broadcast: the only thing anybody else is told is
+        the icon over the owner's head, and that goes out as a presence refresh
+        rather than as a message of this family's own. ⭐ That is the whole
+        shape of this subsystem — a 看板 is read by being asked about (0x4B06),
+        never pushed, so there is nothing here to keep in step across clients.
+        """
+        board = self.billboards
+        chara_id = session.chara_id
+
+        def ng(msg: int, reason: int, why: str) -> bytes:
+            print(f"[{self.tag}] billboard refused ({why}): reason={reason}")
+            return self._answer(session, sequence, msg, billboard.ng_params(reason))
+
+        if msg_type == billboard.MSG_CL_REQUEST_ADD:
+            headline = billboard.parse_add(params)
+            reason = board.add_refusal(chara_id, headline)
+            # ⚠️ INVENTED — that a character in a 自主トレルーム may not also
+            # put up an お知らせ 看板. The two come out of the same 看板作成
+            # window and want the same icon slot, and tmo.exe carries 「他の行動
+            # 中は看板を作成できません」 as its own string, so the client
+            # normally refuses this before it reaches us -- but no sentence
+            # states this particular pair, and reason 3 is only the closest
+            # thing this end can say. What would overturn it: a capture of the
+            # real client sending 0x4B00 from inside a room, or a manual line
+            # putting the two up at once.
+            if reason is None and self.trainingrooms.room_of(chara_id) is not None:
+                reason = billboard.NG_ADD_CANNOT_NOW
+            if reason is not None:
+                return ng(billboard.MSG_SV_NG_ADD, reason, f"add {params.hex()}")
+            sign = board.put_up(chara_id, headline)
+            print(f"[{self.tag}] billboard up {sign.summary()}")
+            # ⚠️ Before the Ok and not after: the icon is the only way anybody
+            # reaches 0x4B06, so raising it is part of putting the 看板 up
+            # rather than a decoration that can lag behind.
+            self._presence_refresh_onlookers(session)
+            return self._answer(session, sequence, billboard.MSG_SV_OK_ADD, b"")
+
+        if msg_type == billboard.MSG_CL_REQUEST_DEL:
+            # Empty body: a character has at most one 看板, so 「which one」 is
+            # not a question this message can ask.
+            sign = board.take_down(chara_id)
+            if sign is None:
+                return ng(
+                    billboard.MSG_SV_NG_DEL,
+                    billboard.NG_DEL_CANNOT_NOW,
+                    "del with no 看板 up",
+                )
+            print(f"[{self.tag}] billboard down {sign.summary()}, "
+                  f"now {board.summary()}")
+            self._presence_refresh_onlookers(session)
+            return self._answer(session, sequence, billboard.MSG_SV_OK_DEL, b"")
+
+        if msg_type == billboard.MSG_CL_REQUEST_INFO:
+            owner_id = billboard.parse_owner(params)
+            sign = board.sign_of(owner_id) if owner_id is not None else None
+            if sign is None:
+                # 「キャラクターデータが不正です」 -- the reader named somebody
+                # who is not standing under a 看板. That is also what a stale
+                # icon looks like from here, and the sentence covers both.
+                return ng(
+                    billboard.MSG_SV_NG_INFO,
+                    billboard.NG_INFO_BAD_CHARACTER,
+                    f"info ownerId={owner_id}",
+                )
+            return self._answer(
+                session,
+                sequence,
+                billboard.MSG_SV_OK_INFO,
+                billboard.info_params(sign.headline),
             )
 
         print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
