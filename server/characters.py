@@ -556,7 +556,16 @@ def describe(info: bytes) -> str:
 
 
 def display_name(info: bytes) -> str:
-    """「姓 名」, the way a chat line should credit whoever typed it."""
+    """「姓 名」, the way a chat line should credit whoever typed it.
+
+    ⚠️ The space is not decoration and it was missing until round 295, where
+    the client drew both spellings in one window: a チャットルーム roster holds
+    a row per member, the recipient's own row is drawn by the client off its own
+    record as 「試験 三郎」, and the rows this end supplies arrived beside it as
+    「試験次郎」. The map nameplate under a character spells it with the space
+    too. ⇒ this is the game's own formatting, read off the screen rather than
+    chosen.
+    """
     fields = parse_create_info(info)
 
     def text(key: str) -> str:
@@ -564,7 +573,7 @@ def display_name(info: bytes) -> str:
         assert isinstance(raw, bytes)
         return raw.split(b"\x00")[0].decode("cp932", "replace")
 
-    return f"{text('familyName')}{text('firstName')}".strip() or "?"
+    return f"{text('familyName')} {text('firstName')}".strip() or "?"
 
 
 def list_entry(

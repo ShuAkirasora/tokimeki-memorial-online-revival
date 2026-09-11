@@ -9,7 +9,7 @@ icon opens 看板作成, and its 看板の種類 dropdown picks which family the
 button sends:
 
     お知らせ        -> 0x4B00  this file
-    チャットルーム  -> 0x4C80  not implemented
+    チャットルーム  -> 0x4C80  chatroom.py
     自主トレ        -> 0x5800  trainingroom.py
 
 ⭐⭐ お知らせ is the dropdown's factory setting, and with it selected the

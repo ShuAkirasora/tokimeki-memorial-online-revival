@@ -78,6 +78,7 @@ import accounts
 import billboard
 import career
 import chat
+import chatroom
 import club
 import clubbattle
 import clubdata
@@ -1264,6 +1265,11 @@ class MpsServer:
         # lifetime: the whole point of a 看板 is that somebody else reads it,
         # so it cannot live on the session that put it up. See billboard.py.
         self.billboards = billboard.Board()
+        # チャットルーム, the 看板 window's middle choice, and held here for the
+        # third time for the third time's reason: the icon over its owner's head
+        # is the only door in, so somebody else's connection has to be able to
+        # find the room behind it. See chatroom.py.
+        self.chatrooms = chatroom.Board()
         # Fights in progress, opened by 0x5C06 and found by any participant.
         # Separate from the room board because a battle is not a room: 練習 and
         # フリー対戦 reach the same 0x5C** messages without one, and this server
@@ -1660,25 +1666,37 @@ class MpsServer:
           it is drawn on is what a reader right-clicks to send 0x4B06. See
           billboard.py.
 
+        * チャット募集中 for the owner of a チャットルーム, and `p05_08` spells
+          the whole door out for it: 「チャットルームを作成したプレイヤーのマッ
+          プキャラに表示されます。このアイコンを右クリックすると内容を見ること
+          ができ、［参加する］を押すとチャットに参加できます」. Same shape as
+          the 自主トレ icon one line up, and the same reason it cannot be left
+          off: 0x4C83 has no other entry. See chatroom.py.
+
         ⚠️ INVENTED: the order. Nothing says which icon wins when two apply, and
-        as written a lesson beats a fight beats a room beats a 看板 beats a
-        locker. Two of these can now genuinely coincide -- a room leader can
-        open a locker -- and the room wins on purpose: 「自主トレ募集中」 is the
-        only door into somebody else's room (p05_08 again), so replacing it with
+        as written a lesson beats a fight beats a 自主トレルーム beats a
+        チャットルーム beats a 看板 beats a locker. Two of these can now
+        genuinely coincide -- a room leader can open a locker -- and the room
+        wins on purpose: 「自主トレ募集中」 is the only door into somebody
+        else's room (p05_08 again), so replacing it with
         a purely informational icon would take a working affordance off the
         screen. ⭐ The 看板 sits where it does for the same reason and one step
         down: it is a door too (0x4B06 has no other entry), so it outranks the
         locker, and it yields to the room only because a character cannot have
         both -- putting a 看板 up while in a room is refused at the other end.
+        ⭐ The three things the 看板作成 window makes are ordered against each
+        other for the sake of having an order and nothing else: all three are
+        mutually exclusive at the other end, so no character can ever qualify
+        for two of them at once.
         What would overturn any of it is a manual line or a capture showing a
         different icon on a character who qualifies for two.
 
-        ⚠️ Five of the ten icons p05_08 names still cannot be sent, and none of
-        them is wiring: 会話中 / トレード中 / ドラマイベント中 / 校内新聞閲覧中 /
-        チャット募集中 each want a subsystem that is not here. Two of those have
-        a message family apiece (0x0A00 newspaper, 0x4C80 chatroom) that this
-        server does not answer; the third family of that set, 0x4B00, is
-        answered now and its icon is the one above.
+        ⚠️ Four of the ten icons p05_08 names still cannot be sent, and none of
+        them is wiring: 会話中 / トレード中 / ドラマイベント中 / 校内新聞閲覧中
+        each want a subsystem that is not here. Only one of those still has a
+        whole message family behind it (0x0A00 newspaper); the other two of that
+        set, 0x4B00 and 0x4C80, are answered now and their icons are the two
+        above.
         """
         if other.lesson is not None:
             return ACTION_LESSON
@@ -1687,6 +1705,8 @@ class MpsServer:
         room = self.trainingrooms.rooms.get(other.chara_id)
         if room is not None:
             return ACTION_TRAINING_ROOM
+        if self.chatrooms.rooms.get(other.chara_id) is not None:
+            return ACTION_CHAT_ROOM
         if self.billboards.sign_of(other.chara_id) is not None:
             return ACTION_SIGNBOARD
         return ACTION_LOCKER_OPEN if other.locker_open else ACTION_NONE
@@ -4331,6 +4351,15 @@ class MpsServer:
                 )
                 print(f"[{self.tag}] trainingroom dropped on disconnect, "
                       f"now {self.trainingrooms.summary()}")
+            # ⭐ And a チャットルーム, which does need a notice: the people
+            # still in it have a roster with this row on it, and 0x4C8B is how
+            # a row comes off. ⚠️ It cannot say 「切断による」 -- that
+            # distinction is 0x580D's and this family does not have it.
+            room = self.chatrooms.room_of(session.chara_id) if session.chara_id else None
+            if room is not None:
+                self._chatroom_part(session, room)
+                print(f"[{self.tag}] chatroom dropped on disconnect, "
+                      f"now {self.chatrooms.summary()}")
             # ⭐ A 看板 goes the same way and needs no notice at all: nobody was
             # ever told it was up except through the icon, and the 0x4810 above
             # has already taken the whole character off everybody's map.
@@ -4797,6 +4826,17 @@ class MpsServer:
                     )
                     print(f"[{self.tag}] trainingroom dropped at logout, "
                           f"now {self.trainingrooms.summary()}")
+                # And the チャットルーム on the same structural reason: after
+                # chara_id is cleared nothing on this connection can name the
+                # room, and its owner is not on the map to be right-clicked.
+                room = (
+                    self.chatrooms.room_of(session.chara_id)
+                    if session.chara_id else None
+                )
+                if room is not None:
+                    self._chatroom_part(session, room)
+                    print(f"[{self.tag}] chatroom dropped at logout, "
+                          f"now {self.chatrooms.summary()}")
                 # ⚠️ And the お知らせ 看板 with it, on the structural reason
                 # rather than on the sentence above: that one is about leaving a
                 # room. Clearing chara_id below is what would strand this —
@@ -5520,6 +5560,11 @@ class MpsServer:
                 # window can make: a line of text over a head, with nothing to
                 # join. See billboard.py.
                 return self._billboard(session, sequence, msg_type, params)
+            if msg_type >> 8 == 0x4C and msg_type <= chatroom.MSG_SV_ERROR_CHAT:
+                # チャットルーム, the same window's middle choice: the 自主トレ
+                # room below with the club battle taken out of it, leaving a
+                # roster and a chat bar. See chatroom.py.
+                return self._chatroom(session, sequence, msg_type, params)
             if msg_type >> 8 == 0x58 and msg_type <= trainingroom.MSG_SV_ERROR_KICK:
                 # 自主トレ, the 看板 room. ⭐ This is クラブ対戦's only entry that
                 # is not a 顧問/キャプテン right-click, which is what makes it
@@ -6109,15 +6154,31 @@ class MpsServer:
 
     def _tr_seat(
         self, session: "_Session", room: "trainingroom.Room",
-        joiner: "trainingroom.Member",
+        joiner: "trainingroom.Member", seats_self: bool,
     ) -> bytes:
-        """0x580C for one join. Two different bodies go out, and they must.
+        """0x580C for one arrival. Two different bodies go out, and they must.
 
-        The joiner is told about everyone already seated; everyone already
-        seated is told about the joiner, and about nobody else. ⚠️⚠️ Sending
-        the whole roster both ways is the tempting version and it is wrong:
-        0x580C merges rows in rather than replacing them (Room.roster_params),
-        so the seated members would re-add every row they are already drawing.
+        Everybody already seated is told about the arrival and about nobody
+        else. ⚠️⚠️ Sending the whole roster both ways is the tempting version
+        and it is wrong: 0x580C merges rows in rather than replacing them
+        (Room.roster_params), so the seated members would re-add every row they
+        are already drawing.
+
+        ⚠️⚠️ ``seats_self`` NARROWS THE OTHER HALF, and round 295 is where it
+        was separated -- on チャットルーム first, then reproduced here on the
+        same screen this note used to describe. 「the client puts itself in the
+        list」 holds only for the client that CREATED the room:
+
+        * create: the leader is sent an empty roster and the window still draws
+          「参加者：１名」 with their own row. ⇒ seats_self=True.
+        * join: the joiner is sent the seated members and draws exactly those.
+          ⚠️ Round 71 wrote that down as a client-side display gap -- 「後から
+          入った人のウィンドウはリーダーしか描けず、参加者も 1名 のまま」 -- and
+          round 295 measured it again, unchanged, then watched it come right by
+          putting the joiner's own row in the body. ⇒ seats_self=False.
+
+        ⭐ So it was this end all along: a joiner was being sent a roster with
+        the joiner taken out of it.
 
         seen=0 because it answers nothing — it follows a change.
         """
@@ -6126,7 +6187,7 @@ class MpsServer:
             0,
             trainingroom.MSG_SV_NOTIFY_JOIN,
             lambda chara_id: (
-                room.roster_params(without=chara_id)
+                room.roster_params(without=chara_id if seats_self else None)
                 if chara_id == joiner.chara_id
                 else room.roster_rows([joiner])
             ),
@@ -9510,7 +9571,7 @@ class MpsServer:
             # An empty 0x580C, and it stays: the leader is the only member, so
             # the roster without them is 「nobody else is here」, which is both
             # true and what the window drew when this was measured.
-            return out + self._tr_seat(session, room, room.members[0])
+            return out + self._tr_seat(session, room, room.members[0], True)
 
         if msg_type == trainingroom.MSG_CL_REQUEST_INFO:
             leader_id = trainingroom.parse_leader(params)
@@ -9549,7 +9610,9 @@ class MpsServer:
             )
             # ⚠️ Order: the Ok carries the headline and the cap, so it has to be
             # the packet that opens the window before any row arrives for it.
-            return out + self._tr_seat(session, room, joiner)
+            # ⚠️⚠️ seats_self=False: a joining client does not seat itself, and
+            # that is what round 71's 「自分が出ない」 was. See _tr_seat.
+            return out + self._tr_seat(session, room, joiner, False)
 
         if msg_type == trainingroom.MSG_CL_REQUEST_PART:
             room = board.room_of(chara_id)
@@ -9778,16 +9841,21 @@ class MpsServer:
         if msg_type == billboard.MSG_CL_REQUEST_ADD:
             headline = billboard.parse_add(params)
             reason = board.add_refusal(chara_id, headline)
-            # ⚠️ INVENTED — that a character in a 自主トレルーム may not also
-            # put up an お知らせ 看板. The two come out of the same 看板作成
-            # window and want the same icon slot, and tmo.exe carries 「他の行動
-            # 中は看板を作成できません」 as its own string, so the client
-            # normally refuses this before it reaches us -- but no sentence
-            # states this particular pair, and reason 3 is only the closest
-            # thing this end can say. What would overturn it: a capture of the
-            # real client sending 0x4B00 from inside a room, or a manual line
-            # putting the two up at once.
-            if reason is None and self.trainingrooms.room_of(chara_id) is not None:
+            # ⚠️ INVENTED — that a character in a 自主トレルーム or a チャット
+            # ルーム may not also put up an お知らせ 看板. All three come out of
+            # the same 看板作成 window and want the same icon slot, and tmo.exe
+            # carries 「他の行動中は看板を作成できません」 as its own string, so
+            # the client normally refuses this before it reaches us -- but no
+            # sentence states any of these pairs, and reason 3 is only the
+            # closest thing this end can say. ⭐ The other two doors refuse it
+            # from their own side as well, and the join door has a better
+            # sentence to say it with (see busy_elsewhere in _chatroom). What
+            # would overturn it: a capture of the real client sending 0x4B00
+            # from inside a room, or a manual line putting two up at once.
+            if reason is None and (
+                self.trainingrooms.room_of(chara_id) is not None
+                or self.chatrooms.room_of(chara_id) is not None
+            ):
                 reason = billboard.NG_ADD_CANNOT_NOW
             if reason is not None:
                 return ng(billboard.MSG_SV_NG_ADD, reason, f"add {params.hex()}")
@@ -9831,6 +9899,252 @@ class MpsServer:
                 sequence,
                 billboard.MSG_SV_OK_INFO,
                 billboard.info_params(sign.headline),
+            )
+
+        print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
+        return None
+
+    def _cr_name(self, chara_id: int) -> str:
+        """The name a 0x4C8A row and a 0x4C8D line draw for this character.
+
+        One string rather than the two fixed halves 0x580C carries: this
+        family's rows hold a counted name, so it is the same display name the
+        map chat bar puts in front of a line. Looked up through the charaId
+        index because a room holds people from several accounts.
+        """
+        store = self.accounts.owner_of(chara_id)
+        info = store.find(chara_id) if store else None
+        return display_name(info) if info else "?"
+
+    def _cr_seat(
+        self, session: "_Session", room: "chatroom.Room",
+        joiner: "chatroom.Member", seats_self: bool,
+    ) -> bytes:
+        """0x4C8A for one arrival: two different bodies, and they must differ.
+
+        Everybody already seated is told about the arrival and about nobody
+        else, because this message MERGES rows rather than replacing them --
+        handing them the whole roster would re-add every row they are already
+        drawing (measured on 0x580C, round 67, and confirmed here: the owner's
+        window went to 「参加者：２名」 with both rows when the joiner's single
+        row arrived).
+
+        ⚠️⚠️ ``seats_self`` IS THE HALF THAT COST A MEASUREMENT, and it is
+        narrower than the rule this was written from. 「the client puts itself
+        in the list」 turns out to be true **only of the client that CREATED
+        the room**:
+
+        * create: the owner is sent an empty roster and the window still draws
+          「参加者：１名」 with their own row in it. ⇒ seats_self=True, and
+          their own row must stay out or they are counted twice.
+        * join: the joiner is sent the seated members and the window draws
+          exactly those -- ⚠️ **itself missing, and the count one short**
+          (「参加者：１名」 beside a list holding only the owner). ⇒
+          seats_self=False, and the joiner's own row has to be in the body.
+
+        ⭐⭐ That second line is also the answer to a gap 自主トレ has carried
+        since round 67 and never explained: 「後から入った人は自分のウィンドウ
+        に自分が出ない、参加者も 1名 のまま」. It was read as a client-side
+        display fault. It is not -- it is this end sending a joiner a roster
+        with the joiner taken out of it.
+        """
+        return self._tr_cast(
+            session,
+            0,
+            chatroom.MSG_SV_NOTIFY_JOIN,
+            lambda chara_id: (
+                room.roster_params(without=chara_id if seats_self else None)
+                if chara_id == joiner.chara_id
+                else room.roster_rows([joiner])
+            ),
+            [m.chara_id for m in room.members],
+        )
+
+    def _cr_part_notice(self, room: "chatroom.Room", gone_id: int) -> None:
+        """0x4C8B to whoever is still in the room. Push-only, no sender copy.
+
+        Call it after Board.part, so ``room.members`` is already the list of
+        people who need telling.
+
+        ⚠️ It says one thing and cannot say more: 0x4C8B carries a charaId and
+        no reason, so 「自分自身の要求による」 and 「切断による」 arrive here as
+        the same three words -- that row is gone. The distinction 0x580D draws
+        does not exist in this family, so nothing here has to choose between
+        them.
+        """
+        params = chatroom.notify_part_params(gone_id)
+        for member in room.members:
+            other = self._session_of(member.chara_id)
+            if other is not None:
+                self._push(
+                    other,
+                    self._answer(other, 0, chatroom.MSG_SV_NOTIFY_PART, params),
+                )
+
+    def _chatroom_part(self, session: "_Session", room: "chatroom.Room") -> None:
+        """Take this character out of ``room`` and tell everybody left in it.
+
+        Shared by the cast, the disconnect and the 中断, because all three are
+        the same event as far as this family can express it (see
+        _cr_part_notice). Moves the 参加 icon too: Board.part may have handed
+        the room to somebody else, and the icon is the only door into it.
+        """
+        chara_id = session.chara_id
+        owner_id = room.owner_id
+        self.chatrooms.part(chara_id)
+        self._cr_part_notice(room, chara_id)
+        self._presence_refresh_onlookers(session)
+        if room.members and chara_id == owner_id:
+            promoted = self._session_of(room.owner_id)
+            if promoted is not None:
+                self._presence_refresh_onlookers(promoted)
+            print(f"[{self.tag}] チャットルーム owner left a room that still "
+                  f"has {len(room.members)} in it; handed it to "
+                  f"{room.owner_id:#x}, and no message in this family says so")
+
+    def _chatroom(
+        self, session: "_Session", sequence: int, msg_type: int, params: bytes
+    ) -> "bytes | None":
+        """The whole 0x4C8x family, dispatched off one branch. See chatroom.py.
+
+        ⚠️ The Notify helpers it borrows are _tr_cast and the pattern around it,
+        named for 自主トレ because that is where they were written. They are not
+        specific to it: 「one body per recipient, the sender's copy returned
+        rather than pushed」 is what every roomful of people on this wire needs.
+        """
+        board = self.chatrooms
+        chara_id = session.chara_id
+
+        def ng(msg: int, reason: int, why: str) -> bytes:
+            print(f"[{self.tag}] chatroom refused ({why}): reason={reason}")
+            return self._answer(session, sequence, msg, chatroom.ng_params(reason))
+
+        def busy_elsewhere() -> bool:
+            """In one of the other two things the 看板 window makes.
+
+            ⚠️ INVENTED, in the sense that no sentence pairs these three off
+            against each other -- but they come out of one dropdown, they want
+            the one icon slot over a head, and tmo.exe carries 「他の行動中は看板
+            を作成できません」 as its own string, so the client already refuses
+            some of this before it reaches us. What each door says about it is
+            the sentence it has: 0x4C82 has only 「今の状態では」, while 0x4C88
+            has 「現在、別の機能を実行していますので」, which names the situation
+            outright.
+            """
+            return (self.trainingrooms.room_of(chara_id) is not None
+                    or self.billboards.sign_of(chara_id) is not None)
+
+        if msg_type == chatroom.MSG_CL_REQUEST_ADD:
+            parsed = chatroom.parse_add(params)
+            headline, limit = parsed if parsed else (None, 0)
+            reason = board.add_refusal(chara_id, headline, limit)
+            if reason is None and busy_elsewhere():
+                reason = chatroom.NG_ADD_CANNOT_NOW
+            if reason is not None:
+                return ng(chatroom.MSG_SV_NG_ADD, reason, f"add {params.hex()}")
+            room = board.open(chara_id, headline, limit, self._cr_name(chara_id))
+            print(f"[{self.tag}] chatroom opened {room.summary()}")
+            # Before the Ok, the way the 看板 goes up before its own: the icon
+            # is the only way anybody else reaches 0x4C83.
+            self._presence_refresh_onlookers(session)
+            out = self._answer(session, sequence, chatroom.MSG_SV_OK_ADD, b"")
+            # An empty 0x4C8A, and it stays empty: the owner's own client seats
+            # them, so 「who else is here」 is nobody. See _cr_seat's seats_self.
+            return out + self._cr_seat(session, room, room.members[0], True)
+
+        if msg_type == chatroom.MSG_CL_REQUEST_INFO:
+            owner_id = chatroom.parse_owner(params)
+            if owner_id is None:
+                return ng(
+                    chatroom.MSG_SV_NG_INFO,
+                    chatroom.NG_INFO_BAD_CHARACTER,
+                    f"info {params.hex()}",
+                )
+            room = board.rooms.get(owner_id)
+            if room is None:
+                # 「チャットルーム情報の取得に失敗しました」 -- the reader named
+                # somebody who is not running one, which is also what a stale
+                # icon looks like from here.
+                return ng(
+                    chatroom.MSG_SV_NG_INFO,
+                    chatroom.NG_INFO_NOT_FOUND,
+                    f"info ownerId={owner_id:#x}",
+                )
+            return self._answer(
+                session, sequence, chatroom.MSG_SV_OK_INFO, room.info_params()
+            )
+
+        if msg_type == chatroom.MSG_CL_REQUEST_JOIN:
+            owner_id = chatroom.parse_owner(params)
+            if owner_id is None:
+                return ng(
+                    chatroom.MSG_SV_NG_JOIN,
+                    chatroom.NG_JOIN_NOT_FOUND,
+                    "join with no ownerId",
+                )
+            reason = (chatroom.NG_JOIN_OTHER_FEATURE if busy_elsewhere()
+                      else board.join_refusal(chara_id, owner_id))
+            if reason is not None:
+                return ng(
+                    chatroom.MSG_SV_NG_JOIN, reason, f"join ownerId={owner_id:#x}"
+                )
+            room = board.rooms[owner_id]
+            joiner = room.add(chara_id, self._cr_name(chara_id))
+            print(f"[{self.tag}] chatroom joined {room.summary()}")
+            out = self._answer(
+                session, sequence, chatroom.MSG_SV_OK_JOIN, room.join_params()
+            )
+            # ⚠️ Order: the Ok carries the 見出し and the cap, so it is the
+            # packet that opens the window before any row arrives for it.
+            # ⚠️⚠️ seats_self=False: a joining client does NOT put itself in the
+            # list, unlike the one that created the room. See _cr_seat.
+            return out + self._cr_seat(session, room, joiner, False)
+
+        if msg_type == chatroom.MSG_CL_CAST_PART:
+            # A cast with no Ok and no Ng anywhere in the family: leaving is not
+            # a request, and there is no sentence for leaving a room you are not
+            # in. So a stray one is logged and dropped rather than answered with
+            # somebody else's error.
+            room = board.room_of(chara_id)
+            if room is None:
+                print(f"[{self.tag}] chatroom part while in no room, ignored")
+                return None
+            self._chatroom_part(session, room)
+            print(f"[{self.tag}] chatroom left, now {board.summary()}")
+            # ⚠️ The leaver is told too, and this is the one place the empty
+            # 0x4C89 forces it: nothing else tells their client its own row is
+            # gone. 0x580D is sent to its leaver for the same reason.
+            return self._answer(
+                session,
+                sequence,
+                chatroom.MSG_SV_NOTIFY_PART,
+                chatroom.notify_part_params(chara_id),
+            )
+
+        if msg_type == chatroom.MSG_CL_CAST_CHAT:
+            room = board.room_of(chara_id)
+            said = chat.parse_cast(params)
+            if room is None:
+                return ng(
+                    chatroom.MSG_SV_ERROR_CHAT,
+                    chatroom.ERROR_CHAT_NO_ROOM,
+                    "room chat outside a room",
+                )
+            who = self._cr_name(chara_id)
+            print(f"[{self.tag}] chatroom chat {who}: {said!r}")
+            # ⚠️ NO 「/」 COMMANDS, the same call twoshot chat makes: the console
+            # is a map console, and this line goes to a roomful of people rather
+            # than to the map.
+            #
+            # The speaker is in the recipient list on purpose. 0x4C8C is a cast:
+            # nothing appears in anybody's room window, the speaker's included,
+            # until the server says it back.
+            return self._tr_cast(
+                session,
+                sequence,
+                chatroom.MSG_SV_NOTIFY_CHAT,
+                chat.notify_params(chara_id, who, said),
+                [m.chara_id for m in room.members],
             )
 
         print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")

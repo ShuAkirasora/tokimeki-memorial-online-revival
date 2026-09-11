@@ -472,8 +472,9 @@ class Room:
         a charaId — so a client that missed one would have nothing to draw a row
         with.
 
-        ⚠️⚠️ ``without`` IS NOT OPTIONAL IN PRACTICE: pass the recipient. Two
-        things were read off the room window (round 67) and both say so:
+        ⚠️⚠️ ``without`` IS NOT ALWAYS THE RECIPIENT, and which it is has a
+        measurement behind it. Two things were read off the room window
+        (round 67):
 
         * The client seats **itself** without being told to. A room whose only
           member is the recipient, sent a one-row roster, drew 「参加者：２名」
@@ -481,17 +482,18 @@ class Room:
         * The lists are **merged in, not swapped in**. A second identical send
           took the count to three rather than leaving it at two.
 
-        So this message answers 「who else is here」, and the recipient is never
-        part of the answer. ⭐ It is the mirror of a trap this project has fallen
-        into three times in the other direction — a Notify that must reach the
-        player themselves to take effect. Here the Notify must leave them out.
+        ⚠️⚠️ THE FIRST OF THOSE IS NARROWER THAN IT LOOKED, and round 295
+        separated it: the client seats itself only when it is the one that
+        CREATED the room. A joiner does not, so a joiner's body has to carry
+        their own row -- see _tr_seat in the session for the two screens that
+        show it. ⭐ Round 71 wrote the joiner's empty window down as a
+        client-side display gap; it was this end all along.
 
-        ⚠️⚠️ MERGED, NOT SWAPPED — the same measurement, read for what it means
-        once a room holds two people: this message ADDS rows. It is not a
-        refresh, so a member may never be sent a row they are already drawing.
-        That is why nothing outside a join sends one at all: a team move is
-        0x5817 and a departure is 0x580D, both of which name a charaId the
-        client already has.
+        ⭐ The second one is why everybody already seated is sent the arriving
+        row ALONE: this message ADDS rows, so a member may never be handed a row
+        they are already drawing. That is also why nothing outside a join sends
+        one at all -- a team move is 0x5817 and a departure is 0x580D, both of
+        which name a charaId the client already has.
         """
         return self.roster_rows(
             [m for m in self.members if m.chara_id != without]
