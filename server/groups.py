@@ -426,6 +426,16 @@ class GroupBook:
     event this server does not run, so the only way in is the console. When the
     event exists, this set is what it should write to.
 
+    ⭐ ``exam_progress`` is the other half of that sentence and arrived with it
+    (round 303): how far through the exam's fifteen-question tour a character
+    is. The scripts keep it in `script.PC_LEADER_EXAM_ANSWERED`, the client's
+    half of that family is a stub, and each station of the tour is a separate
+    NPC event -- so between two stations there is nowhere else for it to be.
+    ⚠️ Nothing writes it yet either, for the same reason nothing awards the
+    pass: the tour cannot be walked. What it buys today is that the shadow VM
+    stops answering 「don't know」 to the two gates in front of the exam, which
+    is what put both of these on the wire's side of the line at all.
+
     Every mutation writes the file, for the reason charaids.CharaIndex gives.
     """
 
@@ -434,6 +444,7 @@ class GroupBook:
         self.path = directory / "groups.json"
         self.groups: dict[int, Group] = {}
         self.qualified: set[int] = set()
+        self.exam_progress: dict[int, int] = {}
         self._load()
 
     # -- persistence ------------------------------------------------------
@@ -453,6 +464,11 @@ class GroupBook:
                 self.qualified.add(int(str(key), 16))
             except ValueError:
                 print(f"[groups] ignoring unreadable qualified id {key!r}")
+        for key, value in (raw.get("exam_progress") or {}).items():
+            try:
+                self.exam_progress[int(str(key), 16)] = int(value)
+            except (TypeError, ValueError):
+                print(f"[groups] ignoring unreadable exam progress {key!r}")
         for key, body in (raw.get("groups") or {}).items():
             try:
                 group_id = int(str(key), 16)
@@ -487,6 +503,11 @@ class GroupBook:
             json.dumps(
                 {
                     "qualified": [f"0x{one:08x}" for one in sorted(self.qualified)],
+                    "exam_progress": {
+                        f"0x{one:08x}": answered
+                        for one, answered in sorted(self.exam_progress.items())
+                        if answered
+                    },
                     "groups": {
                         f"0x{group_id:08x}": group.to_json()
                         for group_id, group in sorted(self.groups.items())
@@ -535,6 +556,14 @@ class GroupBook:
             1 if group is not None and group.leader == chara_id else 0,
             1 if chara_id in self.qualified else 0,
         )
+
+    def answered(self, chara_id: int) -> int:
+        """How many リーダー試験 questions this character has answered.
+
+        Zero for everybody until the tour can be walked, and zero is the honest
+        answer rather than a placeholder: nobody has answered a question.
+        """
+        return self.exam_progress.get(chara_id, 0)
 
     # -- mutations --------------------------------------------------------
 
@@ -711,9 +740,10 @@ class GroupBook:
         return True
 
     def forget(self, chara_id: int) -> None:
-        """Take a deleted character out of the group and the qualified set."""
-        touched = chara_id in self.qualified
+        """Take a deleted character out of the group and both exam records."""
+        touched = chara_id in self.qualified or chara_id in self.exam_progress
         self.qualified.discard(chara_id)
+        self.exam_progress.pop(chara_id, None)
         group = self.of(chara_id)
         if group is not None:
             if group.leader == chara_id:
@@ -725,7 +755,7 @@ class GroupBook:
             self._save()
 
     def summary(self) -> str:
-        if not self.groups and not self.qualified:
+        if not self.groups and not self.qualified and not self.exam_progress:
             return "(no groups)"
         return (
             f"{len(self.groups)} group(s), "

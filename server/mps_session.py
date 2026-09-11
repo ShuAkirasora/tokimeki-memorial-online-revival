@@ -1940,6 +1940,7 @@ class MpsServer:
         # the walk goes to the wrong floor -- which is exactly what happened
         # while nobody supplied it at all.
         cells[("PC", script.PC_IN_CLASS)] = IN_CLASS
+        cells.update(self._leader_exam_cells(session))
         runner.shadow = gs3vm.follow(script_id, cells, registers, actor)
         if runner.shadow is None:
             print(f"[{self.tag}] vm: id={script_id} is not in runtime/scripts "
@@ -1957,6 +1958,47 @@ class MpsServer:
                   + ("台本のまま" if chosen is None
                      else f"{chosen} {gs3vm.SEASON_NAMES[chosen]} "
                           f"({script.SEASON_SOURCE})"))
+
+    def _leader_exam_cells(self, session: "_Session") -> dict:
+        """リーダー試験's three cells, out of records this end already keeps.
+
+        ⭐ Why these three and not some other three: the shadow VM said so. A
+        follower counts every cell it was asked for and could not answer, and
+        walking the secretary's scenario printed exactly
+        `cells nobody supplied: PC[0xd13e], PC[0x3b00], PC[0x3590]` -- the two
+        gates in front of the exam and the tour counter read ahead of them. Two
+        of the three were already computed here and simply never handed over;
+        the third had nowhere to live until `groups.GroupBook.exam_progress`.
+
+        ⚠️⚠️ Supplying them does not open the exam, and it is not meant to. A
+        character who has finished no 課程 has 試験レベル 1, so
+        `PC_TEST_LEVEL_FROM_ZERO` is 0, the `>= 1` gate fails and the secretary
+        says the same line she said before -- to the letter. What changes is on
+        this side of the wire: two branches that were answered with a shrug are
+        now answered with the save's own numbers, which is the difference
+        between a fall-through that happens to be right and one that is right.
+
+        ⭐ Nineteen scenarios read `PC_LEADER_QUALIFIED` and from here on all
+        nineteen get the real bit rather than ⊤ -- and all nineteen are this
+        exam's own tour, checked name by name against the corpus. Nothing
+        outside the exam consults it, so there is no scenario this reaches by
+        surprise.
+        """
+        chara_id = session.chara_id
+        cells: dict[tuple[str, int], int] = {}
+        card = self._chars(session).scorecard(chara_id)
+        if card is not None:
+            # ⚠️ The minus one is the script's own zero-based count -- see
+            # script.PC_TEST_LEVEL_FROM_ZERO. Clamped at zero because
+            # test_level() starts at 1 and a negative cell would be a number
+            # the original could never have put there.
+            cells[("PC", script.PC_TEST_LEVEL_FROM_ZERO)] = max(
+                0, card.test_level() - 1)
+        book = self.accounts.groups
+        cells[("PC", script.PC_LEADER_QUALIFIED)] = (
+            1 if chara_id in book.qualified else 0)
+        cells[("PC", script.PC_LEADER_EXAM_ANSWERED)] = book.answered(chara_id)
+        return cells
 
     def _shadow_at(self, session: "_Session", local_ip: int, op: int):
         """Walk the shadow to where the client says it is. None if it cannot."""

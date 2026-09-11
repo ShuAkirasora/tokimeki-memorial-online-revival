@@ -1515,6 +1515,44 @@ MSG_SV_NG_TITLE_EVENT_END = 0x6C05
 #: that it puts on the wire as `inClass`.
 PC_IN_CLASS = 0x301C
 
+# ── リーダー試験's three cells ────────────────────────────────────────────
+#
+# The exam is a fifteen-question tour: the secretary asks the first question
+# and the last one and judges the result, and every station in between asks
+# one and names the next. Seventeen scenarios share its question bank, and the
+# three cells below are what they read. ⭐ Read off the corpus rather than
+# guessed: the write counts pin each one down on their own (round 302).
+#
+# ⚠️⚠️ The client cannot hold any of them. `0x8180 PC_DATA_REFER` and
+# `0x8181 PC_DATA_UPDATE` are both stubs in this build -- one slot function
+# that skips its operands and returns 0 -- so every one of these reads as 0
+# over there and every write is a no-op. Scoring and the pass are this end's
+# business or nobody's, which is the same shape `PC_IN_CLASS` has.
+
+#: 試験レベル **minus one**. ⚠️ The minus one is not a fudge: the gate in front
+#: of the exam compares `>= 1` while the refusal it guards says
+#: 「試験レベルが２以上になったら、もう一度おいでなさい。」 -- the script counting
+#: from zero where the screen counts from one. curriculum.ScoreCard.test_level
+#: is the value, 1…COURSES+1.
+#: ⭐ One read in the whole corpus and no write anywhere: a cell the server
+#: supplies and the scripts only consult.
+PC_TEST_LEVEL_FROM_ZERO = 0x3590
+
+#: リーダー資格 -- passing the exam. Nineteen scenarios read it and exactly one
+#: writes it: the secretary sets it to 1 straight after 「おめでとう、合格ですよ。」,
+#: in front of 「あなたには、グループを作成する資格が与えられますが……」.
+#: ⭐ groups.GroupBook.qualified is this end's copy of the same bit, and that is
+#: the set the exam should write to once it can be sat.
+PC_LEADER_QUALIFIED = 0x3B00
+
+#: How many of the fifteen questions have been answered so far. Every scenario
+#: that carries a question ends by incrementing it; the secretary's writes it
+#: three times, which is where opening the exam and judging it live.
+#: ⚠️ It has to survive between scenarios -- each station is a separate NPC
+#: event -- and the client's half of the PC data family is a stub, so this end
+#: is the only place it can live. groups.GroupBook.answered is that place.
+PC_LEADER_EXAM_ANSWERED = 0xD13E
+
 MSG_CL_REQUEST_NPC_EVENT_END = 0x5603
 MSG_SV_OK_NPC_EVENT_END = 0x5604
 MSG_SV_NG_NPC_EVENT_END = 0x5605
