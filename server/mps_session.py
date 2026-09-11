@@ -159,6 +159,13 @@ def _die_pins(spec: "str | None") -> "dict[int | None, bool]":
 
     ⚠️ Unset is a real coin at every site -- the shipping behaviour -- so an
     interrupted measuring session leaves nothing pinned behind.
+
+    ⚠️⚠️ **Round 308: this knob no longer reaches a scenario a client is
+    playing.** A shadow rolls now (`Machine.roll`), so an `OP_RAND` produces a
+    number and the branch over it is an ordinary computation -- no coin, nothing
+    to pin. What pins such a site is `TMO_SCRIPT_RAND`, by the `OP_RAND`'s own
+    ip. This one still governs the callers that have no roller, which is every
+    offline one, and it is kept for them rather than out of politeness.
     """
     pins: "dict[int | None, bool]" = {}
     for part in (spec or "").replace(",", " ").split():
@@ -172,6 +179,39 @@ def _die_pins(spec: "str | None") -> "dict[int | None, bool]":
 
 #: Which arm each `OP_RAND` branch takes when it is not left to the coin.
 SCRIPT_DIE_PINS = _die_pins(os.environ.get("TMO_SCRIPT_DIE"))
+
+
+def _rand_pins(spec: "str | None") -> "dict[int | None, int]":
+    """Read `TMO_SCRIPT_RAND` into `{OP_RAND site ip: what it draws}`.
+
+    ⭐⭐ The successor to `_die_pins` for everything that rolls (round 308).
+    Same shape and same reason -- an enumeration can only be exhaustive over
+    answers, and a roll is not one -- but it pins **one site instead of a
+    ladder of branches**: round 306 needed twelve `TMO_SCRIPT_DIE` entries to
+    force one rung of リーダー試験's fifteen, and the same thing is now
+    `TMO_SCRIPT_RAND=322=11` because the rung *is* the number.
+
+    `"3"` pins every site to 3; `"322=11,340=2"` pins those sites by the ip the
+    log prints on the `script rand` line and leaves every other site rolling.
+    ⚠️ A pin is honoured as written even when it falls outside `0..bound` --
+    clamping it would answer a different question than the one asked, and the
+    log says the bound so that a typo is visible rather than absorbed.
+
+    ⚠️ Unset is a real roll at every site, which is the shipping behaviour, so
+    an interrupted measuring session leaves nothing pinned behind.
+    """
+    pins: "dict[int | None, int]" = {}
+    for part in (spec or "").replace(",", " ").split():
+        site, _, value = part.rpartition("=")
+        if not value.isdigit() or (site and not site.isdigit()):
+            raise ValueError(
+                f"TMO_SCRIPT_RAND: {part!r} is neither <script ip>=<n> nor <n>")
+        pins[int(site) if site else None] = int(value)
+    return pins
+
+
+#: What each `OP_RAND` site draws when it is not left to the dice.
+SCRIPT_RAND_PINS = _rand_pins(os.environ.get("TMO_SCRIPT_RAND"))
 
 TAG_TIMESYNC = 0x08
 TAG_MESSAGE = 0x30
@@ -1946,6 +1986,11 @@ class MpsServer:
             print(f"[{self.tag}] vm: id={script_id} is not in runtime/scripts "
                   f"— no shadow for this one")
             return
+        # ⭐⭐⭐ Round 308: this shadow rolls. `Machine.roll` is None everywhere
+        # else on purpose -- offline callers enumerate dice, they do not want
+        # them settled -- and a client stopped on the branch is the one caller
+        # that has to have the number rather than a coin over it.
+        runner.shadow.roll = self._script_roll
         runner.shadow.season = _season()
         register = runner.shadow.script.season_register
         if register is not None:
@@ -2171,9 +2216,14 @@ class MpsServer:
     def _script_die(self, session: "_Session", wire_ip: int, ip: int) -> bool:
         """Flip the coin an `OP_RAND` branch needs. True means「成立」.
 
-        ⭐ A coin and not a roll: what `OP_RAND` draws from has never been read,
-        and a two-armed `OP_BR` is a two-way choice whatever the range is. The
-        reasoning, and the cost of it for an n-way ladder, are in `gs3vm._Die`.
+        ⚠️⚠️ **Round 308 left this unreachable from a scenario a client is
+        playing**: the shadow rolls now (`_script_roll`), so a branch over an
+        `OP_RAND` is a computation and never arrives here as a die. It is kept
+        because a shadow without a roller would still need it, and because
+        deleting the coin would also delete the only record of what it cost --
+        which is in `gs3vm._Die`: an n-way ladder built out of two-armed
+        branches comes out 1/2, 1/4, 1/4 … instead of uniform, and inside a
+        rejection loop that stops the scenario outright.
 
         ⭐⭐ Unless the site is pinned (`_die_pins`), in which case this is not a
         coin at all. The line says which it was, because 「the run happened to
@@ -2186,6 +2236,33 @@ class MpsServer:
               f"{'成立' if heads else '不成立'}"
               f"{'' if pinned is None else ' (pinned)'}")
         return heads
+
+    def _script_roll(self, ip: int, bound: int) -> int:
+        """Roll what an `OP_RAND` at `ip` draws: uniform over `0..bound`.
+
+        ⭐⭐⭐ Installed on the shadow of a client that is playing a scenario,
+        and nowhere else. The argument for why this end may produce the number
+        at all is `gs3vm._Die`'s: the client's own slot for the instruction is a
+        stub, so there is no second opinion to defer to -- and round 307 read
+        the range out of the operand at all 143 sites in the corpus, so there is
+        no number to invent either.
+
+        ⚠️ Inclusive at both ends, because that is what the corpus says the
+        operand means: `rand(99)` under the 恋愛 scripts' `< 30` test is a 30%
+        chance only over 0..99, and リーダー試験's three question pools tile the
+        fifteen rungs only as 0..7, 0..5 and the constant 14.
+
+        ⭐ The line is printed every time for the same reason `_script_die`'s
+        is: 「the roll happened to come out 11」 and 「the roll was told to be
+        11」 are two readings of the same road, and only the log separates them.
+        """
+        pinned = SCRIPT_RAND_PINS.get(ip, SCRIPT_RAND_PINS.get(None))
+        drawn = self._script_dice.randint(0, bound) if pinned is None else pinned
+        note = "" if pinned is None else " (pinned)"
+        if not 0 <= drawn <= bound:
+            note += " ⚠️ 範囲外"
+        print(f"[{self.tag}] script rand at ip={ip}: {drawn} of 0..{bound}{note}")
+        return drawn
 
     def _script_keywords(self, session: "_Session", result) -> None:
         """Hand over the キーワード a finished script granted, if any.
@@ -3586,7 +3663,8 @@ class MpsServer:
                         target = found.wire_ip(goes_to)
                     why = f"サイコロ (OP_RAND -> {'成立' if heads else '不成立'})"
                 elif (verdict is not None and not gs3vm._unknown(verdict) and verdict
-                        and (shadow.decided_road() or shadow.in_party
+                        and (gs3vm.is_rolled(verdict) or shadow.decided_road()
+                             or shadow.in_party
                              or script.is_leader_exam(found.script_id))):
                     # ⭐⭐⭐ INVENTED (scope, not answer): in a ドラマパーティ and
                     # in the リーダー試験 this end answers every branch it can
@@ -3665,10 +3743,32 @@ class MpsServer:
                     # event id (`event_for_menu_item`), and round 303's corpus
                     # scan found nothing outside them reading these cells.
                     target = found.wire_ip(goes_to)
+                    # ⭐⭐⭐ Round 308 added `is_rolled` to the gate, and it is
+                    # the carve-out the die already had rather than a fourth
+                    # scope: a value that descends from a roll this end made
+                    # exists nowhere else, so 「is there anybody who could
+                    # answer」 is still no. ⚠️⚠️ Dropping it when the register
+                    # started being settled would have *narrowed* what round 193
+                    # allowed, silently, inside a change about something else --
+                    # a branch stops being a die the moment the number is real.
+                    #
+                    # ⭐⭐ `サイコロ` is **last** in this chain on purpose: the
+                    # three named scopes are asked first, so the word only ever
+                    # appears when the roll is the reason the branch was answered
+                    # at all. That makes the carve-out countable instead of
+                    # merely argued -- and the count is what says whether it is
+                    # load-bearing. ⚠️ Round 308 measured 0 of them over the
+                    # tutorial, four 日常会話 and a whole リーダー試験 tour:
+                    # `_decided_road` has admitted the tutorial's キーワード
+                    # roads since round 195 and the exam has its own scope. ⛔️
+                    # So this is not yet doing any work, and it is kept for what
+                    # it prevents rather than for what it has been seen to do.
                     why = (f"表現のみ (vm cond={verdict})" if shadow.decided_road()
                            else f"ドラマの帳簿 (vm cond={verdict})"
                            if shadow.in_party
-                           else f"リーダー試験 (vm cond={verdict})")
+                           else f"リーダー試験 (vm cond={verdict})"
+                           if script.is_leader_exam(found.script_id)
+                           else f"サイコロ (vm cond={verdict})")
             elif shadow is None and why == script.STANDING_NO:
                 # ⭐⭐⭐ The same answer as the block above, for a server that
                 # cannot run that block: `script.SEASON_SWITCH` is the four-armed

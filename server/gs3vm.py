@@ -90,13 +90,15 @@ class _Die(_Top):
     time, forever」, which is what made the tutorial hand every player the same
     six キーワード (2.150).
 
-    ⚠️⚠️ It settles the **branch**, never the register -- still, and on purpose:
-    this class now *carries* the range (`bound`), but nothing reads it yet.
-    Defining the register is the step after this one, and it changes what a
-    scenario does; carrying the number changes nothing at all.
-    ⚠️ The cost of settling only the branch, written down rather than hidden: an
-    n-way ladder built out of two-armed branches comes out 1/2, 1/4, 1/4 …
-    instead of uniform.
+    ⚠️⚠️ **This is the fallback now, not the road.** A machine with a `roll`
+    installed never makes one of these: it draws a number over `bound` and
+    writes `_Rolled` instead (round 308). What still arrives here is a machine
+    with no roller -- every offline caller, because a die is enumerable and a
+    roll is not -- and, through `_merge_unknown`, any expression that mixed a
+    die into itself.
+    ⚠️ The cost of settling the branch instead of the register, which is what a
+    caller without a roller still pays: an n-way ladder built out of two-armed
+    branches comes out 1/2, 1/4, 1/4 … instead of uniform.
 
     ⭐⭐⭐ `bound` is the second word of the operand block, and round 307 read it
     across all 143 sites in the corpus: it is a bare literal everywhere, an
@@ -119,11 +121,9 @@ class _Die(_Top):
     was `TMO_SCRIPT_DIE` pinning the rungs by site -- which is what pinning is
     for -- ⛔️ not a change here.
     ⭐ That reopen condition -- 「the range at these sites is not unread」 -- was
-    met in round 307 and the paragraph above records the reading. ⚠️⚠️ What is
-    still open is the step it unlocks, not the measurement: settling the
-    register changes which rung a scenario takes, so it is its own change with
-    its own regression surface (the tutorial's six coins), and this class does
-    not take it. Carrying `bound` is where round 307 stopped, on purpose.
+    met in round 307, and round 308 took the step it unlocks: see `_Rolled` and
+    `Machine.roll`. ⚠️ The pinning stays useful and moved with it -- a roll is
+    pinned by the `OP_RAND` site's own ip now, not by each rung's branch.
     """
 
     __slots__ = ("bound",)
@@ -150,6 +150,50 @@ DIE = _Die()
 def is_die(value) -> bool:
     """Is this a die -- the one unknown this end is allowed to settle?"""
     return isinstance(value, _Die)
+
+
+class _Rolled(int):
+    """A number this end produced by rolling a die, and everything downstream.
+
+    ⭐⭐⭐ It is an `int` in every way that matters -- it compares, adds and
+    prints as the number it is -- and it exists for one question asked much
+    later, at the branch: 「is there anybody else who could answer this」. For a
+    value that descends from a roll there is not. The client's `OP_RAND` slot is
+    a stub (round 306 read it: cursor, log line, `ret 4`, no `rand`), so the
+    number never existed anywhere but here, and declining the branch is not
+    deferring to the side that knows -- it is fall-through, every run, forever.
+    That is the same carve-out `_Die` had; settling the register rather than the
+    branch is what would otherwise have lost it.
+
+    ⚠️ The mark travels through arithmetic (`_keep_rolled`) because that is
+    where the question travels: a ladder rung compares `B2 == k` and a bitmap
+    test divides and subtracts, so by the time a branch sees a flag the roll is
+    three instructions back.
+    ⚠️⚠️ It deliberately does NOT change `repr`: a register file's `repr` is
+    used as a dictionary key by offline enumerators, and `int.__repr__` is what
+    it has always printed.
+    """
+
+    # ⚠️ No `__slots__`: an `int` subtype may not have a non-empty one, so this
+    # class carries a `__dict__` and `_Die` does not. That is the whole cost.
+
+    def __new__(cls, value: int, bound: "int | None" = None):
+        self = super().__new__(cls, value)
+        self.bound = bound
+        return self
+
+
+def is_rolled(value) -> bool:
+    """Did this number come out of a die this end rolled?"""
+    return isinstance(value, _Rolled)
+
+
+def _keep_rolled(value, *sources):
+    """Carry the mark of a roll across one arithmetic instruction."""
+    if isinstance(value, int) and not isinstance(value, _Rolled) and any(
+            isinstance(source, _Rolled) for source in sources):
+        return _Rolled(value)
+    return value
 
 
 def _unknown(value) -> bool:
@@ -955,6 +999,15 @@ class Machine:
 
     STEP_BUDGET = 200_000
 
+    #: ⭐⭐⭐ How this machine turns an `OP_RAND` into a number: a callable
+    #: `(ip, bound) -> int | None`, or None to leave every one of them a die.
+    #: ⚠️⚠️ A class attribute, and None here on purpose: the default is what
+    #: every offline caller wants (a die is enumerable, a roll is not), and a
+    #: subclass that never calls this `__init__` still gets it. Only a server
+    #: walking in step with a client that is stopped on the branch installs one
+    #: -- see `_Die` for why that side is allowed to settle it at all.
+    roll = None
+
     def __init__(self, script: Script, cells: dict[tuple[str, int], int]) -> None:
         self.script = script
         self.cells = dict(cells)
@@ -1049,7 +1102,8 @@ class Machine:
                 a, b = self._as_text(op, a), self._as_text(op, b)
                 unknown = _merge_unknown(a, b)
             self.registers[result] = (
-                unknown if unknown is not None else ARITHMETIC[op](a, b)
+                unknown if unknown is not None
+                else _keep_rolled(ARITHMETIC[op](a, b), a, b)
             )
             return i + 1
 
@@ -1060,24 +1114,32 @@ class Machine:
             a = self._get(left)
             unknown = _merge_unknown(a)
             self.registers[result] = (
-                unknown if unknown is not None else (1 if a == 0 else 0))
+                unknown if unknown is not None
+                else _keep_rolled(1 if a == 0 else 0, a))
             return i + 1
 
         if op == OP_RAND:
-            # ⭐ Taught rather than left to `_uninstructed`, and still taught as
-            # unknown: this machine does not produce the number. What it now
-            # carries is the range the number would come from -- the second word
-            # of the operand block, read as a literal inclusive bound (`_Die`).
-            # ⚠️⚠️ Carrying it is not using it: every consumer still sees an
-            # unknown, and the branch is still settled by a coin. Round 307
-            # measured the range; defining the register is the step after.
-            # ⚠️ A `Machine` -- which runs a script on its own -- is unchanged
-            # by that: `OP_BR` over a die still raises, because nothing there is
-            # watching a screen that a coin would have to agree with. Only
-            # `Follower`, which is in step with a client stopped on the branch,
-            # may settle one.
-            self.registers[_arith_registers(args)[0]] = _Die(
-                int.from_bytes(args[2:4], "little"))
+            # ⭐⭐⭐ Round 308: with a `roll` installed this is a number, drawn
+            # uniformly over the literal inclusive bound the second operand word
+            # names (round 307 read that word across all 143 sites). Without one
+            # it is what it has been since round 193 -- an unknown that says
+            # *whose* it is, for a branch to settle with a coin.
+            # ⚠️⚠️ Which of the two is not a detail: a ladder of n rungs built
+            # out of two-armed coins comes out 1/2, 1/4, 1/4 …, and inside a
+            # 「reroll while already used」 loop that skew stops the scenario
+            # outright (`_Die`). A number makes the rungs uniform and the loop
+            # terminate, and it is the only thing that does.
+            # ⚠️ With no roller nothing changed: `OP_BR` over a die still
+            # raises here, because nothing in a `Machine` running on its own is
+            # watching a screen that an answer would have to agree with, and
+            # only a `Follower` in step with a client may settle one. ⭐ With a
+            # roller a `Machine` does run this stretch on its own -- there is no
+            # screen to disagree with when the number is this end's -- which is
+            # what lets the draw be measured offline.
+            bound = int.from_bytes(args[2:4], "little")
+            drawn = None if self.roll is None else self.roll(ip, bound)
+            self.registers[_arith_registers(args)[0]] = (
+                _Die(bound) if drawn is None else _Rolled(drawn, bound))
             return i + 1
 
         if op == OP_SYNC_VARIABLE:
