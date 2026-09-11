@@ -409,6 +409,14 @@ MSG_CL_QUERY_CHARA_INFO = 0x6500
 MSG_SV_RESULT_CHARA_INFO = 0x6501
 MSG_SV_ERROR_CHARA_INFO = 0x6502
 MSG_CL_REQUEST_MINIMAP_START = 0x3C00
+# 校内新聞. The whole family is these four: two requests that read nothing off
+# the wire and two Oks that carry nothing back. The paper itself never crosses
+# the wire -- the client draws it out of its own Data/news, which is why a bare
+# Ok is enough to put a full page of β2 news on the screen.
+MSG_CL_REQUEST_NEWSPAPER_START = 0x0A00
+MSG_SV_OK_NEWSPAPER_START = 0x0A01
+MSG_CL_REQUEST_NEWSPAPER_END = 0x0A03
+MSG_SV_OK_NEWSPAPER_END = 0x0A04
 
 # ⚠️ INVENTED — how long the teacher's opening line is given, in the client's
 # own milliseconds. Only meaningful if speechEndTime really is a moment in the
@@ -965,6 +973,12 @@ class _Session:
         # nothing else -- both halves read nothing off the wire -- so it carries
         # no state worth keeping past the connection, exactly like shop_open.
         self.locker_open = False
+        # Whether the 校内新聞 is open on this connection -- the 行動中アイコン
+        # 「校内新聞閲覧中」. Same bracket shape as locker_open above and kept for
+        # the same reason: 0x0A00/0x0A03 read nothing off the wire, so the pair
+        # is the only place that knows this player is reading, and a reader who
+        # disconnected is not reading any more.
+        self.newspaper_open = False
         # The period actually in progress, once 0x6100 has gone out. Not saved,
         # for the same reason: ten questions half answered are not owed to
         # anybody, and the original ends a lesson you walk out of too.
@@ -1691,12 +1705,12 @@ class MpsServer:
         What would overturn any of it is a manual line or a capture showing a
         different icon on a character who qualifies for two.
 
-        ⚠️ Four of the ten icons p05_08 names still cannot be sent, and none of
-        them is wiring: 会話中 / トレード中 / ドラマイベント中 / 校内新聞閲覧中
-        each want a subsystem that is not here. Only one of those still has a
-        whole message family behind it (0x0A00 newspaper); the other two of that
-        set, 0x4B00 and 0x4C80, are answered now and their icons are the two
-        above.
+        ⚠️ Three of the ten icons p05_08 names still cannot be sent, and none of
+        them is wiring: 会話中 / トレード中 / ドラマイベント中 each want a
+        subsystem that is not here. 校内新聞閲覧中 left that list when 0x0A00 was
+        answered; it is ordered just above the locker, and the pair of them can
+        never collide anyway -- the paper covers the whole screen, so a reader
+        has no way to be standing at an open locker at the same time.
         """
         if other.lesson is not None:
             return ACTION_LESSON
@@ -1709,6 +1723,8 @@ class MpsServer:
             return ACTION_CHAT_ROOM
         if self.billboards.sign_of(other.chara_id) is not None:
             return ACTION_SIGNBOARD
+        if other.newspaper_open:
+            return ACTION_READING_PAPER
         return ACTION_LOCKER_OPEN if other.locker_open else ACTION_NONE
 
     def _presence_blocked(
@@ -5387,6 +5403,30 @@ class MpsServer:
                     out += self._answer(session, sequence, reply_type, reply_params)
                 if changed and msg_type == item.MSG_CL_CAST_ITEM_USE:
                     out += self._item_effect(session, params)
+                return out
+            if msg_type in (MSG_CL_REQUEST_NEWSPAPER_START,
+                            MSG_CL_REQUEST_NEWSPAPER_END):
+                # 校内新聞. The bracket around the paper, and the whole of what
+                # this server has to do for it: the page the client puts up is
+                # its own Data/news, four tabs of it (お知らせ / 学校案内 /
+                # グループ紹介 / 試験結果) dated 2006年2月1日, and nothing in the
+                # family carries a byte either way. An empty Ok to the Start is
+                # what opens it; without one the client sits on 「通信中」.
+                #
+                # ⚠️ Nothing a player can walk up to sends this. 16:0 校内新聞
+                # sits in map_object.bin next to 16:1 ロッカー, whose record names
+                # the map it stands on -- and 16:0's record names none, on any
+                # map in this build. So the bracket is answered for the sake of
+                # answering it correctly when it does arrive, which costs
+                # nothing; it is not a subsystem players can reach today.
+                started = msg_type == MSG_CL_REQUEST_NEWSPAPER_START
+                reply_type = (MSG_SV_OK_NEWSPAPER_START
+                              if started
+                              else MSG_SV_OK_NEWSPAPER_END)
+                session.newspaper_open = started
+                print(f"[{self.tag}] newspaper {'open' if started else 'close'}")
+                out = self._answer(session, sequence, reply_type, b"")
+                self._presence_refresh_onlookers(session)
                 return out
             if msg_type in (item.MSG_CL_REQUEST_LOCKER_ACCESS_START,
                             item.MSG_CL_REQUEST_LOCKER_ACCESS_END):
