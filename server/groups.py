@@ -418,23 +418,81 @@ class Group:
         return f"#{self.id} {shown} ({len(self.members)}/{self.limit})"
 
 
+class ExamRecord:
+    """One character's place in the リーダー試験's fifteen-question tour.
+
+    Three numbers, and they are the scripts' own three cells rather than a model
+    of an exam this end runs:
+
+        answered  script.PC_LEADER_EXAM_ANSWERED  questions already behind you
+        draw      script.PC_LEADER_EXAM_DRAW      what the サイコロ left there
+        score     script.PC_LEADER_EXAM_SCORE     what is left of 100 points
+
+    ⭐ They are one record because the scenarios write them as one. The
+    secretary (hsy_c002) opens the exam by setting all three in four
+    instructions -- score 100, draw 0, answered 0 -- then writes draw and
+    answered together again when she asks her own question, and clears those two
+    when she judges it. Every other station does the same pair on the way out.
+
+    ⚠️ They live here for the reason script.PC_LEADER_EXAM_ANSWERED gives: each
+    station is a separate NPC event and the client's PC data family is a stub in
+    this build, so between two stations there is nowhere else for them to be.
+
+    ⛔️ Nothing in here is a rule this server invented. What the numbers mean is
+    the scenarios' business; this is a box with three integers in it.
+    """
+
+    __slots__ = ("answered", "draw", "score")
+
+    def __init__(self, answered: int = 0, draw: int = 0,
+                 score: int = 0) -> None:
+        self.answered = answered
+        self.draw = draw
+        self.score = score
+
+    def __bool__(self) -> bool:
+        """False for somebody who has never sat the exam -- see GroupBook._save."""
+        return bool(self.answered or self.draw or self.score)
+
+    def __repr__(self) -> str:
+        return (f"answered={self.answered} draw={self.draw} "
+                f"score={self.score}")
+
+    def to_json(self) -> dict:
+        return {"answered": self.answered, "draw": self.draw,
+                "score": self.score}
+
+    @classmethod
+    def from_json(cls, body: object) -> "ExamRecord":
+        if not isinstance(body, dict):
+            print(f"[groups] ignoring unreadable exam record {body!r}")
+            return cls()
+        got = []
+        for key in ("answered", "draw", "score"):
+            try:
+                got.append(int(body.get(key, 0)))
+            except (TypeError, ValueError):
+                print(f"[groups] ignoring unreadable exam {key} {body.get(key)!r}")
+                got.append(0)
+        return cls(*got)
+
+
 class GroupBook:
     """Every group on the server, plus who has passed the リーダー試験.
 
     ⚠️ The qualification set lives here rather than beside the exam scores it
-    belongs to, because right now nothing awards it: the リーダー試験 is an NPC
-    event this server does not run, so the only way in is the console. When the
-    event exists, this set is what it should write to.
+    belongs to, because when it was built nothing awarded it: the リーダー試験
+    was an NPC event this server could not run, and the console was the only way
+    in. ⭐ It is still the right place now that the exam runs -- a group is what
+    the bit is for.
 
-    ⭐ ``exam_progress`` is the other half of that sentence and arrived with it
-    (round 303): how far through the exam's fifteen-question tour a character
-    is. The scripts keep it in `script.PC_LEADER_EXAM_ANSWERED`, the client's
-    half of that family is a stub, and each station of the tour is a separate
-    NPC event -- so between two stations there is nowhere else for it to be.
-    ⚠️ Nothing writes it yet either, for the same reason nothing awards the
-    pass: the tour cannot be walked. What it buys today is that the shadow VM
-    stops answering 「don't know」 to the two gates in front of the exam, which
-    is what put both of these on the wire's side of the line at all.
+    ⭐⭐ Round 305 wired both: `mps_session._leader_exam_progress` takes the
+    finished scenario's own cell writes, so the pass is awarded by the line the
+    secretary says it after, and ``exam`` -- the other half of that sentence,
+    one `ExamRecord` per character -- is how far through the tour they are.
+    ⚠️ Round 303 shipped the counter alone under ``exam_progress`` and nothing
+    ever wrote one; `_load` still reads that key, because a file from that build
+    costs four lines to keep.
 
     Every mutation writes the file, for the reason charaids.CharaIndex gives.
     """
@@ -444,7 +502,7 @@ class GroupBook:
         self.path = directory / "groups.json"
         self.groups: dict[int, Group] = {}
         self.qualified: set[int] = set()
-        self.exam_progress: dict[int, int] = {}
+        self.exam: dict[int, ExamRecord] = {}
         self._load()
 
     # -- persistence ------------------------------------------------------
@@ -464,9 +522,17 @@ class GroupBook:
                 self.qualified.add(int(str(key), 16))
             except ValueError:
                 print(f"[groups] ignoring unreadable qualified id {key!r}")
+        for key, body in (raw.get("exam") or {}).items():
+            try:
+                self.exam[int(str(key), 16)] = ExamRecord.from_json(body)
+            except ValueError:
+                print(f"[groups] ignoring unreadable exam id {key!r}")
+        # ⚠️ Round 303's shape, read for as long as it is free to: a plain
+        # {charaId: answered} map, no draw and no score.
         for key, value in (raw.get("exam_progress") or {}).items():
             try:
-                self.exam_progress[int(str(key), 16)] = int(value)
+                self.exam.setdefault(
+                    int(str(key), 16), ExamRecord()).answered = int(value)
             except (TypeError, ValueError):
                 print(f"[groups] ignoring unreadable exam progress {key!r}")
         for key, body in (raw.get("groups") or {}).items():
@@ -503,10 +569,10 @@ class GroupBook:
             json.dumps(
                 {
                     "qualified": [f"0x{one:08x}" for one in sorted(self.qualified)],
-                    "exam_progress": {
-                        f"0x{one:08x}": answered
-                        for one, answered in sorted(self.exam_progress.items())
-                        if answered
+                    "exam": {
+                        f"0x{one:08x}": record.to_json()
+                        for one, record in sorted(self.exam.items())
+                        if record
                     },
                     "groups": {
                         f"0x{group_id:08x}": group.to_json()
@@ -557,13 +623,15 @@ class GroupBook:
             1 if chara_id in self.qualified else 0,
         )
 
-    def answered(self, chara_id: int) -> int:
-        """How many リーダー試験 questions this character has answered.
+    def exam_of(self, chara_id: int) -> ExamRecord:
+        """This character's place in the リーダー試験, all zeros if there is none.
 
-        Zero for everybody until the tour can be walked, and zero is the honest
-        answer rather than a placeholder: nobody has answered a question.
+        ⚠️ The empty one is not stored on the way out: asking is not sitting the
+        exam, and a `groups.json` with a row per character who once walked past
+        the secretary would say the opposite of what it holds.
         """
-        return self.exam_progress.get(chara_id, 0)
+        found = self.exam.get(chara_id)
+        return found if found is not None else ExamRecord()
 
     # -- mutations --------------------------------------------------------
 
@@ -575,6 +643,41 @@ class GroupBook:
             self.qualified.add(chara_id)
         else:
             self.qualified.discard(chara_id)
+        self._save()
+        return True
+
+    def record_exam_progress(self, chara_id: int, answered: "int | None" = None,
+                    draw: "int | None" = None,
+                    score: "int | None" = None) -> bool:
+        """Write back whichever of the three the finished scenario decided.
+
+        ⚠️ Not curriculum.ScoreCard.record_exam, which is the other 試験 -- a
+        subject's own exam result. This one is the リーダー試験's tour.
+
+        None means 「that scenario did not write this one」 and is not the same
+        as zero -- the secretary clears two of the three by writing 0 to them
+        when she judges the exam, and that write has to land.
+
+        False if nothing moved, which the caller says out loud: 「the script
+        wrote the value that was already there」 and 「this end dropped the
+        write」 look identical in a save file otherwise.
+        """
+        found = self.exam.get(chara_id)
+        record = (ExamRecord(found.answered, found.draw, found.score)
+                  if found is not None else ExamRecord())
+        before = record.to_json()
+        if answered is not None:
+            record.answered = int(answered)
+        if draw is not None:
+            record.draw = int(draw)
+        if score is not None:
+            record.score = int(score)
+        if record.to_json() == before:
+            return False
+        if record:
+            self.exam[chara_id] = record
+        else:
+            self.exam.pop(chara_id, None)
         self._save()
         return True
 
@@ -741,9 +844,9 @@ class GroupBook:
 
     def forget(self, chara_id: int) -> None:
         """Take a deleted character out of the group and both exam records."""
-        touched = chara_id in self.qualified or chara_id in self.exam_progress
+        touched = chara_id in self.qualified or chara_id in self.exam
         self.qualified.discard(chara_id)
-        self.exam_progress.pop(chara_id, None)
+        self.exam.pop(chara_id, None)
         group = self.of(chara_id)
         if group is not None:
             if group.leader == chara_id:
@@ -755,7 +858,7 @@ class GroupBook:
             self._save()
 
     def summary(self) -> str:
-        if not self.groups and not self.qualified and not self.exam_progress:
+        if not self.groups and not self.qualified and not self.exam:
             return "(no groups)"
         return (
             f"{len(self.groups)} group(s), "

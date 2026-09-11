@@ -1960,15 +1960,24 @@ class MpsServer:
                           f"({script.SEASON_SOURCE})"))
 
     def _leader_exam_cells(self, session: "_Session") -> dict:
-        """リーダー試験's three cells, out of records this end already keeps.
+        """リーダー試験's five cells, out of records this end already keeps.
 
-        ⭐ Why these three and not some other three: the shadow VM said so. A
+        ⭐ Why these and not some others: the shadow VM said so. A
         follower counts every cell it was asked for and could not answer, and
         walking the secretary's scenario printed exactly
         `cells nobody supplied: PC[0xd13e], PC[0x3b00], PC[0x3590]` -- the two
         gates in front of the exam and the tour counter read ahead of them. Two
         of the three were already computed here and simply never handed over;
-        the third had nowhere to live until `groups.GroupBook.exam_progress`.
+        the third had nowhere to live until `groups.ExamRecord`.
+
+        ⭐⭐ Round 305 added the two the counter travels with, and the corpus
+        says they travel together: seventeen of the nineteen scenarios read
+        `PC_LEADER_EXAM_DRAW` once and write it once, read
+        `PC_LEADER_EXAM_SCORE` fifty-five times and write it fifty-five times,
+        and read the counter twice and write it once. ⛔️ Round 304's note that
+        those two were 「written but never read」 was a reading of one log, not
+        of the corpus: the tour reads all three, and the score is the most-read
+        cell the exam has.
 
         ⚠️⚠️ Supplying them does not open the exam, and it is not meant to. A
         character who has finished no 課程 has 試験レベル 1, so
@@ -1997,7 +2006,10 @@ class MpsServer:
         book = self.accounts.groups
         cells[("PC", script.PC_LEADER_QUALIFIED)] = (
             1 if chara_id in book.qualified else 0)
-        cells[("PC", script.PC_LEADER_EXAM_ANSWERED)] = book.answered(chara_id)
+        tour = book.exam_of(chara_id)
+        cells[("PC", script.PC_LEADER_EXAM_ANSWERED)] = tour.answered
+        cells[("PC", script.PC_LEADER_EXAM_DRAW)] = tour.draw
+        cells[("PC", script.PC_LEADER_EXAM_SCORE)] = tour.score
         return cells
 
     def _shadow_at(self, session: "_Session", local_ip: int, op: int):
@@ -2258,6 +2270,66 @@ class MpsServer:
         print(f"[{self.tag}] 登場フラグ {' '.join(touched)} -> "
               + ("記帳" if changed else "既に同じ値（記帳なし）")
               + f" · 現在の登場: {love.on_stage()}")
+
+    def _leader_exam_progress(self, session: "_Session", result) -> None:
+        """Let the リーダー試験's own cell writes drive the tour record.
+
+        ⭐⭐⭐ Round 305, and it is `_script_debut` one family over: since round
+        304 the shadow has been computing these numbers and this end has been
+        dropping them, which is as far as the exam could ever get. Every station
+        is a separate NPC event, so a counter that does not outlive a scenario
+        puts the player back at question one for ever -- and the same goes for
+        the score, which is what the pass is judged against, and for whatever
+        the サイコロ left behind (PC_LEADER_EXAM_DRAW -- ⛔️ not the next
+        station, see the constant).
+
+        ⚠️ Fenced by scope rather than by judgement, the same fence round 304
+        used for the branch that produces these writes: `script.is_leader_exam`.
+        The nineteen scenarios that read these cells and the nineteen that write
+        them are the same nineteen (round 303 counted both), so no scenario
+        outside the exam can reach this even by accident.
+
+        ⭐ `PC_LEADER_QUALIFIED` is taken here too, and it is the one write that
+        grants something: グループ作成資格. ⚠️ It is safe for a narrow reason
+        rather than a general one -- the corpus has exactly one write of that
+        cell, `F99 = 1` immediately after 「おめでとう、合格ですよ。」 in
+        hsy_c002, and the branch in front of it is `score >= 95`. ⛔️ Redemption
+        criterion if it is ever wrong: 「記帳 … 合格」 in the log for a run that
+        never reached that line. `/group qual off` takes it back.
+
+        ⚠️ The log line is the thing to read, for `_script_debut`'s reason:
+        「記帳」 means this ran and took the writes, 「既に同じ値」 means the
+        record already said so, and silence means the scenario wrote none of
+        these cells -- and then the question is the scenario or the shadow, not
+        this end's bookkeeping.
+        """
+        runner = session.script
+        played = runner.script.script_id if runner is not None else None
+        if not script.is_leader_exam(played):
+            return
+        watched = (script.PC_LEADER_EXAM_ANSWERED, script.PC_LEADER_EXAM_DRAW,
+                   script.PC_LEADER_EXAM_SCORE, script.PC_LEADER_QUALIFIED)
+        wrote = {address: value
+                 for (family, address), value in result.writes.items()
+                 if family == "PC" and address in watched}
+        if not wrote:
+            return
+        book = self.accounts.groups
+        chara_id = session.chara_id
+        moved = book.record_exam_progress(
+            chara_id,
+            answered=wrote.get(script.PC_LEADER_EXAM_ANSWERED),
+            draw=wrote.get(script.PC_LEADER_EXAM_DRAW),
+            score=wrote.get(script.PC_LEADER_EXAM_SCORE))
+        passed = wrote.get(script.PC_LEADER_QUALIFIED)
+        awarded = (book.qualify(chara_id, bool(passed))
+                   if passed is not None else False)
+        print(f"[{self.tag}] リーダー試験 "
+              + " ".join(f"{address:#06x}={value}"
+                         for address, value in sorted(wrote.items()))
+              + " -> " + ("記帳" if moved or awarded else "既に同じ値（記帳なし）")
+              + f" · {book.exam_of(chara_id)}"
+              + (" · 合格" if chara_id in book.qualified else ""))
 
     def _romance_credit(self, session: "_Session", seen: int) -> bytes:
         """A finished conversation counts towards 親密さ; a main event moves her.
@@ -3432,6 +3504,7 @@ class MpsServer:
                     # original server flush」 has never been observed here.
                     self._script_keywords(session, shadow.result)
                     self._script_debut(session, shadow.result)
+                    self._leader_exam_progress(session, shadow.result)
                 session.script = None
                 # ⭐ This is the end that actually happens. The client runs the
                 # script itself (round 37) and reports OP_END here, so the two
@@ -10521,7 +10594,10 @@ class MpsServer:
         def state() -> str:
             where = mine.label() if mine is not None else "no group"
             qual = "yes" if me in book.qualified else "no"
-            return f"/group {where}, qualified={qual} [{book.summary()}]"
+            # ⭐ The tour record too: it is the only window onto リーダー試験
+            # progress, and a station writing nothing is the failure to look for.
+            return (f"/group {where}, qualified={qual}, "
+                    f"試験 [{book.exam_of(me)}] [{book.summary()}]")
 
         if not what:
             return self._say(session, sequence, state())

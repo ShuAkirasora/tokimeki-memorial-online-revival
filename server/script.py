@@ -1579,17 +1579,44 @@ PC_TEST_LEVEL_FROM_ZERO = 0x3590
 #: リーダー資格 -- passing the exam. Nineteen scenarios read it and exactly one
 #: writes it: the secretary sets it to 1 straight after 「おめでとう、合格ですよ。」,
 #: in front of 「あなたには、グループを作成する資格が与えられますが……」.
-#: ⭐ groups.GroupBook.qualified is this end's copy of the same bit, and that is
-#: the set the exam should write to once it can be sat.
+#: ⭐ groups.GroupBook.qualified is this end's copy of the same bit, and since
+#: round 305 that write is wired: mps_session._leader_exam_progress takes it out
+#: of the finished scenario's own writes.
 PC_LEADER_QUALIFIED = 0x3B00
 
 #: How many of the fifteen questions have been answered so far. Every scenario
 #: that carries a question ends by incrementing it; the secretary's writes it
 #: three times, which is where opening the exam and judging it live.
+#: ⭐⭐ Round 305: this is also what ORDERS the tour. Each of the seventeen
+#: scenarios opens by comparing it against a constant of its own -- equal, ask;
+#: greater, 「you have already answered mine」; greater than zero, 「the exam is
+#: on but it is not my turn」; zero, not sitting it -- so the fourteen constants
+#: are the running order, and the secretary's is the last one (she judges).
 #: ⚠️ It has to survive between scenarios -- each station is a separate NPC
 #: event -- and the client's half of the PC data family is a stub, so this end
-#: is the only place it can live. groups.GroupBook.answered is that place.
+#: is the only place it can live. groups.ExamRecord is that place.
 PC_LEADER_EXAM_ANSWERED = 0xD13E
+
+#: Whatever the scenario's own サイコロ left in a register on the way out.
+#: Seventeen scenarios write it once and read it once (at the top of the body,
+#: against 255); the secretary writes it three times, twice to clear it.
+#: ⛔️ NOT 「which station is next」, which is what round 304 guessed from two
+#: samples: round 305 walked three stations and the tour is ordered by
+#: PC_LEADER_EXAM_ANSWERED instead -- kyt wrote 9 here and the next scenario to
+#: ask a question was number 2. ⚠️ What it actually drives has not been read,
+#: so the name says what was measured and nothing more.
+#: ⚠️ Same lifetime as the counter above and for the same reason, so the same
+#: record holds it.
+PC_LEADER_EXAM_DRAW = 0xD13D
+
+#: What is left of the exam's hundred points. The secretary sets it to 100 when
+#: the exam opens (`OP_STR 100` straight into the cell) and every wrong answer
+#: subtracts from it -- fifty-five read-subtract-write sites per station, the
+#: subtrahend between 1 and 20 depending on the question. The pass is judged
+#: against this number and nothing else: `>= 95` in front of
+#: 「おめでとう、合格ですよ。」, which is also the only write of
+#: PC_LEADER_QUALIFIED in the corpus.
+PC_LEADER_EXAM_SCORE = 0xD13F
 
 MSG_CL_REQUEST_NPC_EVENT_END = 0x5603
 MSG_SV_OK_NPC_EVENT_END = 0x5604
