@@ -90,13 +90,25 @@ class _Die(_Top):
     time, forever」, which is what made the tutorial hand every player the same
     six キーワード (2.150).
 
-    ⚠️⚠️ It settles the **branch**, never the register: the range `OP_RAND`
-    draws from is still unread (its 143 sites dispatch on constants that a
-    corpus scan cannot separate from register reuse), and inventing one would
-    put a made-up number where a measured one belongs. A two-armed `OP_BR` is a
-    two-way choice whatever the range is, so a coin at the branch needs no range.
-    ⚠️ The cost, written down rather than hidden: an n-way ladder built out of
-    two-armed branches comes out 1/2, 1/4, 1/4 … instead of uniform.
+    ⚠️⚠️ It settles the **branch**, never the register -- still, and on purpose:
+    this class now *carries* the range (`bound`), but nothing reads it yet.
+    Defining the register is the step after this one, and it changes what a
+    scenario does; carrying the number changes nothing at all.
+    ⚠️ The cost of settling only the branch, written down rather than hidden: an
+    n-way ladder built out of two-armed branches comes out 1/2, 1/4, 1/4 …
+    instead of uniform.
+
+    ⭐⭐⭐ `bound` is the second word of the operand block, and round 307 read it
+    across all 143 sites in the corpus: it is a bare literal everywhere, an
+    **inclusive** upper bound counting from 0. ⛔️ It is not the
+    arithmetic family's operand encoding -- that family has no immediate at all
+    (0 of 60314 source operands corpus-wide; constants always arrive through
+    `OP_STR`), and the category nibble is 0 at every one of the 143 sites, which
+    read as a register would name the flag file. Three independent gates agree
+    on the reading and only on this one: `rand(99)` under a `< 30` test is 30%
+    only over 0..99; the 60 lottery chains add 1 and then dispatch on 1..n+1;
+    the rest dispatch on 0..n-1 with n on the fall-through arm. A bound of None
+    is the one that survived an expression (see `_merge_unknown`).
 
     ⚠️⚠️ Round 306 found that the cost is not only a skew. The リーダー試験
     picks its question with a fifteen-rung ladder wrapped in 「reroll while the
@@ -106,19 +118,38 @@ class _Die(_Top):
     branch; a skew inside a rejection loop stops a scenario. ⭐ What got past it
     was `TMO_SCRIPT_DIE` pinning the rungs by site -- which is what pinning is
     for -- ⛔️ not a change here.
-    ⭐ The reopen condition for settling the register after all is the sentence
-    above it: at these sites the range is not unread. `PC_LEADER_EXAM_DRAW`
-    writes down why this call site's operand can be read as a bound when a
-    corpus scan of all 143 cannot.
+    ⭐ That reopen condition -- 「the range at these sites is not unread」 -- was
+    met in round 307 and the paragraph above records the reading. ⚠️⚠️ What is
+    still open is the step it unlocks, not the measurement: settling the
+    register changes which rung a scenario takes, so it is its own change with
+    its own regression surface (the tutorial's six coins), and this class does
+    not take it. Carrying `bound` is where round 307 stopped, on purpose.
     """
 
-    __slots__ = ()
+    __slots__ = ("bound",)
+
+    def __init__(self, bound: "int | None" = None):
+        self.bound = bound
 
     def __repr__(self) -> str:
+        # ⚠️⚠️ The bound deliberately does NOT show here. The `repr` of a
+        # register file is used as a dictionary key by offline enumerators (a
+        # `_Top` is unhashable), so printing the range would split states that
+        # used to merge -- a behaviour change smuggled in through a log line.
+        # When something starts *using* the bound, it can print it.
         return "\u22a4(die)"
 
 
+#: The die with no range left on it -- what an expression over a die produces.
+#: ⚠️⚠️ A die is no longer a singleton, so `x is DIE` is the wrong test and
+#: would quietly stop recognising every die that came out of an `OP_RAND`.
+#: Ask `is_die(x)`.
 DIE = _Die()
+
+
+def is_die(value) -> bool:
+    """Is this a die -- the one unknown this end is allowed to settle?"""
+    return isinstance(value, _Die)
 
 
 def _unknown(value) -> bool:
@@ -135,7 +166,11 @@ def _merge_unknown(*values):
     unknowns = [v for v in values if isinstance(v, _Top)]
     if not unknowns:
         return None
-    return DIE if all(v is DIE for v in unknowns) else TOP
+    # ⚠️ The bound does not survive: `die(0..5) + 8` is a die over 8..13, and
+    # writing 5 on it would be worse than writing nothing. Nothing reads a
+    # bound yet, so this loses nothing today -- it is here to stay honest when
+    # something does.
+    return DIE if all(is_die(v) for v in unknowns) else TOP
 
 
 # Register categories, as the client's own decoder splits a 16-bit operand
@@ -1029,16 +1064,20 @@ class Machine:
             return i + 1
 
         if op == OP_RAND:
-            # ⭐ Taught rather than left to `_uninstructed`, and still taught
-            # as unknown: this machine does not produce the number, because the
-            # range the operand names has never been read (see `_Die`). What
-            # changed in round 193 is only that the unknown says *whose* it is.
+            # ⭐ Taught rather than left to `_uninstructed`, and still taught as
+            # unknown: this machine does not produce the number. What it now
+            # carries is the range the number would come from -- the second word
+            # of the operand block, read as a literal inclusive bound (`_Die`).
+            # ⚠️⚠️ Carrying it is not using it: every consumer still sees an
+            # unknown, and the branch is still settled by a coin. Round 307
+            # measured the range; defining the register is the step after.
             # ⚠️ A `Machine` -- which runs a script on its own -- is unchanged
             # by that: `OP_BR` over a die still raises, because nothing there is
             # watching a screen that a coin would have to agree with. Only
             # `Follower`, which is in step with a client stopped on the branch,
             # may settle one.
-            self.registers[_arith_registers(args)[0]] = DIE
+            self.registers[_arith_registers(args)[0]] = _Die(
+                int.from_bytes(args[2:4], "little"))
             return i + 1
 
         if op == OP_SYNC_VARIABLE:

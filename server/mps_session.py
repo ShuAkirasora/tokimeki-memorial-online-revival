@@ -3562,7 +3562,7 @@ class MpsServer:
                 # bounded, which brought in the other family that needed it: the
                 # 自分のクラス dispatch the tutorial walks you home on.
                 verdict, goes_to = shadow.branch()
-                if verdict is gs3vm.DIE:
+                if gs3vm.is_die(verdict):
                     # ⭐⭐⭐ The other thing this end may settle, and it is
                     # fenced by a different question from the one above. There
                     # the test is 「does the destination matter」; here it is
@@ -3706,7 +3706,7 @@ class MpsServer:
                     # sharing a register file that should not be.
                     print(f"[{self.tag}] ⚠️ 帳簿の temp を横取りされた ip={local}: "
                           f"自分の値 {stolen[0]}、いまの帳簿 {stolen[1]}")
-                if condition is gs3vm.DIE:
+                if gs3vm.is_die(condition):
                     pass  # already said, and said with which way the coin fell
                 elif condition is gs3vm.TOP:
                     print(f"[{self.tag}] vm cond=⊤ — this branch is not answerable here")
