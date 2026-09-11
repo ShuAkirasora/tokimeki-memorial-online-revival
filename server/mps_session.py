@@ -3513,10 +3513,14 @@ class MpsServer:
                         target = found.wire_ip(goes_to)
                     why = f"サイコロ (OP_RAND -> {'成立' if heads else '不成立'})"
                 elif (verdict is not None and not gs3vm._unknown(verdict) and verdict
-                        and (shadow.decided_road() or shadow.in_party)):
-                    # ⭐⭐⭐ INVENTED (scope, not answer): inside a ドラマパーティ
-                    # this end answers every branch it can compute, instead of
-                    # only the ones whose road decides nothing anyone can see.
+                        and (shadow.decided_road() or shadow.in_party
+                             or script.is_leader_exam(found.script_id))):
+                    # ⭐⭐⭐ INVENTED (scope, not answer): in a ドラマパーティ and
+                    # in the リーダー試験 this end answers every branch it can
+                    # compute, instead of only the ones whose road decides
+                    # nothing anyone can see. ⚠️ Two scopes, two different
+                    # arguments -- the party one is below, the exam's is further
+                    # down and is `_Die`'s, not this one's.
                     #
                     # The road test (`gs3vm._decided_road`) is scaffolding around
                     # a register file that was not trusted yet, and for a party's
@@ -3566,9 +3570,32 @@ class MpsServer:
                     # appear on a forced branch. One playthrough of `un111`
                     # printed 86 of them before this and 0 after; ⚠️ if it comes
                     # back anywhere else, this widening is what to look at.
+                    # ⭐⭐⭐ Round 304 widened it by one more scope, and by the
+                    # `_Die` argument rather than the party one: inside the
+                    # リーダー試験's own nineteen scenarios
+                    # (`script.LEADER_EXAM_SCRIPTS`) there is nobody else who
+                    # could answer. The three cells those branches read --
+                    # PC_TEST_LEVEL_FROM_ZERO, PC_LEADER_QUALIFIED,
+                    # PC_LEADER_EXAM_ANSWERED -- all live on this side, because
+                    # the client's whole PC data family is a stub in this build
+                    # (`0x8180`/`0x8181`, see script.py) and reads every one of
+                    # them as 0. ⇒ Declining is not「leave it to the side that
+                    # knows」, it is「fall-through, every time, forever」, which
+                    # is the standing refusal 「試験レベルが２以上になったら、
+                    # もう一度おいでなさい。」 no matter what the save says.
+                    #
+                    # ⚠️ The road test cannot be the fence here and that is the
+                    # point: the exam's roads write PC[0xd13d/e/f] and speak
+                    # 台詞, so `_decided_road` refuses all of them by design.
+                    # ⛔️ What keeps this narrow is the scope instead: those
+                    # nineteen scenarios are started by one ring item on one
+                    # event id (`event_for_menu_item`), and round 303's corpus
+                    # scan found nothing outside them reading these cells.
                     target = found.wire_ip(goes_to)
                     why = (f"表現のみ (vm cond={verdict})" if shadow.decided_road()
-                           else f"ドラマの帳簿 (vm cond={verdict})")
+                           else f"ドラマの帳簿 (vm cond={verdict})"
+                           if shadow.in_party
+                           else f"リーダー試験 (vm cond={verdict})")
             elif shadow is None and why == script.STANDING_NO:
                 # ⭐⭐⭐ The same answer as the block above, for a server that
                 # cannot run that block: `script.SEASON_SWITCH` is the four-armed

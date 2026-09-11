@@ -717,6 +717,44 @@ MENU_ITEM_LEADER_EXAM = 402
 # one; nothing sends the player there yet.)
 LEADER_EXAM_EVENT_ID = 1
 
+#: The second half, for the four staff who have one. ⚠️ Nothing sends the
+#: player there yet; it is here because it is the other half of the same tour
+#: and the set below has to cover it.
+LEADER_EXAM_SECOND_HALF_ID = 2
+
+
+def _leader_exam_scripts() -> frozenset:
+    """Every scenario the リーダー試験 is made of, by scriptId.
+
+    ⭐ Derived from the tables rather than listed by name. The rule is the one
+    LEADER_EXAM_EVENT_ID states -- in `common_npc_event` and `general_npc_event`
+    the `.ssb` behind an event is cNNN with NNN == id + 1, 28 rows and no
+    exceptions -- so event 1 is a c002 and event 2 is a c003 and nothing else in
+    those two tables is either. ⚠️ The other tables are excluded because the
+    rule is not theirs: `capture_npc_event` files `amm_c011` under event 1.
+
+    ⭐⭐ Nineteen come out, and a second witness that shares no input with this
+    one agrees on the same nineteen: exactly nineteen scenarios in the whole
+    corpus read PC_LEADER_QUALIFIED (round 303), and they are these -- fifteen
+    c002 tours plus four c003 second halves.
+    """
+    wanted = (LEADER_EXAM_EVENT_ID, LEADER_EXAM_SECOND_HALF_ID)
+    return frozenset(
+        found["scriptId"]
+        for events in NPC_EVENTS.values()
+        for found in events
+        if found["table"] in ("common_npc_event", "general_npc_event")
+        and found["event"][1] in wanted
+        and found.get("scriptId") is not None)
+
+
+LEADER_EXAM_SCRIPTS = _leader_exam_scripts()
+
+
+def is_leader_exam(script_id: "int | None") -> bool:
+    """Is this scriptId one of the リーダー試験's own scenarios?"""
+    return script_id is not None and script_id in LEADER_EXAM_SCRIPTS
+
 
 def events_of(npc_id: int) -> list[dict]:
     """Every event filed under this npcId, in table order."""
