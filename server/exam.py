@@ -110,10 +110,10 @@ Restored, each traceable to a quoted sentence or to the binary above:
   * a ten-minute limit, a 退出 button that ends it early, and a mark sheet
   * entry by standing in your own classroom when the slot begins, exactly as
     for 授業 — so lesson.Bell.admit is the same rule and is reused unchanged
-  * that a blank class or name scores zero — enforced for the name, which is a
-    NUL-padded buffer and therefore self-evidently blank or not; ⚠️ **not** for
-    the class, because `inClass` 0 is Ａ組 and there is no sentinel to compare
-    against. See CLASS_BLANK.
+  * that a blank class or name scores zero — both halves, the name because it
+    is a NUL-padded buffer and therefore self-evidently blank or not, the class
+    because the 組 box is a letter box: A..Z reach the wire as 0..25 and an
+    empty one as 26, which is not a 組. See CLASS_BLANK and `unclassed`.
   * that the result appears on the 通知表 and nowhere else, which is why there
     is no MsgSvResultExam in the block: nothing is shown when the paper ends
   * that exams are solitary, which costs this server nothing — it has one player
@@ -156,9 +156,10 @@ header, 0x6A04 is a periodic autosave that starts before anything is filled in,
 for ○. Also, the hard way, that `schoolId` must be a real one — see
 mps_session.EXAM_SCHOOL_ID.
 
-⚠️ Still open, and it needs a person at the keyboard rather than more static
-reading: what an unwritten クラス arrives as. Submit with the 組 box **left**
-blank and read the inClass the log prints. See CLASS_BLANK.
+⭐⭐ And, settled at the keyboard in round 326, what the 組 box sends: it is a
+one-letter box the client converts itself (A→0 … Z→25, lowercase folded), and a
+box it cannot read as a letter — empty, or a digit — arrives as 26. That closes
+the クラス half of `p06_03`'s zero rule; see CLASS_BLANK.
 """
 
 from __future__ import annotations
@@ -347,29 +348,57 @@ def blank(name: bytes) -> bool:
     """Did the player leave this name field empty on the sheet?
 
     Unambiguous for the two names, which are NUL-padded fixed buffers: nothing
-    written means nothing sent. ⚠️ There is no such test for `inClass` — see
-    CLASS_BLANK.
+    written means nothing sent. The 組 box has a test of its own — see
+    `unclassed`.
     """
     return not name.split(b"\x00")[0].strip()
 
 
-# What an unwritten クラス arrives as. ⚠️ Still unknown, and now known to be
-# genuinely unknowable by guessing: a paper submitted with the 組 box **filled
-# in** came back `inClass=0`. Zero is Ａ組, it is what this server's characters
-# are in, and it is what a real filled-in sheet sends — so the obvious test,
-# treat zero as empty, would score every Ａ組 paper zero. A u16 has 65535 other
-# candidates and the manual names none of them.
+# What an unwritten クラス arrives as: 26, and the box is a letter box.
 #
-# So half of `p06_03`'s zero rule is enforced below and half is not, which is
-# the honest split until a sheet is submitted with the box **left** blank and
-# the log says what came in. `_exam_sheet` prints inClass on every submission
-# for exactly that purpose.
+# ⭐ Measured at the keyboard, one exam at a time, reading the inClass
+# `_exam_sheet` prints. The 組 box takes one letter and the client converts it
+# itself: A→0, B→1, H→7, I→8, Z→25, and a lowercase `a` arrives as 0 too,
+# so a filled-in box can only ever send a real 組. Anything the client cannot
+# read as a letter — an empty box, or a digit typed into it — arrives as **26**,
+# which is one past Ｚ組 and therefore not a 組 at all: `class.bin` has exactly
+# twenty-six rows and curriculum.CLASSROOM carries all of them.
 #
-# ⚠️ The value in a paper's *first* 0x6A04 is not the answer either: that one
-# goes out before anything has been filled in and carries uninitialised memory —
-# 17279 on one run, 26 on the next, with two copies of the float 255.0 sitting
-# in the name buffers behind it.
-CLASS_BLANK: "int | None" = None
+# ⭐⭐ That is why the rule below tests the range and not this constant: 26 is
+# what a live client sends for a blank box, but it is not a sentinel the client
+# promises — it is simply the first value that is not a class. ⚠️ A paper whose
+# sheet was never synced sends uninitialised memory instead (17279 on one round-63
+# run, with two copies of the float 255.0 in the name buffers behind it), and the
+# range test catches that too where an equality test against 26 would not.
+#
+# ⚠️ The remaining hole is the one no test can close from this side: junk that
+# happens to land inside 0..25 reads as a filled-in 組. Nothing on the wire
+# distinguishes it, and the manual asks for no more.
+CLASS_BLANK = 26
+
+
+def unclassed(in_class: int) -> bool:
+    """Is this sheet's 組 box blank — that is, not a real 組?
+
+    「クラスもしくは氏名を記入し忘れると０点になってしまいます」 is `p06_03`'s, and this is
+    the クラス half of it. `blank` is the 氏名 half.
+    """
+    return not 0 <= in_class < len(curriculum.CLASSROOM)
+
+
+def voided(sheet: dict) -> str:
+    """Which half of `p06_03`'s zero rule threw this paper away, for the log.
+
+    Empty when the paper was marked on its answers. It says nothing the player
+    is shown — 「自分の結果は、試験期間終了後に通知表で確認することができます」 — and exists
+    so that a 0 点 in the log can be told from a paper that was simply bad.
+    """
+    missing = []
+    if unclassed(sheet["inClass"]):
+        missing.append("組")
+    if blank(sheet["familyName"]) or blank(sheet["firstName"]):
+        missing.append("氏名")
+    return "・".join(missing)
 
 
 # ── the paper ───────────────────────────────────────────────────────────────
@@ -440,8 +469,9 @@ def score(questions: "list[quiz.Question]", sheet: dict) -> "tuple[int, int]":
     of questions answered correctly is still reported, because the log should be
     able to say *that* the paper was thrown away rather than that it was bad.
 
-    ⚠️ Only the 氏名 half of that rule is enforced. See CLASS_BLANK: zero is a
-    real class, so there is nothing to test `inClass` against yet.
+    ⭐ Both halves are enforced. `inClass` is not tested against a sentinel but
+    against the twenty-six 組 there are — see `unclassed`, and CLASS_BLANK above
+    it for what a live client actually sends for an empty box.
 
     An unanswered question is one the sheet has no entry for, or one whose entry
     is UNANSWERED. The client always sends twenty rows and marks the empty ones
@@ -457,8 +487,7 @@ def score(questions: "list[quiz.Question]", sheet: dict) -> "tuple[int, int]":
         if question.judge(sheet["choiceId"][index]):
             right += 1
     unnamed = blank(sheet["familyName"]) or blank(sheet["firstName"])
-    unclassed = CLASS_BLANK is not None and sheet["inClass"] == CLASS_BLANK
-    if unnamed or unclassed:
+    if unnamed or unclassed(sheet["inClass"]):
         return 0, right
     return min(100, right * POINTS_PER_QUESTION), right
 

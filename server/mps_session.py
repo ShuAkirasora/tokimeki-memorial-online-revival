@@ -14009,9 +14009,9 @@ class MpsServer:
     def _exam_sheet(self, session: "_Session", params: bytes, why: str) -> bytes:
         """Take in a mark sheet from 0x6A04 or 0x6A05. Answers nothing.
 
-        ⚠️ inClass is printed on every one of these on purpose: it is the only
-        way to find out what an unwritten クラス arrives as, which is the half of
-        `p06_03`'s zero rule this server cannot yet enforce. See exam.CLASS_BLANK.
+        ⭐ inClass is printed on every one of these on purpose: reading it off a
+        live client, one letter at a time, is how the クラス half of `p06_03`'s
+        zero rule was settled. See exam.CLASS_BLANK and exam.unclassed.
         """
         paper = session.exam.paper
         sheet = exam.parse_sheet(params)
@@ -14058,13 +14058,17 @@ class MpsServer:
             print(f"[{self.tag}] exam end: {name}, no sheet was ever sent — 0 点")
         else:
             marked, right = exam.score(paper.questions, paper.sheet)
+            # 「クラスもしくは氏名を記入し忘れると０点」. Say which, or a paper thrown
+            # away for the rule and one that simply scored nothing read alike.
+            void = exam.voided(paper.sheet)
             card = self._chars(session).scorecard(session.chara_id)
             if card is not None:
                 last, best = card.record_exam(paper.subject, paper.course, marked)
                 self._chars(session).set_scorecard(session.chara_id, card)
                 done = card.completed(paper.subject, paper.course)
                 print(f"[{self.tag}] exam end: {name} 段階{paper.course + 1} "
-                      f"{right}/{len(paper.questions)}問正解 → {marked} 点 "
+                      f"{right}/{len(paper.questions)}問正解 → {marked} 点"
+                      f"{f' ({void} 未記入 → 0 点)' if void else ''} "
                       f"(前回 {last}, 最高 {best}, 修了 {'済' if done else 'まだ'}, "
                       f"試験レベル {card.test_level()})")
             else:
