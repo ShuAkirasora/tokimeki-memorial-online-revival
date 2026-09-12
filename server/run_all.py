@@ -33,6 +33,7 @@ def _utf8_output() -> None:
 
 import accounts
 import clubbattle
+import knobs
 import mps_session
 from auth_http_server import AuthHttpServer
 from common import PACKET_LOG_ENV, ServiceConfig, packet_log_enabled, parse_ipv4
@@ -199,6 +200,12 @@ async def main(
         if value != default:
             print(f"[system] ⚠️ {name}={value:g} (stock is {default:g}) -- "
                   f"measuring knob, NOT shipping behaviour")
+    # The invented numbers somebody turned and saved (`/knob save`). Printed for
+    # the same reason the two above are: a number that is not the stock one has
+    # to be visible from the outside, or the next reader debugs a game that was
+    # tuned on purpose.
+    for knob, _stock, value in knobs.load():
+        print(f"[system] ⚠️ knob {knob.key}={knobs.show(value)} (from {knobs.SAVE_PATH.name})")
     if open_host == LOOPBACK:
         print(
             "[system] loopback only -- a game on another machine reaches nothing."

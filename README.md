@@ -773,6 +773,16 @@ it back to the save.
 | `/de [<genre>:<index>]` | the drama-event list |
 | `/dms` | open the matching screen |
 | `/raw <msgid16> [hex]` | send one message by hand, by number |
+| `/knob [<name> [<value>\|reset]\|list [word]\|changed\|reset\|save]` | turn one of the invented numbers, without a restart |
+
+**Tuning.** Every number this server made up rather than read off the game — a damage
+scale, a drop chance, how long a question stays open — is marked `INVENTED` in the source,
+and `/knob` finds them by that mark. `/knob list` prints them with their current and factory
+values, `/knob DAMAGE_SCALE 0.6` changes one in place, `/knob changed` shows what differs from
+stock, `/knob save` writes those to `runtime/knobs.json` so the next start picks them up, and
+`/knob reset` puts everything back. A number without the mark was read off the game and cannot
+be reached from here at all: tuning is confined to what was invented. The `TMO_*` environment
+variables some of these also answer to keep working as before.
 
 **Probes.** These are for reading the client rather than for playing: `/cb` drives a club
 battle a piece at a time, and `/seq` replies with a sequence number that goes backwards, to

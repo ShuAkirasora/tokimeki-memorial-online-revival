@@ -51,6 +51,7 @@ import curriculum
 import exam
 import facing
 import item
+import knobs
 import lesson
 import mapgraph
 import options
@@ -255,6 +256,7 @@ HELP = (
     "/nev [<cat>:<id>] [<npcCat>:<npcId>|echo] 会話イベントキー (既定 16:1 + echo)",
     "/smenu [<キー>] 0x6302 で返す sub_menu (既定 2 ロッカー・手紙メニュー)",
     "/evend [auto|manual] 0x5603 の返し方 (manual は返事なし、/raw で手動終了)",
+    "/knob [<名前> [<値>|reset]|list [語]|changed|reset|save] 発明した数値のつまみ (再起動不要)",
     "/sc <名前|scriptId> [ctrl] [actor:npcId] 台本開始",
     "/sc next <名前|off> 次の会話イベントをこの台本にすり替える",
     "/scn 次の命令へ  /sce 台本終了  /scl 一覧",
@@ -2072,6 +2074,55 @@ def respond(
         if mode not in ("auto", "manual"):
             return Reply(["/evend [auto|manual]"])
         return Reply([f"0x5603 の返し方 = {mode}"], npc_event_end=mode)
+
+    if word == "knob":
+        # The invented numbers, turned in place. Everything here is a number
+        # this server made up (see knobs.py for how they are found); a
+        # restored number is not reachable from this command at all, which is
+        # the point -- tuning is meant to happen where inventing happened.
+        # ⚠️ Nothing is written to any save; a turn lives until the process
+        # ends unless `/knob save` writes it to runtime/knobs.json, which the
+        # next start reads back.
+        words = rest.split()
+        usage = ("/knob [<名前> [<値>|reset]|list [語]|changed|reset|save]"
+                 "  例: /knob DAMAGE_SCALE 0.6")
+        if not words:
+            n = len(knobs.catalogue())
+            m = len(knobs.turned())
+            return Reply([f"つまみ {n} 個、うち {m} 個が既定と違う", usage])
+        head = words[0].lower()
+        try:
+            if head == "list":
+                frag = words[1].lower() if len(words) > 1 else ""
+                rows = [knobs.describe(k) for k in knobs.catalogue()
+                        if frag in k.key.lower()]
+                return Reply(rows or [f"「{frag}」に一致するつまみなし"])
+            if head == "changed":
+                rows = [knobs.describe(knobs.find(k)) for k in knobs.turned()]
+                return Reply(rows or ["全部既定値"])
+            if head == "reset" and len(words) == 1:
+                done = knobs.reset()
+                return Reply([f"{k.key}: {knobs.show(a)} -> {knobs.show(b)}"
+                              for k, a, b in done] or ["全部既定値"])
+            if head == "save":
+                n = knobs.save()
+                return Reply([f"{knobs.SAVE_PATH.name} に {n} 個書いた"
+                              if n else f"{knobs.SAVE_PATH.name} を消した (全部既定値)"])
+            knob = knobs.find(words[0])
+            if len(words) == 1:
+                lines = [knobs.describe(knob)]
+                if knob.summary:
+                    lines.append(knob.summary)
+                return Reply(lines)
+            if words[1].lower() == "reset":
+                (knob, old, new), = knobs.reset(knob.key)
+            else:
+                knob, old, new = knobs.set_value(knob.key, " ".join(words[1:]))
+            return Reply([f"{knob.key}: {knobs.show(old)} -> {knobs.show(new)}"])
+        except KeyError as exc:
+            return Reply([str(exc).strip("'"), usage])
+        except (ValueError, SyntaxError) as exc:
+            return Reply([f"値が読めない: {exc}", usage])
 
     if word == "raw":
         # Push any message at all, by number. Exists because every question in
