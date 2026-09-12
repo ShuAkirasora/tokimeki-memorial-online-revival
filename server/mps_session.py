@@ -1034,6 +1034,16 @@ class _Session:
         # is the only place that knows this player is reading, and a reader who
         # disconnected is not reading any more.
         self.newspaper_open = False
+        # Whether パーティ一覧 -- the ドラマイベント matching screen -- is up on
+        # this connection. Same bracket shape as the three flags above, and the
+        # same reason for living here rather than on the character: the client
+        # opens it with 0xE000 and closes it with 0xE005, and a screen that was
+        # open when the socket went away is not open. ⭐ It exists so that
+        # 0xE007/0xE008 can reach the people the list is *about* -- see
+        # _drama_push_onlookers. ⚠️ Cleared in a third place too: the play
+        # itself replaces the screen (0x7200, round 231), and the client sends
+        # 0xE000 again by itself when the play is over (round 262's capture).
+        self.drama_matching = False
         # The period actually in progress, once 0x6100 has gone out. Not saved,
         # for the same reason: ten questions half answered are not owed to
         # anybody, and the original ends a lesson you walk out of too.
@@ -2889,6 +2899,11 @@ class MpsServer:
             # on a one-player server that is exactly the parties this player
             # made and has not left.
             parties = list(self.dramaparties.parties.values())[: drama.PARTY_MAX]
+            # ⭐ The screen is open from here until 0xE005 takes it down, and
+            # the list below is the last thing this connection would hear about
+            # it without that bracket being written down. See
+            # _drama_push_onlookers.
+            session.drama_matching = True
             return (
                 self._answer(
                     session, seen, script.MSG_SV_OK_DRAMA_EVENT_MATCHING_START,
@@ -2961,6 +2976,14 @@ class MpsServer:
                     session, seen, drama.MSG_SV_NOTIFY_DEL,
                     drama.del_params(party.party_id),
                 )
+                # ⭐ The last member walking out is the one case the list has to
+                # be told about with a Del rather than a row: nobody is in the
+                # party any more, so `party.actors` is empty and the leaver is
+                # the only person who already knows.
+                self._drama_push_onlookers(
+                    drama.MSG_SV_NOTIFY_DEL, drama.del_params(party.party_id),
+                    party, skip=session.chara_id,
+                )
             else:
                 record = drama.party_record(party)
                 reply += self._answer(
@@ -2984,6 +3007,10 @@ class MpsServer:
                     ),
                 )
                 self._drama_push_members(party, drama.MSG_SV_NOTIFY_UPDATE, record)
+                self._drama_push_onlookers(
+                    drama.MSG_SV_NOTIFY_UPDATE, record, party,
+                    skip=session.chara_id,
+                )
             return reply
 
         if msg_type == drama.MSG_CL_CAST_READY:
@@ -2998,6 +3025,7 @@ class MpsServer:
             # nothing behind it and the client stopped on 「サーバーと通信して
             # います」 until the connection was torn down. The notify is what
             # closes the screen, and it is empty, so this is the whole exchange.
+            session.drama_matching = False
             return self._answer(
                 session, seen, script.MSG_SV_NOTIFY_DRAMA_EVENT_MATCHING_END, b"",
             )
@@ -3122,6 +3150,13 @@ class MpsServer:
         # still 参加者募集中, and that is the half of it the leader spends
         # standing on the map where somebody can see it.
         self._presence_refresh_onlookers(session)
+        # ⭐ And the row itself goes to everybody standing on the list, which is
+        # what makes a party built next to you appear without reopening the
+        # screen. The leader is `skip` because their own copy is two lines down.
+        self._drama_push_onlookers(
+            drama.MSG_SV_NOTIFY_UPDATE, drama.party_record(party), party,
+            skip=session.chara_id,
+        )
         # Ok first (it is what carries the id everything else is addressed by),
         # then the row for the list the player is standing on, then the roster
         # for the room they are about to be standing in. ⚠️ The last of the
@@ -3260,6 +3295,13 @@ class MpsServer:
         self._drama_push_members(
             party, drama.MSG_SV_NOTIFY_START, b"", skip=session.chara_id,
         )
+        # ⭐ 参加者募集中 -> イベント中 is a change to the row, so the list has
+        # to hear it too: a watcher who presses ［参加］ on a play that is
+        # already running gets 「既にドラマイベントが開始されています」, and the
+        # byte that would have told them not to try was already on the wire.
+        self._drama_push_onlookers(
+            drama.MSG_SV_NOTIFY_UPDATE, record, party, skip=session.chara_id,
+        )
         return (
             self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
             + self._answer(session, seen, drama.MSG_SV_NOTIFY_START, b"")
@@ -3328,6 +3370,11 @@ class MpsServer:
         record = drama.party_record(party)
         self._drama_push_members(
             party, drama.MSG_SV_NOTIFY_UPDATE, record, skip=session.chara_id,
+        )
+        # ⭐ The other half of the same byte, and the one a watcher can act on:
+        # a party that has finished its play is joinable again.
+        self._drama_push_onlookers(
+            drama.MSG_SV_NOTIFY_UPDATE, record, party, skip=session.chara_id,
         )
         return self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
 
@@ -3416,6 +3463,12 @@ class MpsServer:
         for (actor_id, _), other in zip(cast, sessions):
             other.script = script.Runner(found, 0, [])
             other.talking_choice = None
+            # ⭐ 0x7200 is what takes the パーティメンバー screen down (round
+            # 231), so this is the third place the matching bracket ends -- the
+            # client never sends 0xE005 for a screen a play replaced. It opens
+            # the list again by itself when the drama is over (round 262), which
+            # is what sets the bit back.
+            other.drama_matching = False
             # ⭐ One `script start` per member, in the shape the solo door
             # prints, plus the two fields that tell the members apart: the 役柄
             # each of them walks the scenario as, and the party they share a
@@ -3453,6 +3506,44 @@ class MpsServer:
             if other is not None:
                 self._push(other, self._answer(other, 0, msg_type, params))
 
+    def _drama_push_onlookers(
+        self, msg_type: int, params: bytes,
+        party: "drama.Party | None" = None, skip: int = 0,
+    ) -> None:
+        """Send one list-screen Notify to everybody who has パーティ一覧 open.
+
+        ⭐⭐⭐ 0xE007 and 0xE008 are the *list's* messages, not the room's: one
+        says 「this row is now like this」 and the other 「this row is gone」.
+        Until round 328 they only ever reached the party they were about, so a
+        player standing on the list saw a board frozen at the moment they
+        opened it -- a party built next to them never appeared, one that
+        disbanded stayed on screen, and pressing ［参加］ on a stale row bought
+        a refusal sentence out of nowhere. The people the messages are for are
+        exactly the ones who cannot ask: the list is pushed once, at 0xE000,
+        and nothing after that makes the client ask again.
+
+        ⭐ Who is looking is knowable rather than invented, which is why this
+        is a restoration and not a design decision: the client brackets the
+        screen with 0xE000 and 0xE005 -- round 229 wrote that criterion down
+        and left it -- so 「sent the first and not yet the second」 is the whole
+        of it. `_Session.drama_matching` is that bit.
+
+        ⚠️ Members are skipped rather than told twice: a member's copy of the
+        same record rides out with _drama_push_members, or inside the reply to
+        the request they made. Pass the party so this end knows who they are --
+        for a 0xE008 about a party that has just been deleted there is nobody
+        left in it and the only skip that matters is the leaver, who is `skip`.
+        """
+        members = {a.chara_id for a in party.actors} if party is not None else set()
+        for other in self.live:
+            if not other.drama_matching or not other.chara_id:
+                continue
+            if other.chara_id == skip or other.chara_id in members:
+                continue
+            if other.writer is None or other.writer.is_closing():
+                continue
+            self._push(other, self._answer(other, 0, msg_type, params))
+
     def _drama_part_notice(
         self, party: "drama.Party", actor_id: int, reason: int
     ) -> None:
@@ -3465,9 +3556,10 @@ class MpsServer:
         leads now: that is exactly the number 0xE00A carries.
 
         ⚠️ Does nothing for a party that emptied — Board.part deletes those and
-        there is nobody left to tell. The 0xE008 Del the list screen would want
-        is a separate question: it is addressed to onlookers, and this server
-        does not track who has that screen open.
+        there is nobody left to tell. ⭐ The 0xE008 Del the list screen wants
+        for that case is a different audience and so a different call: the
+        caller makes it, because the skip it needs is the departing character
+        and this method is only given their 役柄. See _drama_party_gone.
         """
         if not party.actors:
             return
@@ -3496,6 +3588,19 @@ class MpsServer:
         )
         self.dramaparties.part(chara_id)
         self._drama_part_notice(party, actor_id, drama.PART_DISCONNECTED)
+        # ⭐ And the list, for the people watching it: a party whose last member
+        # dropped their socket has to come off the board, and one that still has
+        # somebody in it just got a cast slot back.
+        if party.party_id not in self.dramaparties.parties:
+            self._drama_push_onlookers(
+                drama.MSG_SV_NOTIFY_DEL, drama.del_params(party.party_id),
+                party, skip=chara_id,
+            )
+        else:
+            self._drama_push_onlookers(
+                drama.MSG_SV_NOTIFY_UPDATE, drama.party_record(party), party,
+                skip=chara_id,
+            )
         # ⚠️ Whoever is left may be holding a branch on the click this member
         # was going to make, and that click is not coming now -- see
         # `_release_held_branches`. ⚠️ `party` is the object taken before the
@@ -3577,6 +3682,12 @@ class MpsServer:
                                  skip=session.chara_id)
         self._drama_push_members(party, drama.MSG_SV_NOTIFY_UPDATE, record,
                                  skip=session.chara_id)
+        # ⭐ The row changed for the watchers too: `flgUnreserve` just lost the
+        # slot this player took, which is the difference between ［参加］
+        # working and ［参加］ bouncing off 「他のキャラクターが担当する…」.
+        self._drama_push_onlookers(
+            drama.MSG_SV_NOTIFY_UPDATE, record, party, skip=session.chara_id,
+        )
         # Same order create sends: the id everything is addressed by, then the
         # row on the list being left, then the roster for the room being
         # entered.
@@ -5220,6 +5331,11 @@ class MpsServer:
                 # ドラマイベント party the way p07_06 says it drops a 看板.
                 if session.chara_id:
                     self._drama_party_gone(session.chara_id, "at logout")
+                # ⭐ And the list screen this connection may have had up: 下校
+                # is the one way out of it that sends no 0xE005, and a stale bit
+                # would push rows at a connection that 登校's again as somebody
+                # else with nothing on screen to put them in.
+                session.drama_matching = False
                 session.chara_id = 0
                 return self._answer(session, sequence, MSG_SV_OK_SCHOOL_LOGOUT, b"")
             if msg_type == MSG_CL_QUERY_POOL_MESSAGE:
