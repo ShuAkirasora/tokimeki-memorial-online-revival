@@ -103,6 +103,7 @@ import mps_cipher
 import multipurpose
 import naming
 import ngwords
+import npcspawns
 import options
 import posts
 import quiz
@@ -5210,6 +5211,46 @@ class MpsServer:
                             map_id=session.map_id,
                         )
                     )
+                # And the teachers and staff who belong on this map. They ride in
+                # the same batch as everybody else because to the client they
+                # are the same kind of thing: an add whose charaId happens to be
+                # a roster reference, which it resolves into a chibi and a
+                # right-click menu of its own. See npcspawns for where the 44
+                # rows come from and for the two things about them that are
+                # invented.
+                #
+                # ⭐ This is what makes the five doors reachable without a
+                # developer command -- 入部 and クラブ活動 off the 顧問, 同好会
+                # 登録 and 多目的室予約 off the 秘書, リーダー試験 off any of
+                # them, ドラマイベント off a 先生 -- and it runs on every lobby
+                # load for the same reason the peers below do: the client tears
+                # the scene down on every warp and every cutscene, so anybody
+                # who is not re-added is gone.
+                staff = npcspawns.on_map(session.map_id)
+                for spawn in staff:
+                    entries.append(
+                        add_entry(
+                            spawn.chara_id,
+                            info,
+                            pos=spawn.pos,
+                            # ⚠️ Blank, and deliberately so: `info` is the
+                            # *player's* record, along for the ride because the
+                            # entry has to carry one, and leaving the names off
+                            # it would put the player's own name over the
+                            # teacher's head. ⭐ And blank is what the screen
+                            # wants anyway: round 324 saw a player's name drawn
+                            # under the player and *nothing* under the teacher
+                            # standing next to them, which is what these people
+                            # look like in the original -- a roster NPC is not a
+                            # character anyone is told the name of. Round 217 had
+                            # already measured that the client never asks 0x6500
+                            # about a roster id, so there is nothing it is
+                            # waiting to be told here either.
+                            names=(b"", b""),
+                            map_id=session.map_id,
+                            direction=npcspawns.SPAWN_FACING,
+                        )
+                    )
                 # And everybody else already standing here. This runs on every
                 # lobby load, not just the first, so a player who warps indoors
                 # and back arrives with the current scene rather than the one
@@ -5245,6 +5286,8 @@ class MpsServer:
                         session, sequence, chat.MSG_SV_NOTIFY_NPC_CONTROL, spawn
                     )
                 extra = f" plus {len(markers)} markers" if markers else ""
+                if staff:
+                    extra += f" and {len(staff)} staff"
                 if session.npc_spawns:
                     extra += f" and {len(session.npc_spawns)} NPCs"
                 if peers:
