@@ -707,6 +707,27 @@ NPC_EVENTS = _load_npc_events()
 # event request rather than the 0x6301 sub-menu MENU_ITEM_TALK's neighbours use.
 MENU_ITEM_LEADER_EXAM = 402
 
+# ⭐⭐ The ring item behind 「名簿を見る」, the 保健の先生's own. 17 is type 0
+# too, so it arrives the same way the exam does: a 0x6304 naming the NPC and the
+# item, with the event left to this end.
+#
+# ⭐ Which event it is comes out by elimination rather than by reading a title.
+# `menu.bin` gives the 保健先生 exactly two ring items -- 17 and 402 -- and the
+# event tables file exactly two events under her npcId (2:8): event 1, her
+# リーダー試験 c002, and event 0, her c001. 402 is already spoken for, so 17 is
+# the other one. ⭐⭐ And the c001 the pairing lands on is
+# 保科恋愛候補生紹介: a scenario whose opening move is to read PC[0x3900+i] for
+# all five candidates -- 登場 -- which is precisely what the manual says 「名簿」
+# shows. Three witnesses, no titles matched.
+MENU_ITEM_NPC_ROSTER = 17
+
+# ⭐ Every NPC in `common_npc_event` and `general_npc_event` whose ring carries
+# a function of her own has it as event 0, her `c001` (the naming rule below
+# says c001 is id 0): 入退部 for the キャプテン, 体型変更 for the 教頭,
+# 恋愛候補生紹介 for the 保健の先生. ⚠️ Only 17 is routed here for now --
+# the rest of those items are type 2 and never become a 0x6304 at all.
+NPC_OWN_EVENT_ID = 0
+
 # Which event id a リーダー試験 is, in whichever table the NPC belongs to.
 #
 # ⭐ It is a constant because the data makes it one: in common_npc_event and
@@ -820,11 +841,12 @@ def event_for_menu_item(
 ) -> "dict | None":
     """The event this ring item should start on this NPC, or None for the default.
 
-    ⚠️ Only リーダー試験 is answered here, and the omission is deliberate rather
-    than unfinished: 「会話」 (MENU_ITEM_TALK) has no one right answer -- which
-    conversation an NPC offers is progress state this server does not model, and
-    DEFAULT_NPC_EVENT plus /nev is the standing arrangement for it. The exam is
-    different because the data picks it: one NPC, one c002, no state involved.
+    ⚠️ Only the two items the data can answer are answered here, and the
+    omission of the third is deliberate rather than unfinished: 「会話」
+    (MENU_ITEM_TALK) has no one right answer -- which conversation an NPC offers
+    is progress state this server does not model, and DEFAULT_NPC_EVENT plus
+    /nev is the standing arrangement for it. リーダー試験 and 名簿 are different
+    because the data picks them: one NPC, one scenario, no state involved.
 
     ⭐ Four of them have a c003 as well, and for those the data picks that too --
     by room rather than by progress. See LEADER_EXAM_SECOND_HALF_MAP. ``map_id``
@@ -832,6 +854,13 @@ def event_for_menu_item(
     classroom; with either missing this falls back to the first half, which is
     the answer for every NPC that has only one.
     """
+    if menu_item == MENU_ITEM_NPC_ROSTER:
+        # ⚠️ Looked up rather than hard-coded to the 保健先生: if some other NPC
+        # ever carries this item, hers is not the scenario to start.
+        for found in events_of(npc_id):
+            if found["event"][1] == NPC_OWN_EVENT_ID:
+                return found
+        return None
     if menu_item != MENU_ITEM_LEADER_EXAM:
         return None
     halves = {found["event"][1]: found for found in events_of(npc_id)}

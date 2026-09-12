@@ -76,6 +76,7 @@ from characters import (
 import ability
 import accounts
 import billboard
+import capturenpc
 import career
 import chat
 import chatroom
@@ -5497,6 +5498,28 @@ class MpsServer:
                 for reply_type, reply_params in couple.list_replies(entries):
                     out += self._answer(session, sequence, reply_type, reply_params)
                 return out
+            if msg_type == capturenpc.MSG_CL_QUERY_CAPTURE_NPC_LIST:
+                # 「名簿」, the 保健の先生's ring item: 「既に登場している恋愛
+                # 候補生の情報を見ることができます」. 0x4400 carries no body, so
+                # the whole question is "who is on stage for THIS character" --
+                # which is `on_stage`, the same list a spawn push is allowed to
+                # contain, not the whole cast. See capturenpc.py for the layout,
+                # for why the array is ten long, and for the two refusals.
+                love = self._chars(session).romance(session.chara_id)
+                if love is None:
+                    print(f"[{self.tag}] capture npc list: no character")
+                    return self._answer(
+                        session, sequence, capturenpc.MSG_SV_ERROR_CAPTURE_NPC_LIST,
+                        capturenpc.error_params(capturenpc.NG_NO_PLAYER),
+                    )
+                body = capturenpc.result_params([
+                    capturenpc.npc_id(romance.candidate_index(name))
+                    for name in love.on_stage()
+                ])
+                print(f"[{self.tag}] capture npc list: {capturenpc.describe(body)}")
+                return self._answer(
+                    session, sequence, capturenpc.MSG_SV_RESULT_CAPTURE_NPC_LIST, body
+                )
             if msg_type in (career.MSG_CL_QUERY_CHARA_CAREER,
                             career.MSG_CL_QUERY_CHARA_CAREER_LIST):
                 # 「経歴」 -- the 生徒情報 window's last tab, and the bottom-right
