@@ -1608,8 +1608,9 @@ PC_LEADER_EXAM_ANSWERED = 0xD13E
 #:   * read the mask;
 #:   * pick a pool by how full it is -- below 255, OP_RAND(7); below 16383,
 #:     OP_RAND(5) + 8; otherwise the constant 14;
-#:   * turn that number into a single bit through a fifteen-rung ladder of
-#:     `B2 == k -> B4 = 1 << k`, k running 0..14;
+#:   * turn that number into a single bit through a fifteen-rung ladder that
+#:     ends in `B4 = 1 << k` -- and the ladder tests only `B2 == 0` .. `B2 == 13`
+#:     explicitly, the fifteenth rung being the fall-through that sets 16384;
 #:   * test the bit the way a VM with no AND does, `(mask % (2*B4)) / B4`;
 #:   * if it is already set, throw the pick away and start over at the pool;
 #:   * otherwise add B4 to the mask and store it back, next to the counter.
@@ -1620,13 +1621,28 @@ PC_LEADER_EXAM_ANSWERED = 0xD13E
 #: pool is the `otherwise` arm, which is only reached once the mask has reached
 #: 16383 -- so a finished tour leaves 16383 here and not 32767.
 #:
-#: ⚠️ The three pools partition the fifteen rungs exactly -- 8 + 6 + 1 -- if
-#: OP_RAND's operand is an inclusive upper bound. That is a reading of this call
-#: site, not a measurement of the opcode: the operand is two bytes wide and a
-#: corpus scan cannot tell a small constant from a register reference. The
-#: reading is offered because the register one leaves the pool gates, whose
-#: constants are exactly the all-ones of the first eight and of the first
-#: fourteen bits, with nothing to mean.
+#: ⭐⭐⭐ The three pools partition the fifteen rungs exactly -- 8 + 6 + 1 -- and
+#: only if OP_RAND's operand is an INCLUSIVE upper bound. Round 310 stopped
+#: offering that as a reading and made it a census of the corpus, because the
+#: opposite reading is refutable rather than merely unattractive:
+#:   * read half-open, the pools cover 0..6, 8..12 and 14, so rungs 7 and 13 are
+#:     unreachable -- two of the fifteen questions could never be drawn, the mask
+#:     could never reach 16383, and the 「redraw while already used」 loop the
+#:     stations run would not terminate on the last two bits;
+#:   * read half-open, sixty sites elsewhere in the corpus compare their own
+#:     roll against the operand itself, so sixty comparisons would be constantly
+#:     false and the arm behind each one dead;
+#:   * thirty-three further sites spell out 0..n-1 and leave n to a fall-through,
+#:     which read half-open is an arm nothing reaches. Seventeen of those are the
+#:     stations' own `rand(2)` that shuffles the three answers on screen, and a
+#:     real client drew all three of them.
+#: Read inclusive, not one site in the corpus contradicts itself. ⚠️ What is
+#: still unmeasured is the opcode in isolation: the client's slot for it is a
+#: stub, so the corpus is the only witness there is.
+#:
+#: ⭐ The pool gates agree with the ladder from the other side: 255 and 16383 are
+#: exactly the all-ones of the first eight and of the first fourteen bits, which
+#: is 「the first pool is used up」 and 「both are」 and nothing else.
 #:
 #: ⚠️ Same lifetime as the counter above and for the same reason, so the same
 #: record holds it.

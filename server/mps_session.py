@@ -2250,7 +2250,11 @@ class MpsServer:
         ⚠️ Inclusive at both ends, because that is what the corpus says the
         operand means: `rand(99)` under the 恋愛 scripts' `< 30` test is a 30%
         chance only over 0..99, and リーダー試験's three question pools tile the
-        fifteen rungs only as 0..7, 0..5 and the constant 14.
+        fifteen rungs only as 0..7, 0..5 and the constant 14. ⭐⭐ Round 310
+        turned that from two examples into a census of all 143 sites: read
+        half-open, 93 of them have an arm nothing can reach (60 compare the roll
+        against the operand itself, 33 spell out 0..n-1 and leave n to a
+        fall-through); read inclusive, none of them contradicts itself.
 
         ⭐ The line is printed every time for the same reason `_script_die`'s
         is: 「the roll happened to come out 11」 and 「the roll was told to be
