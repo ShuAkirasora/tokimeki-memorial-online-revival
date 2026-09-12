@@ -53,10 +53,18 @@ count; the slot is recorded because it was read, not because it is used.
 (0x98FC90) dispatches all three -- Result, Error and Notify -- each to its own
 CSequencerCoupleInfo, and on success stores it as the current sequencer, which
 is what makes a screen come up. It is byte-for-byte the same function as
-CaptureNpcInfoMessageProcedure::onMessage (0x9AE7A0), whose screen is reachable
-today through menu_item 17 ＮＰＣ情報参照. The only structural difference is
-that CaptureNpc's family has no Notify, so that dispatch has two arms and this
-one has three.
+CaptureNpcInfoMessageProcedure::onMessage (0x9AE7A0). The only structural
+difference is that CaptureNpc's family has no Notify, so that dispatch has two
+arms and this one has three.
+
+⛔️ CORRECTION. This note used to add "whose screen is reachable today through
+menu_item 17 ＮＰＣ情報参照". That was wrong, and nobody had ever checked it:
+menu_item 17 is type 0, so clicking it fires a scenario script (hsn_c001.ssb)
+and the roster screen behind it is drawn BY THAT SCRIPT -- 0x4400 never flies.
+Two functions being byte-for-byte identical says the *dispatch* is the same; it
+says nothing about which door leads to which screen. The door is in the data
+(menu_item.bin's type column), the isomorphism is in the code, and neither
+implies the other.
 
 ⇒ 0x4503 is a Notify: this end may push it without being asked, exactly as
 0x480F is pushed. That is the whole reason this module can be tested at all --

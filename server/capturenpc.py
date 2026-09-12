@@ -59,6 +59,43 @@ for all five candidates, which is the same question this message asks. See
 script.MENU_ITEM_NPC_ROSTER for the pairing and for why it is an elimination
 rather than a guess.
 
+⚠️⚠️ PUSHING 0x4401 UNASKED DOES NOT OPEN ANYTHING, and the reason is not in
+this server. A 0x4401 sent to a client standing on a map is parsed correctly --
+the client's own dump prints every id back byte for byte -- and the screen does
+not move. CaptureNpcInfoMessageProcedure::onMessage (0x9AE7A0) has two gates
+after the dispatch, and both of them turned out to be code every sequencer in
+the client shares:
+
+    if (!handler->onMessage(msg))   return 0;        // gate A, 0x00935991
+    if ( sequencer->hasResult() )   this->cur = seq; // gate B, 0x0092F106
+
+  * gate A is the generic MessageHandler::onMessage: it prints the ▼Receive
+    line, locks a weak_ptr to whatever receiver is registered, prints
+    「受信ハンドラが設定されていません」 and returns false when that pointer is
+    dead, and otherwise RETURNS WHAT THE RECEIVER RETURNS. ⚠️ So the absence of
+    that sentence means only that a receiver exists -- not that the gate opened.
+  * gate B is one instruction, `return *(bool *)(sequencer + 4)`. That flag is
+    zeroed by the sequencer's constructor (0x0093CDB0) and by its own vt+4
+    reset (0x0093CDA0), which the procedure calls on every sequencer it owns --
+    and NO virtual function anywhere sets it. It can only be set inline by the
+    receiver, which makes gate B the receipt for gate A rather than an
+    independent condition.
+
+⇒ the open question is who the receiver is, and it is a question about the
+client's screen stack, not about this wire. CSequencerCaptureNpcInfo is 0x20
+bytes with no data members at all (vtable, flag, two handler sub-objects each
+carrying a weak_ptr) and overrides neither virtual -- ⚠️ but so is
+CSequencerCharaInfo, whose family does reach the screen, so "it is an empty
+shell" is NOT evidence that this family is dead.
+
+⭐ Every sequencer and every procedure in this client is built and registered
+once at startup by a single factory, which means the two "[Sys] ... MsgHandle is
+NULL" branches inside 0x9AE7A0 are dead code, and a family never loses its
+procedure. Registration is `setSequencer(idx, seq)` (0x9AE4E0): a
+__RTDynamicCast from MessageSequencer to that arm's concrete MessageHandler
+interface, idx 1 for 0x4401 and idx 2 for 0x4402 -- the same low byte the
+dispatch above switches on.
+
 ⚠️ NOTHING HERE IS MADE UP (inventions:skip -- this line says there is no entry
 for this module in that ledger, rather than declaring one). The list is
 `on_stage`, the ids are npcIds, the widths and the cap are the client's. The one thing this module chooses is which
