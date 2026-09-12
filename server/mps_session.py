@@ -7670,8 +7670,25 @@ class MpsServer:
             )
             fighter.command = (0, attack, target)
 
+    def _owned_use_count(
+        self, fighter: "clubbattle.Fighter", keyword_id: int
+    ) -> "int | None":
+        """This fighter's LIVE 習熟度 for one キーワード, or None if nobody owns it.
+
+        The owner's own store, which is where _battle_mastery raises it and
+        where the client's gauge reads it. None is the ordinary answer for an
+        NPC or a stand-in: no account claims them, so they have no list to
+        keep a 習熟度 in.
+        """
+        store = self.accounts.owner_of(fighter.chara_id)
+        state = store.club(fighter.chara_id) if store else None
+        if state is None:
+            return None
+        row = next((r for r in state.keywords if r[0] == keyword_id), None)
+        return None if row is None else row[1]
+
     def _battle_power(
-        self, kind: int, payload: bytes
+        self, fighter: "clubbattle.Fighter", kind: int, payload: bytes
     ) -> "tuple[int, int, float, str]":
         """``(attack, defence, mastery, label)`` for one card as played.
 
@@ -7682,28 +7699,52 @@ class MpsServer:
 
         ``mastery`` is this card's 習熟度 as a fraction of its own full scale,
         which is what 「『習熟度』が高いと…パワーがアップします」 (p07_02) needs.
-        ⚠️ It is read off the SIX BYTES THE CLIENT SENT with the card, not off
-        the owner's キーワード list: those bytes are what this fighter brought
-        into the fight, and _battle_mastery next door explains why the two
-        readings drift.
+
+        ⭐⭐⭐ IT IS THE OWNER'S LIVE 習熟度, NOT THE SIX BYTES THE CLIENT SENT.
+        ⛔️ This reverses what rounds 222-328 did here, and round 329 measured
+        why: the deck entry's useCount is a SNAPSHOT the client composed when
+        「更 新」 registered the card, and NOTHING refreshes it -- so reading it
+        meant a keyword that had been mastered went on hitting at whatever it
+        was worth the day it was put in the deck. ⚠️ The old note here called
+        those bytes 「what this fighter brought into the fight」; the client
+        does not treat them that way anywhere. It re-queries 0x4303 and 0x5B00
+        every time the 部活デッキ window opens and NEVER re-sends 0x5B03, its
+        習熟度 gauge is drawn from the 0x4305 list (the ONE place in tmo.exe
+        that divides by `keyword.bin` +0x78 reads that list, measured on
+        screen), and the snapshot's useCount is not drawn anywhere at all --
+        even the detail popup a deck row opens drops it. So those bytes are a
+        transport artefact, and this is the only number of the two that moves.
+        ⭐ Nothing is invented by the change: the live row is the same field,
+        raised by _battle_mastery under the same p07_02 sentence.
+
+        ⚠️ The payload's own useCount is still the fallback, for a fighter no
+        account claims: an NPC composes its card here (with useCount 0, and no
+        キーワード list to look up), so it keeps taking no 習熟度 bonus.
 
         ⚠️ An unknown card comes back all zeroes rather than with a stand-in.
         A fight where the feed is missing then does no damage, which is exactly
-        what every round before this one did -- a legible degradation rather
+        what every round before round 222 did -- a legible degradation rather
         than a made-up hit.
         """
         if len(payload) != club.DECK_ITEM_BYTES:
             return (0, 0, 0.0, "unreadable")
         if kind == club.DECK_ITEM_KEYWORD:
-            keyword_id, use_count, _source = struct.unpack("<HHH", payload)
+            keyword_id, deck_use_count, _source = struct.unpack("<HHH", payload)
             row = clubdata.keyword(keyword_id)
             if row is None:
                 return (0, 0, 0.0, f"keyword {keyword_id} (not in the feed)")
             full = row.get("fullScale") or club.KEYWORD_FULL_SCALE_DEFAULT
+            owned = self._owned_use_count(fighter, keyword_id)
+            use_count = deck_use_count if owned is None else owned
             mastery = min(1.0, use_count / full) if full else 0.0
+            # ⚠️ Worth printing when the two disagree: it is the only place the
+            # snapshot's age is visible, and a deck that never drifts says so
+            # by this note never appearing.
+            stale = ("" if owned is None or owned == deck_use_count
+                     else f" (the deck's copy still says {deck_use_count})")
             return (row["attack"], row["defence"], mastery,
                     f"keyword {keyword_id} 攻{row['attack']}/守{row['defence']} "
-                    f"習熟{use_count}/{full}")
+                    f"習熟{use_count}/{full}{stale}")
         if kind == club.DECK_ITEM_CLUB_SKILL:
             category, skill_id, _completeness = struct.unpack("<HHB", payload[:5])
             row = clubdata.club_skill(category, skill_id)
@@ -7787,7 +7828,8 @@ class MpsServer:
         resolves. A target who chose nothing has no 守備力 at all -- they did
         not act, which the manual covers on its own terms.
         """
-        attack_base, _defence, mastery, label = self._battle_power(kind, payload)
+        attack_base, _defence, mastery, label = self._battle_power(
+            attacker, kind, payload)
         if attack_base <= 0:
             print(f"[{self.tag}] battle damage: {label} has no 攻撃力 — "
                   f"charaId={attacker.chara_id:#x} lands nothing")
@@ -7804,7 +7846,7 @@ class MpsServer:
             shield, shield_label = 0, "no card"
             guard = self._battle_deck_item(target)
             if guard is not None:
-                _atk, shield, _m, shield_label = self._battle_power(*guard)
+                _atk, shield, _m, shield_label = self._battle_power(target, *guard)
             # ⭐ The ±% a 部活奥義 put on either side. 100 on both is the
             # untouched case and the arithmetic below is then exactly what
             # round 222 shipped. ⚠️ They scale the CARD, because that is where
@@ -8091,13 +8133,21 @@ class MpsServer:
         ⚠️ The owner's own store, not the handling session's and not the deck's
         copy of the row (the same rule _battle_deck is under). Those six bytes
         are the client's struct as it stood when 0x5B03 registered the card and
-        NOTHING REFRESHES THEM, so from this round on the two readings really do
-        drift: every deck holding this card goes on handing the old useCount
-        back out in 0x5B01, and the デッキ window's gauge stands still while the
-        キーワード window's moves. ⛔️ Do NOT "fix" that by rewriting the stored
-        payload — those bytes are an echo of what the client sent, and whether a
-        real client re-registers its cards when that window opens has not been
-        measured. Every line below says which of the two it read.
+        NOTHING REFRESHES THEM, so every deck holding this card goes on handing
+        the old useCount back out in 0x5B01.
+        ⭐⭐ THAT DRIFT IS INVISIBLE TO THE PLAYER, measured round 329: the
+        部活デッキ window re-queries 0x4303/0x5B00 every time it opens, its
+        習熟度 gauge is drawn from the 0x4305 list and not from the deck entry
+        (a deck holding 40 while the list said 80 drew a FULL bar), and the
+        snapshot's useCount reaches no widget at all. ⛔️ The sentence that used
+        to stand here — 「the デッキ window's gauge stands still」 — was wrong,
+        and it was wrong in the direction that cost something: what DID read the
+        snapshot was this server's own _battle_power, which now reads the live
+        row like this method does. ⛔️ Still do NOT "fix" the drift by rewriting
+        the stored payload: those bytes are an echo of what the client sent, and
+        a real client never re-registers its cards by itself (round 329: zero
+        0x5B03 across opening and closing that window). Every line below says
+        which of the two it read.
 
         ⚠️⚠️ ``credit=False`` is what /cb replay gets. It clears battle.resolved
         on purpose so a finished turn's stream can go out again, and re-sending

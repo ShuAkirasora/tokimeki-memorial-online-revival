@@ -353,6 +353,14 @@ CLUB_SKILL_LIST_PAGE = 32
 # Measured live: clicking the toolbar icon sends 0x4303 once, 0x4306 twice, then
 # 0x5B00 over and over until it is answered — the client retries this one.
 #
+# ⭐⭐ ROUND 329 RE-MEASURED IT NOW THAT ALL THREE ARE ANSWERED: every opening
+# of the window sends 0x4303 ×1, 0x4306 ×1, 0x5B00 ×2 per deck, and that is the
+# whole of it — the repetition above was the retry, not the shape. ⭐⭐⭐ AND IT
+# SENDS NO 0x5B03: the window never re-registers a deck by itself, opening or
+# closing, so what this server stored stays the client's whole picture of it.
+# That is why the 習熟度 a fight reads comes from the キーワード list rather
+# than from a deck entry (mps_session._battle_power).
+#
 #     0x5B00 MsgClQueryClubDeckList    deckId u8
 #       -> 0x5B01 MsgSvResultClubDeckList
 #            deckId u8, clubDeck{item[count]={kind, …}}, useType u8
