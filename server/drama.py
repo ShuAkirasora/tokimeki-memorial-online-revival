@@ -33,6 +33,14 @@ per member and the rest left open for whoever walks in.
     0xE01A MsgClCastDramaPartyStart      ()
     0xE01B MsgSvNotifyDramaPartyStart    ()
     0xE01C MsgSvErrorDramaPartyStart     reason u8
+    0xE01F MsgClCastDramaPartyKick       actorId u16
+    0xE020 MsgSvErrorDramaPartyKick      reason u8
+    0xE021 MsgClRequestDramaPartyEnv     name[u16], password[u16]
+    0xE022 MsgSvOkDramaPartyEnv          ()
+    0xE023 MsgSvNgDramaPartyEnv          reason u8
+    0xE024 MsgClCastDramaPartyChat       utterance[u16]
+    0xE025 MsgSvNotifyDramaPartyChat     senderId u32, name[u16], utterance[u16]
+    0xE026 MsgSvErrorDramaPartyChat      reason u8
 
 Field names are the client's own (its ``DramaParty`` formatter), shapes
 and buffer sizes are read out of its deserialisers, and every limit below is
@@ -107,6 +115,34 @@ MSG_CL_CAST_START = 0xE01A
 MSG_SV_NOTIFY_START = 0xE01B
 MSG_SV_ERROR_START = 0xE01C
 
+# The three doors the room itself carries beside those two buttons: the ［拒否］
+# on somebody else's cell, the パーティ設定 panel under the cells, and the chat
+# bar along the bottom of the screen.
+#
+# ⚠️⚠️ KICK HAS NO NOTIFY, and that is the shape talking rather than an
+# omission: 0xE020 is an Error, for the presser alone, and there is no 0xE01x
+# left over to tell a room that somebody was thrown out of it. The message that
+# does that already exists -- 0xE00A NotifyDramaPartyPart carries a `reason`,
+# and the client's own three sentences for that field (0xBD75D8) are 自分自身の
+# 要求による / リーダーに排除された / 切断による. The middle one is this door's
+# whole far side; see PART_KICKED.
+MSG_CL_CAST_KICK = 0xE01F
+MSG_SV_ERROR_KICK = 0xE020
+# ⭐ Env changes BOTH fields at once -- the body carries a name and a password
+# whether or not either moved -- which is why refusal 25 exists to say that
+# neither did. The panel on screen is two text boxes and one ［設 定］ button,
+# so the client has no way to send half of it.
+MSG_CL_REQUEST_ENV = 0xE021
+MSG_SV_OK_ENV = 0xE022
+MSG_SV_NG_ENV = 0xE023
+# ⭐ The party room's chat bar. Layouts are 0x4900/0x4901's byte for byte, and
+# not by analogy: the client reads 0xE024 with the same deserialiser as
+# 0x6B00 (0x8E0590) and 0xE025 with the same one as 0x6B01 (0x8D6230), so the
+# buffer sizes chat.py measured for the map channel are literally these.
+MSG_CL_CAST_CHAT = 0xE024
+MSG_SV_NOTIFY_CHAT = 0xE025
+MSG_SV_ERROR_CHAT = 0xE026
+
 # 裏話チャット: the chat bar during the performance itself. A family of its own
 # rather than part of 0xE0xx -- high byte 0x6B, its own
 # DramainsideChatMessageProcedure -- and not the party room's 0xE024 either.
@@ -165,6 +201,8 @@ NG_ALREADY_IN_PARTY = 17    # 既にパーティに参加しています。
 NG_NOT_LEADER = 19          # リーダー権限がありません。
 NG_NOT_ALL_READY = 20       # パーティの参加者全員が「準備OK」の状態に…
 NG_ALREADY_STARTED = 23     # 既にドラマイベントが開始されています。
+NG_KICK_SELF = 24           # 自分自身を強制退室させることはできません。
+NG_ENV_UNCHANGED = 25       # 入力されたパーティ名とパスワードが両方とも…
 NG_DUPLICATE_NAME = 26      # 同名のパーティが存在しています。
 
 # 0xE00A's reason, from the client's own three sentences at 0xBD75D8:
@@ -536,6 +574,25 @@ def parse_join(params: bytes) -> tuple[int, str, int] | None:
         return None
     (actor_id,) = struct.unpack_from(">H", params, at)
     return party_id, password, actor_id
+
+
+def parse_env(params: bytes) -> tuple[str, str] | None:
+    """A MsgClRequestDramaPartyEnv body → (name, password).
+
+    None only when the first counted string's length word is not there; a body
+    that stops inside either string is handed back as far as it got, the same
+    way `parse_create` treats one. ⚠️ An empty password is two bytes of length
+    and one NUL on the wire, not a zero length -- the client sends the
+    terminator of an empty text box like it sends the terminator of a full one
+    (round 332: the wire was 0006 R332B NUL then 0001 NUL), so "the player cleared the
+    password" and "the player left it alone" look identical here and the
+    caller has to compare against what the party already holds.
+    """
+    if len(params) < 2:
+        return None
+    name, at = read_counted(params, 0)
+    password, _ = read_counted(params, at)
+    return name, password
 
 
 def parse_create(params: bytes) -> tuple[int, int, int, str, str] | None:

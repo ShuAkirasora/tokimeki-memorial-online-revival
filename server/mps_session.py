@@ -3030,9 +3030,18 @@ class MpsServer:
                 session, seen, script.MSG_SV_NOTIFY_DRAMA_EVENT_MATCHING_END, b"",
             )
 
-        # The rest of the 0xE0xx family — kick, surrogate, party chat, party
-        # env — is logged rather than answered for now. (⭐ Join left this list
-        # in round 229, ready and start in round 230.)
+        if msg_type == drama.MSG_CL_CAST_KICK:
+            return self._drama_party_kick(session, seen, params)
+
+        if msg_type == drama.MSG_CL_REQUEST_ENV:
+            return self._drama_party_env(session, seen, params)
+
+        if msg_type == drama.MSG_CL_CAST_CHAT:
+            return self._drama_party_chat(session, seen, params)
+
+        # What is left of the 0xE0xx family is 0xE01D 代行ＮＰＣ, which is
+        # logged rather than answered. (⭐ Join left this list in round 229,
+        # ready and start in round 230, kick/env/chat in round 332.)
         return None
 
     def _drama_select_actor(self, session: "_Session", events: list[dict]):
@@ -3306,6 +3315,217 @@ class MpsServer:
             self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
             + self._answer(session, seen, drama.MSG_SV_NOTIFY_START, b"")
             + self._drama_light(party, session, seen)
+        )
+
+    def _drama_party_kick(
+        self, session: "_Session", seen: int, params: bytes
+    ) -> "bytes | None":
+        """0xE01F ［拒否］ -> 0xE00A to the room, or 0xE020 to the presser.
+
+        ⭐⭐⭐ THE ANSWER IS A DEPARTURE, NOT A KICK. This family has no
+        NotifyKick: 0xE020 is an Error and nothing else follows it, so the
+        room has to hear about a thrown-out member through the message that
+        already exists for a member leaving -- 0xE00A, whose `reason` byte the
+        client renders from its own three sentences, the middle one being
+        「リーダーに排除された」 (drama.PART_KICKED). ⇒ ⭐ nothing here is
+        invented: the shape is the client's deserialiser, the refusals are
+        four of the 27 sentences it carries, and the far side is a message
+        this end has been sending since round 229.
+
+        ⚠️ A Cast with no waiting box. Round 332 pressed ［拒否］ against a
+        server that answered nothing and the screen did not so much as blink --
+        unlike 0xE021 next door, which parks the client on 「サーバーと通信して
+        います」 until its Ok arrives. So the cell only empties when this end
+        says it does.
+
+        ⚠️ NG_KICK_SELF is here for the rule rather than for the client: the
+        ［拒否］ button is drawn on other people's cells only, so the sentence
+        「自分自身を強制退室させることはできません」 is one the game ships and
+        the UI never reaches. It is cheaper to honour it than to find out the
+        hard way that some path does.
+        """
+        if len(params) < 2:
+            print(f"[{self.tag}] drama party kick: short body {params.hex()}")
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_KICK,
+                struct.pack(">B", drama.NG_BAD_ACTOR),
+            )
+        (actor_id,) = struct.unpack_from(">H", params, 0)
+        party = self.dramaparties.party_of(session.chara_id)
+        target = None
+        reason = None
+        if party is None:
+            reason = drama.NG_NOT_IN_PARTY
+        else:
+            mine = next(
+                (a for a in party.actors if a.chara_id == session.chara_id), None
+            )
+            target = next((a for a in party.actors if a.actor_id == actor_id), None)
+            if mine is None or mine.actor_id != party.leader_actor_id:
+                reason = drama.NG_NOT_LEADER
+            elif target is None:
+                reason = drama.NG_BAD_ACTOR
+            elif target.chara_id == session.chara_id:
+                reason = drama.NG_KICK_SELF
+            elif party.state == drama.STATE_RUNNING:
+                # A play in progress has the cast wired into a running script;
+                # taking one of them out of the party mid-scene would leave the
+                # script talking to a cell nobody is standing in.
+                reason = drama.NG_ALREADY_STARTED
+        if reason is not None:
+            print(f"[{self.tag}] drama party kick refused, reason {reason}")
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_KICK, struct.pack(">B", reason),
+            )
+        assert party is not None and target is not None
+
+        gone = target.chara_id
+        self.dramaparties.part(gone)
+        print(f"[{self.tag}] drama party kick: #{party.party_id} actorId={actor_id}, "
+              f"now {self.dramaparties.summary()}")
+        # ⚠️ The party cannot have emptied: the leader is doing the kicking and
+        # is still standing in it, so there is no 0xE008 branch here the way
+        # 離脱 has one.
+        kicked = self._session_of(gone)
+        if kicked is not None:
+            # ⚠️ No password on this copy, for the reason part_params spells
+            # out: the field is assigned unconditionally by whoever reads it as
+            # the leader, and the person who just lost the room must not keep
+            # a credential for it.
+            self._push(kicked, self._answer(
+                kicked, 0, drama.MSG_SV_NOTIFY_PART,
+                drama.part_params(
+                    actor_id, drama.PART_KICKED, party.leader_actor_id,
+                ),
+            ))
+            # ⭐ …and the ドラマイベント中 icon over their head comes down, the
+            # same as it does at 離脱.
+            self._presence_refresh_onlookers(kicked)
+        record = drama.party_record(party)
+        notice = drama.part_params(
+            actor_id, drama.PART_KICKED, party.leader_actor_id, party.password,
+        )
+        self._drama_push_members(party, drama.MSG_SV_NOTIFY_PART, notice,
+                                 skip=session.chara_id)
+        self._drama_push_members(party, drama.MSG_SV_NOTIFY_UPDATE, record,
+                                 skip=session.chara_id)
+        self._drama_push_onlookers(
+            drama.MSG_SV_NOTIFY_UPDATE, record, party, skip=session.chara_id,
+        )
+        return (
+            self._answer(session, seen, drama.MSG_SV_NOTIFY_PART, notice)
+            + self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
+        )
+
+    def _drama_party_env(
+        self, session: "_Session", seen: int, params: bytes
+    ) -> "bytes | None":
+        """0xE021 ［設 定］ -> 0xE022 (empty), or 0xE023 with a reason.
+
+        ⭐⭐ BOTH FIELDS TRAVEL EVERY TIME, and the client's own sentence table
+        is what says so: refusal 25 is 「入力されたパーティ名とパスワードが両方
+        とも変更されていません」 -- a sentence that only makes sense for a
+        request that carries both and may have moved neither. ⇒ the comparison
+        this end has to make is against what the party already holds.
+
+        ⭐ The Ok is empty because the client already has the new values: round
+        332 watched the 現在のパーティ名 box on screen change from R332 to
+        R332B the moment a hand-sent 0xE022 arrived, with no record following
+        it. What the row on everybody else's パーティ一覧 needs is another
+        matter, and that is 0xE007's job.
+
+        ⚠️ This is the door 2.186 六.6 was about: it is the only way a password
+        changes after 作成, so an end that answers it has to keep answering
+        0xE00F's password to members only.
+
+        ⚠️ WHAT THIS DOES NOT DO: tell the other members the new password. The
+        record 0xE007 carries only `existPassword`, and the one message that
+        carries the string to a room is 0xE00A, a departure notice. So a member
+        who joined with the old password keeps a stale copy until they leave
+        and come back. Measured cost: none on screen -- the password a member
+        holds is only read when they are the leader.
+        """
+        parsed = drama.parse_env(params)
+        if parsed is None:
+            print(f"[{self.tag}] drama party env: short body {params.hex()}")
+            return self._answer(
+                session, seen, drama.MSG_SV_NG_ENV,
+                struct.pack(">B", drama.NG_BAD_PARTY),
+            )
+        name, password = parsed
+        party = self.dramaparties.party_of(session.chara_id)
+        print(f"[{self.tag}] drama party env: name={name!r} password={password!r}")
+        reason = None
+        if party is None:
+            reason = drama.NG_NOT_IN_PARTY
+        else:
+            mine = next(
+                (a for a in party.actors if a.chara_id == session.chara_id), None
+            )
+            other = self.dramaparties.named(name)
+            if mine is None or mine.actor_id != party.leader_actor_id:
+                reason = drama.NG_NOT_LEADER
+            elif name == party.name and password == party.password:
+                reason = drama.NG_ENV_UNCHANGED
+            elif other is not None and other is not party:
+                reason = drama.NG_DUPLICATE_NAME
+        if reason is not None:
+            print(f"[{self.tag}] drama party env refused, reason {reason}")
+            return self._answer(
+                session, seen, drama.MSG_SV_NG_ENV, struct.pack(">B", reason),
+            )
+        assert party is not None
+        party.name = name
+        party.password = password
+        record = drama.party_record(party)
+        self._drama_push_members(party, drama.MSG_SV_NOTIFY_UPDATE, record,
+                                 skip=session.chara_id)
+        self._drama_push_onlookers(
+            drama.MSG_SV_NOTIFY_UPDATE, record, party, skip=session.chara_id,
+        )
+        return (
+            self._answer(session, seen, drama.MSG_SV_OK_ENV, b"")
+            + self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
+        )
+
+    def _drama_party_chat(
+        self, session: "_Session", seen: int, params: bytes
+    ) -> "bytes | None":
+        """0xE024 the party room's chat bar -> 0xE025 to the party, or 0xE026.
+
+        ⭐⭐⭐ THE CHAT BAR'S FIFTH DESTINATION. The one bar along the bottom of
+        the screen has been measured into four channels already -- 0x4900 on
+        the map, 0x6109 in 授業, 0x4C8C with a チャットルーム open, 0x6B00
+        during a performance -- and with パーティメンバー up it becomes
+        this one. Round 332 typed one line into it and 0xE024 came up the wire.
+
+        ⚠️ NOT the same family as 0x6B00 裏話チャット even though the bytes are
+        identical, and the manual keeps them apart on purpose: 「ドラマイベント
+        マッチング画面ではチャットを行なうことができません」 (p08_02) is about
+        the *list* screen, while this bar lives one screen further in, in the
+        room. Recipients are the party either way.
+
+        ⚠️ NO 「/」 COMMANDS here, the same call _drama_chat makes: this line
+        goes to a room rather than to the map console. runtime/console.txt is
+        the way in while this screen is up.
+        """
+        said = chat.parse_cast(params)
+        party = self.dramaparties.party_of(session.chara_id)
+        if party is None:
+            print(f"[{self.tag}] drama party chat outside a party, refused: {said!r}")
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_CHAT,
+                struct.pack(">B", drama.NG_NOT_IN_PARTY),
+            )
+        info = self._chars(session).find(session.chara_id)
+        who = display_name(info) if info else "?"
+        print(f"[{self.tag}] drama party chat {who}: {said!r}")
+        return self._tr_cast(
+            session,
+            seen,
+            drama.MSG_SV_NOTIFY_CHAT,
+            chat.notify_params(session.chara_id, who, said),
+            [actor.chara_id for actor in party.actors],
         )
 
     def _drama_chat(
