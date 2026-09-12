@@ -49,6 +49,19 @@ MSG_CL_REQUEST_GAME_OPTION_UPDATE = 0x0703
 MSG_SV_OK_GAME_OPTION_UPDATE = 0x0704
 MSG_SV_NG_GAME_OPTION_UPDATE = 0x0705
 
+#: 0x0705's one reason byte. ⚠️ NOT invented: the client looks a refusal up in
+#: error_message.bin by (id, reason), 0x0705 is in none of the redirects the
+#: client's own table function lists (refusals.py), so its four rows are read
+#: under its own id. Row 2 「設定内容を変更できませんでした。」 is the only case
+#: this end refuses on -- a body too short to hold four flags, or no record to
+#: put them in. Rows 0 and 3 are 未使用; row 1 is the query half's wording.
+NG_UPDATE_FAILED = 2
+
+#: 0x0702's, the same pair's other half: 「設定内容を取得できませんでした。」.
+#: Nothing sends 0x0702 yet -- 0x0700 is answered out of the record, and a
+#: character with nothing saved gets DEFAULTS rather than an error.
+ERROR_QUERY_FAILED = 1
+
 #: Wire order, which is also the order the dump prints them in.
 FIELDS = ("lesson", "test", "scorecard", "career")
 

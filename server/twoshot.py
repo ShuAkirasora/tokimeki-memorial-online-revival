@@ -137,6 +137,8 @@ from __future__ import annotations
 
 import struct
 
+import refusals
+
 MSG_CL_REQUEST_TWOSHOT_REQUEST = 0x5000
 MSG_SV_OK_TWOSHOT_REQUEST = 0x5001
 MSG_SV_NG_TWOSHOT_REQUEST = 0x5002
@@ -197,13 +199,15 @@ REASON_BAD_PLACE = 11        # 指定されたキャラクターがいる場所�
 # list starts at 11 because 0..10 are what each subsystem's own list holds; this
 # one is only the endings. See the module docstring for how the split was read.
 # ---------------------------------------------------------------------------
-NOTIFY_FAILED = 11     # 申し込みに失敗しました。
-NOTIFY_DECLINED = 12   # 申し込みを断られました。
-NOTIFY_CANCELLED = 13  # 申し込みがキャンセルされました。
-NOTIFY_PARTNER_GONE = 14  # 相手がログアウトもしくはキャラクター選択画面に戻ったため、申し込みをキャンセルしました。
-NOTIFY_END = 15        # 未使用：：：終了メッセージ
-NOTIFY_OUT_OF_RANGE = 16  # 指定されたキャラクターが申し込み可能な範囲に存在しません。
-NOTIFY_OTHER_ACCEPTED = 17  # １つの申し込みが承諾されましたので、他の申し込みはキャンセルしました。
+# ⭐ The rows are in refusals.py -- four families send this list. The names stay
+# here so this family reads as one piece.
+NOTIFY_FAILED = refusals.NOTIFY_FAILED
+NOTIFY_DECLINED = refusals.NOTIFY_DECLINED
+NOTIFY_CANCELLED = refusals.NOTIFY_CANCELLED
+NOTIFY_PARTNER_GONE = refusals.NOTIFY_PARTNER_GONE
+NOTIFY_END = refusals.NOTIFY_END
+NOTIFY_OUT_OF_RANGE = refusals.NOTIFY_OUT_OF_RANGE
+NOTIFY_OTHER_ACCEPTED = refusals.NOTIFY_OTHER_ACCEPTED
 
 # ---------------------------------------------------------------------------
 # 0xFF00 -- 0x5402 / 0x5405, shared with every other chat channel's Error.

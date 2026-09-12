@@ -52,6 +52,7 @@ import json
 import struct
 from pathlib import Path
 
+import refusals
 from characters import NAME_LEN, parse_create_info
 
 MSG_CL_QUERY_FRIEND_LIST = 0x6400
@@ -101,11 +102,54 @@ HANDLED = frozenset(
 #: 4 + 11 + 11 + 2, and the shape reader reads 28 off the client's own loop.
 ENTRY_SIZE = 4 + NAME_LEN + NAME_LEN + 2
 
-#: ⚠️ INVENTED, like every other reason byte this server sends. The refusals in
-#: this family each spend one byte on a reason and nothing in the image visibly
-#: reads it back, so zero goes out because the reader consumes a byte either
-#: way. See mps_session.NG_REASON for the same argument at length.
-REASON = 0
+# ---------------------------------------------------------------------------
+# The refusals. ⚠️⚠️ NOTHING BELOW IS MADE UP ANY MORE (round 323) -- every byte
+# is a row of error_message.bin, and which list a row comes out of was read off
+# the client's own redirect function (refusals.py). This family spends its bytes
+# on three different lists:
+#
+#   0x6405 / 0x640C  -> 0xFF07, the group family's list. ⚠️ Not a mistake in
+#                       this end: the image ships 0xFF08 with 友達登録 wording
+#                       and produces it nowhere, so the original showed these
+#                       refusals out of the group list too.
+#   0x640D           -> 0xFF04, shared by every 申し込み subsystem's Notify.
+#   0x6410           -> its own id, no redirect, five rows of its own.
+#
+# ⚠️ Where a row says exactly what happened it is used; where none does, the
+# comment says so. A judgement call named as one can be replaced later; a
+# placeholder zero looked like a decision and said nothing on screen.
+# ---------------------------------------------------------------------------
+
+#: 「自分自身に申し込むことはできません。」 -- exact.
+NG_SELF = refusals.NG_SELF
+#: 「キャラクターの情報が不正です。」 for a target id that is 0 or nobody, and
+#: for one who is offline. ⚠️ The second is a judgement: no row in 0xFF07 says
+#: 「offline」, and トレード picked the same row for the same case (trade.py's
+#: REASON_BAD_CHARA), so the two families at least say the same thing.
+NG_BAD_CHARA = refusals.NG_BAD_CHARA
+#: 「指定されたキャラクターは、現在申し込みを受けられる状態ではありません。」
+#: ⚠️ A judgement, for 「they are already in your アドレス帳」: 0xFF07 has no row
+#: for that, and a real client greys the menu entry out (measured round 214), so
+#: this branch is a guard rather than something a player can reach.
+NG_TARGET_BUSY = refusals.NG_TARGET_BUSY
+#: 「指定されたキャラクターは、現在申し込みを受け付けていません。」 for 取り下げ
+#: with nothing open. ⚠️ A judgement, and the same slot number トレード uses for
+#: the same case out of its own list (0xFF09's row 3, worded 受けていません).
+NG_NOTHING_OPEN = refusals.NG_TARGET_NOT_ACCEPTING
+
+#: 0x640D's two, out of 0xFF04. Both exact: the family has no 「they said no」
+#: message of its own, so the sentence is what carries the difference between
+#: 「断られました」 and 「キャンセルされました」.
+NOTIFY_DECLINED = refusals.NOTIFY_DECLINED
+NOTIFY_CANCELLED = refusals.NOTIFY_CANCELLED
+
+# 0x6410 消去's own five rows. It is in no redirect, so these are read under the
+# message's own id.
+DEL_BAD_CHARA = 0      # キャラクターの情報が不正です。
+DEL_BAD_SELECTION = 1  # 選択されたキャラクターの情報が不正です。
+DEL_NO_LIST = 2        # アドレス帳に登録されたキャラクター一覧の取得に失敗しました。
+DEL_NOT_IN_BOOK = 3    # 選択されたキャラクターはアドレス帳に登録されていません。
+DEL_UNDEFINED = 4      # 未使用：：：未定義のエラーが発生しました。
 
 #: MsgSvResultFriendState's ``state``. Two values are needed and the client's
 #: own vocabulary elsewhere -- the roster's onlineFlag -- is a flag, so this is

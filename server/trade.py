@@ -85,10 +85,11 @@ real ones.
 really does look this table up by (pseudo id, reason), and a refusal that goes
 out with 0 says nothing at all to the player.
 
-⚠️ Only this family's codes were changed. The other three lists still get 0
-from friends.py, groups.py and NG_REASON, which means their refusals are silent
-or wrong on screen -- known, not unknown, and each needs its own look at a real
-client before it moves.
+⭐ This family went first, in round 213. The rest followed in round 323:
+友達登録, 仲良しグループ／同好会, キャラクター削除 and the option screen all sent a
+placeholder 0 until then, which in 0xFF04 is no row at all and in every other
+list is the original's own 「未使用：：：エラーなし」. The shared lists are in
+refusals.py now, so there is one copy of each rather than one per family.
 
 ⭐⭐⭐ ROUND 214 REPLACED THE INFERENCE ABOVE WITH A READING, and corrected part
 of it. The client picks the table with a function, FUN_008163e9, which takes a
@@ -139,6 +140,7 @@ from __future__ import annotations
 import struct
 
 import item
+import refusals
 
 MSG_CL_REQUEST_TRADE_REQUEST = 0x5100
 MSG_SV_OK_TRADE_REQUEST = 0x5101
@@ -234,13 +236,16 @@ REASON_ITEM_UPDATE_FAILED = 25  # アイテムトレードに失敗しました�
 # one character on screen. Nothing was wrong with the reading that a sentence
 # existed for it; the wrong part was which list to read it out of.
 # ---------------------------------------------------------------------------
-NOTIFY_FAILED = 11        # 申し込みに失敗しました。
-NOTIFY_DECLINED = 12      # 申し込みを断られました。
-NOTIFY_CANCELLED = 13     # 申し込みがキャンセルされました。
-NOTIFY_PARTNER_GONE = 14  # 相手がログアウトもしくはキャラクター選択画面に戻ったため、申し込みをキャンセルしました。
-NOTIFY_END = 15           # 未使用：：：終了メッセージ
-NOTIFY_OUT_OF_RANGE = 16  # 指定されたキャラクターが申し込み可能な範囲に存在しません。
-NOTIFY_OTHER_ACCEPTED = 17  # １つの申し込みが承諾されましたので、他の申し込みはキャンセルしました。
+# ⭐ The rows themselves live in refusals.py, because four families send them and
+# a seven-row list copied into each is four places for the same fact to drift.
+# The names stay here so this family reads as one piece.
+NOTIFY_FAILED = refusals.NOTIFY_FAILED
+NOTIFY_DECLINED = refusals.NOTIFY_DECLINED
+NOTIFY_CANCELLED = refusals.NOTIFY_CANCELLED
+NOTIFY_PARTNER_GONE = refusals.NOTIFY_PARTNER_GONE
+NOTIFY_END = refusals.NOTIFY_END
+NOTIFY_OUT_OF_RANGE = refusals.NOTIFY_OUT_OF_RANGE
+NOTIFY_OTHER_ACCEPTED = refusals.NOTIFY_OTHER_ACCEPTED
 
 #: 0x5104's ``reply``. ⚠️ The 勧誘 handshake taught that both buttons of a
 #: confirmation box can send the Ok message and put the answer in the byte

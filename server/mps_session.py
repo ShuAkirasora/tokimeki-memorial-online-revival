@@ -106,6 +106,7 @@ import ngwords
 import options
 import posts
 import quiz
+import refusals
 import romance
 import script
 import shop
@@ -425,15 +426,27 @@ MSG_SV_NG_CHARACTER_DESTROY = 0x0311
 # not the empty message the Ok side of the pair sends (0x8CB9A0, `xor eax,eax;
 # ret 8`, reads nothing).
 #
-# ⚠️ The value is a placeholder, not a finding, and following it statically ends
-# at a wall rather than at an answer. The only place in the whole image that
-# visibly reads the field back is the message's own debug dump; whoever else
-# consumes it is reached through a delegate bound at run time, so "the client
-# ignores it" cannot be concluded either. Zero is sent because the reader
-# consumes a byte no matter what.
+# ⚠️⚠️ THE VALUE IS NOT A PLACEHOLDER ANY MORE (round 323). It used to be zero
+# on the argument that nothing visibly reads the byte back; round 213 then
+# watched the client print a sentence out of error_message.bin keyed by
+# (id, reason), and round 214 read the client's own id -> table function.
+# 0x0311 appears in no redirect, so its rows are read under its own id, and it
+# has ten of them.
+#
+# Row 2, 「キャラクター情報が見つかりませんでした。」, is exactly what this end
+# refuses on: a destroy for a charaId no record claims.
 #
 # The slot is read-int8, i.e. **signed**: a byte above 127 arrives negative.
-NG_REASON = b"\x00"
+NG_DESTROY_NO_CHARA_INFO = 2
+
+# ⭐ Read on the way past and NOT acted on here: 0x0311's row 9 is
+# 「仲良しグループのリーダーになっている場合、削除することはできません。」 -- the
+# original refused to delete a character who leads a group, where this end
+# deletes them and lets GroupBook take the group down under them. That is a
+# rule rather than a reason byte, and it wants its own look at a real client
+# before the delete button starts saying no; it is written down as an open
+# question rather than quietly implemented.
+NG_DESTROY_IS_GROUP_LEADER = 9
 MSG_CL_REQUEST_SCHOOL_LOGIN = 0x0306
 MSG_SV_OK_SCHOOL_LOGIN = 0x0307
 MSG_CL_REQUEST_SCHOOL_LOGOUT = 0x0309
@@ -4849,9 +4862,10 @@ class MpsServer:
                 # (the shape reader: 0x030f scalar reads=4). Ok takes nothing off the
                 # wire — Input_MsgSvOkCharacterDestroy's deserializer is 0x8CB9A0,
                 # the same ``xor eax,eax; ret 8`` stub MsgSvOkSchoolLogin uses —
-                # but Ng is not that stub and does read one byte, so it goes out
-                # with NG_REASON. Either way an unknown id gets an answer rather
-                # than silence, which would leave the dialog spinning forever.
+                # but Ng is not that stub and does read one byte, so it goes
+                # out with the row that says so. Either way an unknown id gets an
+                # answer rather than silence, which would leave the dialog
+                # spinning forever.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
                 if self._chars(session).remove(chara_id):
                     # Out of everybody's アドレス帳 as well. A row is built from
@@ -4866,7 +4880,10 @@ class MpsServer:
                     print(f"[{self.tag}] deleted charaId={chara_id}; left: {self._chars(session).summary()}")
                     return self._answer(session, sequence, MSG_SV_OK_CHARACTER_DESTROY, b"")
                 print(f"[{self.tag}] destroy: no charaId={chara_id}, answering Ng")
-                return self._answer(session, sequence, MSG_SV_NG_CHARACTER_DESTROY, NG_REASON)
+                return self._answer(
+                    session, sequence, MSG_SV_NG_CHARACTER_DESTROY,
+                    refusals.byte(NG_DESTROY_NO_CHARA_INFO),
+                )
             if msg_type == MSG_CL_REQUEST_REENTRANCE:
                 # 「再入学しています」, the 再入学する button on the character-select
                 # screen. Request is one u32 charaId (the shape reader: 0x031b scalar
@@ -5388,7 +5405,7 @@ class MpsServer:
                         session,
                         sequence,
                         options.MSG_SV_NG_GAME_OPTION_UPDATE,
-                        NG_REASON,
+                        refusals.byte(options.NG_UPDATE_FAILED),
                     )
                 was = opts.summary()
                 opts.update(values)
@@ -5921,8 +5938,9 @@ class MpsServer:
                 # nothing, not even which lesson it means, so every condition
                 # `p06_02` lists is checked here or not at all.
                 #
-                # ⚠️ Refusing costs the player the connection (see NG_REASON and
-                # Bell.poll), which is why the conditions are also checked before
+                # ⚠️ Refusing costs the player the connection (see
+                # lesson.refusal_reason and Bell.poll), which is why the
+                # conditions are also checked before
                 # the bell goes out rather than only here.
                 refusal = session.bell.admit(
                     session.map_id, session.in_class,
@@ -11520,7 +11538,7 @@ class MpsServer:
             print(f"[{self.tag}] group info: charaId={me} is in no group, answering Error")
             return self._answer(
                 session, seen, groups.MSG_SV_ERROR_CHARA_GROUP_INFO,
-                struct.pack(">B", groups.REASON),
+                struct.pack(">B", groups.NG_NO_GROUP),
             )
         roster = []
         for member in group.members:
@@ -11900,15 +11918,17 @@ class MpsServer:
         public = params[0] if params else 0
         catchcopy = groups.read_counted(params, 1)
         why = None
+        code = groups.NG_NO_GROUP
         if group is None:
             why = "in no group"
         elif group.leader != me:
-            why = "not the leader"
+            why, code = "not the leader", groups.NG_NOT_LEADER
         if why is not None:
-            print(f"[{self.tag}] group update from charaId={me} refused: {why}")
+            print(f"[{self.tag}] group update from charaId={me} refused: "
+                  f"{why} (reason={code})")
             return self._answer(
                 session, seen, groups.MSG_SV_NG_CHARA_GROUP_UPDATE,
-                struct.pack(">B", groups.REASON),
+                struct.pack(">B", code),
             )
         assert group is not None
         if group.clublike and not public:
@@ -11959,17 +11979,25 @@ class MpsServer:
         target = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
         group = book.of(me)
         why = None
-        if group is None or group.leader != me:
+        code = groups.NG_NOT_LEADER
+        if group is None:
+            why, code = "in no group", groups.NG_NO_GROUP
+        elif group.leader != me:
             why = "not the leader"
         elif target == me:
-            why = "a leader leaves through 解散 or 引継, not 除名"
+            # ⭐ The one row in 0xFF07 written for this exact button:
+            # 「自分自身を除名することはできません。」
+            why, code = ("a leader leaves through 解散 or 引継, not 除名",
+                         groups.NG_KICK_SELF)
         elif target not in group.members:
-            why = f"charaId={target} is not in this group"
+            why, code = (f"charaId={target} is not in this group",
+                         groups.NG_BAD_CHARA)
         if why is not None:
-            print(f"[{self.tag}] 除名 of {target} by charaId={me} refused: {why}")
+            print(f"[{self.tag}] 除名 of {target} by charaId={me} refused: "
+                  f"{why} (reason={code})")
             return self._answer(
                 session, seen, groups.MSG_SV_NG_CHARA_GROUP_KICK,
-                struct.pack(">B", groups.REASON),
+                struct.pack(">B", code),
             )
         assert group is not None
         book.kick(group.id, target)
@@ -12017,15 +12045,17 @@ class MpsServer:
         group = book.of(me)
         comment = groups.read_counted(params)
         why = None
+        code = groups.NG_NO_GROUP
         if group is None:
             why = "in no group"
         elif group.leader != me:
-            why = "not the leader"
+            why, code = "not the leader", groups.NG_NOT_LEADER
         if why is not None:
-            print(f"[{self.tag}] 解散 by charaId={me} refused: {why}")
+            print(f"[{self.tag}] 解散 by charaId={me} refused: {why} "
+                  f"(reason={code})")
             return self._answer(
                 session, seen, groups.MSG_SV_NG_CHARA_GROUP_DESTROY,
-                struct.pack(">B", groups.REASON),
+                struct.pack(">B", code),
             )
         assert group is not None
         # ⭐ Logged raw for the reason _group_update logs its catchcopy length:
@@ -12082,15 +12112,18 @@ class MpsServer:
         me = session.chara_id
         group = book.of(me)
         why = None
+        code = groups.NG_NO_GROUP
         if group is None:
             why = "in no group"
         elif group.leader == me:
-            why = "a leader leaves through 解散 or 引継, not 脱退"
+            why, code = ("a leader leaves through 解散 or 引継, not 脱退",
+                         groups.NG_LEADER_CANNOT_PART)
         if why is not None:
-            print(f"[{self.tag}] 脱退 by charaId={me} refused: {why}")
+            print(f"[{self.tag}] 脱退 by charaId={me} refused: {why} "
+                  f"(reason={code})")
             return self._answer(
                 session, seen, groups.MSG_SV_NG_CHARA_GROUP_PART,
-                struct.pack(">B", groups.REASON),
+                struct.pack(">B", code),
             )
         assert group is not None
         was = group.label()
@@ -12149,20 +12182,26 @@ class MpsServer:
             if other is not None:
                 self._forget_stale_group(other)
             why = None
-            if target in (0, me) or other is None:
-                why = "no target" if target in (0, me) else "not online"
-            elif group is None or group.leader != me:
-                why = "not the leader"
+            code = groups.NG_BAD_CHARA
+            if target == me:
+                why, code = "oneself", groups.NG_SELF
+            elif target == 0 or other is None:
+                why = "no target" if target == 0 else "not online"
+            elif group is None:
+                why, code = "in no group", groups.NG_NO_GROUP
+            elif group.leader != me:
+                why, code = "not the leader", groups.NG_NOT_LEADER
             elif target not in group.members:
                 why = f"charaId={target} is not in this group"
             elif (session.group_handover_to is not None
                   or other.group_handover_from is not None):
-                why = "a handover is already open"
+                why, code = "a handover is already open", groups.NG_ALREADY_ASKED
             if why is not None:
-                print(f"[{self.tag}] 引継 from charaId={me} to {target} refused: {why}")
+                print(f"[{self.tag}] 引継 from charaId={me} to {target} "
+                      f"refused: {why} (reason={code})")
                 return self._answer(
                     session, seen, groups.MSG_SV_NG_CHARA_GROUP_TRANSFER_REQUEST,
-                    struct.pack(">B", groups.REASON),
+                    struct.pack(">B", code),
                 )
             assert other is not None and group is not None
             session.group_handover_to = target
@@ -12219,10 +12258,13 @@ class MpsServer:
                 leader.group_handover_to = None
                 # 0x6217 is the only message that tells the other end an offer
                 # has ended, exactly as 0x6222 is for 勧誘 -- the family has no
-                # 「they said no」 of its own.
+                # 「they said no」 of its own. ⭐ Which is why the reason byte
+                # carries the difference: 12 is this list's 「declined」 and 13
+                # its 「withdrawn」. ⚠️ It used to forward the client's own answer
+                # byte, which is 0 for ［断 る］, and 0 is in neither list.
                 self._push(leader, self._answer(
                     leader, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER_CANCEL,
-                    struct.pack(">B", first),
+                    struct.pack(">B", groups.NOTIFY_DECLINED),
                 ))
             print(f"[{self.tag}] 引継: charaId={me} declined {asker} "
                   f"(reason={first})")
@@ -12233,7 +12275,7 @@ class MpsServer:
         if target is None:
             return self._answer(
                 session, seen, groups.MSG_SV_NG_CHARA_GROUP_TRANSFER_CANCEL,
-                struct.pack(">B", groups.REASON),
+                struct.pack(">B", groups.NG_NOTHING_OPEN),
             )
         session.group_handover_to = None
         asked = self._session_of(target)
@@ -12241,7 +12283,7 @@ class MpsServer:
             asked.group_handover_from = None
             self._push(asked, self._answer(
                 asked, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER_CANCEL,
-                struct.pack(">B", groups.REASON),
+                struct.pack(">B", groups.NOTIFY_CANCELLED),
             ))
         print(f"[{self.tag}] 引継: charaId={me} withdrew the offer to {target}")
         return self._answer(
@@ -12336,21 +12378,28 @@ class MpsServer:
             if other is not None:
                 self._forget_stale_group(other)
             why = None
-            if target in (0, me) or other is None:
-                why = "no target" if target in (0, me) else "not online"
-            elif group is None or group.leader != me:
-                why = "not a leader"
+            code = groups.NG_BAD_CHARA
+            if target == me:
+                why, code = "oneself", groups.NG_SELF
+            elif target == 0 or other is None:
+                why = "no target" if target == 0 else "not online"
+            elif group is None:
+                why, code = "in no group", groups.NG_NO_GROUP
+            elif group.leader != me:
+                why, code = "not a leader", groups.NG_NOT_LEADER
             elif book.of(target) is not None:
-                why = "already in a group"
+                why, code = "already in a group", groups.NG_ALREADY_IN_A_GROUP
             elif len(group.members) >= groups.MAX_MEMBERS:
-                why = f"full ({groups.MAX_MEMBERS})"
+                why, code = f"full ({groups.MAX_MEMBERS})", groups.NG_GROUP_FULL
             elif session.group_invited is not None or other.group_inviter is not None:
-                why = "an application is already open"
+                why, code = ("an application is already open",
+                             groups.NG_ALREADY_ASKED)
             if why is not None:
-                print(f"[{self.tag}] 勧誘 from charaId={me} to {target} refused: {why}")
+                print(f"[{self.tag}] 勧誘 from charaId={me} to {target} "
+                      f"refused: {why} (reason={code})")
                 return self._answer(
                     session, seen, groups.MSG_SV_NG_CHARA_GROUP_INVITE_REQUEST,
-                    struct.pack(">B", groups.REASON),
+                    struct.pack(">B", code),
                 )
             assert other is not None
             session.group_invited = target
@@ -12423,9 +12472,16 @@ class MpsServer:
                 # The same judgement call _friends makes for 0x640D: the family
                 # has no 「they said no」 of its own and 0x6222 is the only
                 # message that tells somebody an application has ended.
+                # ⭐ And the same reason byte, 12, for the same reason: it is
+                # what says 「declined」 rather than 「withdrawn」.
+                # ⭐⭐ MEASURED ON THIS ONE (round 323, real client): with an
+                # application open, 12 draws 「仲良し登録拒否／仲良しグループへの
+                # 登録を拒否されました」 for about five seconds and 13 closes the
+                # waiting box without a word. ⚠️ That sentence is the client's
+                # own, not a row of error_message.bin -- see refusals.py.
                 self._push(leader, self._answer(
                     leader, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL,
-                    struct.pack(">B", first),
+                    struct.pack(">B", groups.NOTIFY_DECLINED),
                 ))
             print(f"[{self.tag}] 勧誘: charaId={me} declined {asker} "
                   f"(reason={first})")
@@ -12436,7 +12492,7 @@ class MpsServer:
         if target is None:
             return self._answer(
                 session, seen, groups.MSG_SV_NG_CHARA_GROUP_INVITE_CANCEL,
-                struct.pack(">B", groups.REASON),
+                struct.pack(">B", groups.NG_NOTHING_OPEN),
             )
         session.group_invited = None
         asked = self._session_of(target)
@@ -12444,7 +12500,7 @@ class MpsServer:
             asked.group_inviter = None
             self._push(asked, self._answer(
                 asked, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL,
-                struct.pack(">B", groups.REASON),
+                struct.pack(">B", groups.NOTIFY_CANCELLED),
             ))
         print(f"[{self.tag}] 勧誘: charaId={me} withdrew the application to {target}")
         return self._answer(
@@ -13374,16 +13430,19 @@ class MpsServer:
         if msg_type == friends.MSG_CL_REQUEST_FRIEND_ADD_REQUEST:
             other = self._session_of(target) if target else None
             if target in (0, me) or book.linked(me, target) or other is None:
-                why = (
-                    "no target" if target in (0, me)
-                    else "already friends" if book.linked(me, target)
-                    else "not online"
-                )
+                if target == me:
+                    why, code = "oneself", friends.NG_SELF
+                elif target == 0:
+                    why, code = "no target", friends.NG_BAD_CHARA
+                elif book.linked(me, target):
+                    why, code = "already friends", friends.NG_TARGET_BUSY
+                else:
+                    why, code = "not online", friends.NG_BAD_CHARA
                 print(f"[{self.tag}] 友達登録 from charaId={me} to {target} "
-                      f"refused: {why}")
+                      f"refused: {why} (reason={code})")
                 return self._answer(
                     session, seen, friends.MSG_SV_NG_FRIEND_ADD_REQUEST,
-                    struct.pack(">IB", target, friends.REASON),
+                    struct.pack(">IB", target, code),
                 )
             session.friends_asked.add(target)
             other.friends_asking.add(me)
@@ -13447,9 +13506,19 @@ class MpsServer:
                 # that tells somebody an application they were part of has
                 # ended. A capture showing the original answering the asker some
                 # other way is the thing that would replace this line.
+                #
+                # ⭐ The reason byte is not a judgement call, though: this
+                # family's Notify is the only thing that can tell 「they said
+                # no」 from 「they withdrew」, and the byte is what carries the
+                # difference. ⚠️ It used to forward the client's own byte from
+                # 0x6408, which is 0 in every capture. ⚠️⚠️ What the client
+                # draws for each value has been watched for the sibling message
+                # 0x6222 and NOT for this one: there, 12 draws a box the client
+                # owns and 13 closes the waiting box in silence -- see
+                # refusals.py for why that matters.
                 self._push(asker, self._answer(
                     asker, 0, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
-                    struct.pack(">IB", me, tail),
+                    struct.pack(">IB", me, friends.NOTIFY_DECLINED),
                 ))
             print(f"[{self.tag}] 友達登録: charaId={me} declined {target} "
                   f"(reason={tail})")
@@ -13459,7 +13528,7 @@ class MpsServer:
             if target not in session.friends_asked:
                 return self._answer(
                     session, seen, friends.MSG_SV_NG_FRIEND_ADD_CANCEL,
-                    struct.pack(">IB", target, friends.REASON),
+                    struct.pack(">IB", target, friends.NG_NOTHING_OPEN),
                 )
             session.friends_asked.discard(target)
             asked = self._session_of(target)
@@ -13467,7 +13536,7 @@ class MpsServer:
                 asked.friends_asking.discard(me)
                 self._push(asked, self._answer(
                     asked, 0, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
-                    struct.pack(">IB", me, friends.REASON),
+                    struct.pack(">IB", me, friends.NOTIFY_CANCELLED),
                 ))
             print(f"[{self.tag}] 友達登録: charaId={me} withdrew the "
                   f"application to {target}")
@@ -13483,7 +13552,7 @@ class MpsServer:
                 print(f"[{self.tag}] 消去: charaId={me} has no {target} to drop")
                 return self._answer(
                     session, seen, friends.MSG_SV_NG_FRIEND_DEL,
-                    struct.pack(">B", friends.REASON),
+                    struct.pack(">B", friends.DEL_NOT_IN_BOOK),
                 )
             print(f"[{self.tag}] 消去: charaId={me} dropped {target}; "
                   f"{book.summary()}")

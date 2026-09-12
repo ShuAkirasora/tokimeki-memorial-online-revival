@@ -67,6 +67,7 @@ import json
 import struct
 from pathlib import Path
 
+import refusals
 from characters import GROUP_NAME_LEN, NAME_LEN, NO_GROUP
 
 # The three the family is missing, marked so that the message audit counts them
@@ -283,10 +284,53 @@ CLUBLIKE_TEST_LEVEL = 3
 #: enforced.
 MAX_MEMBERS = 15
 
-#: ⚠️ INVENTED, like every other reason byte here. See mps_session.NG_REASON.
-REASON = 0
+# ---------------------------------------------------------------------------
+# The refusals. ⚠️⚠️ NOTHING HERE IS MADE UP ANY MORE (round 323). Every 0x62xx
+# refusal in this family is looked up in 0xFF07 and every Notify*Cancel in
+# 0xFF04 -- read off the client's own redirect function, see refusals.py. The
+# rows below are the ones this end can actually reach; the full lists are in
+# that module.
+#
+# ⚠️ Rows that say exactly what happened are used as such. Where none does, the
+# comment says 「judgement」 -- and those branches are all guards for things a
+# real client's own menus do not offer (a leader pressing 脱退, 除名 of somebody
+# who is not a member), so the wording matters less than the fact that something
+# now appears at all.
+# ---------------------------------------------------------------------------
 
-#: ⭐ NOT invented, unlike REASON above. 0x620C's sentences do not hang on its
+#: Exact, all four.
+NG_NO_GROUP = refusals.NG_NO_GROUP                    # 所属していません
+NG_NOT_LEADER = refusals.NG_NOT_LEADER                # リーダー権限を持っていません
+NG_ALREADY_IN_A_GROUP = refusals.NG_ALREADY_IN_A_GROUP  # 既に…所属しています
+NG_GROUP_FULL = refusals.NG_GROUP_FULL                # これ以上メンバーを増やすことはできません
+#: Exact, and the reason 除名 of oneself is refused at all: the original wrote a
+#: sentence for it.
+NG_KICK_SELF = refusals.NG_KICK_SELF
+#: 「既に申し込んでいます。」 -- exact, for a second 勧誘 or 引継 while one is open.
+NG_ALREADY_ASKED = refusals.NG_ALREADY_ASKED
+#: 「自分自身に申し込むことはできません。」 -- exact.
+NG_SELF = refusals.NG_SELF
+#: 「キャラクターの情報が不正です。」 for a target id that is 0 or nobody, for an
+#: offline one (⚠️ judgement, the row トレード picked for the same case), and for
+#: a 除名／引継 target who is not in the group (⚠️ judgement).
+NG_BAD_CHARA = refusals.NG_BAD_CHARA
+#: 「指定されたキャラクターは、現在申し込みを受け付けていません。」 for 取り下げ
+#: with nothing open. ⚠️ Judgement; same slot number トレード uses for that case.
+NG_NOTHING_OPEN = refusals.NG_TARGET_NOT_ACCEPTING
+#: 「仲良しグループもしくは同好会の情報が不正です。」 for a leader pressing 脱退.
+#: ⚠️⚠️ Judgement, and the weakest one here: what is wrong is not the group's
+#: information, it is that a leader leaves through 解散 or 引継. 0xFF07 has no row
+#: for that -- the nearest, 26 「未使用：：：リーダー以外のメンバーが存在する」, is
+#: a dead slot the original itself marked 未使用 and would put nothing on screen.
+NG_LEADER_CANNOT_PART = refusals.NG_BAD_GROUP
+
+#: The two 0xFF04 rows this family's Notify*Cancel carries. Both exact: neither
+#: 勧誘 nor 引継 has a 「they said no」 message of its own, so 0x6222 and 0x6217
+#: are told apart by the sentence rather than by the id.
+NOTIFY_DECLINED = refusals.NOTIFY_DECLINED
+NOTIFY_CANCELLED = refusals.NOTIFY_CANCELLED
+
+#: ⭐ 0x620C's sentences do not hang on its
 #: own id: the client looks them up under the pseudo id 0xFF07, the table the
 #: whole group family shares, and reason 27 there reads 「同好会を非公開には
 #: できません。（公開必須です）」. It is the other half of promote()'s forced
@@ -297,7 +341,7 @@ REASON = 0
 #: (the reason is written there), and refusing everything that is not 1 would
 #: spend that measurement: a third state, if the client has one, still has to
 #: reach the store to become visible.
-NG_CLUBLIKE_PUBLIC_REQUIRED = 27
+NG_CLUBLIKE_PUBLIC_REQUIRED = refusals.NG_CLUBLIKE_PUBLIC_REQUIRED
 
 #: ⚠️⚠️ NOT invented, and not what the message names suggest: the two buttons in
 #: the 「引継ぎ依頼」 box both send 0x6211 (the *Ok* message) and put the decision
