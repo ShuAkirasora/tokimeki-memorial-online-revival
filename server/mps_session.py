@@ -10679,6 +10679,8 @@ class MpsServer:
 
             /group                     what the store holds
             /group qual on|off         leaderQualificationFlag for me
+            /group exam [answered=N] [draw=N] [score=N] | clear
+                                       the リーダー試験 tour record
             /group create <name>       found one, me as leader
             /group join <charaId>      put somebody else in mine (hex ok)
             /group leave               脱退 -- the leader leaving disbands it
@@ -10710,6 +10712,36 @@ class MpsServer:
             book.qualify(me, on)
             return self._say(session, sequence, f"/group qual {'on' if on else 'off'} "
                                                 f"(re-login to see it)")
+        if what == "exam":
+            # ⭐ The tour record, by hand. The tour is fifteen stations long
+            # and the verdict reads one cell of it -- PC_LEADER_EXAM_SCORE, and
+            # nothing else -- so this is how a test puts a character at any
+            # point of the tour, or in front of any one of the verdict's arms,
+            # in a single line.
+            # ⛔️ It invents nothing: the three cells are the scenarios' own,
+            # and record_exam_progress is the very call their writes take.
+            fields: dict[str, int] = {}
+            if args[1:2] == ["clear"]:
+                fields = {"answered": 0, "draw": 0, "score": 0}
+            else:
+                for word in args[1:]:
+                    key, _, value = word.partition("=")
+                    if key not in ("answered", "draw", "score"):
+                        return self._say(session, sequence,
+                                         "/group exam [answered=N] [draw=N] "
+                                         "[score=N] | clear")
+                    try:
+                        fields[key] = int(value, 0)
+                    except ValueError:
+                        return self._say(session, sequence,
+                                         f"/group exam {key}=<number>")
+            if not fields:
+                return self._say(session, sequence, f"試験 [{book.exam_of(me)}]")
+            moved = book.record_exam_progress(me, **fields)
+            return self._say(session, sequence,
+                             "/group exam "
+                             + ("記帳" if moved else "既に同じ値（記帳なし）")
+                             + f" · {book.exam_of(me)}")
         if what == "create":
             name = " ".join(args[1:]).strip()
             if not name:

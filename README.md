@@ -741,7 +741,7 @@ it back to the save.
 | `/cs [n <count>\|add\|del\|deck <0-2> …]` | club skills owned, and how complete each one is |
 | `/item [sample\|n <count>\|add\|del\|probe]` | the inventory, by tab |
 | `/locker [n <count>\|add\|del\|clear]` | the locker the whole account shares |
-| `/group [create\|join\|leave\|disband\|hand\|qual]` | the friendly-group store |
+| `/group [create\|join\|leave\|disband\|hand\|qual\|exam]` | the friendly-group store, and the リーダー試験 tour record |
 
 **School.**
 
