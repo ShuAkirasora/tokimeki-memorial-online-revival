@@ -1185,6 +1185,14 @@ class _Session:
         # the NPC_EVENT_START branch, so that /sc-ing a conversation script by
         # hand does not count as having talked to anybody.
         self.talking_about: tuple[int, int] | None = None
+        # Whether an NPC event is on screen right now -- the 会話中 icon over
+        # this character's head, and nothing else. ⚠️ A FLAG OF ITS OWN RATHER
+        # THAN ``talking_about is not None``, on purpose: that one is the
+        # romance credit's key and it is due a narrowing (it is set for the
+        # リーダー試験 and the locker's letter as well, which credit the wrong
+        # person), while the icon wants exactly the wide reading -- talking to
+        # an NPC is talking to an NPC whichever table the event came out of.
+        self.npc_talking: bool = False
         # Which line the player clicked in that conversation, or None if it
         # never asked or never got an answer. Lives here rather than on the
         # Runner because all four NotifyScriptEnd paths drop the Runner before
@@ -1709,8 +1717,8 @@ class MpsServer:
     def _presence_action(self, other: "_Session") -> int:
         """The icon to draw over this character's head.
 
-        Which byte draws which picture is recovered (see the constants). What
-        this server puts up is four of them:
+        Which byte draws which picture is recovered (see the constants). Since
+        round 327 this server puts up all ten of the icons `p05_08` names:
 
         * 授業中 while a period is running. `p05_08`: 「授業中のマップキャラの
           頭上に表示されます」 -- the character keeps standing on the map while
@@ -1742,9 +1750,30 @@ class MpsServer:
           the 自主トレ icon one line up, and the same reason it cannot be left
           off: 0x4C83 has no other entry. See chatroom.py.
 
+        * ドラマイベント中 for anybody in a ドラマ party, and the manual states
+          that reach itself: 「ドラマイベント中（マッチング中を含む）のマップキ
+          ャラの頭上に表示されます」. The 括弧 is why the test is membership
+          rather than drama.STATE_RUNNING -- a party still 参加者募集中 IS
+          マッチング中, and that is the half of it spent standing on the map,
+          where an icon can be seen at all.
+
+        * トレード中 while the trade window is up, which is ``trade_with`` and
+          not 「an application is out」: 申し込み中 is the handshake before it,
+          and `p05_08` names the state after. It stays up through 成立 until
+          0x5109 takes the window down, because the window is what it is about.
+
+        * 会話中 for the three conversations this end can see somebody in: an
+          NPC event (0x5600 until the script ends), a ツーショットチャット, and
+          a seat in somebody\'s チャットルーム. `p05_08` draws the reach wide --
+          「他のプレイヤーやＮＰＣと会話（チャット）中」 -- and those three are
+          the ones with a state to hang it on. ⚠️ Map chat (0x4901) is not a
+          fourth: a line is an event, not a state, and nothing on this wire or
+          in the manual says when such an icon would come down again.
+
         ⚠️ INVENTED: the order. Nothing says which icon wins when two apply, and
         as written a lesson beats a fight beats a 自主トレルーム beats a
-        チャットルーム beats a 看板 beats a locker. Two of these can now
+        チャットルーム beats a 看板 beats a ドラマパーティ beats a trade beats a
+        conversation beats a locker. Two of these can now
         genuinely coincide -- a room leader can open a locker -- and the room
         wins on purpose: 「自主トレ募集中」 is the only door into somebody
         else's room (p05_08 again), so replacing it with
@@ -1757,15 +1786,22 @@ class MpsServer:
         other for the sake of having an order and nothing else: all three are
         mutually exclusive at the other end, so no character can ever qualify
         for two of them at once.
+        ⭐⭐ The three round 327 added go BELOW the three doors, and that is the
+        rule one paragraph up rather than a new call: all three are notices, and
+        the doors are the only entries in `p05_08` whose own text says 右クリック.
+        Among themselves they are ordered by how long the state lasts and how
+        hard it is to leave -- a party outlives a trade window, a trade window
+        outlives one conversation -- which is an order for the sake of having
+        one, the same as the 看板作成 three. ⚠️ 授業中 and クラブ活動中 stay
+        above the doors where round 150 put them; the new three do not follow
+        them up there, because 「a notice yields to a door」 is what this
+        function already says.
         What would overturn any of it is a manual line or a capture showing a
         different icon on a character who qualifies for two.
 
-        ⚠️ Three of the ten icons p05_08 names still cannot be sent, and none of
-        them is wiring: 会話中 / トレード中 / ドラマイベント中 each want a
-        subsystem that is not here. 校内新聞閲覧中 left that list when 0x0A00 was
-        answered; it is ordered just above the locker, and the pair of them can
-        never collide anyway -- the paper covers the whole screen, so a reader
-        has no way to be standing at an open locker at the same time.
+        ⚠️ 校内新聞閲覧中 is ordered just above the locker, and the pair of them
+        can never collide anyway -- the paper covers the whole screen, so a
+        reader has no way to be standing at an open locker at the same time.
         """
         if other.lesson is not None:
             return ACTION_LESSON
@@ -1778,6 +1814,14 @@ class MpsServer:
             return ACTION_CHAT_ROOM
         if self.billboards.sign_of(other.chara_id) is not None:
             return ACTION_SIGNBOARD
+        if self.dramaparties.party_of(other.chara_id) is not None:
+            return ACTION_DRAMA_EVENT
+        if other.trade_with is not None:
+            return ACTION_TRADING
+        if (other.npc_talking
+                or other.twoshot_with is not None
+                or self.chatrooms.room_of(other.chara_id) is not None):
+            return ACTION_TALKING
         if other.newspaper_open:
             return ACTION_READING_PAPER
         return ACTION_LOCKER_OPEN if other.locker_open else ACTION_NONE
@@ -2451,6 +2495,15 @@ class MpsServer:
         """
         talking_about, session.talking_about = session.talking_about, None
         choice, session.talking_choice = session.talking_choice, None
+        # ⭐ The 会話中 icon comes down with the script, wherever the script
+        # ended. This method is where it happens for the reason its own
+        # docstring gives: it is the one call every NotifyScriptEnd path makes,
+        # and an icon left up would outlive the conversation on every screen
+        # that can see it. ⚠️ Before the early returns below, which are about
+        # who gets credited and have nothing to say about the icon.
+        if session.npc_talking:
+            session.npc_talking = False
+            self._presence_refresh_onlookers(session)
         if talking_about is None:
             return b""
         found = romance.whose_event(talking_about[0])
@@ -2753,6 +2806,12 @@ class MpsServer:
             # The fix is to carry the key only while the answered npcId belongs
             # to capture_npc_event (event_table_for) and None otherwise.
             session.talking_about = session.npc_event
+            # ⭐ The 会話中 icon goes up here and comes down in _romance_credit,
+            # which is the one thing every NotifyScriptEnd path calls. The
+            # scene the talker is looking at is the event, not the map, so this
+            # refresh is for the people still standing on it.
+            session.npc_talking = True
+            self._presence_refresh_onlookers(session)
             return reply + self._script_start(session, seen, found, 0, infos)
 
         if msg_type == script.MSG_CL_REQUEST_NPC_EVENT_END:
@@ -2887,6 +2946,11 @@ class MpsServer:
             self.dramaparties.part(session.chara_id)
             print(f"[{self.tag}] drama party part: #{party.party_id}, "
                   f"now {self.dramaparties.summary()}")
+            # ⭐ …and comes down at 離脱. ⚠️ Only here and not in
+            # _drama_party_gone: that one runs on the disconnect and 下校 paths,
+            # where the character is leaving the map rather than standing on it
+            # without an icon.
+            self._presence_refresh_onlookers(session)
             reply = self._answer(session, seen, drama.MSG_SV_OK_PART, b"")
             reply += self._answer(
                 session, seen, drama.MSG_SV_NOTIFY_PART,
@@ -3053,6 +3117,11 @@ class MpsServer:
             first=full[1],
         ))
         print(f"[{self.tag}] drama party created: {self.dramaparties.summary()}")
+        # ⭐ ドラマイベント中 goes up at 作成, not at ［イベントスタート］: the
+        # manual's own 「マッチング中を含む」 puts the icon on a party that is
+        # still 参加者募集中, and that is the half of it the leader spends
+        # standing on the map where somebody can see it.
+        self._presence_refresh_onlookers(session)
         # Ok first (it is what carries the id everything else is addressed by),
         # then the row for the list the player is standing on, then the roster
         # for the room they are about to be standing in. ⚠️ The last of the
@@ -3498,6 +3567,7 @@ class MpsServer:
             first=full[1],
         ))
         print(f"[{self.tag}] drama party joined: {self.dramaparties.summary()}")
+        self._presence_refresh_onlookers(session)
         record = drama.party_record(party)
         roster = drama.join_params(party)
         # Everybody already in the room needs the roster too — 0xE009 is the
@@ -10500,6 +10570,11 @@ class MpsServer:
             room = board.rooms[owner_id]
             joiner = room.add(chara_id, self._cr_name(chara_id))
             print(f"[{self.tag}] chatroom joined {room.summary()}")
+            # ⭐ 会話中 over the newcomer. The owner already wears the door icon
+            # and keeps it (it outranks this one); everybody else in the room
+            # is in a conversation and now says so. The leaving half is in
+            # _chatroom_part, which was already refreshing for the door's sake.
+            self._presence_refresh_onlookers(session)
             out = self._answer(
                 session, sequence, chatroom.MSG_SV_OK_JOIN, room.join_params()
             )
@@ -12616,6 +12691,10 @@ class MpsServer:
         if other is None or other.trade_with != session.chara_id:
             return
         self._trade_clear(other)
+        # ⚠️ The survivor only. This runs on the disconnect and 下校 paths, and
+        # ``session`` is on its way off the map -- re-announcing it would put a
+        # character back into a scene the very next message takes it out of.
+        self._presence_refresh_onlookers(other)
         print(f"[{self.tag}] トレード: charaId={session.chara_id} went away, "
               f"telling {partner}")
         self._push(other, self._answer(
@@ -12750,6 +12829,14 @@ class MpsServer:
             other.trade_with = me
             session.trade_table.clear()
             other.trade_table.clear()
+            # ⭐ Both heads at once: the icon is per character, and a trade is
+            # the one state on this server that two characters enter on the
+            # same message. ⚠️ The partner is not skipped -- the trade window
+            # sits on top of the map rather than replacing it (the ウェストアッ
+            # プ screen is the one that replaces it), so the scene the pair
+            # edits is still up at both ends.
+            self._presence_refresh_onlookers(session)
+            self._presence_refresh_onlookers(other)
             print(f"[{self.tag}] トレード: charaId={me} accepted {asker} "
                   f"(answer={answer}); the table is open")
             return self._trade_notify_both(
@@ -12780,6 +12867,8 @@ class MpsServer:
                   f"{other.chara_id}")
             self._trade_clear(session)
             self._trade_clear(other)
+            self._presence_refresh_onlookers(session)
+            self._presence_refresh_onlookers(other)
             # ⭐ The reading that used to be here was right and pointed at the
             # wrong list: a clean close does carry the developers' own name for
             # 「nothing went wrong」, but 0x510D/0x510E read 0xFF04, where that
@@ -13098,6 +13187,10 @@ class MpsServer:
                     and other.twoshot_asking != session.chara_id):
                 continue
             self._twoshot_clear(other)
+            # ⚠️ The survivor only, and only their icon: ``session`` is leaving
+            # the map on this path (disconnect or 下校), so re-announcing it
+            # would put a character back into a scene it is being taken out of.
+            self._presence_refresh_onlookers(other, also={session.chara_id})
             print(f"[{self.tag}] ツーショット: charaId={session.chara_id} went "
                   f"away, telling {who}")
             self._push(other, self._answer(
@@ -13276,6 +13369,17 @@ class MpsServer:
             )
         session.twoshot_with = asker
         other.twoshot_with = me
+        # ⭐ 会話中 over both heads, for the third parties still on the map.
+        # ⚠️⚠️ EACH REFRESH SKIPS THE OTHER END, and this is the one place in
+        # the family where that matters: the pair edits the map scene, and a
+        # ウェストアップ screen has replaced the map at both of these two. It is
+        # the same reasoning _presence_blocked applies to a lesson and a fight,
+        # spelled per call because a twoshot is the only state whose two
+        # members are named right here.
+        # ⚠️ What it costs: neither of them sees the other's icon go up. That
+        # is nothing today -- there is no map on their screens to draw it on.
+        self._presence_refresh_onlookers(session, also={other.chara_id})
+        self._presence_refresh_onlookers(other, also={session.chara_id})
         print(f"[{self.tag}] ツーショット: charaId={me} accepted {asker} "
               f"(answer={answer}); place {place} "
               f"({MAP_NAMES.get(session.map_id, '?')} {session.pos})")
@@ -13353,6 +13457,15 @@ class MpsServer:
               f"{other.chara_id}")
         self._twoshot_clear(session)
         self._twoshot_clear(other)
+        # ⚠️ Skipping each other again, and for the same reason as the start:
+        # the ウェストアップ screen is still up at the far end when this runs,
+        # and 0x5203 is what takes it down. ⚠️ The open question this leaves is
+        # a stale icon rather than a dropped connection -- if a client coming
+        # back from that screen does NOT rebuild the scene the way it does
+        # after a cutscene, each of these two keeps 会話中 over the other until
+        # something else redraws them. Preferring the stale icon is deliberate.
+        self._presence_refresh_onlookers(session, also={other.chara_id})
+        self._presence_refresh_onlookers(other, also={session.chara_id})
         # ⭐ NOTIFY_END is 0xFF04's slot 15, 「未使用：：：終了メッセージ」 -- the
         # developers' own name for this exact message, marked 未使用 because a
         # normal ending is not something to put a sentence on screen about. The
