@@ -714,13 +714,64 @@ MENU_ITEM_LEADER_EXAM = 402
 # -- 28 rows, no exceptions -- and c002 is the リーダー試験 for every NPC that
 # has one. So this end recognises the exam by number and never has to match a
 # Japanese title. (c003 is id 2, the second half for the four staff who have
-# one; nothing sends the player there yet.)
+# one; LEADER_EXAM_SECOND_HALF_MAP below is what sends a player there.)
 LEADER_EXAM_EVENT_ID = 1
 
-#: The second half, for the four staff who have one. ⚠️ Nothing sends the
-#: player there yet; it is here because it is the other half of the same tour
-#: and the set below has to cover it.
+#: The second half, for the four staff who have one.
 LEADER_EXAM_SECOND_HALF_ID = 2
+
+# ⭐⭐⭐ What picks one half over the other, and it is NOT progress.
+#
+# Each c003 opens by comparing PC_LEADER_EXAM_ANSWERED against the very same
+# constant its own c002 compares it against -- 1 and 1 for 教頭, 2 and 2 for both
+# 担任, 3 and 3 for 体育教師 -- so the counter that orders the tour cannot tell
+# the two halves apart, and no state on this end can either. Nor is there a
+# second door on the client's side: `menu_item.bin` carries exactly one
+# リーダー試験 row, MENU_ITEM_LEADER_EXAM, and the 0x6304 it sends names only the
+# NPC and that item. The choice was always the server's to make.
+#
+# ⭐⭐ What the two halves actually differ in is WHERE the scene stands. The
+# background each scenario declares in its own header names a room:
+#
+#     教頭      c002 進路指導室   c003 職員室
+#     体育教師  c002 グラウンド   c003 体育館
+#     担任      c002 一般教室     c003 一般教室  (same room, different classroom)
+#
+# and those rooms are exactly the maps the character-placement scripts stand
+# each of them on: 教頭 has two, map 46 進路指導室 and map 44 職員室;
+# 体育教師 has two, map 1 屋外 (the グラウンド) and map 70 体育館. Four
+# rooms, four backgrounds, no exceptions. ⇒ the half a player gets is the half
+# that belongs to the room they are standing in.
+#
+# ⚠️ An NPC with no c003 is unaffected: `event_for_menu_item` still answers its
+# one c002 wherever it is asked.
+LEADER_EXAM_SECOND_HALF_MAP = {
+    (2, 11): 44,   # 教頭      職員室   (the first half is map 46 進路指導室)
+    (3, 27): 70,   # 体育教師  体育館   (the first half is map 1 屋外)
+}
+
+# ⭐⭐ The two 担任 are the same rule read through one more step. They do not
+# stand in two rooms; they stand in twenty-six, one per classroom, and the
+# placement scripts split them without an exception: 担任（女） holds Ａ Ｃ Ｅ …
+# Ｙ and 担任（男） holds Ｂ Ｄ Ｆ … Ｚ -- the even and odd halves of
+# curriculum.CLASSROOM, thirteen each, twenty-six in all. So "the room this
+# scene belongs to" is "the player's OWN classroom", and the c003 says so in
+# words: 「そもそもわたしはあなたの担任じゃない」, 「自分のクラスに行って受けて」.
+LEADER_EXAM_HOMEROOM_NPCS = frozenset({(3, 0), (3, 1)})
+
+# ⚠️ The two above have to cover every NPC that owns a c003, or a player would
+# stand in the second half's room and be handed the first one anyway. The tables
+# say which NPCs those are, so the check is free -- and it is a check rather
+# than a derivation because the rooms themselves cannot be read out of them.
+_SECOND_HALF_NPCS = frozenset(
+    npc for npc, events in NPC_EVENTS.items()
+    for found in events
+    if found["table"] in ("common_npc_event", "general_npc_event")
+    and found["event"][1] == LEADER_EXAM_SECOND_HALF_ID)
+if _SECOND_HALF_NPCS != (frozenset(LEADER_EXAM_SECOND_HALF_MAP) | LEADER_EXAM_HOMEROOM_NPCS):
+    raise AssertionError(
+        f"second halves {sorted(_SECOND_HALF_NPCS)} are not the NPCs this "
+        f"module knows a room for")
 
 
 def _leader_exam_scripts() -> frozenset:
@@ -761,7 +812,12 @@ def events_of(npc_id: int) -> list[dict]:
     return NPC_EVENTS.get((npc_id >> 16, npc_id & 0xFFFF), [])
 
 
-def event_for_menu_item(npc_id: int, menu_item: int) -> "dict | None":
+def event_for_menu_item(
+    npc_id: int,
+    menu_item: int,
+    map_id: "int | None" = None,
+    home_room: "int | None" = None,
+) -> "dict | None":
     """The event this ring item should start on this NPC, or None for the default.
 
     ⚠️ Only リーダー試験 is answered here, and the omission is deliberate rather
@@ -769,13 +825,27 @@ def event_for_menu_item(npc_id: int, menu_item: int) -> "dict | None":
     conversation an NPC offers is progress state this server does not model, and
     DEFAULT_NPC_EVENT plus /nev is the standing arrangement for it. The exam is
     different because the data picks it: one NPC, one c002, no state involved.
+
+    ⭐ Four of them have a c003 as well, and for those the data picks that too --
+    by room rather than by progress. See LEADER_EXAM_SECOND_HALF_MAP. ``map_id``
+    is where the player is standing and ``home_room`` the map of their own
+    classroom; with either missing this falls back to the first half, which is
+    the answer for every NPC that has only one.
     """
     if menu_item != MENU_ITEM_LEADER_EXAM:
         return None
-    for found in events_of(npc_id):
-        if found["event"][1] == LEADER_EXAM_EVENT_ID:
-            return found
-    return None
+    halves = {found["event"][1]: found for found in events_of(npc_id)}
+    first = halves.get(LEADER_EXAM_EVENT_ID)
+    second = halves.get(LEADER_EXAM_SECOND_HALF_ID)
+    if second is None or map_id is None:
+        return first
+    key = (npc_id >> 16, npc_id & 0xFFFF)
+    if key in LEADER_EXAM_HOMEROOM_NPCS:
+        # A 担任 is the exam's own 担任 in one classroom and a stranger in the
+        # other twenty-five. ⚠️ Not knowing which class the player is in is not
+        # the same as being in it -- answer the second half rather than guess.
+        return first if home_room is not None and map_id == home_room else second
+    return second if map_id == LEADER_EXAM_SECOND_HALF_MAP.get(key) else first
 
 
 def npc_map_object_event_params(event: tuple[int, int], npc_id: int) -> bytes:

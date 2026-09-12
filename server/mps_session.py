@@ -2585,7 +2585,13 @@ class MpsServer:
             # ⚠️ /nev still outranks it. The override exists to point this end
             # at a script by hand, and an item that has a right answer is
             # exactly when someone is most likely to be testing a wrong one.
-            ring = script.event_for_menu_item(npc_id, menu_item)
+            # ⭐ Which half of it, for the four staff who have two, is the room
+            # the player is standing in -- see LEADER_EXAM_SECOND_HALF_MAP.
+            ring = script.event_for_menu_item(
+                npc_id, menu_item,
+                map_id=session.map_id,
+                home_room=lesson.classroom_of(session.in_class),
+            )
             if ring is not None and session.npc_event_npc is None:
                 event = ring["event"]
                 print(f"[{self.tag}] menuItem {menu_item} → {ring['table']} "
