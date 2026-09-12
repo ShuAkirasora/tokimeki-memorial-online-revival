@@ -423,9 +423,15 @@ class Board:
           keeps the room joinable, which is what a room with people in it is
           for.
 
-        ⚠️ What would overturn it: a capture of the real client after an owner
-        walks out -- if the remaining window closes itself, the client already
-        believes the room is gone and this end is disagreeing with it.
+        ⭐⭐ MEASURED on a real client, and it did not overturn this. Two
+        characters in one room, the owner casts Part while staying logged in:
+        the window left behind stays open, its roster drops that row and
+        「参加者」 counts 2名 -> 1名. It also goes on working exactly as the
+        first reason above claims -- a line typed after the handover still
+        leaves as 0x4C8C and comes back as 0x4C8D -- and a third character
+        joined the same room afterwards by naming the promoted owner's
+        charaId, so the door the icon opens is the new owner's. A disband
+        would have had to close that window, and nothing closed it.
         """
         room = self.room_of(chara_id)
         if room is None:
