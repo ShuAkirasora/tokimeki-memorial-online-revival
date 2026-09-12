@@ -6353,8 +6353,13 @@ class MpsServer:
         client's table rather than asked for. What confirms it landed is the
         生徒情報 window: 所属部 goes from 無所属 to the club's name, and the
         captain's ring redraws with 退部 in the same slot and the two items
-        that need membership no longer greyed. The refusals (and 0x5A03) have
-        still never been on screen.
+        that need membership no longer greyed.
+
+        ⭐ The ten-day wait has now been seen refusing a real 入部: leave a club
+        and pick 入部 off the same ring, and reason 6's sentence is on screen a
+        third of a second later. ⚠️ It is the only refusal here the client can
+        ask for -- every path to reason 2 is one the ring does not offer, since
+        that slot reads 退部 for as long as you are a member.
         """
         club_id = club.parse_enter(params)
         state = self._chars(session).club(session.chara_id)
@@ -6389,6 +6394,14 @@ class MpsServer:
 
         Leaving stamps the day so the ten-day wait can be measured; nothing else
         on this server reads that stamp, which is the point of writing it now.
+
+        ⭐ Confirmed against the client: the ring's top slot reads 退部 while you
+        are a member, the request carries no body, and 所属部 on the 生徒情報
+        window goes back to 無所属. ⚠️ The client draws its own 退部確認 box
+        first and that box states the ten-day wait itself, so the rule is the
+        client's too and not just this server's -- but it does not act on it:
+        入部 is offered again the moment you are out, and the refusal that
+        follows is the server's.
         """
         state = self._chars(session).club(session.chara_id)
         if state is None:

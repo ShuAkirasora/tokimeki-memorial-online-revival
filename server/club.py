@@ -70,13 +70,26 @@ It is written down because the rule is real, not because anything reaches it.
 Reasons 2 and 5 carry the same sentence, so the wire cannot tell them apart and
 neither can the screen. Everything that is not the ten-day wait answers 2.
 
+⭐⭐⭐ The reason is a BARE INDEX and the client checks nothing: whatever sits at
+that offset is what the box draws. Sending 0 puts the developers' own retired
+marker, 「未使用：：：エラーなし」, on screen word for word. That is the
+confirmation this whole restoration rested on -- the index really is the
+selector, and not something layered on top of it. It also means a reason this
+server has no business sending would be shown to the player rather than
+swallowed, which is why the two handlers only ever send 2 and 6.
+
+Both boxes are titled by the client: 部活入部エラー for 0x5A02 and
+部活退部エラー for 0x5A05. ⚠️ Each one closes itself after five seconds.
+
 INVENTED — one field, and it is small
 -------------------------------------
 ``remain``, the u16 riding along with 0x5A02. It exists only for reason 6, and
 nothing says what unit it is in; the sentence it decorates counts 日, so days
-is the reading this sends. ⚠️ NOT CONFIRMED ON SCREEN. If the refusal box ever
-prints a number that is ten times what it should be, this is the field to
-suspect — the other candidate is hours. Every other reason sends 0.
+is the reading this sends. ⚠️ NOTHING ON SCREEN CAN CONFIRM IT, and that is
+measured rather than assumed: the refusal box draws the stored sentence
+verbatim, and the 「１０」 inside it is part of that string rather than a
+placeholder. No path prints this field to the player. So it stays invented --
+and it also cannot be seen to be wrong. Every other reason sends 0.
 
 Which clubs a character may be in
 ---------------------------------
