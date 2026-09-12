@@ -64,10 +64,15 @@ Invented, because no table carries a number for any of it:
     would be one more invented number on top of the threshold, not instead of
     it. Recorded as a divergence, not as a reading.
 
-⚠️ 泉 and テラス are places on 屋外, not maps of their own: `map.bin` has no
-record under either name, and `twoshot_place` gives seasonal background ids
-rather than cells. So HEALING_MAPS can only name 保健室 for now, and a
-体調不良 character has exactly one room in this server that will heal them.
+⭐ 泉 and テラス are places on 屋外 rather than maps of their own, so the test
+is per *cell* and not per map. Every cell of every `cld_*.bin` names its
+`twoshot_place` key in the u32 at +4 and `mapgraph.region` reads it back, which
+is the same lookup MsgSvNotifyTwoshotStart's placeId comes from; the three keys
+the +0x2D flag marks are therefore directly answerable off the floor the
+character is standing on. For 保健室 that is a strict superset of the map test
+it replaces -- all 676 walkable cells of map 48 carry key 41, and none of its
+106 place-less cells are walkable -- and it adds the 1628 walkable テラス cells
+and 156 泉 cells of 屋外, which is the manual's parenthesis complete.
 
 Scale, from ability.py: `stress` is drawn as 「ストレス：Ｎ／１００」 with
 N = min(100, floor(値·100/257)), so 257 is a full bar and the numbers below are
@@ -101,9 +106,9 @@ DOCTOR_STOP = 3
 # A full bar. See the module docstring for where the 257 comes from.
 FULL = 257
 
-# The one 癒しスペース this server can locate. See the ⚠️ above for the two it
-# cannot.
-HEALING_MAPS = (48,)  # 特殊教室校舎１Ｆ保健室
+# The three 癒しスペース, as `twoshot_place` keys -- the exact three records
+# whose +0x2D flag is set. See the ⭐ above for why the key and not the map.
+HEALING_PLACES = (7, 23, 41)  # テラス, 泉, 保健室
 
 # ── INVENTED — how much ストレス one activity adds (授業 / クラブ / 奥義合成) ──
 # Nothing below is read off anything. `lesson.bin` carries no stress column,
@@ -161,9 +166,14 @@ def name(condition: int) -> str:
     return CONDITIONS[condition] if 0 <= condition < len(CONDITIONS) else f"?{condition}"
 
 
-def healing(map_id: int) -> bool:
-    """Is this map one of the 癒しスペース?"""
-    return map_id in HEALING_MAPS
+def healing(place: int | None) -> bool:
+    """Is this `twoshot_place` key one of the 癒しスペース?
+
+    The argument is what mapgraph.region returns for the cell being stood on,
+    so None -- no data for the map, or a cell that belongs to no place -- is
+    simply not one of the three.
+    """
+    return place in HEALING_PLACES
 
 
 def worsen(condition: int, added: int) -> int:
@@ -283,18 +293,18 @@ def relieve(sheet, amount: int) -> int:
     return removed
 
 
-def recover(sheet, seconds: float, map_id: int) -> int:
-    """Sit still for `seconds` on `map_id`. Returns the 値 actually removed.
+def recover(sheet, seconds: float, place: int | None) -> int:
+    """Sit still for `seconds` on `place`. Returns the 値 actually removed.
 
     「体調が「健康」の場合」 and 「体調不良の場合、座っているだけではストレスは
-    減りません。癒しスペース…で座り」 — so a 体調不良 character recovers in the
-    保健室 and nowhere else, while a healthy one recovers anywhere and faster
-    there. 「ストレスを0にすることで、体調が「健康」に戻ります」 closes the loop,
-    and relieve is where that last clause lives.
+    減りません。癒しスペース…で座り」 — so a 体調不良 character recovers in one
+    of the three 癒しスペース and nowhere else, while a healthy one recovers
+    anywhere and faster there. 「ストレスを0にすることで、体調が「健康」に戻り
+    ます」 closes the loop, and relieve is where that last clause lives.
     """
     if sheet.stress <= 0:
         return 0
-    at_healing = healing(map_id)
+    at_healing = healing(place)
     if sheet.condition != HEALTHY and not at_healing:
         return 0
     rate = HEALING_SECONDS_PER_POINT if at_healing else SIT_SECONDS_PER_POINT

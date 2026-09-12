@@ -11454,13 +11454,17 @@ class MpsServer:
             return b""
         if session.pose == stress.POSE_SITTING and session.sat_at:
             now = time.monotonic()
-            removed = stress.recover(sheet, now - session.sat_at, session.map_id)
+            # 癒しスペース is a place and not a map -- 泉 and テラス are cells of
+            # 屋外 -- so the same cell lookup the ツーショット background comes
+            # from is what decides whether this is one of the three.
+            place = self._twoshot_place(session)
+            removed = stress.recover(sheet, now - session.sat_at, place)
             if removed:
                 # Consume rather than reset, so the seconds that were not worth
                 # a whole point stay owed instead of being dropped every drain.
                 session.sat_at += removed * (
                     stress.HEALING_SECONDS_PER_POINT
-                    if stress.healing(session.map_id)
+                    if stress.healing(place)
                     else stress.SIT_SECONDS_PER_POINT
                 )
                 self._chars(session).set_ability(session.chara_id, sheet)
