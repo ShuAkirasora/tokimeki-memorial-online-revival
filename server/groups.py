@@ -244,6 +244,12 @@ HANDLED = frozenset({
 #:   8  仲良しグループデータの取得もしくは変更に失敗したため、…
 #:   9  未使用：：：未定義のエラーが発生しました。
 #:
+#: ⭐⭐⭐ MEASURED ON A REAL CLIENT: reason 7 drew its own titled error box
+#: (not the generic system-message one) with row 7 VERBATIM. ⚠️ An earlier round
+#: recorded "this client draws nothing at all for 0x0802" after checking twice
+#: -- that was the looking, not the client: the box is short-lived and both
+#: checks were too late. ⛔️ Do not carry that claim forward.
+#:
 #: ⭐⭐ Reason 1 is worth reading even though it is unused: it says the request
 #: is judged with an NPC in hand, which is what the door being on the 理事長
 #: 秘書's ring already implies. Nothing on the wire carries that NPC -- 0x0800

@@ -1494,10 +1494,32 @@ NPC_START_BAD_LEVEL = 9    # 部活レベルが不正です。
 NPC_START_NO_DECK = 10     # 部活デッキが作成されていない、もしくは「部活用」…
 NPC_START_INJURED = 11     # 怪我をしているため、部活に参加できません。
 
+# ⭐⭐⭐ MEASURED ON A REAL CLIENT: this family's refusals DO reach the screen.
+# Reason 3 and reason 10 were each pushed down the wire and each drew a system
+# message box carrying the matching `error_message.bin` row VERBATIM -- so the
+# restored reading (reason is a bare index into that message's own run of
+# sentences) holds here too, and nothing in the client checks the code first.
+# ⚠️⚠️ THE BOX CLEARS ITSELF AFTER ABOUT FIVE SECONDS, which is the whole
+# reason two earlier rounds recorded "nothing was drawn": they looked too
+# late, not the client silent.
+
 #: 0x5C04's ``reason``, RESTORED from `error_message.bin` 760-775. Only the two
 #: this server can honestly mean are named.
 LEVEL_BAD = 7              # 選択された対戦レベルが不正です。
 LEVEL_BAD_CLUB = 8         # 所属クラブの情報が不正です。
+
+# ⚠️⚠️ 0x5C04 BEHAVES NOTHING LIKE 0x5D02 ABOVE, measured the same session:
+#   * Sent while the player is just standing on a map, the client has no
+#     handler registered for it at all: this family's listener comes and goes
+#     with the club-battle screen.
+#   * Sent while the level selector IS up, the client takes it -- and still
+#     draws no refusal sentence. It looks the row up, hands it to the screen's
+#     own container rather than to the message-box call the 0x5D02 family uses,
+#     then tears the selector down and asks for lobby data (0x4000) by itself.
+#     All that shows on screen is the client's own "returning to the lobby".
+# ⇒ Do not read "the sentence never appeared" as "this reason is wrong"; here it
+#   is the client choosing not to draw it. Which container it goes into instead
+#   has not been chased down.
 
 
 def parse_npc_battle_start(params: bytes) -> "int | None":
