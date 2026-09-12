@@ -200,6 +200,26 @@ def lesson_notify_params(sender_id: int, family: bytes, first: bytes, text: str)
     )
 
 
+# ── the 裏話チャット bar, during a ドラマイベント ────────────────────────────
+# A fourth destination for the same box on screen. The bar re-routes by what is
+# on top of it: 0x4900 on the map, 0x6109 in class, 0x4C8C with a チャットルーム
+# window open, and 0x6B00 while a drama is playing. That last one is measured,
+# not assumed -- round 331 typed one line into the bar with 『戦闘バレンタイン
+# デー』 on screen and got `0x6b00 params=0009 "R331CHAT\0"`.
+#
+# ``MsgClCastDramainsideChat`` (0x6B00) is 0x4900's body exactly and
+# ``MsgSvNotifyDramainsideChat`` (0x6B01), reader 0x8EE9C0, is 0x4901's::
+#
+#     u32 senderId                                        +0x04
+#     u16 nameLen,      bytes name          len +0x1e, buffer +0x08
+#     u16 utteranceLen, bytes utterance     len +0x7e, buffer +0x20
+#
+# Same offsets, so the same two buffers: NAME_MAX 22 and TEXT_MAX 94, and
+# `parse_cast`/`notify_params` serve this family unchanged. ``0x6B02`` is the
+# one reason byte every chat channel's Error is; its sentences are the shared
+# 0xFF00 table. See drama.py for the message ids.
+
+
 def parse_emotion(params: bytes) -> int:
     """The `emotion` a MsgClCastLessonEmotion (0x610C) carries, one u16."""
     if len(params) < 2:

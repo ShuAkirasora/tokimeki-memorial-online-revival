@@ -3308,6 +3308,60 @@ class MpsServer:
             + self._drama_light(party, session, seen)
         )
 
+    def _drama_chat(
+        self, session: "_Session", seen: int, msg_type: int, params: bytes
+    ) -> "bytes | None":
+        """0x6B00 裏話チャット -> 0x6B01 to the party, or 0x6B02 with a reason.
+
+        ⭐ The whole family, and none of it is invented: the layouts are
+        0x4900/0x4901's byte for byte (chat.py), and who hears it is the
+        manual's own sentence -- 「ドラマイベント中に、同じパーティ内の参加者と
+        チャットすることができます」 (beta/manual p08_03 §4). The party is the
+        recipient list, not the room and not the map.
+
+        ⚠️ NO 「/」 COMMANDS, the same call the room's chat and ツーショット
+        make: this line goes to a party rather than to the map console. Nothing
+        is lost by it -- a running script locks the client's input anyway, which
+        is why runtime/console.txt exists (see `_drain_console`).
+
+        The speaker is in the recipient list on purpose. 0x6B00 is a cast:
+        nothing appears in anybody's window, the speaker's included, until the
+        server says it back.
+
+        ⚠️ The manual names two moments when chatting is off -- 「選択肢を選んで
+        いる間、文字列を入力している間はチャットを行なうことはできません」 --
+        and this end does not enforce them: a line that arrived anyway is still
+        a line the player typed, and refusing it would put a sentence on screen
+        for something the player was told was simply unavailable.
+        ⚠️⚠️ WHICH END ENFORCES IT IS UNMEASURED. Round 331 typed into the bar
+        only while the play was between boxes; nobody has yet tried it with a
+        選択肢 box open. If 0x6B00 turns out to arrive there, that is the
+        finding, not a bug in this branch.
+        """
+        if msg_type != drama.MSG_CL_CAST_INSIDE_CHAT:
+            # 0x6B01 and 0x6B02 are ours to send, and the family has no fourth
+            # member; anything else here is a message this build does not have.
+            print(f"[{self.tag}] no reply implemented for 0x{msg_type:04x} yet")
+            return None
+        said = chat.parse_cast(params)
+        party = self.dramaparties.party_of(session.chara_id)
+        if party is None:
+            print(f"[{self.tag}] drama chat outside a party, refused: {said!r}")
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_INSIDE_CHAT,
+                struct.pack(">B", drama.ERROR_CHAT_NO_PARTY),
+            )
+        info = self._chars(session).find(session.chara_id)
+        who = display_name(info) if info else "?"
+        print(f"[{self.tag}] drama chat {who}: {said!r}")
+        return self._tr_cast(
+            session,
+            seen,
+            drama.MSG_SV_NOTIFY_INSIDE_CHAT,
+            chat.notify_params(session.chara_id, who, said),
+            [actor.chara_id for actor in party.actors],
+        )
+
     def _drama_party_end(self, session: "_Session", seen: int) -> bytes:
         """The mirror of ［イベントスタート］: the play is over, the party is not.
 
@@ -6591,6 +6645,8 @@ class MpsServer:
                 return reply + self._apply_chat(session, sequence, said)
             if msg_type >> 8 == 0xE0 or msg_type in DRAMA_DOORS:
                 return self._drama_incoming(session, sequence, msg_type, params)
+            if msg_type >> 8 == 0x6B:
+                return self._drama_chat(session, sequence, msg_type, params)
             if msg_type >> 8 == 0x72:
                 # The script subsystem. Everything in it is unproven, so the
                 # branch logs first and acts second: a reply we did not expect

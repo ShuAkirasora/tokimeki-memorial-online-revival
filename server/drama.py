@@ -107,6 +107,24 @@ MSG_CL_CAST_START = 0xE01A
 MSG_SV_NOTIFY_START = 0xE01B
 MSG_SV_ERROR_START = 0xE01C
 
+# 裏話チャット: the chat bar during the performance itself. A family of its own
+# rather than part of 0xE0xx -- high byte 0x6B, its own
+# DramainsideChatMessageProcedure -- and not the party room's 0xE024 either.
+# The manual splits the two the same way: 「ドラマイベントマッチング画面では
+# チャットを行なうことができません」 (beta/manual p08_02) against 「4.裏話チャット
+# ドラマイベント中に、同じパーティ内の参加者とチャットすることができます」
+# (p08_03), which is also where the recipient list below comes from.
+#
+# Layouts are 0x4900/0x4901's byte for byte; see chat.py.
+MSG_CL_CAST_INSIDE_CHAT = 0x6B00
+MSG_SV_NOTIFY_INSIDE_CHAT = 0x6B01
+MSG_SV_ERROR_INSIDE_CHAT = 0x6B02
+
+#: 0x6B02 shares the 0xFF00 sentence table with every other chat channel's
+#: Error, so this is a sentence rather than a number: 「チャット相手が存在して
+#: いません。」 -- which is what a line cast by somebody in no party is.
+ERROR_CHAT_NO_PARTY = 3
+
 # Cast slots per drama, from `drama_event.bin`'s four (sex, keyword) pairs.
 # All 22 events in this build fill the first two and leave slots 2 and 3 empty,
 # which is why `reference/drama_events.json` carries the per-event list rather
