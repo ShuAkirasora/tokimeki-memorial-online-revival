@@ -5713,6 +5713,12 @@ class MpsServer:
                 # (0x8F75F0) prints the message name and no fields.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
                 session.chara_id = chara_id
+                # ⭐ The 組 comes off the record, not off characters.IN_CLASS:
+                # under CLASS_ASSIGNMENT="balanced"/"random" two characters on
+                # one account are in different ones, and this is the value every
+                # later answer on this connection reads -- which classroom a
+                # lesson happens in, what 経歴 and the name card print.
+                session.in_class = self._chars(session).in_class(chara_id)
                 session.map_id, *pos = self._chars(session).location(chara_id)
                 session.pos = (pos[0], pos[1])
                 # ⭐⭐⭐ 初登校. The flag went out with the character list this
@@ -5896,6 +5902,10 @@ class MpsServer:
                 # else with nothing on screen to put them in.
                 session.drama_matching = False
                 session.chara_id = 0
+                # Back to the default 組 with the character: a connection between
+                # 下校 and the next 登校 is nobody, and leaving the last one's 組
+                # behind would answer for whoever 登校's next.
+                session.in_class = IN_CLASS
                 return self._answer(session, sequence, MSG_SV_OK_SCHOOL_LOGOUT, b"")
             if msg_type == MSG_CL_QUERY_POOL_MESSAGE:
                 # Last step of the reload the client runs after a cutscene:
@@ -6154,6 +6164,7 @@ class MpsServer:
                     # somebody else's id answers about nobody.
                     chara_info(
                         info,
+                        in_class=owner.in_class(chara_id),
                         in_club=owner.in_club(chara_id),
                         group_name=gname,
                         group_id=gid,

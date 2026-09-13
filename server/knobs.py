@@ -210,7 +210,15 @@ def parse(knob: Knob, text: str) -> Any:
         if isinstance(value, (list, tuple)):
             return tuple(value) if isinstance(old, tuple) else list(value)
         raise ValueError(f"{knob.key} takes a list, e.g. [1, 2, 3]")
-    value = ast.literal_eval(word)
+    try:
+        value = ast.literal_eval(word)
+    except (ValueError, SyntaxError):
+        # A knob that holds a word takes it unquoted: `/knob CLASS_ASSIGNMENT
+        # balanced` is what somebody types, and refusing it for want of quotes
+        # would be this console's own invention.
+        if isinstance(old, str):
+            return word
+        raise ValueError(f"{knob.key} takes a literal, e.g. 3 or 0.5")
     if isinstance(old, float):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"{knob.key} is a number")

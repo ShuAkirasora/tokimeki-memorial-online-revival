@@ -26,6 +26,8 @@ reader actually consumes.
 from __future__ import annotations
 
 import json
+import os
+import random
 import struct
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -192,6 +194,46 @@ SPAWN_POS = (106, 84)
 #: 組 the screen prints. The tutorial reads it too, to pick which classroom
 #: door its mid-tour walk goes to.
 IN_CLASS = 0
+
+#: ⚠️ INVENTED — how a newly registered character's 組 is picked:
+#: "fixed" (every character gets IN_CLASS), "balanced" (whichever of the 26 has
+#: the fewest), or "random".
+#:
+#: ⭐ The rule the original used is not recoverable, and this is the knob that
+#: admits it rather than hiding one choice inside a literal. "fixed" is the
+#: default because of who plays here, not because of what the original did: 授業
+#: and 試験 happen in the classroom of your own 組, so on a server with a handful
+#: of players 26 open rooms means nobody is ever in class with anybody. "balanced"
+#: is the likeliest reconstruction of the original -- a 組 was decided at
+#: registration with no say from the player, cohorts mixed inside one, every
+#: letter was in use, and classes were the unit official events scored (試験 の
+#: クラス平均点, and the 2006-11-08 server merge moved whole ones 「バランスよく」)
+#: -- but likeliest is not measured, and "random" is the other candidate that
+#: the same evidence cannot rule out.
+#:
+#: ⚠️ A character's 組 is written into its record when it is created and never
+#: read from this knob again: 登録内容は変更できません, and a 組 that moved when an
+#: operator turned a knob would take the player's classroom, their 名刺 line and
+#: their lesson attendance with it. Turning this decides where the NEXT
+#: character enrols. Records written before the key existed read as IN_CLASS,
+#: which is what they have always been sent as.
+CLASS_ASSIGNMENT = os.environ.get("TMO_CLASS_ASSIGNMENT") or "fixed"
+
+#: The 組 a character lands in under CLASS_ASSIGNMENT, given how many are in
+#: each. Pure, so the policy can be read (and tested) without a store on disk.
+def pick_class(counts: "dict[int, int]") -> int:
+    rooms = len(curriculum.CLASSROOM)
+    mode = CLASS_ASSIGNMENT
+    if mode == "balanced":
+        # Ties go to the lowest 組, so an empty school fills Ａ組 first and the
+        # answer does not depend on dict order.
+        return min(range(rooms), key=lambda room: (counts.get(room, 0), room))
+    if mode == "random":
+        return random.randrange(rooms)
+    if mode != "fixed":
+        print(f"[characters] CLASS_ASSIGNMENT={mode!r} is not one of "
+              f"fixed/balanced/random; enrolling in {IN_CLASS} instead")
+    return IN_CLASS
 
 #: ⚠️ INVENTED — the 期生 every character created on this server is (2 = 2期生).
 #:
@@ -597,6 +639,7 @@ def list_entry(
     tutorial_flag: int = 0,
     couple_names: "tuple[bytes, bytes, bytes] | None" = None,
     couple_in_class: int = 0,
+    in_class: int | None = None,
 ) -> bytes:
     """Build one 238-byte MsgSvResultCharacterListFromAccount entry.
 
@@ -630,7 +673,9 @@ def list_entry(
         out += struct.pack(">H", f[key])
     out += struct.pack(">H", PERIOD)  # period
     out += group_name.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]  # friendGroupName
-    out += struct.pack(">HH", IN_CLASS, in_club)  # inClass (0 = A組), inClub
+    out += struct.pack(">HH",
+                       IN_CLASS if in_class is None else in_class,
+                       in_club)  # inClass (0 = A組), inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
     out += struct.pack(">BB", couple_flag, 1)  # coupleFlag, newbieFlag
     # ⭐ Three hard zeros until round 156. ``title`` is the 称号 out of the 経歴
@@ -795,6 +840,7 @@ def chara_info(
     title: int = 0,
     class_post: int = 0,
     club_post: int = posts.NO_CLUB_POST,
+    in_class: int | None = None,
 ) -> bytes:
     """Build the 139-byte MsgSvResultCharaInfo (0x6501) parameter block.
 
@@ -825,7 +871,9 @@ def chara_info(
     for key in LOOKS + ACCESSORY:
         out += struct.pack(">H", f[key])
     out += struct.pack(">H", f["charaType"])
-    out += struct.pack(">HHH", PERIOD, IN_CLASS, in_club)  # period, inClass, inClub
+    out += struct.pack(">HHH", PERIOD,
+                       IN_CLASS if in_class is None else in_class,
+                       in_club)  # period, inClass, inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
     # ⚠️ coupleFlag is derived, never stored: one field cannot say 「恋人あり」
     # while the other says who, so the flag is 1 exactly when there is an id.
@@ -947,12 +995,58 @@ class CharacterStore:
         # a tool, a future caller — before it has ever been to school, and the
         # honest answer for one this end created itself should not depend on a
         # migration rule meant for records it did not.
+        # ⭐ "inClass": which 組 this character enrolled in, decided once here by
+        # CLASS_ASSIGNMENT and never again -- 登録内容は変更できません, and the 組
+        # is what picks the classroom its 授業 and 試験 happen in. A record from
+        # before this key existed has no 組 of its own and reads as IN_CLASS,
+        # which is the only value this server has ever sent for one.
         self.records.append({"charaId": chara_id, "info": info.hex(),
                              "debut": True,
+                             "inClass": self._assign_class(),
                              "romance": romance.Romance(
                                  int(parse_create_info(info)["sex"])).to_json()})
         self._save()
         return chara_id
+
+    def _school_class_counts(self) -> "dict[int, int]":
+        """How many characters are in each 組, across every account on disk.
+
+        ⚠️ School-wide rather than account-wide on purpose: balancing against
+        this account's own three would put the first three characters in Ａ組,
+        Ｂ組, Ｃ組 no matter how full those already are. Read off the records
+        themselves rather than kept as a running tally, because a tally is a
+        second copy of the same fact and the two would drift the first time a
+        character was deleted by hand. Creation is rare and these files are
+        small, so the walk costs nothing anyone can feel.
+        """
+        counts = {room: 0 for room in range(len(curriculum.CLASSROOM))}
+        if self.path is None:
+            return counts
+        for path in sorted(self.path.parent.parent.glob("*/characters.json")):
+            try:
+                records = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            for record in records:
+                room = int(record.get("inClass", IN_CLASS))
+                if room in counts:
+                    counts[room] += 1
+        return counts
+
+    def _assign_class(self) -> int:
+        """The 組 a character created right now enrols in."""
+        room = pick_class(self._school_class_counts())
+        if room != IN_CLASS:
+            print(f"[characters] enrolling in 組 {room} (CLASS_ASSIGNMENT="
+                  f"{CLASS_ASSIGNMENT})")
+        return room
+
+    def in_class(self, chara_id: int) -> int:
+        """Which 組 that character is in; IN_CLASS if the record predates the key."""
+        for record in self.records:
+            if int(record["charaId"]) == chara_id:
+                return int(record.get("inClass", IN_CLASS))
+        return IN_CLASS
 
     # ── 初登校 ──────────────────────────────────────────────────────────────
     def debut_pending(self, chara_id: int) -> bool:
@@ -1164,6 +1258,7 @@ class CharacterStore:
                     class_post=held.class_post,
                     club_post=held.club_post,
                     tutorial_flag=1 if self.debut_pending(chara_id) else 0,
+                    in_class=self.in_class(chara_id),
                 )
             )
         if self.records and LIST_PROBES:
