@@ -1667,6 +1667,25 @@ def is_tutorial(script_id: "int | None") -> bool:
 #: on the wire as `inClass`.
 PC_IN_CLASS = 0x301C
 
+#: ⚠️⚠️ **Named for what the tutorial does with it, not for what it is.** The
+#: semantics of this cell are NOT restored, and round 336 is where that stopped
+#: being 「not yet」: the client cannot hold it (`0x8100 PLAYER_DATA_REFER` is
+#: one of the four shared stubs, `0x73150b`, 「skip 8 operand bytes and return
+#: 0」), the 95 original server scripts never touch it, and the whole 744-message
+#: protocol carries no account-level counter of any kind -- `accountId`,
+#: `accountType`, `charaFrameId` and the school list's `accountCount` are all of
+#: it. So the number lived in the original server's own database and never
+#: crossed the wire; there is nothing left to read it off.
+#:
+#: ⭐ What IS restored is its shape, off all 8 reads in the corpus (`amm_e001`
+#: and `skr_e001`, the two 初登校 scripts, four reads each, structurally
+#: identical): it is compared `< 2` once and `>= 0` / `< 0` three times and
+#: against nothing else, so it is signed, unbounded above, and its range spans
+#: 2. All four reads gate the same kind of question -- 「shall I ask the player,
+#: or just do the long version」 -- which is what `mps_session.TUTORIAL_ASK`
+#: supplies a value for. 2.282, 2.283.
+PLAYER_TUTORIAL_ASK = 0x2001
+
 # ── リーダー試験's three cells ────────────────────────────────────────────
 #
 # The exam is a fifteen-question tour: the secretary asks the first question

@@ -487,6 +487,39 @@ MSG_SV_OK_NEWSPAPER_END = 0x0A04
 # dies just the same, the fault is in the packet and not in what comes after it.
 # Either answer is worth one restart.
 SPEECH_MS = 600_000
+
+#: ⚠️ INVENTED — what this end answers the tutorial's `PLAYER[0x2001]` with, and
+#: therefore whether 初登校 asks the player its four 「shall I explain / shall I
+#: show you around」 questions or decides for them. ⛔️ It is an invention because
+#: the cell's meaning is unrecoverable, not merely unknown; the three
+#: independent reasons are on `script.PLAYER_TUTORIAL_ASK`.
+#:
+#: ⭐⭐ 2 rather than anything else, and the argument is not 「a sensible
+#: default」 -- it is the only value whose effect on the screen was worked out
+#: read by read. The four gates are `X < 2` (ip=600, true ⇒ do not ask), `X >= 0`
+#: (ip=2270, true ⇒ ask) and `X < 0` twice (ip=6964/13476, true ⇒ do not ask).
+#: Against what the client actually saw until now -- an unsupplied cell reads ⊤,
+#: so every one of the four fell through -- 2 changes exactly one of them:
+#:
+#:   ip=588   fall-through asked already; `2 < 2` is false ⇒ asks.      same
+#:   ip=2262  fall-through skipped it;    `2 >= 0` is true  ⇒ asks.  ⭐ ONLY ONE
+#:   ip=6952  fall-through asked already; `2 < 0` is false ⇒ asks.      same
+#:   ip=13464 fall-through asked already; `2 < 0` is false ⇒ asks.      same
+#:
+#: ⇒ the one branch it moves is the 校内めぐり 二択 the player reported missing,
+#: and the rest of 初登校 plays out byte for byte as they already played it.
+#: ⭐ That also settles what 2.282 三 could only bound: the standing fall-through
+#: was answering `X < 0` at ip=2262 and `X >= 0` at the other three, so at least
+#: one had to be wrong -- and it is exactly the one, ip=2262.
+#:
+#: ⚠️ The principle it is picked on is 「do not decide for the player」: every
+#: value ≥ 2 puts all four questions on the screen. A value of -1 does the
+#: opposite -- all four decided, the full guided tour with no choices, which is
+#: what 2.282 五's second reading of the cell would mean for a brand-new
+#: account. Both readings are still standing; this knob is how a player picks.
+#: ⭐ What would overturn it: any operator-era account that separates 「was asked
+#: and chose the tour」 from 「was never asked」. Knob: TMO_TUTORIAL_ASK.
+TUTORIAL_ASK = int(os.environ.get("TMO_TUTORIAL_ASK") or 2)
 MSG_SV_OK_MINIMAP_START = 0x3C01
 MSG_SV_NOTIFY_MINIMAP = 0x3C06
 MSG_CL_CAST_CHARA_TURN = 0x4803
@@ -2058,6 +2091,10 @@ class MpsServer:
         # the walk goes to the wrong floor -- which is exactly what happened
         # while nobody supplied it at all.
         cells[("PC", script.PC_IN_CLASS)] = IN_CLASS
+        # ⭐ The tutorial's own gate, and the only scripts in the corpus that
+        # read it are the two 初登校 ones -- so supplying it always is the same
+        # as supplying it to 初登校 only, with nothing to keep in step.
+        cells[("PLAYER", script.PLAYER_TUTORIAL_ASK)] = TUTORIAL_ASK
         cells.update(self._leader_exam_cells(session))
         runner.shadow = gs3vm.follow(script_id, cells, registers, actor)
         if runner.shadow is None:
