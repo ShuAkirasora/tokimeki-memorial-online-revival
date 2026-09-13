@@ -164,13 +164,49 @@ SPAWN_POS = (106, 84)
 # short one -- 「ひとりで行ける」, which never touches a map at all (2.143 五) --
 # leaves the player wherever this server put them.
 
-#: どの組に在籍しているか, for every character this server has. Ａ組 until
-#: something assigns one -- the same 0 `MsgSvResultScoreCard`, `0x0319` and
-#: `0x6501` have all been sending since long before this constant existed, and
-#: the same one `_Session.in_class` starts at. The tutorial reads it too, to
-#: pick which classroom door its mid-tour walk goes to (2.147 四 has the 26
-#: endpoints), so a literal 0 in two files would be two places for it to drift.
+#: ⚠️ INVENTED — the one 組 this server's school opens, and so the 組 every
+#: character here is in (0 = Ａ組).
+#:
+#: A policy, not a measurement. The original decided a 組 automatically at
+#: registration, and the player could neither pick one nor ask to be put with a
+#: friend -- `p03_04` says 「登録すると、「期生」・「クラス」が自動的に決定され」 and
+#: no source anywhere states the rule it decided by.
+#: Two things about it are settled even so, and both are negative: the 組 was
+#: not keyed on 期生 (players six cohorts apart shared one) and classes were not
+#: filled one at a time (every letter Ａ..Ｚ was in use), which leaves balancing
+#: by headcount as the likeliest rule -- a school held 5000 by the top bucket of
+#: `student_num_scale.bin`, so roughly 192 to a 組.
+#:
+#: ⭐ None of which this server can usefully copy. 授業 and 試験 happen in the
+#: classroom of your own 組, so spreading a handful of players over 26 rooms
+#: would mean nobody is ever in class with anybody. One open 組 is the choice;
+#: turning this knob moves everyone to a different one (5 = Ｆ組) rather than
+#: spreading them out.
+#:
+#: ⚠️ Deliberately not per-character: a 組 that differs between characters
+#: needs a school-wide roster to balance against, plus a slot in the record to
+#: keep it fixed afterwards (登録内容は変更できません), and neither exists yet. The
+#: wire has carried this same value all along -- `MsgSvResultScoreCard`,
+#: `0x0319`, `0x6501` -- and `_Session.in_class` now starts from it rather than
+#: from a literal, so the room a lesson happens in cannot drift away from the
+#: 組 the screen prints. The tutorial reads it too, to pick which classroom
+#: door its mid-tour walk goes to.
 IN_CLASS = 0
+
+#: ⚠️ INVENTED — the 期生 every character created on this server is (2 = 2期生).
+#:
+#: The rule behind it is not invented -- `p03_04`: 「1期生・2期生などの「期生」は、
+#: キャラクターの作成時期に応じて自動的に決定されます」, with βテスト期間中
+#: characters 1期生 and 正式サービス開始後 ones 2期生 or later -- but which of those this server stands in for is a choice,
+#: and the client it serves is what settles it: a pressed retail disc (its
+#: `update.ini` says VERSION=2006012300) could only be registered once the
+#: service was open, and that is 2期生.
+#:
+#: ⭐ It is a label and nothing else. Eight text templates print it -- 経歴's
+#: 「%1%期生として入学」, the first line of the right-click name card, the
+#: character-select screen, the 立候補者情報 of an election -- and no rule in the
+#: manual, in 運営方針 or on this wire takes it as an input.
+PERIOD = 2
 
 PRINCIPAL_ROOM = 45           # 特殊教室校舎１Ｆ理事長室
 SPECIAL_BUILDING_1F = 43      # 特殊教室校舎１Ｆ, the corridor outside it
@@ -566,8 +602,9 @@ def list_entry(
 
     Everything the create request already said about the character is carried
     over verbatim; the rest is a freshly enrolled student. The character-select
-    screen confirms how the filled-in values read: ``period`` 1 prints as
-    「1 期生」, ``inClass`` is zero-based (1 came out as 「B組」, so A組 is 0), and
+    screen confirms how the filled-in values read: ``period`` 1 printed as
+    「1 期生」 when that was what this end sent (it sends PERIOD now), ``inClass``
+    is zero-based (1 came out as 「B組」, so A組 is 0), and
     ``inClub`` 0 with an empty ``friendGroupName`` give 「クラブ 無所属 / グループ
     無所属」 — which is what makes this entry the cheapest place to read a
     joined club back off the screen: the same slot prints the club's name from
@@ -591,7 +628,7 @@ def list_entry(
     out += struct.pack(">BB", f["birthMonth"], f["birthDay"])
     for key in LOOKS + ACCESSORY:
         out += struct.pack(">H", f[key])
-    out += struct.pack(">H", 1)  # period
+    out += struct.pack(">H", PERIOD)  # period
     out += group_name.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]  # friendGroupName
     out += struct.pack(">HH", IN_CLASS, in_club)  # inClass (0 = A組), inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
@@ -788,7 +825,7 @@ def chara_info(
     for key in LOOKS + ACCESSORY:
         out += struct.pack(">H", f[key])
     out += struct.pack(">H", f["charaType"])
-    out += struct.pack(">HHH", 1, IN_CLASS, in_club)  # period (1 期生), inClass, inClub
+    out += struct.pack(">HHH", PERIOD, IN_CLASS, in_club)  # period, inClass, inClub
     out += b"\x00" * GROUP_NAME_LEN  # catchCopy
     # ⚠️ coupleFlag is derived, never stored: one field cannot say 「恋人あり」
     # while the other says who, so the flag is 1 exactly when there is an id.

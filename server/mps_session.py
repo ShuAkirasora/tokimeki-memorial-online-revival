@@ -1095,10 +1095,12 @@ class _Session:
         # server's invention (there is no calendar in the client's data), so a
         # period that outlived a restart would need an end date to invent too.
         self.exam = exam.Period()
-        # どの組に在籍しているか. Ａ組 until something sets it, which is also
-        # what MsgSvResultScoreCard's inClass has been sending all along. It
-        # decides the room a lesson happens in, via curriculum.CLASSROOM.
-        self.in_class = 0
+        # どの組に在籍しているか. Read from the one place that decides it rather
+        # than restated as a literal here: characters.IN_CLASS is the single 組
+        # this server opens, it is what MsgSvResultScoreCard's inClass and every
+        # other copy on the wire carry, and it decides the room a lesson happens
+        # in via curriculum.CLASSROOM. Two literals would be two places to drift.
+        self.in_class = IN_CLASS
         self.warp_index = -1  # -1 = still at the spawn point, no warp sent yet
         # Which map the player is on. Cell coordinates are only meaningful
         # alongside this: MsgClRequestCharaWarp names a target map and a position
