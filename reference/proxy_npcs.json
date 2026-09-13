@@ -1,0 +1,285 @@
+{
+ "npcs": [
+  {
+   "key": "6:0",
+   "familyName": "赤城",
+   "firstName": "剛",
+   "nickName": "ゴウくん",
+   "sex": 0,
+   "bloodType": 0,
+   "looks": [
+    6,
+    2,
+    8,
+    1,
+    4,
+    4,
+    3,
+    0,
+    0
+   ],
+   "accessory": [
+    65535,
+    65535,
+    65535,
+    65535,
+    65535,
+    65535,
+    65535
+   ]
+  },
+  {
+   "key": "6:1",
+   "familyName": "青海",
+   "firstName": "亮",
+   "nickName": "リョウくん",
+   "sex": 0,
+   "bloodType": 1,
+   "looks": [
+    2,
+    0,
+    15,
+    1,
+    2,
+    1,
+    2,
+    0,
+    1
+   ],
+   "accessory": [
+    65535,
+    65535,
+    65535,
+    4,
+    65535,
+    65535,
+    65535
+   ]
+  },
+  {
+   "key": "6:2",
+   "familyName": "黄金崎",
+   "firstName": "大吾",
+   "nickName": "こがねっち",
+   "sex": 0,
+   "bloodType": 0,
+   "looks": [
+    3,
+    2,
+    5,
+    0,
+    3,
+    0,
+    3,
+    0,
+    1
+   ],
+   "accessory": [
+    65535,
+    65535,
+    65535,
+    3,
+    65535,
+    65535,
+    65535
+   ]
+  },
+  {
+   "key": "6:3",
+   "familyName": "黒沢",
+   "firstName": "哲也",
+   "nickName": "てっちゃん",
+   "sex": 0,
+   "bloodType": 1,
+   "looks": [
+    1,
+    0,
+    0,
+    1,
+    1,
+    3,
+    6,
+    2,
+    1
+   ],
+   "accessory": [
+    65535,
+    65535,
+    65535,
+    65535,
+    65535,
+    65535,
+    65535
+   ]
+  },
+  {
+   "key": "6:4",
+   "familyName": "緑川",
+   "firstName": "優太",
+   "nickName": "ゆう坊",
+   "sex": 0,
+   "bloodType": 2,
+   "looks": [
+    0,
+    2,
+    14,
+    0,
+    1,
+    0,
+    5,
+    0,
+    1
+   ],
+   "accessory": [
+    65535,
+    65535,
+    65535,
+    1,
+    65535,
+    65535,
+    65535
+   ]
+  },
+  {
+   "key": "6:5",
+   "familyName": "紅",
+   "firstName": "美咲",
+   "nickName": "みさきちん",
+   "sex": 1,
+   "bloodType": 0,
+   "looks": [
+    8,
+    2,
+    8,
+    1,
+    4,
+    2,
+    1,
+    0,
+    0
+   ],
+   "accessory": [
+    65535,
+    65535,
+    65535,
+    65535,
+    65535,
+    65535,
+    65535
+   ]
+  },
+  {
+   "key": "6:6",
+   "familyName": "紺野",
+   "firstName": "利子",
+   "nickName": "リコちゃん",
+   "sex": 1,
+   "bloodType": 1,
+   "looks": [
+    24,
+    8,
+    16,
+    1,
+    2,
+    4,
+    2,
+    3,
+    1
+   ],
+   "accessory": [
+    65535,
+    65535,
+    65535,
+    1,
+    65535,
+    65535,
+    65535
+   ]
+  },
+  {
+   "key": "6:7",
+   "familyName": "山吹",
+   "firstName": "明日香",
+   "nickName": "やまちゃん",
+   "sex": 1,
+   "bloodType": 0,
+   "looks": [
+    0,
+    2,
+    4,
+    0,
+    2,
+    3,
+    0,
+    1,
+    0
+   ],
+   "accessory": [
+    65535,
+    65535,
+    7,
+    3,
+    65535,
+    65535,
+    65535
+   ]
+  },
+  {
+   "key": "6:8",
+   "familyName": "桃原",
+   "firstName": "双葉",
+   "nickName": "ももちゃん",
+   "sex": 1,
+   "bloodType": 2,
+   "looks": [
+    4,
+    4,
+    9,
+    1,
+    2,
+    1,
+    1,
+    0,
+    0
+   ],
+   "accessory": [
+    65535,
+    65535,
+    65535,
+    65535,
+    65535,
+    65535,
+    65535
+   ]
+  },
+  {
+   "key": "6:9",
+   "familyName": "浅葱",
+   "firstName": "由美",
+   "nickName": "ゆみりん",
+   "sex": 1,
+   "bloodType": 0,
+   "looks": [
+    17,
+    0,
+    14,
+    0,
+    1,
+    3,
+    6,
+    2,
+    0
+   ],
+   "accessory": [
+    65535,
+    65535,
+    65535,
+    5,
+    65535,
+    65535,
+    65535
+   ]
+  }
+ ],
+ "note": "The ten stand-in NPCs a drama party can put in an empty cast slot (0xE01D MsgClCastDramaPartySurrogate). Per entry: the three names, sex, blood type and the looks/accessory numbers -- exactly the fields MsgSvResultCharaInfo (0x6501) carries, which is what the client asks for before it will draw the cell. No dialogue, no art, nothing else."
+}

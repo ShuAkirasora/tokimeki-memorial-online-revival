@@ -115,6 +115,17 @@ MSG_CL_CAST_START = 0xE01A
 MSG_SV_NOTIFY_START = 0xE01B
 MSG_SV_ERROR_START = 0xE01C
 
+# 「ＮＰＣに変更」 on an empty cast cell: hand the 役柄 to one of the ten
+# 代行ＮＰＣ so that a party which is a player short can play anyway.
+#
+# ⚠️⚠️ NO Ok AND NO Notify OF ITS OWN, the same shape 強制退室 has, and the far
+# side is again a message that already exists: a surrogate goes into the room's
+# roster, so 0xE009 NotifyDramaPartyJoin is what the room hears. ⚠️ And the
+# roster is not enough on its own -- the client will not draw a cell for a
+# charaId it cannot look up with 0x6500, which is why `proxynpc` exists.
+MSG_CL_CAST_SURROGATE = 0xE01D
+MSG_SV_ERROR_SURROGATE = 0xE01E
+
 # The three doors the room itself carries beside those two buttons: the ［拒否］
 # on somebody else's cell, the パーティ設定 panel under the cells, and the chat
 # bar along the bottom of the screen.
@@ -190,6 +201,7 @@ STATE_RUNNING = 1
 
 # The refusals this server can reach, out of the 27 the family shares.
 NG_BAD_CHARACTER = 0        # キャラクター情報の取得に失敗しました。
+NG_BAD_NPC = 1              # 選択されたＮＰＣの情報が不正です。
 NG_BAD_EVENT = 2            # 選択されたドラマイベントの情報が不正です。
 NG_BAD_PARTY = 4            # 選択されたパーティの情報が不正です。
 NG_BAD_ACTOR = 5            # 選択された登場人物の情報が不正です。
@@ -198,8 +210,10 @@ NG_ACTOR_TAKEN = 14         # 選択された登場人物は、他のキャラ�
 NG_NO_ROOM = 15             # この場所では、これ以上パーティを登録できません。
 NG_NOT_IN_PARTY = 16        # パーティに参加していません。
 NG_ALREADY_IN_PARTY = 17    # 既にパーティに参加しています。
+NG_NPC_ALREADY_CAST = 18    # 選択された代行ＮＰＣは、既に役柄が割り当て…
 NG_NOT_LEADER = 19          # リーダー権限がありません。
 NG_NOT_ALL_READY = 20       # パーティの参加者全員が「準備OK」の状態に…
+NG_WRONG_SEX = 22           # 選択された登場人物は性別が違うため、プレイ…
 NG_ALREADY_STARTED = 23     # 既にドラマイベントが開始されています。
 NG_KICK_SELF = 24           # 自分自身を強制退室させることはできません。
 NG_ENV_UNCHANGED = 25       # 入力されたパーティ名とパスワードが両方とも…
@@ -290,6 +304,16 @@ class Actor:
     #: only "nonzero is ready" (`Party.everyone_ready`), because the button is
     #: a toggle and nothing says its off value is anything but 0.
     ready: int = 0
+    #: The `proxy_npc.bin` pair this slot is a 代行ＮＰＣ for, or None for a
+    #: player. ⭐ The charaId already says so (`proxynpc.is_proxy`); the pair is
+    #: kept because the roster is not the only place it is needed -- 0x7200's
+    #: cast will want the npcId back, and reading it out of the charaId again
+    #: would be the same fact stored twice in two shapes.
+    npc: "tuple[int, int] | None" = None
+
+    @property
+    def is_surrogate(self) -> bool:
+        return self.npc is not None
 
 
 @dataclass
@@ -328,6 +352,14 @@ class Party:
             if slot < CAST_MAX and slot not in taken:
                 mask |= 1 << slot
         return mask
+
+    @property
+    def players(self) -> "list[Actor]":
+        """The members who are people. ⚠️ Every rule that is about *somebody*
+        -- who leads, whether the room still exists -- reads this and not
+        `actors`: a 代行ＮＰＣ cannot take over a party and cannot keep one
+        alive, because nobody is standing in it any more."""
+        return [actor for actor in self.actors if not actor.is_surrogate]
 
     def has(self, chara_id: int) -> bool:
         return any(actor.chara_id == chara_id for actor in self.actors)
@@ -410,13 +442,19 @@ class Board:
             return None
         left = next(a for a in party.actors if a.chara_id == chara_id)
         party.actors = [a for a in party.actors if a.chara_id != chara_id]
-        if not party.actors:
+        # ⚠️ `players`, not `actors`: the last person walking out of a room
+        # that still has a 代行ＮＰＣ standing in it empties the room, and the
+        # NPC goes with it. An NPC on its own has nobody to play to and no way
+        # anyone could reach it again -- the party would sit on the 一覧 for
+        # ever with its 参加 button refusing everyone (`unreserved` is 0).
+        if not party.players:
             self.parties.pop(party.party_id, None)
         elif left.actor_id == party.leader_actor_id:
             # See Party.leader_actor_id: the longest-standing member left in
             # the room takes over, and 0xE00A tells everyone in the same
-            # breath as the departure.
-            party.leader_actor_id = party.actors[0].actor_id
+            # breath as the departure. ⚠️ A surrogate is skipped -- it cannot
+            # press ［イベントスタート］ and cannot be told it is the leader.
+            party.leader_actor_id = party.players[0].actor_id
         return party
 
     def summary(self) -> str:
@@ -574,6 +612,21 @@ def parse_join(params: bytes) -> tuple[int, str, int] | None:
         return None
     (actor_id,) = struct.unpack_from(">H", params, at)
     return party_id, password, actor_id
+
+
+def parse_surrogate(params: bytes) -> tuple[int, int, int] | None:
+    """A MsgClCastDramaPartySurrogate body → (actorId, categoryId, npcId).
+
+    Three u16 and nothing else: which empty cast slot, and which 代行ＮＰＣ to
+    put in it. ⭐ The client picks the NPC itself -- pressing 「ＮＰＣに変更」
+    opens a 「ＮＰＣの設定」 list built from its own `proxy_npc.bin`, five names
+    for a male 役柄 and five for a female one, and nothing crosses the wire
+    until ［決 定］. So this end is told the answer rather than asked for the
+    menu, and the only thing it has to decide is whether to allow it.
+    """
+    if len(params) < 6:
+        return None
+    return struct.unpack_from(">HHH", params, 0)
 
 
 def parse_env(params: bytes) -> tuple[str, str] | None:

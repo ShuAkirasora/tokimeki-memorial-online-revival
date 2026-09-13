@@ -106,6 +106,7 @@ import ngwords
 import npcspawns
 import options
 import posts
+import proxynpc
 import quiz
 import refusals
 import romance
@@ -3030,6 +3031,9 @@ class MpsServer:
                 session, seen, script.MSG_SV_NOTIFY_DRAMA_EVENT_MATCHING_END, b"",
             )
 
+        if msg_type == drama.MSG_CL_CAST_SURROGATE:
+            return self._drama_party_surrogate(session, seen, params, events)
+
         if msg_type == drama.MSG_CL_CAST_KICK:
             return self._drama_party_kick(session, seen, params)
 
@@ -3039,9 +3043,9 @@ class MpsServer:
         if msg_type == drama.MSG_CL_CAST_CHAT:
             return self._drama_party_chat(session, seen, params)
 
-        # What is left of the 0xE0xx family is 0xE01D 代行ＮＰＣ, which is
-        # logged rather than answered. (⭐ Join left this list in round 229,
-        # ready and start in round 230, kick/env/chat in round 332.)
+        # ⭐ Every 0xE0xx the client can send is answered now: join left this
+        # list in round 229, ready and start in round 230, kick/env/chat in
+        # round 332, and 代行ＮＰＣ in round 333.
         return None
 
     def _drama_select_actor(self, session: "_Session", events: list[dict]):
@@ -3315,6 +3319,125 @@ class MpsServer:
             self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
             + self._answer(session, seen, drama.MSG_SV_NOTIFY_START, b"")
             + self._drama_light(party, session, seen)
+        )
+
+    def _drama_party_surrogate(
+        self, session: "_Session", seen: int, params: bytes, events: list[dict]
+    ) -> "bytes | None":
+        """0xE01D 「ＮＰＣに変更」 -> the room's roster, or 0xE01E to the presser.
+
+        ⭐⭐⭐ THE FAR SIDE IS 0xE009, AND THE CELL IS DRAWN FROM 0x6501.
+        This family has no OkSurrogate and no NotifySurrogate: 0xE01E is an
+        Error and nothing else follows it. The message that tells a room its
+        cast changed already exists -- 0xE009 NotifyDramaPartyJoin, the whole
+        roster every time -- and a 代行ＮＰＣ joins it as an ordinary
+        `dramaActorInfo` entry. ⚠️⚠️ But the roster alone draws nothing:
+        measured with the client's own log (round 333), the moment 0xE009 names
+        a charaId the client does not know it sends 0x6500 MsgClQueryCharaInfo
+        and stops there, and answering that Error leaves the cell exactly as it
+        was, 「ＮＰＣに変更」 button and all. ⇒ the other half of this door is
+        the 0x6500 branch that answers for a surrogate (see `proxynpc`).
+
+        ⭐ The client picks the NPC, not this end: ［ＮＰＣに変更］ opens a
+        「ＮＰＣの設定」 list of five names out of its own `proxy_npc.bin` --
+        the five whose sex matches the 役柄 -- and sends nothing until ［決
+        定］. So every refusal below is a rule the client mostly enforces for
+        itself, and this end honours them to keep the two ends agreeing rather
+        than because the UI can reach them. Three of the 27 sentences exist for
+        this door alone: 1 「選択されたＮＰＣの情報が不正です」, 18 「選択され
+        た代行ＮＰＣは、既に役柄が割り当てられています」 and 22 「…性別が違う
+        ため」.
+
+        ⚠️ Refusal 18's scope is this party, not the server: the sentence says
+        a 代行ＮＰＣ already has a 役柄, and the only 役柄 a request can be
+        talking about are this booking's. Two parties casting 黒沢哲也 at the
+        same time is two performances, not a double booking.
+        """
+        parsed = drama.parse_surrogate(params)
+        if parsed is None:
+            print(f"[{self.tag}] drama party surrogate: short body {params.hex()}")
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_SURROGATE,
+                struct.pack(">B", drama.NG_BAD_ACTOR),
+            )
+        actor_id, category, npc_id = parsed
+        print(f"[{self.tag}] drama party surrogate: actorId={actor_id} "
+              f"npcId={category}:{npc_id}")
+
+        party = self.dramaparties.party_of(session.chara_id)
+        row = proxynpc.find(category, npc_id)
+        slot = None
+        reason = None
+        if party is None:
+            reason = drama.NG_NOT_IN_PARTY
+        else:
+            mine = party.actor_of(session.chara_id)
+            event = next(
+                (e for e in events
+                 if e["genre"] == party.genre and e["index"] == party.index),
+                None,
+            )
+            slot = next(
+                (s for s in (event or {}).get("cast", []) if s["slot"] == actor_id),
+                None,
+            )
+            # Ordered the way the presser meets them, as in create and join.
+            if mine is None or mine.actor_id != party.leader_actor_id:
+                reason = drama.NG_NOT_LEADER
+            elif party.state != drama.STATE_RECRUITING:
+                reason = drama.NG_ALREADY_STARTED
+            elif actor_id >= drama.CAST_MAX or slot is None:
+                reason = drama.NG_BAD_ACTOR
+            elif any(a.actor_id == actor_id for a in party.actors):
+                reason = drama.NG_ACTOR_TAKEN
+            elif row is None:
+                reason = drama.NG_BAD_NPC
+            elif any(a.npc == (category, npc_id) for a in party.actors):
+                reason = drama.NG_NPC_ALREADY_CAST
+            elif int(row["sex"]) != int(slot["sex"]):
+                reason = drama.NG_WRONG_SEX
+        if reason is not None:
+            print(f"[{self.tag}] drama party surrogate refused, reason {reason}")
+            return self._answer(
+                session, seen, drama.MSG_SV_ERROR_SURROGATE,
+                struct.pack(">B", reason),
+            )
+        assert party is not None and row is not None
+
+        family, first = proxynpc.names(row)
+        party.actors.append(drama.Actor(
+            actor_id=actor_id,
+            chara_id=proxynpc.chara_id(category, npc_id),
+            family=family,
+            first=first,
+            # ⚠️ INVENTED — that a 代行ＮＰＣ counts as 準備ＯＫ from the moment
+            # it is cast. Nothing on the wire says so; what says so is that the
+            # alternative does not work: `everyone_ready` gates ［イベントスタ
+            # ート］ on every actor's prepare bit, an NPC has no ［OK!］ button
+            # to press, and a room that can never start is not what the button
+            # 「一人でも始められる」 is for. ⛔️ Not a knob: whether a stand-in
+            # keeps the room waiting is a rule, not a number.
+            ready=1,
+            npc=(category, npc_id),
+        ))
+        print(f"[{self.tag}] drama party surrogate cast: "
+              f"{self.dramaparties.summary()}")
+        record = drama.party_record(party)
+        roster = drama.join_params(party)
+        # Same three audiences as 参加, and for the same reasons: the room gets
+        # the roster and the row, everybody holding a パーティ一覧 gets the row
+        # (its 現在のパーティ数 and its ［参加する］ both just changed), and the
+        # presser is answered rather than pushed to.
+        self._drama_push_members(party, drama.MSG_SV_NOTIFY_JOIN, roster,
+                                 skip=session.chara_id)
+        self._drama_push_members(party, drama.MSG_SV_NOTIFY_UPDATE, record,
+                                 skip=session.chara_id)
+        self._drama_push_onlookers(
+            drama.MSG_SV_NOTIFY_UPDATE, record, party, skip=session.chara_id,
+        )
+        return (
+            self._answer(session, seen, drama.MSG_SV_NOTIFY_UPDATE, record)
+            + self._answer(session, seen, drama.MSG_SV_NOTIFY_JOIN, roster)
         )
 
     def _drama_party_kick(
@@ -5786,6 +5909,20 @@ class MpsServer:
                     # account keeps its own (round 68), so this connection's store
                     # simply does not have somebody else's character.
                     info = self._peer_chara(chara_id)
+                if info is None:
+                    # ⭐⭐⭐ A 代行ＮＰＣ standing in a drama party's cast. This
+                    # is the branch that makes 0xE01D visible: the roster names
+                    # the surrogate's charaId, the client asks here about it,
+                    # and only an answer draws the cell -- an Error leaves it
+                    # empty with its 「ＮＰＣに変更」 button (measured, round
+                    # 333). ⚠️ Answered for any proxy id rather than only for
+                    # one in a party the asker can see: the id is the client's
+                    # own `proxy_npc.bin` key, there is nothing private in a
+                    # shipped NPC's record, and a membership test here would
+                    # only be able to guess which room the question came from.
+                    row = proxynpc.by_chara_id(chara_id)
+                    if row is not None:
+                        info = proxynpc.create_info(row)
                 if info is None and PROBE_ID_BASE <= chara_id < PROBE_ID_LIMIT:
                     # A stand-in — a doorway marker or a direction probe. None of
                     # them has a record of its own; hand back the player's, since
