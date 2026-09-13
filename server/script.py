@@ -1644,6 +1644,21 @@ MSG_CL_REQUEST_TITLE_EVENT_END = 0x6C03
 MSG_SV_OK_TITLE_EVENT_END = 0x6C04
 MSG_SV_NG_TITLE_EVENT_END = 0x6C05
 
+#: The two scenarios that come through the タイトルイベント door, by scriptId.
+#: ⭐ Read off the wire rather than listed by hand: the client asked for 0x2000
+#: (`amm_e001`) on the first 登校 this server ever answered with
+#: `tutorialFlag = 1`, and for 0x20F3 (`skr_e001`) with a female character.
+#: ⭐⭐ The pair is closed, and a second witness that shares no input with the
+#: wire says so: `*_e001` matches exactly two files in the whole 683-scenario
+#: corpus, these two. There is no third character's 初登校 left to find.
+TUTORIAL_SCRIPTS = frozenset({0x2000, 0x20F3})
+
+
+def is_tutorial(script_id: "int | None") -> bool:
+    """Is this scriptId the 初登校 tutorial (either half of the pair)?"""
+    return script_id is not None and script_id in TUTORIAL_SCRIPTS
+
+
 #: 自分のクラス, 0 = Ａ組 .. 25 = Ｚ組. Pinned by value range in 2.143 四 (26
 #: constants in the tutorial's dispatch tree, 26 classrooms in `map.bin`) and
 #: read by both `<キャラ>_e011` and the tutorial. ⭐ The tutorial dispatches on it

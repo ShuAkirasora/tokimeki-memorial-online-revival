@@ -4362,13 +4362,39 @@ class MpsServer:
                 elif (verdict is not None and not gs3vm._unknown(verdict) and verdict
                         and (gs3vm.is_rolled(verdict) or shadow.decided_road()
                              or shadow.in_party
-                             or script.is_leader_exam(found.script_id))):
-                    # ⭐⭐⭐ INVENTED (scope, not answer): in a ドラマパーティ and
-                    # in the リーダー試験 this end answers every branch it can
-                    # compute, instead of only the ones whose road decides
-                    # nothing anyone can see. ⚠️ Two scopes, two different
-                    # arguments -- the party one is below, the exam's is further
-                    # down and is `_Die`'s, not this one's.
+                             or script.is_leader_exam(found.script_id)
+                             or script.is_tutorial(found.script_id))):
+                    # ⭐⭐⭐ INVENTED (scope, not answer): in a ドラマパーティ, in
+                    # the リーダー試験 and in 初登校 this end answers every branch
+                    # it can compute, instead of only the ones whose road
+                    # decides nothing anyone can see. ⚠️ Three scopes, three
+                    # different arguments -- the party one is below, the exam's
+                    # is further down and is `_Die`'s, not this one's, and the
+                    # tutorial's is next.
+                    #
+                    # ⭐⭐⭐ 初登校 (round 335) is the scope where the standing
+                    # "no" was measured to cost a whole act. The tutorial's 校内めぐり
+                    # hangs on one branch -- `amm_e001` ip=505, 「is the guide
+                    # still on」 -- and the register it tests is one this end
+                    # watched the script write: the player's own answer to the
+                    # 案内 question, computed inside the run, with no cell from
+                    # outside it involved. The shadow gets it right every time
+                    # and the log has been saying so in the same breath as
+                    # declining it: `vm cond=1 -> ip=524 ⚠️ NOT what was sent`,
+                    # once per playthrough and nowhere else in the run.
+                    # ⛔️ What the "no" buys there is not caution: taking the
+                    # fall-through skips `JS 14/15/1a`, which is all three 廊下
+                    # legs, the 屋外, and the 26-way walk home to your own
+                    # classroom -- sixty `MAP_CHARA_MOVE_MAP` in all, and the
+                    # only part of 初登校 that happens on a map at all -- the
+                    # 校内めぐり a player's diary from the service remembers as
+                    # 「チュートリアルだけで30分以上」. It has only ever reached a screen
+                    # with this branch forced by hand (`/scb`), which is the
+                    # definition of a branch nobody else can answer.
+                    # ⚠️ An unsupplied cell still refuses on its own, so the two
+                    # questions the tutorial asks about `PLAYER[0x2001]` are
+                    # untouched by this: they read ⊤ and fall through exactly as
+                    # before.
                     #
                     # The road test (`gs3vm._decided_road`) is scaffolding around
                     # a register file that was not trusted yet, and for a party's
@@ -4405,8 +4431,11 @@ class MpsServer:
                     # what it is replacing (a forced branch outranks it), the
                     # verdict has to be definite -- an unsupplied cell reads ⊤
                     # and refuses on its own -- and the follower has to be a
-                    # party's (`Follower.in_party`). A solo script, a 日常会話
-                    # and the tutorial are untouched.
+                    # party's (`Follower.in_party`). ⚠️ That last sentence used
+                    # to read 「a solo script, a 日常会話 and the tutorial are
+                    # untouched」, and the tutorial left the list above: it is
+                    # solo and it is in scope now, by scriptId. A 日常会話 still
+                    # is not.
                     #
                     # ⭐⭐⭐ Round 250 widened it by one family: a **choice
                     # chain** used to outrank this and no longer does inside a
