@@ -55,7 +55,9 @@ from typing import Callable
 from characters import (
     LOOKS,
     ACCESSORY,
+    DEBUT_CELL_ALONE,
     DEBUT_FACING,
+    DEBUT_FACING_ALONE,
     IN_CLASS,
     MARK_DOORS,
     MAX_CHARACTERS,
@@ -1161,6 +1163,12 @@ class _Session:
         # Which way the character is turned. Kept up to date from two places:
         # the client's own turn casts, and the direction a walk ended up going.
         self.direction = facing.DEFAULT
+        # ⭐ Whether this 登校 is the character's 初登校 and was answered with
+        # the debut cell. Asked at 登校 because the flag comes down there, read
+        # when the tutorial ends because that is when the road it took is known
+        # -- see the OP_END arm of _script_incoming. Not saved: it is about one
+        # 登校, and the event it belongs to cannot outlive the connection.
+        self.debut_placed = False
         # 休憩: whether the player is sitting, and since when by the monotonic
         # clock. Not saved — a pose is a moment, like a bell, and a character
         # who logs out sitting has stopped sitting. ``sat_at`` doubles as the
@@ -2585,6 +2593,72 @@ class MpsServer:
         print(f"[{self.tag}] 登場フラグ {' '.join(touched)} -> "
               + ("記帳" if changed else "既に同じ値（記帳なし）")
               + f" · 現在の登場: {love.on_stage()}")
+
+    def _debut_standing(self, session: "_Session", found, local: int) -> None:
+        """Move a 初登校 that played none of itself to where it opened.
+
+        ⭐⭐⭐ 初登校 has two endings and 登校 can only answer with one of them.
+        The client is on 「登校処理を行っています」 when it asks for a position,
+        and the question that picks the other ending -- 「誰か他の人に聞いてみた
+        ほうがいいかな？」 -- has not been put to the player yet. So the position
+        handed out there is the one the event itself ends at (DEBUT_CELL, the
+        corridor outside the 理事長室), and this is the moment the other road
+        becomes known.
+
+        ⭐⭐ Which road it was is not inferred: the client reports the ip it
+        stopped on, and both halves of the pair have exactly two OP_END. The
+        earlier one calls two subroutines -- the six キーワード and the
+        close-down -- and stops; it is where 「聞かなくてもだいじょうぶ！」 goes. The
+        later one is the end of the whole event. ⛔️ Not 「did it walk anybody」:
+        answering 「案内にはおよばない」 half way through skips the tour and
+        still plays the rest of the scenes, and those scenes still finish
+        outside the 理事長室, so that road keeps the cell 登校 already gave it.
+
+        Nothing having played at all is the one case where the tutorial cannot
+        have moved the player anywhere, and then the honest answer is where the
+        event opened -- which the script states before it draws anybody, by
+        loading the background of 噴水の並木道. See DEBUT_CELL_ALONE.
+
+        ⚠️ Three gates, each of them a way of not being sure:
+
+        * this 登校 has to be the one `location` answered with a debut cell
+          (`session.debut_placed`), so that re-arming an established character
+          replays the event without also teleporting them;
+        * the script has to be 初登校 itself -- 「which ending」 means nothing
+          anywhere else, and most scenarios only have the one;
+        * and the export has to actually show the two endings. One is a
+          scenario that cannot answer this question, and an export old enough
+          to be missing instructions would otherwise read as the short road.
+
+        ⚠️⚠️ Nothing is pushed to the client here. It is still holding the event
+        screen up and asks for the map itself once NotifyScriptEnd goes out --
+        the 0x4000 that follows is what draws the player, wherever the session
+        says they are by then.
+        """
+        if not session.debut_placed:
+            return
+        if not script.is_tutorial(found.script_id):
+            return
+        session.debut_placed = False
+        ends = found.ends()
+        if len(ends) != 2:
+            print(f"[{self.tag}] 初登校: {found.file} stops in {len(ends)} "
+                  f"place(s), so which ending this was cannot be read — "
+                  f"leaving the player on map {session.map_id} {session.pos}")
+            return
+        if local != ends[0]:
+            print(f"[{self.tag}] ⭐ 初登校 was played through (ip={local}): "
+                  f"理事長室の廊下 stands — map {session.map_id} {session.pos}")
+            return
+        session.map_id, *cell = DEBUT_CELL_ALONE
+        session.pos = (cell[0], cell[1])
+        session.direction = DEBUT_FACING_ALONE
+        session.walk = None  # put down somewhere, not walking there
+        print(f"[{self.tag}] ⭐⭐ 初登校 「ひとりで行ける」 (ip={local}): none of "
+              f"the event played, so the player stands where it opened — "
+              f"噴水の並木道, map {session.map_id} "
+              f"({MAP_NAMES.get(session.map_id, '?')}) {session.pos} facing "
+              f"{facing.NAMES.get(session.direction, '?')}")
 
     def _leader_exam_progress(self, session: "_Session", result) -> None:
         """Let the リーダー試験's own cell writes drive the tour record.
@@ -4435,6 +4509,13 @@ class MpsServer:
                     self._script_keywords(session, shadow.result)
                     self._script_debut(session, shadow.result)
                     self._leader_exam_progress(session, shadow.result)
+                # ⚠️ Outside the block above, unlike its three neighbours:
+                # those three read what the shadow computed, and this one reads
+                # the ip the client just named. A debut still has to be placed
+                # when there is no shadow at all -- no export, or a follower
+                # that lost its place -- and it can be, because the ending is
+                # the client's own report either way.
+                self._debut_standing(session, found, local)
                 session.script = None
                 # ⭐ This is the end that actually happens. The client runs the
                 # script itself (round 37) and reports OP_END here, so the two
@@ -5852,11 +5933,14 @@ class MpsServer:
                 # -- keep the flag until something confirms it -- would replay
                 # the tutorial on every 登校 for as long as that confirmation
                 # never comes. /tutorial re-arms it.
+                session.debut_placed = self._chars(session).debut_placement(chara_id)
                 if self._chars(session).debut_pending(chara_id):
                     session.direction = DEBUT_FACING
                     print(f"[{self.tag}] ⭐ 初登校 for charaId={chara_id}: "
                           f"tutorialFlag was 1, standing at map {session.map_id} "
-                          f"{session.pos} facing {facing.NAMES.get(session.direction, '?')}")
+                          f"{session.pos} facing {facing.NAMES.get(session.direction, '?')}"
+                          f" — provisional until the event says which of its two "
+                          f"endings it reached (_debut_standing)")
                     # ⭐⭐ Round 194: say so in the save before the flag goes.
                     # The 初登校 about to play is what puts 天宮/桜井 on stage
                     # (romance.absorb), and `characters.romance()` can only tell

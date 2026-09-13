@@ -944,6 +944,16 @@ class Script:
         """The instruction starting at a local ip, or None if ip is interior."""
         return self._by_ip.get(ip)
 
+    def ends(self) -> list[int]:
+        """Every ip this script can stop at, in order.
+
+        A scenario with more than one OP_END has more than one ending, and
+        which of them a run reached is something this end learns for free: the
+        client names the ip it stopped on. 初登校 is the case that needs it --
+        see the OP_END arm of mps_session._script_incoming.
+        """
+        return sorted(ip for ip, op, _, _ in self.instructions if op == OP_END)
+
     def branch_roads(self, wire: int) -> tuple[int, int | None]:
         """Both ways out of the OP_BR at a wire ip: `(fall_through, taken)`.
 

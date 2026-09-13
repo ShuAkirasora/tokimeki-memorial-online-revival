@@ -277,6 +277,74 @@ def debut_cell() -> tuple[int, int, int]:
     return DEBUT_CELL
 
 
+#: twoshot_place key of 並木道, as 屋外's own cells say: every cell of every
+#: collision file carries the key of the place it belongs to. See mapgraph.region.
+TREE_LINED_WALK = 1
+
+#: Facing up the avenue, towards the fountain and the building beyond -- the
+#: direction the opening background is painted from. That step is -Y, the
+#: opposite of the door step DEBUT_FACING reads, and the client draws it as
+#: up-and-right (the tutorial's own walk ends on dir 9, going the same way).
+DEBUT_FACING_ALONE = facing.UP | facing.RIGHT
+
+# ⭐⭐⭐ 初登校, the other ending. The cell above is where the event leaves the
+# player, and the event is not compulsory: it opens by asking whether to go and
+# find somebody to ask, and 「聞かなくてもだいじょうぶ！」 takes a road that calls
+# two subroutines -- the six キーワード and the close-down -- and stops, at the
+# first of the two OP_END both halves of the pair have. Nothing of the event
+# plays on it and nothing moves the player, so the honest answer for it is not
+# where the event ends but where it began, and the script says where that is:
+# the first thing it loads, before the opening waist-up goes up, is the
+# background of 噴水の並木道 -- the brick avenue that runs from the 正門 up to
+# the fountain, with the main building behind it.
+#
+# ⛔️ Not 「the road that walks nobody」, which is a different and larger set:
+# saying 「案内にはおよばない」 half way through skips the tour of the school and
+# still plays every scene after it, and those end outside the 理事長室 like the
+# guided road does. Only the road that plays nothing at all lands here.
+#
+# Which cells those are is the map's own answer rather than a reading of the
+# painting: every cell of 屋外 carries the key of the place it belongs to, and
+# the 並木道's cells are a 12-wide strip running north from the gate plaza,
+# parted in the middle by the fountain. The player has just walked in through
+# the 正門, so the cell is the southern end of that strip, mid-avenue.
+#
+# ⚠️ INVENTED, the same one decision the cell above is and no more: *which* end
+# of the avenue a character whose event played none of itself stands at. The
+# strip, the map and the facing are all read.
+
+
+def _foot_of_the_tree_lined_walk() -> tuple[int, int, int]:
+    """``(mapId, posX, posY)``: the 正門 end of 屋外's 並木道, mid-avenue."""
+    import mapgraph  # local: mapgraph imports nothing from here, but keep it lazy
+    extent = mapgraph.size(SPAWN_MAP_ID)
+    if extent is None:
+        return SPAWN_MAP_ID, 125, 137
+    width, height = extent
+    walk = [
+        (x, y)
+        for y in range(height)
+        for x in range(width)
+        if mapgraph.region(SPAWN_MAP_ID, (x, y)) == TREE_LINED_WALK
+        and mapgraph.walkable(SPAWN_MAP_ID, (x, y))
+    ]
+    if not walk:
+        return SPAWN_MAP_ID, 125, 137
+    # Furthest from the fountain is furthest from the building, which on this
+    # map is +Y: the gate plaza is the bottom edge of the artwork.
+    gate_end = max(y for _, y in walk)
+    across = sorted(x for x, y in walk if y == gate_end)
+    return SPAWN_MAP_ID, across[(len(across) - 1) // 2], gate_end
+
+
+DEBUT_CELL_ALONE = _foot_of_the_tree_lined_walk()
+
+
+def debut_cell_alone() -> tuple[int, int, int]:
+    """``(mapId, posX, posY)`` for a debut whose event played none of itself."""
+    return DEBUT_CELL_ALONE
+
+
 # Standing the player on ex_map_object's numbers put it on flat blue with no
 # scenery at all, and the client never emitted a move for any click — it only
 # turned to face one. Blue is the map's out-of-bounds colour: 屋外's artwork is a
@@ -1049,6 +1117,27 @@ class CharacterStore:
         return IN_CLASS
 
     # ── 初登校 ──────────────────────────────────────────────────────────────
+    def debut_placement(self, chara_id: int) -> bool:
+        """Is `location` answering about this character with a debut cell?
+
+        The three conditions are `location`'s own, kept here rather than
+        re-spelled at the call site because the session has to ask them at 登校
+        and act on the answer much later: which of the two debut cells a
+        character belongs on is not settled until the tutorial has said whether
+        it walked them anywhere, and by then the flag below is down and the
+        record may have been written to. ⚠️ Guarded on "map"/"pos" as well as
+        on the flag for the reason `location` is: re-arming an established
+        character replays the event without also teleporting them.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            pos = record.get("pos")
+            if isinstance(pos, list) and len(pos) == 2:
+                return False
+            return "map" not in record and self.debut_pending(chara_id)
+        return False
+
     def debut_pending(self, chara_id: int) -> bool:
         """Has this character never been to school? (the ``tutorialFlag``)
 
@@ -1143,13 +1232,15 @@ class CharacterStore:
             map_id = int(record.get("map", SPAWN_MAP_ID))
             if isinstance(pos, list) and len(pos) == 2:
                 return map_id, int(pos[0]), int(pos[1])
-            if "map" not in record and self.debut_pending(chara_id):
+            if self.debut_placement(chara_id):
                 # ⭐ Never been to school: stand where the tutorial ends, in
                 # the corridor outside the 理事長室. See DEBUT_CELL.
-                # ⚠️ Guarded on "map" as well as on the flag, so that /tutorial
-                # re-arming an established character replays the event without
-                # also teleporting them: a record that has been anywhere keeps
-                # saying where.
+                # ⚠️ This is the guided ending, and it is the answer given
+                # before the event has been played -- the client is still on
+                # 「登校処理を行っています」 and nobody has been asked anything
+                # yet. A tutorial that turns out to walk nobody anywhere moves
+                # the player to DEBUT_CELL_ALONE when it ends, which is the only
+                # moment that road is known.
                 return debut_cell()
             return map_id, *SPAWN_POS
         return SPAWN_MAP_ID, *SPAWN_POS
