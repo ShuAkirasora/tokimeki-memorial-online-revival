@@ -635,8 +635,27 @@ MAP_NAMES = {
 
 # INVENTED — how long one cell of walking takes, in the client's clock units,
 # which look like milliseconds. Too small and characters snap to the
-# destination, too large and they crawl. Nothing in the binary says 300.
-MOVE_MS_PER_CELL = 300
+# destination, too large and they crawl.
+#
+# ⭐ 200 is not a taste any more, it is the one value that makes the game's own
+# two timed walks agree. The tutorial walks a character down two corridors with
+# MAP_CHARA_MOVE_MAP -- the client covering the ground at its own pace, with no
+# server in it -- and then holds the shot open with PLAYER_WAIT_TIME_LOCAL:
+#
+#     (5,27) -> (5,70)    43 cells   wait 12.00 s
+#     (26,99) -> (61,99)  35 cells   wait 10.40 s
+#
+# Both corridors are straight and every cell of both is walkable, so those are
+# the real distances. Read as `wait = cells * t + overhead`, where the overhead
+# is the fade and the beat the two shots share (they are built from identical
+# instructions), eight cells cost 1.60 s: t = 200 ms and overhead = 3.40 s, and
+# no other t leaves the two shots with the same overhead.
+#
+# ⚠️ Still a knob rather than a restored constant, for one reason: both waits
+# are multiples of 0.4 s, so the author's own resolution puts a band of roughly
+# 150-250 ms around it. The way to close that band is a stopwatch on the real
+# client during that cutscene, which nothing here can do.
+MOVE_MS_PER_CELL = 200
 
 # INVENTED — which ruler a walk is measured with before MOVE_MS_PER_CELL prices
 # it: "cells" counts grid cells, so a step that moves both coordinates costs the
