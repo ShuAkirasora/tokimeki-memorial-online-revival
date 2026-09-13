@@ -1647,9 +1647,9 @@ MSG_SV_NG_TITLE_EVENT_END = 0x6C05
 #: 自分のクラス, 0 = Ａ組 .. 25 = Ｚ組. Pinned by value range in 2.143 四 (26
 #: constants in the tutorial's dispatch tree, 26 classrooms in `map.bin`) and
 #: read by both `<キャラ>_e011` and the tutorial. ⭐ The tutorial dispatches on it
-#: to pick which classroom door to walk the player to; characters.DEBUT_CELLS is
-#: that walk's 26 endpoints, and this end feeds the same value to the shadow VM
-#: that it puts on the wire as `inClass`.
+#: to pick which classroom door its mid-tour walk goes to (the 26 endpoints are
+#: in 2.147 四), and this end feeds the same value to the shadow VM that it puts
+#: on the wire as `inClass`.
 PC_IN_CLASS = 0x301C
 
 # ── リーダー試験's three cells ────────────────────────────────────────────

@@ -128,105 +128,75 @@ SPAWN_MAP_ID = 1
 # ground a character is allowed to be on.
 SPAWN_POS = (106, 84)
 
-# ⭐⭐⭐ 初登校: where a character stands the very first time [登校] is pressed,
-# one cell per 自分のクラス. RESTORED, and not from a table of positions -- there
-# is no such table. It is read out of the tutorial's own walk.
+# ⭐⭐⭐ 初登校: where a character stands the very first time [登校] is pressed.
+# RESTORED from the tutorial's own last scene, not from a table of positions --
+# there is no such table.
 #
 # The manual (`manual/p02_06`) says 初登校 plays the tutorial and then enters
 # マップモード, and that every later 登校 puts the character back where it logged
 # out. So the only 登校 this server has to answer for itself is the first one,
-# and the honest answer is wherever the tutorial leaves the player standing --
-# which is a thing the script says out loud.
+# and the honest answer is wherever the tutorial leaves the player.
 #
-# `amm_e001`/`skr_e001`'s second-to-last block (label 21, ip=3898) is 「and this
-# is your own classroom」: it reads PC[0x301c] (自分のクラス), dispatches on it
-# through a binary comparison tree, walks PC#0 along one
-# MAP_ROUTE per class, and every arm merges into the same three instructions --
-# MAP_CHARA_MOVE_WAIT PC#0, MAP_CHARA_DIRECTION PC#0 dir=9, SCREEN_BLACK_OUT.
-# So the last waypoint of that route is where the event ends, and dir 9 (右上,
-# facing.UP|facing.RIGHT) is which way it leaves the player turned.
+# Where that is comes from reading `amm_e001`/`skr_e001` in the order they
+# *run*, not the order their blocks sit in the file. The long tutorial's main
+# routine (ip=493) calls its scenes as subroutines: … → 0x14 → 0x15 (the walk
+# to your own classroom, label 21) → 0x1a → 0x22 → 0x23 → 0x4c → 0x4d → 0x4e →
+# 0x5a → 0x5c → 0x0a → 0x0c → OP_END. The classroom walk is the middle of the
+# tour, and it ends in a SCREEN_BLACK_OUT with the map switched off; nothing
+# after it puts anybody on a map again. What comes after is portraits over
+# backgrounds, and the very last EVENT_BG_LOAD of the script (ip=15769) is bg 8
+# 「廊下（昼）」, loaded right after bg 57 「理事長室（昼）」 -- the player has just
+# stepped out of the 理事長室 into the corridor when the event ends. (Round 192
+# read the classroom walk as the ending because label 21 is the second-to-last
+# block in the file; a β1 tester's diary line about 自分の教室前 describes where
+# the *crowd* was after wandering around, not where the tutorial put them.)
 #
-# The routes are declared in the script's first 32 instructions. `MAP_ROUTE`'s
-# operand is the same `(aux word offset << 12) | count` packing SYNC_VARIABLE and
-# OP_STR's immediates use (2.144 四), and each waypoint is two little-endian i32,
-# x then y. `MAP_CHARA_MOVE_MAP`'s route number is a 0-based index into those
-# declarations -- measured, not assumed: PC#0 stands on 屋外 at (88,59) when it is
-# told to walk route 1, and declaration 1's first waypoint is (88,66); it stands
-# in the 1F corridor at (85,23) when A組 is told to walk route 2, and declaration
-# 2's first waypoint is (85,15). Read as 1-based, neither lines up with anything.
+# So the standing cell is the one the 理事長室's corridor door delivers into,
+# and that is a row of the game's own door table: map 45 door 3/4 → map 43
+# (5,25)/(6,25). Read from mapgraph at import, with the same cell as a fallback
+# for a build that has no graph.
 #
-# Walking all 26 values of PC[0x301c] through the dispatch tree with the
-# evaluator (the project's own, so the tree is executed rather than eyed)
-# gives the table below, with no exceptions and nothing left over:
-#
-#   0-9   A-J組  map  2 一般教室校舎1F  y=12  x = 22 34 46 58 70 111 123 135 147 159
-#   10-19 K-T組  map 15 一般教室校舎2F  y= 3  x = 21 33 45 57 69 110 122 134 146 158
-#   20-25 U-Z組  map 28 一般教室校舎3F  y= 3  x = 21 33 45 57 69 110
-#
-# ⭐ Four things agree with it and none of them is this reading again:
-#   * 26 cells for the 26 classrooms `map.bin` has, which is what pinned
-#     PC[0x301c]'s value range in the first place (2.143 四) -- 10 + 10 + 6, the
-#     same split as that table's 3–12 / 16–25 / 29–34.
-#   * The doors are 12 cells apart, all of them, on all three floors.
-#   * 1F's gap between x=70 and x=111 is where the two staircases are: routes 7
-#     and 8, the arms that carry 2F and 3F classes upstairs, end at x=74 and x=98.
-#   * The β1 tester's diary (`lib/diary01_01`): 「チュートリアル終了後…なんか人が
-#     たまっていると思ったら自分の教室前でした。（Ａ組）」. A組 is class 0, and
-#     class 0 lands at 一般教室校舎1F (22,12) -- 自分の教室前. ⚠️ 2.143 二 is right
-#     that this sentence cannot say where a tutorial *starts*; it is being used
-#     here for where one *ends*, which is what it actually reports.
-#
-# ⚠️ INVENTED, and it is one decision rather than a number:
-# that a character who has not had its 初登校 yet is placed at the end of the walk
-# rather than at the start. Nothing says what the original sent in the 0x480F that
-# precedes the tutorial. Placing them at the end is what makes the two versions of
-# the tutorial agree: the long one walks there and stops, and the short one --
-# 「ひとりで行ける」, which never touches a map at all (2.143 五) -- leaves the
-# player wherever this server put them.
+# ⚠️ INVENTED, and it is one decision rather than a number: that a character
+# who has not had its 初登校 yet is placed at the *end* of the tutorial rather
+# than where it starts (map 43 (5,27), a few cells away). Nothing says what the
+# original sent in the 0x480F that precedes the tutorial. Placing them at the
+# end is what makes the two versions agree: the long one ends there, and the
+# short one -- 「ひとりで行ける」, which never touches a map at all (2.143 五) --
+# leaves the player wherever this server put them.
 
 #: どの組に在籍しているか, for every character this server has. Ａ組 until
 #: something assigns one -- the same 0 `MsgSvResultScoreCard`, `0x0319` and
 #: `0x6501` have all been sending since long before this constant existed, and
-#: the same one `_Session.in_class` starts at. It is named here because 初登校
-#: now reads it too: the wire says Ａ組 and the tutorial has to walk to Ａ組's
-#: door, and a literal 0 in two files is two places for that to drift apart.
+#: the same one `_Session.in_class` starts at. The tutorial reads it too, to
+#: pick which classroom door its mid-tour walk goes to (2.147 四 has the 26
+#: endpoints), so a literal 0 in two files would be two places for it to drift.
 IN_CLASS = 0
 
-DEBUT_FACING = facing.UP | facing.RIGHT  # dir 9, the way the walk's last leg goes
-DEBUT_CELLS: tuple[tuple[int, int, int], ...] = (
-    (2, 22, 12), (2, 34, 12), (2, 46, 12), (2, 58, 12), (2, 70, 12),
-    (2, 111, 12), (2, 123, 12), (2, 135, 12), (2, 147, 12), (2, 159, 12),
-    (15, 21, 3), (15, 33, 3), (15, 45, 3), (15, 57, 3), (15, 69, 3),
-    (15, 110, 3), (15, 122, 3), (15, 134, 3), (15, 146, 3), (15, 158, 3),
-    (28, 21, 3), (28, 33, 3), (28, 45, 3), (28, 57, 3), (28, 69, 3),
-    (28, 110, 3),
-)
+PRINCIPAL_ROOM = 45           # 特殊教室校舎１Ｆ理事長室
+SPECIAL_BUILDING_1F = 43      # 特殊教室校舎１Ｆ, the corridor outside it
+#: The step out of that door goes +Y, which the client draws as down-and-left
+#: (facing's own measurement), and the tutorial itself pairs a +Y neighbour
+#: with dir 6 three times over. The door table happens to say 6 for this door
+#: too, but that number lives in the map file's own namespace (see
+#: mapgraph.landing) and is not what this is read from.
+DEBUT_FACING = facing.DOWN | facing.LEFT
 
 
-# ⭐ One more agreement, and from a table decoded somewhere else entirely: the
-# three corridors are the map right in front of each floor's first classroom in
-# `curriculum.CLASSROOM` (3-1 = 2, 16-1 = 15, 29-1 = 28), which comes out of
-# `class.bin` and `map.bin`. Asserted rather than remarked on, because the two
-# tables have to keep the same 26 rows in the same three runs or a lesson and a
-# 初登校 would disagree about which floor somebody's 組 is on.
-if len(DEBUT_CELLS) != len(curriculum.CLASSROOM):
-    raise AssertionError(
-        f"{len(DEBUT_CELLS)} 初登校 cells for "
-        f"{len(curriculum.CLASSROOM)} classrooms")
+def _corridor_outside_principal_room() -> tuple[int, int, int]:
+    """``(mapId, posX, posY)`` the 理事長室's corridor door delivers into."""
+    import mapgraph  # local: mapgraph imports nothing from here, but keep it lazy
+    for _, _, _, (dest_map, dest_x, dest_y, _) in mapgraph.exits(PRINCIPAL_ROOM):
+        if dest_map == SPECIAL_BUILDING_1F:
+            return dest_map, dest_x, dest_y
+    return SPECIAL_BUILDING_1F, 5, 25
 
 
-def debut_cell(in_class: int = 0) -> tuple[int, int, int]:
-    """``(mapId, posX, posY)`` for a character who has never been to school.
+DEBUT_CELL = _corridor_outside_principal_room()
 
-    ⚠️ Out-of-range falls back to A組 rather than raising: 自分のクラス is a
-    stored number and a save written by hand can hold anything, while the client
-    has 26 classrooms and no 27th to draw.
-    """
-    if not 0 <= in_class < len(DEBUT_CELLS):
-        print(f"[characters] 自分のクラス {in_class} is not one of the "
-              f"{len(DEBUT_CELLS)} classrooms; 初登校 falls back to A組")
-        in_class = 0
-    return DEBUT_CELLS[in_class]
+
+def debut_cell() -> tuple[int, int, int]:
+    """``(mapId, posX, posY)`` for a character who has never been to school."""
+    return DEBUT_CELL
 
 
 # Standing the player on ex_map_object's numbers put it on flat blue with no
@@ -1044,12 +1014,12 @@ class CharacterStore:
                 return map_id, int(pos[0]), int(pos[1])
             if "map" not in record and self.debut_pending(chara_id):
                 # ⭐ Never been to school: stand where the tutorial ends, in
-                # front of this character's own classroom. See DEBUT_CELLS.
+                # the corridor outside the 理事長室. See DEBUT_CELL.
                 # ⚠️ Guarded on "map" as well as on the flag, so that /tutorial
                 # re-arming an established character replays the event without
                 # also teleporting them: a record that has been anywhere keeps
                 # saying where.
-                return debut_cell(IN_CLASS)
+                return debut_cell()
             return map_id, *SPAWN_POS
         return SPAWN_MAP_ID, *SPAWN_POS
 
