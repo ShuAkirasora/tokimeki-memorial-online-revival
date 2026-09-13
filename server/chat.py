@@ -1,7 +1,7 @@
 """The bottom chat bar: reading what was typed, and answering it.
 
 Two messages on the map, both read straight out of the client rather than
-guessed at (the 授業 screen has a pair of its own; see LESSON_NAME_MAX below):
+guessed at (the 授業 screen has a pair of its own; see SPLIT_NAME_MAX below):
 
 ``MsgClCastNormalChat`` (0x4900), deserializer 0x8E0590::
 
@@ -172,11 +172,18 @@ def notify_params(sender_id: int, name: str, text: str) -> bytes:
 # a string's destination and its own length field: 12, 12 and 94 bytes. ⭐ The
 # 12 is the create block's NAME_LEN (11) plus one, so a name that fits the
 # character sheet fits here by construction, and the 94 is TEXT_MAX again.
-LESSON_NAME_MAX = 12
+#
+# ⭐⭐⭐ 0x610A is not the only message that reads this way. 0x8E5240 is also
+# vtable[0] of Input_MsgSvNotifyFriendChat and Input_MsgSvNotifyCharaGroupChat,
+# so 0x4601 and 0x4701 are 0x610A byte for byte and share the builder below --
+# the same kind of sharing 0x4A01 has with 0x4901, which read through one
+# function as well (0x8D6230). Hence the names here are `split_*` rather than
+# `lesson_*`: what they describe is a speaker credited with two counted names.
+SPLIT_NAME_MAX = 12
 
 
-def lesson_notify_params(sender_id: int, family: bytes, first: bytes, text: str) -> bytes:
-    """A MsgSvNotifyLessonChat body. Names arrive as the create block holds them.
+def split_notify_params(sender_id: int, family: bytes, first: bytes, text: str) -> bytes:
+    """A 0x610A / 0x4601 / 0x4701 body. Names as the create block holds them.
 
     ``characters.full_name`` hands back both names NUL-padded to NAME_LEN, which
     is not what a counted string wants: the count on this wire includes exactly
@@ -186,7 +193,7 @@ def lesson_notify_params(sender_id: int, family: bytes, first: bytes, text: str)
     """
     def name(raw: bytes) -> bytes:
         cut = raw.split(b"\x00", 1)[0].decode("cp932", "replace")
-        return clip(cut, LESSON_NAME_MAX - 1) + b"\x00"
+        return clip(cut, SPLIT_NAME_MAX - 1) + b"\x00"
 
     family_raw, first_raw = name(family), name(first)
     text_raw = clip(text, TEXT_MAX - 1) + b"\x00"
@@ -218,6 +225,94 @@ def lesson_notify_params(sender_id: int, family: bytes, first: bytes, text: str)
 # `parse_cast`/`notify_params` serve this family unchanged. ``0x6B02`` is the
 # one reason byte every chat channel's Error is; its sentences are the shared
 # 0xFF00 table. See drama.py for the message ids.
+
+
+# ── 会話ツール's other three channels ─────────────────────────────────────────
+# The same box again, and this time the re-routing is not by what is on top of
+# it. The bottom bar is two fields: a narrow 宛先 box and the wide message box.
+# 「宛先、メッセージを入力し [ Enter ] を押すと、宛先に指定した相手に、入力した
+# メッセージを送信します。宛先を省略すると、自分を中心とした約１画面分の範囲に
+# いるプレイヤーにメッセージを送信できます」 (beta/manual p05_03) -- so an empty
+# 宛先 is 0x4900 and a filled one is one of these.
+#
+# ⭐⭐⭐ There is a second way in, and it is the game's own: the operation table
+# (`operation_explain.bin` rows 0x34-0x36, the /help window's own text) lists
+#
+#     ・内緒話（名指し）  … [ /secretchat [ 苗字 名前 ] [ メッセージ ] ]
+#     ・友達チャット      … [ /friendchat  [ 苗字 名前 ] [ メッセージ ] ]
+#     ・仲良しチャット    … [ /groupchat   [ メッセージ ] ]
+#
+# which is why those three words are in CLIENT_RESERVED above: the client keeps
+# them for itself and turns them into these messages rather than letting them
+# reach the console.
+#
+# ⚠️⚠️ WHICH channel a name goes out on is the CLIENT's decision, not the
+# wording of the command. Measured in round 334 with two stand-ins on the map:
+# `/secretchat 試験 次郎 …` at somebody in the address book cast 0x4600, and the
+# identical command at somebody who is not a friend cast 0x4A00. The 宛先 box
+# behaves the same way. So 友達 wins over 内緒 whenever both would fit, and this
+# end cannot tell which word the player typed -- nor does it need to.
+#
+# What the manual says each one reaches (p05_05 §4):
+#   ノーマル  … 画面内にいる生徒全員        (0x4900, the map)
+#   ないしょ話 … 宛名を指定し特定の相手とだけ (0x4A00, one character)
+#   友達      … アドレス帳に登録している友達と１対１、画面外にいる友達とも
+#   仲良し    … 所属しているグループのメンバー全員
+#
+# Layouts, from the client's own readers:
+#
+# ``MsgClCastFriendChat`` (0x4600) and ``MsgClCastSecretChat`` (0x4A00) share
+# one serializer (0x8EC650) and are 0x4900's body with an address in front::
+#
+#     u32 addressId
+#     u16 utteranceLen, bytes utterance
+#
+# ``MsgClCastCharaGroupChat`` (0x4700) has no address at all -- the group is the
+# address -- so it is 0x4900's body unchanged and `parse_cast` reads it.
+#
+# ``MsgSvNotifySecretChat`` (0x4A01) reads through 0x8D6230, which is
+# 0x4901's own reader, so `notify_params` builds it. ``MsgSvNotifyFriendChat``
+# (0x4601) and ``MsgSvNotifyCharaGroupChat`` (0x4701) read through 0x8E5240,
+# which is 0x610A's, so `split_notify_params` builds those two.
+#
+# ⚠️ All three Errors (0x4602 / 0x4702 / 0x4A02) carry one reason byte out of
+# the shared 0xFF00 sentence table, the same as 0x4902 and 0x6B02.
+MSG_CL_CAST_FRIEND_CHAT = 0x4600
+MSG_SV_NOTIFY_FRIEND_CHAT = 0x4601
+MSG_SV_ERROR_FRIEND_CHAT = 0x4602
+MSG_CL_CAST_GROUP_CHAT = 0x4700
+MSG_SV_NOTIFY_GROUP_CHAT = 0x4701
+MSG_SV_ERROR_GROUP_CHAT = 0x4702
+MSG_CL_CAST_SECRET_CHAT = 0x4A00
+MSG_SV_NOTIFY_SECRET_CHAT = 0x4A01
+MSG_SV_ERROR_SECRET_CHAT = 0x4A02
+
+#: The one sentence these three refuse with: 「チャット相手が存在していません。」
+#: It is the 0xFF00 row that says a line had nobody to reach -- an addressee who
+#: is not connected, and a 仲良しチャット cast by somebody in no group.
+#: ⚠️ Row 4, 「指定されたキャラクターは、現在受信を拒否しています。」, is the
+#: other one these channels could earn. Nothing here sends it: the four wire
+#: options (options.py) hold no 受信拒否 flag, and the client keeps an /ignore
+#: command of its own (CLIENT_RESERVED) whose effect has never been measured.
+ERROR_CHAT_NO_PARTNER = 3
+
+#: 「受信したチャットデータが不正です。」 -- the 0xFF00 row for a body that does
+#: not hold what its message says it holds. 0x4600 and 0x4A00 open with a u32
+#: address and a counted string; anything shorter than that cannot be read.
+ERROR_CHAT_BAD_DATA = 1
+
+
+def parse_addressed(params: bytes) -> "tuple[int, str] | None":
+    """``(addressId, line)`` out of a 0x4600 / 0x4A00 body, or None if short.
+
+    One reader for both because the client has one writer for both. The
+    utterance behind the address is the same counted string 0x4900 carries,
+    terminator included, so `parse_cast` finishes the job.
+    """
+    if len(params) < 6:
+        return None
+    (address_id,) = struct.unpack_from(">I", params, 0)
+    return address_id, parse_cast(params[4:])
 
 
 def parse_emotion(params: bytes) -> int:

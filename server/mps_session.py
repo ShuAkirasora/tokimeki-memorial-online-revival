@@ -496,17 +496,24 @@ MSG_SV_OK_CHARA_WARP = 0x4801
 MSG_SV_NG_CHARA_WARP = 0x4802
 MSG_CL_CAST_NORMAL_CHAT = 0x4900
 MSG_SV_NOTIFY_NORMAL_CHAT = 0x4901
-# The other things the player can say, and why none of them is answered.
+# The other things the player can say. 0x4600 友達チャット, 0x4700 仲良し
+# チャット and 0x4A00 内緒話 are answered in _social_chat below; the note that
+# used to stand here said the 会話ツール window had never been opened, so
+# nothing would ever send them, and round 334 sent all three from a real
+# client. See chat.py for the two ways in.
 # Marked in the form the message audit reads, so that it counts them as
 # decided rather than as forgotten.
-# UNANSWERED 0x4A00 -- ひそひそ話 is addressed at one character, and nothing has
-#   ever been seen selecting a target; answering it as a broadcast would be the
-#   opposite of what it means.
-# UNANSWERED 0x4600 -- 友達チャット, one of the 会話ツール window's channels. That
-#   window has never been opened here, so nothing would ever send it (0x4700,
-#   the group channel, is the same story -- see groups.py).
 # UNANSWERED 0x480C -- 表情 on the map. Its lesson twin (0x610C) is answered
 #   because the pair was being measured anyway; this one has no measured layout.
+
+#: The three the 宛先 box and the client's own /secretchat, /friendchat and
+#: /groupchat reach. One branch for all of them: they differ in who hears the
+#: line, not in how it gets here.
+SOCIAL_CHATS = (
+    chat.MSG_CL_CAST_FRIEND_CHAT,
+    chat.MSG_CL_CAST_GROUP_CHAT,
+    chat.MSG_CL_CAST_SECRET_CHAT,
+)
 
 # How many 74-byte entries go into one MsgSvNotifyCharacterAdd. Sixteen keeps a
 # batch at 1186 bytes of parameters — the same order as the messages already
@@ -3651,6 +3658,92 @@ class MpsServer:
             [actor.chara_id for actor in party.actors],
         )
 
+    def _social_chat(
+        self, session: "_Session", seen: int, msg_type: int, params: bytes
+    ) -> "bytes | None":
+        """会話ツール's other three channels: 0x4600 友達 / 0x4700 仲良し / 0x4A00 内緒.
+
+        ⭐ Round 334, and none of the three is invented: the layouts come out of
+        the client's own readers (chat.py names the four functions), and who
+        hears each one is the manual's own sentence -- 「アドレス帳に登録して
+        いる友達と１対１で行う会話です。画面外にいる友達とも話すことができます」
+        / 「所属しているグループのメンバー全員に聞こえる会話です」 / 「宛名を
+        指定し特定の相手とだけで行う会話です」 (beta/manual p05_05 §4).
+
+        ⚠️ NO 「/」 COMMANDS, the same call the room's chat, ツーショット and
+        the drama's chat make: these lines are addressed at a person or a group
+        rather than at the map console.
+
+        The speaker is in the recipient list on purpose. All three are Casts:
+        nothing appears in anybody's window, the speaker's included, until the
+        server says it back -- measured for 0x4900, 0x4C8C and 0x6B00, and the
+        box on screen is the same box.
+
+        ⚠️ ONE THING THIS END DOES NOT GATE: 内緒話 is described at the log
+        window's tab as 「画面内にいるマップキャラとの１対１チャット」, and this
+        delivers it to the addressee wherever they are standing. The client
+        picks the channel and only casts 0x4A00 at somebody on screen (round 334
+        measured the picking: the same /secretchat went out as 0x4600 at a friend
+        and as 0x4A00 at a stranger), so a refusal here could only fire in a case
+        the client is not believed to produce -- and being wrong in the
+        permissive direction delivers a line the player meant to send instead of
+        putting a red sentence on screen for it. ⭐ Reopen it the moment a
+        0x4A00 turns up naming somebody off this map.
+        """
+        me = session.chara_id
+        if msg_type == chat.MSG_CL_CAST_GROUP_CHAT:
+            said = chat.parse_cast(params)
+            group = self.accounts.groups.of(me)
+            listeners = list(group.members) if group is not None else []
+            channel = "仲良しチャット"
+            where = group.label() if group is not None else "no group"
+            notify = chat.MSG_SV_NOTIFY_GROUP_CHAT
+            error = chat.MSG_SV_ERROR_GROUP_CHAT
+        else:
+            friendly = msg_type == chat.MSG_CL_CAST_FRIEND_CHAT
+            channel = "友達チャット" if friendly else "内緒話"
+            notify = (chat.MSG_SV_NOTIFY_FRIEND_CHAT if friendly
+                      else chat.MSG_SV_NOTIFY_SECRET_CHAT)
+            error = (chat.MSG_SV_ERROR_FRIEND_CHAT if friendly
+                     else chat.MSG_SV_ERROR_SECRET_CHAT)
+            read = chat.parse_addressed(params)
+            if read is None:
+                print(f"[{self.tag}] {channel}: body too short for an address, "
+                      f"refused (reason={chat.ERROR_CHAT_BAD_DATA})")
+                return self._answer(
+                    session, seen, error,
+                    struct.pack(">B", chat.ERROR_CHAT_BAD_DATA),
+                )
+            address_id, said = read
+            where = f"charaId={address_id:#x}"
+            # A friend who is not in the address book is not a 友達チャット
+            # partner, and the client's copy of that book can be a login behind
+            # this one (round 146) -- so the test is ours, not theirs.
+            linked = (not friendly) or self.accounts.friends.linked(me, address_id)
+            reachable = linked and self._session_of(address_id) is not None
+            listeners = [me, address_id] if reachable else []
+        if not listeners:
+            print(f"[{self.tag}] {channel} from charaId={me:#x} to {where}: "
+                  f"nobody to hear it, refused "
+                  f"(reason={chat.ERROR_CHAT_NO_PARTNER})")
+            return self._answer(
+                session, seen, error,
+                struct.pack(">B", chat.ERROR_CHAT_NO_PARTNER),
+            )
+        chars = self._chars(session)
+        info = chars.find(me)
+        who = display_name(info) if info else "?"
+        if notify == chat.MSG_SV_NOTIFY_SECRET_CHAT:
+            # 0x4A01 reads through 0x4901's own function, so it is credited with
+            # one name; the other two are 0x610A's shape, two names.
+            body = chat.notify_params(me, who, said)
+        else:
+            names = chars.full_name(me)
+            family, first = names if names else (b"", b"")
+            body = chat.split_notify_params(me, family, first, said)
+        print(f"[{self.tag}] {channel} {who} -> {where}: {said!r}")
+        return self._tr_cast(session, seen, notify, body, listeners)
+
     def _drama_chat(
         self, session: "_Session", seen: int, msg_type: int, params: bytes
     ) -> "bytes | None":
@@ -6666,7 +6759,7 @@ class MpsServer:
                 print(f"[{self.tag}] lesson chat: {said!r}")
                 reply = self._answer(
                     session, sequence, lesson.MSG_SV_NOTIFY_LESSON_CHAT,
-                    chat.lesson_notify_params(session.chara_id, family, first, said),
+                    chat.split_notify_params(session.chara_id, family, first, said),
                 )
                 # ⭐ And this is the point of answering it at all: the console
                 # works in class again, so a lesson can be steered without
@@ -6992,14 +7085,15 @@ class MpsServer:
                 print(f"[{self.tag}] chat {who}: {said!r}")
                 chat_params = chat.notify_params(session.chara_id, who, said)
                 # Everyone on the map hears it. 「通常会話」 is the map-wide
-                # channel -- ひそひそ話 (0x4A00) is the one that is not, and it
-                # is not answered here at all; see MSG_CL_CAST_NORMAL_CHAT for
-                # the other three channels this one does not cover.
+                # channel, which is what an empty 宛先 box means; the other
+                # three that box can reach are answered in _social_chat.
                 self._presence_relay(session, MSG_SV_NOTIFY_NORMAL_CHAT, chat_params)
                 reply = self._answer(
                     session, sequence, MSG_SV_NOTIFY_NORMAL_CHAT, chat_params
                 )
                 return reply + self._apply_chat(session, sequence, said)
+            if msg_type in SOCIAL_CHATS:
+                return self._social_chat(session, sequence, msg_type, params)
             if msg_type >> 8 == 0xE0 or msg_type in DRAMA_DOORS:
                 return self._drama_incoming(session, sequence, msg_type, params)
             if msg_type >> 8 == 0x6B:

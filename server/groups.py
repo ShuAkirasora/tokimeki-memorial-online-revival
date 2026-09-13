@@ -54,7 +54,8 @@ looked like two unanswered rows was three.
 
 ⚠️ What is left in 0x62xx after that is 0x6200 create (the button that sends it
 is an NPC event this server cannot stage) and 0x622A グループ一覧 (同じ, 理事長
-秘書). 0x4700 グループチャット is a 会話ツール message, not this menu's.
+秘書). 0x4700 グループチャット is a 会話ツール message, not this menu's, and
+round 334 answered it there.
 
 The store is one file for the whole server, for the reason friends.FriendBook
 gives: a group spans accounts, so a per-account file would have to be written
@@ -80,8 +81,11 @@ from characters import GROUP_NAME_LEN, NAME_LEN, NO_GROUP
 #   /cid put the 理事長秘書 on the map by charaId alone. Her ring has five icons
 #   and 「グループ一覧を見る」 is one of them, so the door was never behind a wall
 #   -- it was behind a spawn. 0x622A is handled below.
-# UNANSWERED 0x4700 -- グループチャット: a 会話ツール message, not this menu's;
-#   the whole 会話ツール window is unopened. Shape is 0x6109's, see chat.py.
+# ⭐ 0x4700 グループチャット is not one of them either, since round 334: it is a
+# 会話ツール message rather than this menu's, and it is answered in
+# mps_session._social_chat -- the roster it broadcasts to is Group.members, so
+# it is this file's store that decides who hears it. Shape is 0x6109's; see
+# chat.py.
 MSG_CL_REQUEST_CHARA_GROUP_CREATE = 0x6200
 MSG_SV_OK_CHARA_GROUP_CREATE = 0x6201
 MSG_SV_NG_CHARA_GROUP_CREATE = 0x6202
