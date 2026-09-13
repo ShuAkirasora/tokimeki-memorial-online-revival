@@ -179,6 +179,10 @@ data and run on this side, which is the side they always ran on.
   fired an event, what advanced the dating-sim progression — did not survive alongside the
   client, and none of it is reimplemented here. What you get is a school you can walk into
   and spend an afternoon in, not a game you can play through.
+- **Not the game as it ended.** The disc holds the client as it shipped — `update.ini` reports
+  version `2006012300` — and a year of live-service updates went out through an update server
+  that is long gone. Whatever the game gained after launch is not in this client, and so is not
+  here either.
 - **Not a service.** This repository is the software, and nothing here is or will be sold.
   It does not hand out a server to join: running one is something you do on your own
   machine, which is what the whole of *Connecting a client* is about.
