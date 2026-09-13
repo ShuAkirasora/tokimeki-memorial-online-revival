@@ -32,6 +32,8 @@ rather than being explained away.
 
 from __future__ import annotations
 
+import math
+
 UP = 1
 DOWN = 2
 LEFT = 4
@@ -78,3 +80,36 @@ def of_move(start: tuple[int, int], end: tuple[int, int]) -> int | None:
 def name(direction: int) -> str:
     """A readable facing for a log line; unnamed values show as themselves."""
     return NAMES.get(direction, str(direction))
+
+
+# One cell of +X and one cell of +Y, in screen pixels, off the same ruler
+# screenshot the docstring reads its sixteen poses from: a step of +X puts the
+# sprite (+136,+87) and a step of +Y puts it (-133,+88). Everything below about
+# how far a walk *looks* is these two vectors and nothing else.
+STEP_X = (136, 87)
+STEP_Y = (-133, 88)
+# What one cell along an axis looks like, in pixels: the two above are 161 and
+# 159 px long, and one number for both is well within what a sprite shows.
+AXIS_PX = (math.hypot(*STEP_X) + math.hypot(*STEP_Y)) / 2
+
+
+def screen_cells(start: tuple[int, int], end: tuple[int, int]) -> float:
+    """How far a walk looks, in units of one axis cell.
+
+    The grid is isometric and the two readings above are not the same length as
+    their sum or their difference, so counting cells and counting what the eye
+    sees are two different measurements:
+
+        (+1, 0)   one cell, 161 px -- 1.00 by this ruler
+        (+1, +1)  one cell by max(|dx|,|dy|), 175 px straight down on screen
+        (+1, -1)  one cell by max(|dx|,|dy|), **269 px** straight across
+
+    So a character walking left or right across the screen covers two thirds
+    again as much ground per cell as one walking any other way. Which of the
+    two rulers the walking time should be priced by is a question about the
+    original game that nothing here can answer -- see MOVE_DISTANCE.
+    """
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    across = dx * STEP_X[0] + dy * STEP_Y[0]
+    down = dx * STEP_X[1] + dy * STEP_Y[1]
+    return math.hypot(across, down) / AXIS_PX

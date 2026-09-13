@@ -44,7 +44,9 @@ import asyncio
 import os
 import random
 import secrets
+import socket
 import struct
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -629,10 +631,54 @@ MAP_NAMES = {
     if entry.get("name")
 }
 
-# How long one cell of walking takes, in the client's clock units, which look
-# like milliseconds. This is a guess and the first thing to tune: too small and
-# characters will snap to the destination, too large and they will crawl.
+# INVENTED — how long one cell of walking takes, in the client's clock units,
+# which look like milliseconds. Too small and characters snap to the
+# destination, too large and they crawl. Nothing in the binary says 300.
 MOVE_MS_PER_CELL = 300
+
+# INVENTED — which ruler a walk is measured with before MOVE_MS_PER_CELL prices
+# it: "cells" counts grid cells, so a step that moves both coordinates costs the
+# same as one that moves a single coordinate; "screen" counts how far the sprite
+# travels (facing.screen_cells), so every direction looks equally fast.
+#
+# ⚠️ The two really do differ by two thirds, and not on this server's account:
+# the grid is isometric, so one cell of (+1,-1) is 269 px across the screen
+# where one cell of (+1,0) is 161 px. "cells" is the factory value because it is
+# what every round up to this one sent, NOT because it is known to be right --
+# whether the original priced walking by cells or by pixels is a question about
+# a server nobody here has seen. Turn it and watch.
+MOVE_DISTANCE = "cells"
+
+# INVENTED — how much of the trip an arrivalTime may be padded by, in ms; 0
+# turns the padding off and leaves the naked estimate every round before this
+# one sent. arrivalTime is an absolute moment on the client's own clock, so
+# whatever the packet spends in the air is spent out of the walk: at 95 ms each
+# way a single-cell walk arrives with two thirds of its 300 ms left and the
+# sprite dashes. _Session.rtt_ms is what gets added; this is only the ceiling
+# that keeps one stalled link from parking a character mid-stride.
+MOVE_RTT_PAD_MS_MAX = 1000
+
+#: Where the socket keeps its round trip, as (option, byte offset, units per
+#: millisecond), by the system the server runs on. ⚠️ A table rather than a
+#: chain of attempts: the name TCP_INFO exists on both of these and means a
+#: different structure on each, and a structure read at the wrong offset does
+#: not fail -- it comes back with a plausible number. Measured rather than
+#: copied off a header: on a connection whose round trip was timed by hand at
+#: 98 ms, each of these two places read 98 and nothing else in either structure
+#: read anything plausible. A system not listed here reads 0 and pads nothing.
+RTT_FIELD = {
+    "linux": (11, 68, 1000),   # TCP_INFO -> tcpi_rtt, microseconds
+    "darwin": (0x106, 40, 1),  # TCP_CONNECTION_INFO -> tcpi_rttcur, milliseconds
+}
+
+# How many timesync samples the clock estimate keeps. The client stamps t1
+# before the packet flies, so a slow trip can only ever make our reading of its
+# clock too *early*; keeping several and believing the earliest-looking one
+# (_Session.client_now) is the NTP trick of trusting the least delayed sample.
+# At one sync every thirty seconds this is four minutes of history: long enough
+# that a single late packet cannot own the estimate, short enough that two
+# quartz clocks cannot drift apart inside it (50 ppm over four minutes is 12 ms).
+CLOCK_SAMPLES = 8
 
 # Notifications: the client tells us something and expects nothing back, so
 # these are logged without the "no reply implemented" complaint.
@@ -1181,14 +1227,23 @@ class _Session:
         self.twoshot_asked: int | None = None
         self.twoshot_asking: int | None = None
         self.twoshot_with: int | None = None
-        # The client's own clock, as of the last tag-8 probe, plus when that
-        # arrived by our monotonic clock. MsgSvNotifyCharaMove has to state an
-        # arrivalTime on the client's timebase, and the tag-8 exchange is the
-        # only clock the protocol has — which is what it exists for. Observed
-        # values look like milliseconds since the client started (0x7533 ≈ 30 s
-        # into a run), and timesync_reply already declares the two clocks equal.
-        self.clock_t1 = 0
-        self.clock_at = 0.0
+        # The client's own clock minus ours, in ms, one reading per tag-8 probe
+        # and the last CLOCK_SAMPLES of them kept. MsgSvNotifyCharaMove has to
+        # state an arrivalTime on the client's timebase, and the tag-8 exchange
+        # is the only clock the protocol has — which is what it exists for.
+        # Observed values look like milliseconds since the client started
+        # (0x7533 ≈ 30 s into a run), and timesync_reply already declares the
+        # two clocks equal. client_now believes the largest reading; see
+        # CLOCK_SAMPLES for why a maximum is the right filter here.
+        self.clock_offsets: list[float] = []
+        # The walk this character is in the middle of, or None when it is
+        # standing still: (start, target, began, arrival), the last two on the
+        # client's clock. ⚠️ This is what the *sprite* is doing, which is not
+        # what session.pos says -- pos is the destination from the moment the
+        # cast arrives, because that is where every other question ("which room
+        # is the player in", "what gets saved") wants the answer. A walk is the
+        # one question that wants the cell in between, and only until it lands.
+        self.walk: tuple[tuple[int, int], tuple[int, int], int, int] | None = None
         # The script this session is playing, if any. See script.py.
         self.script: script.Runner | None = None
         # What the next MsgSvQueryScriptCommandSelect carries, or None to let
@@ -1275,14 +1330,76 @@ class _Session:
         self.battle_due = 0.0
 
     def note_clock(self, t1: int) -> None:
-        self.clock_t1 = t1
-        self.clock_at = time.monotonic()
+        self.clock_offsets.append(t1 - time.monotonic() * 1000)
+        del self.clock_offsets[:-CLOCK_SAMPLES]
 
     def client_now(self) -> int:
-        """Best estimate of the client's clock right now, in its own units."""
-        if not self.clock_at:
+        """Best estimate of the client's clock right now, in its own units.
+
+        ⚠️ The maximum rather than the latest, and the difference is worth a
+        walk: t1 is stamped by the client before the packet leaves, so the trip
+        is time the client has already spent and we have not counted, and every
+        sample reads *early* by however long that trip took. One timesync that
+        happened to sit in a queue for 400 ms therefore drags the estimate 400 ms
+        into the past -- and, since the client sends one only every thirty
+        seconds, keeps it there for the whole half-minute, which is a great many
+        walks. Taking the largest of the last few is the same move NTP's filter
+        makes: the least delayed sample is the honest one, and delay is the only
+        direction the error has.
+        """
+        if not self.clock_offsets:
             return 0
-        return self.clock_t1 + int((time.monotonic() - self.clock_at) * 1000)
+        return int(max(self.clock_offsets) + time.monotonic() * 1000)
+
+    def rtt_ms(self) -> int:
+        """One round trip to this client, as the kernel already measures it.
+
+        The protocol has no round-trip probe of its own -- the timesync is one
+        packet each way, with no second exchange to compare it against -- but
+        the socket underneath has been timing every acknowledgement since the
+        connection opened, so this number can be asked for rather than invented.
+
+        ⚠️ Read through RTT_FIELD rather than by trying one layout after
+        another: a struct read at the wrong offset does not fail, it returns a
+        plausible number. A system this does not know how to ask is told apart
+        from a genuinely instant link by nothing here, and both come out as
+        "add nothing", which is what every round before this one did anyway.
+        """
+        field = RTT_FIELD.get(sys.platform)
+        sock = self.writer.get_extra_info("socket") if self.writer and field else None
+        if sock is None:
+            return 0
+        option, offset, per_ms = field
+        try:
+            blob = sock.getsockopt(socket.IPPROTO_TCP, option, offset + 4)
+        except OSError:
+            return 0
+        if len(blob) < offset + 4:
+            return 0
+        value = int.from_bytes(blob[offset:offset + 4], sys.byteorder) // per_ms
+        return value if 0 < value < 60_000 else 0
+
+    def walking_at(self, when: int) -> tuple[int, int] | None:
+        """Which cell the sprite is on mid-walk, or None if it is not walking.
+
+        The client is told where to be and when to be there and is left to cover
+        the ground by itself, so this is an interpolation and not a report: the
+        walk is assumed to be steady and straight, which is what the one
+        arrivalTime it was given can express. Good enough for the one question
+        that asks -- how far the *next* walk has to go -- and wrong in the same
+        direction as doing nothing, only far less.
+        """
+        if self.walk is None:
+            return None
+        start, target, began, arrival = self.walk
+        if arrival <= began or when >= arrival:
+            self.walk = None
+            return None
+        if when <= began:
+            return start
+        share = (when - began) / (arrival - began)
+        return (round(start[0] + (target[0] - start[0]) * share),
+                round(start[1] + (target[1] - start[1]) * share))
 
     def next_wake(self) -> float | None:
         """Seconds until something is due to be pushed, or None if nothing is.
@@ -5721,6 +5838,7 @@ class MpsServer:
                 session.in_class = self._chars(session).in_class(chara_id)
                 session.map_id, *pos = self._chars(session).location(chara_id)
                 session.pos = (pos[0], pos[1])
+                session.walk = None  # put down somewhere, not walking there
                 # ⭐⭐⭐ 初登校. The flag went out with the character list this
                 # 登校 was picked off (characters.list_entry's tutorialFlag), so
                 # by the time this message arrives the client already has the
@@ -7076,6 +7194,11 @@ class MpsServer:
                     )
                     session.map_id, session.pos = values[0], (values[1], values[2])
                     session.direction = values[3]
+                    # A door, not a walk: whatever the sprite was doing on the
+                    # old map it is not doing on the new one. Left set, the
+                    # first step taken after the door would be measured from a
+                    # cell in a different building.
+                    session.walk = None
                 if self._chars(session).set_position(
                     session.chara_id, session.pos, session.map_id
                 ):
@@ -7125,21 +7248,43 @@ class MpsServer:
                     # clock — hence tag 8 existing at all — so it is now plus the
                     # distance times a per-cell duration.
                     pos_x, pos_y, status = values
-                    steps = max(abs(pos_x - prev_pos[0]), abs(pos_y - prev_pos[1]), 1)
-                    arrival = session.client_now() + steps * MOVE_MS_PER_CELL
+                    now = session.client_now()
+                    # Where the sprite actually is, which is only the same as
+                    # the last destination when the player waited for the walk
+                    # to finish. A quarter of the casts in the archived sessions
+                    # do not: the client takes a new click the moment the last
+                    # one is answered, and reading the distance off the cell the
+                    # character was *heading for* priced a walk that had a third
+                    # of itself still to go as though it were standing there.
+                    here = session.walking_at(now) or prev_pos
+                    steps = max(abs(pos_x - here[0]), abs(pos_y - here[1]), 1)
+                    if MOVE_DISTANCE == "screen":
+                        steps = max(facing.screen_cells(here, (pos_x, pos_y)), 1.0)
+                    budget = max(1, round(steps * MOVE_MS_PER_CELL))
+                    # What the packet costs in the air, added back. See
+                    # MOVE_RTT_PAD_MS_MAX: without it the whole trip comes out
+                    # of the walk, which is nothing on a link measured in tenths
+                    # of a millisecond and most of a short walk on a real one.
+                    pad = min(session.rtt_ms(), MOVE_RTT_PAD_MS_MAX)
+                    arrival = now + pad + budget
+                    # The walk as the sprite will perform it: it starts when the
+                    # notify lands, which is what the pad is an estimate of.
+                    session.walk = (here, (pos_x, pos_y), now + pad, arrival)
                     # Which way the walk leaves the character looking. Nothing
                     # else tells us: the client casts a turn when the player
                     # turns on the spot, but says nothing at all while walking,
                     # so echoing session.direction back sent the same stale
                     # number every time and the sprite snapped to one fixed pose
                     # on the last frame of every walk, wherever it had gone.
-                    turned = facing.of_move(prev_pos, (pos_x, pos_y))
+                    turned = facing.of_move(here, (pos_x, pos_y))
                     if turned is not None:
                         session.direction = turned
                     print(
-                        f"[{self.tag}] move charaId={session.chara_id} -> ({pos_x},{pos_y}) "
-                        f"{steps} cells, facing {facing.name(session.direction)}"
-                        f"({session.direction}), arrivalTime={arrival}"
+                        f"[{self.tag}] move charaId={session.chara_id} ({here[0]},{here[1]})"
+                        f" -> ({pos_x},{pos_y}) {steps:g} cells in {budget}ms"
+                        f"{f' (+{pad}ms in the air)' if pad else ''}, facing "
+                        f"{facing.name(session.direction)}({session.direction}), "
+                        f"arrivalTime={arrival}"
                     )
                     def move_params(when: int) -> bytes:
                         return struct.pack(
@@ -7168,7 +7313,9 @@ class MpsServer:
                                 other,
                                 0,
                                 MSG_SV_NOTIFY_CHARA_MOVE,
-                                move_params(other.client_now() + steps * MOVE_MS_PER_CELL),
+                                move_params(other.client_now()
+                                            + min(other.rtt_ms(), MOVE_RTT_PAD_MS_MAX)
+                                            + budget),
                             ),
                         )
                     return self._answer(
@@ -12107,6 +12254,7 @@ class MpsServer:
             map_id, pos_x, pos_y, direction = answer.warp
             session.map_id, session.pos = map_id, (pos_x, pos_y)
             session.direction = direction
+            session.walk = None  # carried, not walked; same as the door above
             # The scene is torn down and rebuilt, and the character comes back
             # standing. Same reason as the move cast; see the pose branch there.
             session.pose = stress.POSE_STANDING
