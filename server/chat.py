@@ -58,6 +58,7 @@ import options
 import posts
 import quiz
 import romance
+import cibispawns
 import script
 import shop
 
@@ -344,7 +345,7 @@ HELP = (
     "/act [開始値] action の目盛りを置く (頭上アイコン探し)",
     "/cid <cat>:<id> … charaId を指定して立たせる (先生・秘書・顧問はこれ)",
     "/npc <cat>:<id> <cat>:<id> NPC制御 (2つめが台本キー)",
-    "/npca 登場済みの恋愛候補生を配置 / <始> <終> [分類] で生キー",
+    "/npca この地図の恋愛候補生を配置し直す (ロビー読込時は自動) / <始> <終> [分類] で生キー",
     "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
     "/opt [<項目> <on|off>|clear] オプション (授業/試験/通知表公開/経歴公開)",
@@ -768,25 +769,24 @@ def respond(
         words = rest.split()
         category = CIBI_EVENT_CATEGORY
         if len(words) < 2:
-            # The useful form: whoever has appeared, each on the spot her own
-            # story has reached. Not per-map — the map lives in the client's
-            # script, so one push seats the whole campus and the player meets
-            # whoever is on the map they walk into. Anything beyond one key per
-            # person is not more people, it is the same people moved.
-            #
-            # ⭐ It is the *debuted* ones and not all five. 「その他のキャラクター
-            # は、最初からは登場していません」, and p09_02 says the map characters
-            # of candidates the player never met are not drawn at all. A fresh
-            # male character therefore has exactly 天宮 on campus, and a female
-            # one exactly 桜井 — which is also why those two share a square at
-            # several spots: they are the same slot, not two people in it.
+            # The useful form: what the lobby load pushes by itself for the
+            # map the player is standing on -- each candidate's own ちびキャラ
+            # 管理 script, run against this save (see cibispawns). Since round
+            # 335 nobody needs to type this to see her; it is a way to re-run
+            # the rule after /rom moved a number without warping out and back.
+            # ⚠️ Per map, like the original: a candidate whose current spot is
+            # elsewhere is not pushed from here, and the map she is on is the
+            # script's to know, so this cannot say where to go and find her.
             if love is None:
                 return Reply(["恋愛状態が読めない (キャラ未選択?)"])
-            pairs = love.keys()
-            if not pairs:
-                return Reply(["登場している恋愛候補生がいない (/rom で確認)"])
-            keys = [key for _, key in pairs]
-            note = f"{len(keys)}人 " + " ".join(f"{who}={key}" for who, key in pairs)
+            cast, notes = cibispawns.on_map(love, map_id)
+            if not cast:
+                return Reply(["この地図に立つ恋愛候補生がいない (/rom で確認)"] + notes)
+            return Reply(
+                [f"ちびキャラ {len(cast)}人 " + " ".join(cibispawns.describe(c) for c in cast)]
+                + notes,
+                sends=[(MSG_SV_NOTIFY_NPC_CONTROL, cibispawns.pack(c)) for c in cast],
+            )
         else:
             # The probe form, kept for keys the cast rule does not reach: 4:179
             # upwards, or some other category entirely. Nothing here consults
@@ -814,10 +814,11 @@ def respond(
 
     if word == "rom":
         # The 恋愛 state, readable and pokeable. Every mutator here is a stand-in
-        # for something the game did on its own — a drama event, a conversation,
-        # a main event — and they exist because those triggers are not all wired
-        # yet. `debut` in particular has no rule behind it at all: which drama
-        # event introduces whom is in none of the tables we have.
+        # for something the game does on its own — a drama event, a conversation,
+        # a main event — and they are kept for steering a test, not because a
+        # trigger is missing: 登場 is written by the scripts themselves (her 初登校
+        # for 天宮/桜井, one named ドラマイベント each for the other three, round
+        # 232), and the placement that follows runs on every lobby load.
         if love is None:
             return Reply(["恋愛状態が読めない (キャラ未選択?)"])
         words = rest.split()

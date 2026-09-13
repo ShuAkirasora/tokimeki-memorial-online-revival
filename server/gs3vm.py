@@ -1338,8 +1338,16 @@ class Machine:
         self.result.passed[op] += 1
         return i + 1
 
-    def run(self) -> Result:
-        i: int | None = 0
+    def run(self, start: int = 0) -> Result:
+        """Run from `start` (an instruction index, not an ip) until the script
+        stops, and hand back the one Result this machine accumulates.
+
+        ⭐ Calling it again on the same machine continues with the registers
+        and the stack the first run left behind -- that is what lets a caller
+        step past a mid-script OP_END and give the code behind it its turn
+        with the values the code in front computed (see cibispawns).
+        """
+        i: int | None = start
         for _ in range(self.STEP_BUDGET):
             if i is None or not 0 <= i < len(self.script.code):
                 return self.result

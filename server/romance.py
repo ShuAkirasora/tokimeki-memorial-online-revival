@@ -334,6 +334,11 @@ PC_PLAYER_SEX = 0x3013
 # the call and has no subject.
 CTX_PROGRESS = 0xD900
 CTX_MENU_ITEM = 0x8103
+#: The same slot, read by a different script for a different thing: the
+#: ちびキャラ管理 scripts (`_s101`) test it against a map id. It is the one
+#: cell the engine rather than the save supplies -- 「the argument」 -- and each
+#: script family knows what it was handed. Two names, one address, on purpose.
+CTX_ENGINE_ARG = CTX_MENU_ITEM
 PROGRESS_OFFSET = 2
 
 # The two menu_item ids the locker answers to. 403 is 「ロッカー開く」; 404 is the
@@ -493,12 +498,15 @@ def cibi_key(name: str, progress: int) -> int:
 
     「校内マップで恋愛候補生が立っている位置は、メインイベントを一つ見るごとに
     変わるようになっています」. Spot 0 is where she stands once she has appeared;
-    each main event moves her one along; past the end she stays put. Her last two
-    main events (その１１ / その１２, the two with おまけ) are the confession and
-    after, which is why twelve events fit ten spots.
+    each main event moves her one along. Her last two main events (その１１ /
+    その１２, the two with おまけ) are the confession and after, which is why
+    twelve events fit ten spots.
 
-    One body per character, campus-wide: pushing a second key for the same person
-    moves her, it does not add anyone. So this returns one key, not a set.
+    ⚠️ Since round 335 this is the *table* form of the rule, used to print her
+    state; what actually seats her is her own ちびキャラ管理 script, run per
+    lobby load (cibispawns). The two agree spot for spot where the script has
+    a door, and differ where it has none: past her last spot the script places
+    nobody (her remaining events come through the locker), while this clamps.
     """
     who = CANDIDATES[name]
     return who.base + max(0, min(progress, who.spots - 1))
@@ -510,6 +518,11 @@ def classroom_key(name: str, class_index: int) -> int:
     The 26 keys are not 26 places: the coordinate is identical across all of
     them, and the five sit side by side (x=3..7, y=10). One room, chosen from
     outside; not a spot she wanders to, which is why it is not in cibi_key().
+
+    ⚠️ Nothing calls this, and nothing in the game data calls these keys
+    either: none of the 95 server scripts and none of the 683 client scripts
+    names a classroom placement key (round 335 scanned every EVENT_CALL). The
+    seat exists in the data and no known occasion puts her in it.
     """
     who = CANDIDATES[name]
     return who.base + who.spots + class_index % 26
@@ -580,13 +593,13 @@ class Romance:
 
     # ── writing ────────────────────────────────────────────────────────────
     def debut(self, name: str) -> bool:
-        """Mark her as having appeared. Manual for now, and deliberately so.
+        """Mark her as having appeared, by hand (the /rom console command).
 
-        The real trigger is a drama event with a role this player can take, and
-        which drama event introduces whom is not in any table we have — the 22
-        drama events name their scripts and their roles, not their guest stars.
-        Until that mapping is found this is the honest shape: a switch somebody
-        flips, not a rule pretending to know.
+        The real trigger is a script write that `absorb` takes: her 初登校 for
+        天宮 and 桜井, and for the other three the one ドラマイベント whose
+        role writes her 登場 flag (春日 ← 『よろしくタイムマシーン』 役柄 1,
+        弥生 ← 『キャプテンはお留守中』, 犬飼 ← 『家庭科部奉仕活動の日』; round
+        232 read them off the scripts). This stays for steering a test.
         """
         if self.state[name]["debut"]:
             return False

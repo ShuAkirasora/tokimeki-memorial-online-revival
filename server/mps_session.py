@@ -110,6 +110,7 @@ import proxynpc
 import quiz
 import refusals
 import romance
+import cibispawns
 import script
 import shop
 import stress
@@ -5961,7 +5962,28 @@ class MpsServer:
                     reply += self._answer(
                         session, sequence, chat.MSG_SV_NOTIFY_NPC_CONTROL, spawn
                     )
+                # And the 恋愛候補生 who belong on this map, decided by running
+                # each one's own ちびキャラ管理 script against this save and
+                # this map -- the same script, on the same occasion, with the
+                # same inputs the original server gave it. It is a push per
+                # lobby load for the reason the two loops above are: the
+                # client rebuilds the scene from nothing on every warp. See
+                # cibispawns for what the script reads and for the one
+                # reading in it that is invented.
+                cast = self._chars(session).romance(session.chara_id)
+                candidates, notes = (
+                    cibispawns.on_map(cast, session.map_id) if cast else ([], [])
+                )
+                for note in notes:
+                    print(f"[{self.tag}] lobby: {note}")
+                for candidate in candidates:
+                    reply += self._answer(
+                        session, sequence, chat.MSG_SV_NOTIFY_NPC_CONTROL,
+                        cibispawns.pack(candidate),
+                    )
                 extra = f" plus {len(markers)} markers" if markers else ""
+                if candidates:
+                    extra += " and " + " ".join(cibispawns.describe(c) for c in candidates)
                 if staff:
                     extra += f" and {len(staff)} staff"
                 if session.npc_spawns:
