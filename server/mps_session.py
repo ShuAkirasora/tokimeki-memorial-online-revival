@@ -637,25 +637,45 @@ MAP_NAMES = {
 # which look like milliseconds. Too small and characters snap to the
 # destination, too large and they crawl.
 #
-# ⭐ 200 is not a taste any more, it is the one value that makes the game's own
-# two timed walks agree. The tutorial walks a character down two corridors with
-# MAP_CHARA_MOVE_MAP -- the client covering the ground at its own pace, with no
-# server in it -- and then holds the shot open with PLAYER_WAIT_TIME_LOCAL:
+# ⭐⭐⭐ 166 was measured off the real client, walking. The tutorial's guided
+# tour moves a character with MAP_CHARA_MOVE_MAP, which is a scenario command:
+# no server is in it, the client covers the ground at whatever pace is built
+# into it. Filming one of those walks at a steady 150 ms a frame, the world
+# slid 26.12 px per frame along one cell axis; a cell on that axis is 28.84 px
+# (facing.STEP_X, itself measured by warping a character eight cells), so the
+# character covered 0.906 cells per frame: 165.7 ms per cell, six a second.
+# The client's own log agrees on the clock -- it times the same walks between a
+# pair of CSCWaitMapCharaMoveMap lines, 4915 + 517 ms.
 #
-#     (5,27) -> (5,70)    43 cells   wait 12.00 s
-#     (26,99) -> (61,99)  35 cells   wait 10.40 s
+# ⭐ The scenario's own numbers agree too, and they are how this started: the
+# two shots that walk to absolute coordinates hold the camera open afterwards
+# with PLAYER_WAIT_TIME_LOCAL -- 43 cells / 12.00 s and 35 cells / 10.40 s --
+# which reads as `wait = cells * t + overhead` and gives t = 200 ms if the two
+# overheads are assumed equal. ⚠️ That assumption is what the measurement
+# replaced: both waits are multiples of 0.4 s, so the author's resolution left
+# a band of roughly 150-250 ms, and 166 sits inside it (overheads 4.86 s and
+# 4.59 s, which differ by less than the rounding).
 #
-# Both corridors are straight and every cell of both is walkable, so those are
-# the real distances. Read as `wait = cells * t + overhead`, where the overhead
-# is the fade and the beat the two shots share (they are built from identical
-# instructions), eight cells cost 1.60 s: t = 200 ms and overhead = 3.40 s, and
-# no other t leaves the two shots with the same overhead.
+# Still a knob because the reading has its own error bars (±3%, from the pixel
+# quantisation and the frame clock) and because taste is allowed to differ from
+# the original here.
+MOVE_MS_PER_CELL = 166
+
+# INVENTED — what share of a walk's time the same trip takes at a run, when the
+# player holds Ctrl (0x4809's status byte: 0 walks, 1 runs, and the manual's
+# p05_04 says which key does it). 0.6 is five cells in the time walking takes
+# three.
 #
-# ⚠️ Still a knob rather than a restored constant, for one reason: both waits
-# are multiples of 0.4 s, so the author's own resolution puts a band of roughly
-# 150-250 ms around it. The way to close that band is a stopwatch on the real
-# client during that cutscene, which nothing here can do.
-MOVE_MS_PER_CELL = 200
+# ⚠️⚠️ The SHARE is invented; that running is faster at all is not. Every round
+# before this one echoed the status byte back and priced the trip identically,
+# so Ctrl changed which animation the client played and nothing else -- the
+# sprite ran on the spot at walking speed. There is no reading of the manual in
+# which that is right, so a number had to be picked; nothing in the client, the
+# scenarios or the data tables says which. The run and walk animations are two
+# different files of the same length (36 frames each in mch/pc/pc_bin), which
+# says the stride differs and not the cycle, and says nothing about by how much.
+# ⇒ Turn it and watch; 1.0 puts back exactly what every round before this sent.
+MOVE_RUN_SHARE = 0.6
 
 # INVENTED — which ruler a walk is measured with before MOVE_MS_PER_CELL prices
 # it: "cells" counts grid cells, so a step that moves both coordinates costs the
@@ -7383,7 +7403,10 @@ class MpsServer:
                     steps = max(abs(pos_x - here[0]), abs(pos_y - here[1]), 1)
                     if MOVE_DISTANCE == "screen":
                         steps = max(facing.screen_cells(here, (pos_x, pos_y)), 1.0)
-                    budget = max(1, round(steps * MOVE_MS_PER_CELL))
+                    # status is the player's own Ctrl (2.15), so the pace is
+                    # theirs to choose and this end only has to price it.
+                    pace = MOVE_MS_PER_CELL * (MOVE_RUN_SHARE if status == 1 else 1.0)
+                    budget = max(1, round(steps * pace))
                     # What the packet costs in the air, added back. See
                     # MOVE_RTT_PAD_MS_MAX: without it the whole trip comes out
                     # of the walk, which is nothing on a link measured in tenths
@@ -7404,7 +7427,8 @@ class MpsServer:
                         session.direction = turned
                     print(
                         f"[{self.tag}] move charaId={session.chara_id} ({here[0]},{here[1]})"
-                        f" -> ({pos_x},{pos_y}) {steps:g} cells in {budget}ms"
+                        f" -> ({pos_x},{pos_y}) {steps:g} cells"
+                        f"{' at a run' if status == 1 else ''} in {budget}ms"
                         f"{f' (+{pad}ms in the air)' if pad else ''}, facing "
                         f"{facing.name(session.direction)}({session.direction}), "
                         f"arrivalTime={arrival}"

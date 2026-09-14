@@ -16,11 +16,10 @@ VALUES below; the client's own MsgClCastCharaTurn has been seen sending 5 and
 
 Where the readings above say 上/下/左/右 they mean *on screen*, because that is
 what a player can see. The wire's cells are the isometric axes underneath, and
-the two are turned 45 degrees from each other — one cell of +X moves a sprite
-down-and-right on screen, one cell of +Y moves it down-and-left, as measured off
-the ruler screenshot at (+136,+87) and (-133,+88) pixels. So screen-right grows
-with ``x - y`` and screen-down grows with ``x + y``, which is the whole of
-``of_move``.
+the two are turned 45 degrees from each other -- one cell of +X moves a sprite
+down-and-right on screen, one cell of +Y moves it down-and-left; the two vectors
+are STEP_X and STEP_Y below. So screen-right grows with ``x - y`` and screen-down
+grows with ``x + y``, which is the whole of ``of_move``.
 
 One thing this module cannot yet vouch for: the sixteen were read from
 MsgSvNotifyCharacterAdd, and the value 0 there was read as 下, while 0 in
@@ -82,14 +81,19 @@ def name(direction: int) -> str:
     return NAMES.get(direction, str(direction))
 
 
-# One cell of +X and one cell of +Y, in screen pixels, off the same ruler
-# screenshot the docstring reads its sixteen poses from: a step of +X puts the
-# sprite (+136,+87) and a step of +Y puts it (-133,+88). Everything below about
-# how far a walk *looks* is these two vectors and nothing else.
-STEP_X = (136, 87)
-STEP_Y = (-133, 88)
-# What one cell along an axis looks like, in pixels: the two above are 161 and
-# 159 px long, and one number for both is well within what a sprite shows.
+# One cell of +X and one cell of +Y, in screen pixels at the client's 800x600.
+# Measured by warping a character eight cells and matching the two screenshots:
+# +8 in X moved the world 192 px left and 128 px up, +8 in Y moved it 192 right
+# and 128 up, both to within the pixel. So a cell is exactly 24 by 16.
+#
+# ⚠️ These replace (136,87)/(-133,88), which this file carried from the /dirs
+# ruler screenshot and which are about 5.6 times too long: the ruler's sixteen
+# stand-ins were not one cell apart. Nothing that used them cared -- the
+# anisotropy below is a RATIO, and 48/28.8 is the same 1.66 as 269/161 -- but
+# anything that converts pixels to cells did, which is how this was caught.
+STEP_X = (24, 16)
+STEP_Y = (-24, 16)
+# What one cell along an axis looks like, in pixels. Both are 28.8 px long.
 AXIS_PX = (math.hypot(*STEP_X) + math.hypot(*STEP_Y)) / 2
 
 
@@ -100,9 +104,9 @@ def screen_cells(start: tuple[int, int], end: tuple[int, int]) -> float:
     their sum or their difference, so counting cells and counting what the eye
     sees are two different measurements:
 
-        (+1, 0)   one cell, 161 px -- 1.00 by this ruler
-        (+1, +1)  one cell by max(|dx|,|dy|), 175 px straight down on screen
-        (+1, -1)  one cell by max(|dx|,|dy|), **269 px** straight across
+        (+1, 0)   one cell, 28.8 px -- 1.00 by this ruler
+        (+1, +1)  one cell by max(|dx|,|dy|), 32 px straight down on screen
+        (+1, -1)  one cell by max(|dx|,|dy|), **48 px** straight across
 
     So a character walking left or right across the screen covers two thirds
     again as much ground per cell as one walking any other way. Which of the
