@@ -675,6 +675,14 @@ MOVE_MS_PER_CELL = 166
 # different files of the same length (36 frames each in mch/pc/pc_bin), which
 # says the stride differs and not the cycle, and says nothing about by how much.
 # ⇒ Turn it and watch; 1.0 puts back exactly what every round before this sent.
+#
+# ⭐ 0.6 is where watching landed: it went out as a first guess, the player
+# tried it on the real client against the live instance and kept it. So the
+# number is still invented -- nothing measured it, and nothing can until
+# something makes the client run at its own pace, which no scenario in the
+# shipped set ever does (not one MAP_CHARA_MOTION in 1461 of them, and the move
+# command has no run flag) -- but it is a considered value rather than a
+# placeholder, and the eyes that chose it were looking at the game.
 MOVE_RUN_SHARE = 0.6
 
 # INVENTED — which ruler a walk is measured with before MOVE_MS_PER_CELL prices
