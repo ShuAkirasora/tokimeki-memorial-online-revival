@@ -498,32 +498,50 @@ SPEECH_MS = 600_000
 #: the cell's meaning is unrecoverable, not merely unknown; the three
 #: independent reasons are on `script.PLAYER_TUTORIAL_ASK`.
 #:
-#: ⭐⭐ 2 rather than anything else, and the argument is not 「a sensible
-#: default」 -- it is the only value whose effect on the screen was worked out
-#: read by read. The four gates are `X < 2` (ip=600, true ⇒ do not ask), `X >= 0`
-#: (ip=2270, true ⇒ ask) and `X < 0` twice (ip=6964/13476, true ⇒ do not ask).
-#: Against what the client actually saw until now -- an unsupplied cell reads ⊤,
-#: so every one of the four fell through -- 2 changes exactly one of them:
+#: ⭐⭐ 0 means 「the number of characters this account has」, computed at
+#: each 登校 by `tutorial_ask()`; any other value is fed as it is. The four
+#: gates are `X < 2` (ip=600, true ⇒ do not ask), `X >= 0` (ip=2270, true ⇒
+#: ask) and `X < 0` twice (ip=6964/13476, true ⇒ do not ask), so the count
+#: reads:
 #:
-#:   ip=588   fall-through asked already; `2 < 2` is false ⇒ asks.      same
-#:   ip=2262  fall-through skipped it;    `2 >= 0` is true  ⇒ asks.  ⭐ ONLY ONE
-#:   ip=6952  fall-through asked already; `2 < 0` is false ⇒ asks.      same
-#:   ip=13464 fall-through asked already; `2 < 0` is false ⇒ asks.      same
+#:   1st character   1 < 2 ⇒ the opening 「聞かなくてもだいじょうぶ！」 is NOT
+#:                   offered: the tour plays and 天宮/桜井 introduce themselves.
+#:                   The other three questions are asked (1 >= 0, not 1 < 0).
+#:   2nd, 3rd        all four asked, the way out of the tour included.
 #:
-#: ⇒ the one branch it moves is the 校内めぐり 二択 the player reported missing,
-#: and the rest of 初登校 plays out byte for byte as they already played it.
-#: ⭐ That also settles what 2.282 三 could only bound: the standing fall-through
-#: was answering `X < 0` at ip=2262 and `X >= 0` at the other three, so at least
-#: one had to be wrong -- and it is exactly the one, ip=2262.
-#:
-#: ⚠️ The principle it is picked on is 「do not decide for the player」: every
-#: value ≥ 2 puts all four questions on the screen. A value of -1 does the
-#: opposite -- all four decided, the full guided tour with no choices, which is
-#: what 2.282 五's second reading of the cell would mean for a brand-new
-#: account. Both readings are still standing; this knob is how a player picks.
-#: ⭐ What would overturn it: any operator-era account that separates 「was asked
-#: and chose the tour」 from 「was never asked」. Knob: TMO_TUTORIAL_ASK.
-TUTORIAL_ASK = int(os.environ.get("TMO_TUTORIAL_ASK") or 2)
+#: ⭐ Why a count and not the constant 2 it was until round 344: with 2, every
+#: brand-new character could skip the tour, and the campus afterwards made no
+#: sense for them -- `amm_e001` writes 天宮's 登場 cell at ip=444, BEFORE the
+#: question is asked, and her 進行度-0 conversations (`amm_c011`..`c013`) all
+#: recall 「学校を案内したとき」; the only self-introduction in the corpus is
+#: inside the tour. A character who skipped it met a stranger who knew them.
+#: Of the two readings of the cell still standing (the account's character
+#: count, or a -1 sentinel for 「never had one」), the count is the one a
+#: server can compute, and the manual's own ruler says 初登校 is per
+#: character -- so the way out is for a player whose earlier character has
+#: already been shown around. Both readings agree that a first character is
+#: never offered it.
+#: ⚠️ Still a reading, not a recovered fact: nothing operator-era separates
+#: 「was asked and chose the tour」 from 「was never asked」, and the -1 reading
+#: is not excluded. That is what the knob is for: -1 plays the full guided
+#: tour with no choices for everyone; ≥ 2 asks all four of everyone, which is
+#: what rounds 336-343 did. Knob: TMO_TUTORIAL_ASK.
+TUTORIAL_ASK = int(os.environ.get("TMO_TUTORIAL_ASK") or 0)
+
+
+def tutorial_ask(roster: int) -> int:
+    """What `PLAYER[0x2001]` reads for an account of ``roster`` characters.
+
+    The knob wins when it is set; 0 hands the count through, never below 1:
+    the character playing 初登校 is on the account by then, and a store that
+    cannot count reports 0, which must not turn into 「a stranger's first
+    character was offered the way out」.
+    """
+    if TUTORIAL_ASK:
+        return TUTORIAL_ASK
+    return max(1, roster)
+
+
 MSG_SV_OK_MINIMAP_START = 0x3C01
 MSG_SV_NOTIFY_MINIMAP = 0x3C06
 MSG_CL_CAST_CHARA_TURN = 0x4803
@@ -2268,7 +2286,16 @@ class MpsServer:
         # ⭐ The tutorial's own gate, and the only scripts in the corpus that
         # read it are the two 初登校 ones -- so supplying it always is the same
         # as supplying it to 初登校 only, with nothing to keep in step.
-        cells[("PLAYER", script.PLAYER_TUTORIAL_ASK)] = TUTORIAL_ASK
+        # ⭐ Round 344: the value is the account's roster size unless the knob
+        # says otherwise, and on the tutorial it is said out loud, so the log
+        # shows which way the opening question went and why.
+        ask = tutorial_ask(self._chars(session).roster_size())
+        cells[("PLAYER", script.PLAYER_TUTORIAL_ASK)] = ask
+        if script.is_tutorial(script_id):
+            print(f"[{self.tag}] 初登校: PLAYER[0x2001] <- {ask} "
+                  f"({'knob' if TUTORIAL_ASK else 'characters on the account'})"
+                  f"; the opening way out of the tour is "
+                  f"{'offered' if ask >= 2 else 'not offered'}")
         cells.update(self._leader_exam_cells(session))
         runner.shadow = gs3vm.follow(script_id, cells, registers, actor)
         if runner.shadow is None:

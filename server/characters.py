@@ -1009,6 +1009,26 @@ class CharacterStore:
         """
         return len(self.records) >= MAX_CHARACTERS
 
+    def roster_size(self) -> int:
+        """How many characters this account has right now, counted off the file.
+
+        Off the file rather than ``self.records`` on purpose: the store that
+        asks is the game connection's, whose snapshot dates from bind time,
+        and the character about to play 初登校 was created on the school
+        connection after that. ``reload`` would see it too, but it swaps
+        ``self.records`` wholesale and is reserved for ``entries``; this one
+        reads, counts and touches nothing. A detached store, or an unreadable
+        file, counts what it holds. Used by ``mps_session.tutorial_ask`` --
+        the constant above it says why the count is what 初登校's opening
+        question is answered with.
+        """
+        if self.path is not None and self.path.exists():
+            try:
+                return len(json.loads(self.path.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
+        return len(self.records)
+
     def notebook_taken(self, frame_id: int) -> bool:
         """True when one of this account's characters is already in that 手帳.
 

@@ -1692,8 +1692,9 @@ PC_IN_CLASS = 0x301C
 #: identical): it is compared `< 2` once and `>= 0` / `< 0` three times and
 #: against nothing else, so it is signed, unbounded above, and its range spans
 #: 2. All four reads gate the same kind of question -- 「shall I ask the player,
-#: or just do the long version」 -- which is what `mps_session.TUTORIAL_ASK`
-#: supplies a value for. 2.282, 2.283.
+#: or just do the long version」 -- which is what `mps_session.tutorial_ask`
+#: supplies a value for (the account's character count, or the knob). 2.282,
+#: 2.283.
 PLAYER_TUTORIAL_ASK = 0x2001
 
 # ── リーダー試験's three cells ────────────────────────────────────────────
