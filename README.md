@@ -1,4 +1,4 @@
-# Tokimeki Memorial ONLINE — local server
+# Tokimeki Memorial ONLINE — server
 
 A from-scratch server for *Tokimeki Memorial ONLINE* (KONAMI, 2006–2007, service ended),
 written so that a surviving copy of the original client has something to connect to again.
