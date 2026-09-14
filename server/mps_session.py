@@ -2673,6 +2673,11 @@ class MpsServer:
         session.pos = (cell[0], cell[1])
         session.direction = DEBUT_FACING_ALONE
         session.walk = None  # put down somewhere, not walking there
+        # ⚠️ And into the save, over the cell 登校 wrote a moment ago: the same
+        # 「前回ログアウトした場所」 reason, and this is the road that ends up
+        # somewhere 登校 could not have known.
+        self._chars(session).set_position(session.chara_id, session.pos,
+                                          session.map_id)
         print(f"[{self.tag}] ⭐⭐ 初登校 「ひとりで行ける」 (ip={local}): none of "
               f"the event played, so the player stands where it opened — "
               f"噴水の並木道, map {session.map_id} "
@@ -5953,6 +5958,21 @@ class MpsServer:
                 # the tutorial on every 登校 for as long as that confirmation
                 # never comes. /tutorial re-arms it.
                 session.debut_placed = self._chars(session).debut_placement(chara_id)
+                if session.debut_placed:
+                    # ⭐⭐ Write the spawn through to the save, because 初登校 is
+                    # the one arrival this server decides rather than replays.
+                    # 「２回目以降の登校では、前回ログアウトした場所に登場します」
+                    # (p02_06) is answered out of the record, and a character who
+                    # never took a step had nothing in it: every other writer here
+                    # is a move or a warp the client reported. So a player who
+                    # logged out from where the tutorial left them came back at
+                    # the default spawn on 屋外 instead -- measured both roads,
+                    # both landed on the same wrong cell. The one road that is
+                    # still open here rewrites this a moment later
+                    # (_debut_standing), which is why this is a write and not a
+                    # decision.
+                    self._chars(session).set_position(
+                        chara_id, session.pos, session.map_id)
                 if self._chars(session).debut_pending(chara_id):
                     session.direction = DEBUT_FACING
                     print(f"[{self.tag}] ⭐ 初登校 for charaId={chara_id}: "
