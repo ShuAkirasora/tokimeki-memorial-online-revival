@@ -1337,6 +1337,16 @@ class _Session:
         # reachable. ⚠️ Default None so forgetting to put it back cannot leave a
         # changed server behind. See /nev.
         self.npc_event_npc: int | None = None
+        # ⭐ Round 346: /nev was used this session, so her own 会話 chooser
+        # (`<name>_s102`, see _run_talk) stands aside and the pair above is
+        # what goes back. `/nev script` hands the choice back to her.
+        self.npc_event_forced: bool = False
+        # What the last 0x6304 answered, when that was a capture_npc_event key
+        # (None otherwise), and the menu item that asked. Consumed by the
+        # event start, which is what makes NotifyScriptEnd credit the
+        # conversation that actually played rather than the default one.
+        self.talk_key: tuple[int, int] | None = None
+        self.talk_menu_item: int = script.MENU_ITEM_TALK
         # Which sub_menu.bin key we hand back when a type 1 menu item is picked
         # off a map object. Per-session for the same reason npc_event is: the
         # whole point of the knob is to try one key against a running client and
@@ -2529,6 +2539,72 @@ class MpsServer:
             print(f"[{self.tag}] {name}: 書き戻せませんでした")
         return result
 
+    def _run_candidate_script(self, session: "_Session", love, name: str,
+                              suffix: str, menu_item: int):
+        """Run one of her own GS3 scripts (`<stem>_<suffix>`) over this save.
+
+        ⭐⭐⭐ The same shape as `_run_locker`, for the same reason: `_s102`
+        (which 会話 a right-click gets) and `_s104` (the bookkeeping after a
+        メイン played) are the original server's own bytecode, and every
+        threshold, pool, die and exclusion in them stays in the data
+        (2.287). The cells are `Romance.talk_cells`: her save, the
+        会話 slots, today's date, the 能力 レベル and the menu item; the die
+        is `_script_roll`, the roller a client's scenario already trusts.
+
+        Returns ``(result, changed)``: None when this end could not run it
+        (not exported, or a cell nobody supplied -- gs3vm raises rather than
+        reading 0), and whether ``love`` now needs saving. ⚠️ The writes are
+        absorbed into ``love`` here but NOT saved: the caller is holding the
+        record and decides when it goes to disk.
+        """
+        script_name = f"{romance.SCRIPT_STEMS[name]}_{suffix}"
+        found = gs3vm.load(script_name)
+        if found is None:
+            print(f"[{self.tag}] {script_name}: runtime/scripts に無し — 従来の答えに戻ります")
+            return None, False
+        sheet = self._chars(session).ability(session.chara_id)
+        cells = love.talk_cells(menu_item, sheet.levels() if sheet else None)
+        machine = gs3vm.Machine(found, cells)
+        machine.roll = self._script_roll
+        try:
+            result = machine.run()
+        except (gs3vm.UnknownCell, gs3vm.UnsupportedOp, gs3vm.Runaway) as exc:
+            print(f"[{self.tag}] {script_name}: {exc} — 台本を回せず、従来の答えに戻ります")
+            return None, False
+        return result, love.absorb_talk(result.writes)
+
+    def _run_talk(self, session: "_Session", npc_id: int, menu_item: int):
+        """Which 会話 a right-click on one of the five gets: her `_s102`'s answer.
+
+        ⭐⭐⭐ Round 346, the second step of 「天宮 を右クリックすると永遠に c011」.
+        None means
+        「not hers to answer」 -- the npcId is not a candidate's, she has not
+        debuted, or the script could not run -- and the caller keeps the
+        constant it used before. Otherwise the Result is the answer:
+        ``event`` is the key for 0x6305, ``no_event`` is the script's own
+        「none」 (0x6306 reason 0). What the run wrote (the five slots; never
+        進行度 -- that is `_s104`'s) is saved before returning.
+        """
+        name = romance.candidate_of_npc(npc_id)
+        if name is None:
+            return None
+        love = self._chars(session).romance(session.chara_id)
+        if love is None or not love.state[name]["debut"]:
+            print(f"[{self.tag}] {name} は未登場 — 従来の答えに戻ります")
+            return None
+        result, changed = self._run_candidate_script(
+            session, love, name, romance.TALK_SCRIPT, menu_item)
+        if result is None:
+            return None
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] {name}: 会話の記帳を書き戻せませんでした")
+        answer = ("なし (EVENT_CALL 0xffff)" if result.no_event
+                  else f"{result.event[0]}:{result.event[1]}" if result.event
+                  else "⚠️ 何も呼ばずに終わった")
+        print(f"[{self.tag}] {romance.SCRIPT_STEMS[name]}_{romance.TALK_SCRIPT} → "
+              f"{answer} · {love.line(name)}")
+        return result
+
     def _script_die(self, session: "_Session", wire_ip: int, ip: int) -> bool:
         """Flip the coin an `OP_RAND` branch needs. True means「成立」.
 
@@ -2823,6 +2899,7 @@ class MpsServer:
         """
         talking_about, session.talking_about = session.talking_about, None
         choice, session.talking_choice = session.talking_choice, None
+        menu_item, session.talk_menu_item = session.talk_menu_item, script.MENU_ITEM_TALK
         # ⭐ The 会話中 icon comes down with the script, wherever the script
         # ended. This method is where it happens for the reason its own
         # docstring gives: it is the one call every NotifyScriptEnd path makes,
@@ -2842,7 +2919,25 @@ class MpsServer:
         if love is None:
             return b""
         if kind == "main":
-            changed, note = love.see_main_event(name), "メインイベント"
+            # ⭐⭐⭐ Round 346: the step is booked by her own `_s104`, run over
+            # the same cells `_s102` left -- it advances `c000[0xd900]` only
+            # when `e100` is the -1 that script wrote on answering the メイン,
+            # and only below 11 -- and `absorb_talk` turns that into
+            # ``progress``. It also raises `d8`, which keeps her quiet on the
+            # next new day until a placement clears it. Nothing here adds one
+            # any more; a メイン started some other way (/nev, /sc) finds no
+            # -1 and books nothing, which is what the original would do.
+            result, changed = self._run_candidate_script(
+                session, love, name, romance.MAIN_SEEN_SCRIPT, menu_item)
+            if result is None:
+                # ⚠️ The pre-346 count, kept only for a machine without the
+                # export; the log says which road was taken.
+                changed, note = love.see_main_event(name), "メインイベント（_s104 なし・+1）"
+            else:
+                note = f"メインイベント → _s104 {result.summary()}"
+                if not changed:
+                    print(f"[{self.tag}] romance {name} {note}: 記帳なし "
+                          f"(e100 が -1 ではない) {love.line(name)}")
         else:
             # What this particular conversation is worth, out of the table
             # rather than out of a constant: 22 of them grant nothing, the ones
@@ -2857,7 +2952,7 @@ class MpsServer:
             # even when there is none to be had.
             sheet = self._chars(session).ability(session.chara_id)
             levels = sheet.levels() if sheet else None
-            changed, advanced = love.talk(name, gain=gain, levels=levels)
+            changed = love.talk(name, gain=gain)
             short = love.blocked_by_ability(name, levels)
             # ⚠️ Five outcomes, and only two of them are holes in the wiring:
             # answers this end knows about that never arrived, and a click it
@@ -2880,8 +2975,7 @@ class MpsServer:
                 how = f"⚠️ 選択肢{choice} は {answers} 行の範囲外"
             else:
                 how = f"選択肢{choice}・加値に影響しない"
-            note = f"日常会話+{gain}（{how}）" + (
-                " -> メインイベント!" if advanced else "")
+            note = f"日常会話+{gain}（{how}）"
             if short:
                 # 親密さ is at the rung and the event still did not play. Say
                 # which 能力 and by how much, because from the outside this is
@@ -2969,6 +3063,26 @@ class MpsServer:
             if result is not None and result.event is not None:
                 event = result.event
                 print(f"[{self.tag}] lck_s102 → event {event[0]}:{event[1]}")
+            # ⭐⭐⭐ And for the five 恋愛候補生 the game has a script for this
+            # question too: her `_s102` reads 親密さ, 進行度, the date and its
+            # own bookkeeping and names the segment -- メイン on a new day
+            # once the rung is reached, 久しぶり after a week away, しつこい
+            # from the 17th time in a day, 特別 three times in ten, else 日常
+            # avoiding last time's. Its 「none」 is a refusal the shipped
+            # error table has a sentence for. See script.NPC_EVENT_NONE_REASON
+            # and 2.287; /nev stands it down (`npc_event_forced`).
+            talk = None if session.npc_event_forced else self._run_talk(
+                session, npc_id, menu_item)
+            if talk is not None and talk.no_event:
+                session.talk_key = None
+                print(f"[{self.tag}] npc event: 会話なし → 0x6306 reason "
+                      f"{script.NPC_EVENT_NONE_REASON}")
+                return self._answer(
+                    session, seen, script.MSG_SV_NG_NPC_MAP_OBJECT_EVENT,
+                    bytes((script.NPC_EVENT_NONE_REASON,)),
+                )
+            if talk is not None and talk.event is not None:
+                event = talk.event
             # ⭐⭐⭐ And except on 「リーダー試験を受ける」, where the data picks
             # the event and this end has no business choosing: the event tables
             # file every row under the npcId it belongs to, so the 理事長秘書's
@@ -2994,6 +3108,14 @@ class MpsServer:
                       f"{event[0]}:{event[1]} ({ring['ssb']}, "
                       f"scriptId 0x{ring['scriptId']:04X})")
             answer_npc = npc_id if session.npc_event_npc is None else session.npc_event_npc
+            # ⭐ Carried to the event start only while the key is one whose
+            # category names a candidate (`event_table_for`): a common or
+            # general key means a different person in that numbering, and
+            # crediting it would credit the wrong 恋愛.
+            session.talk_key = (
+                event if script.event_table_for(answer_npc) == "capture_npc_event" else None
+            )
+            session.talk_menu_item = menu_item
             # ⭐ Which table the client is about to read `event` out of, said
             # before it goes rather than guessed from what comes back: the whole
             # question this pair answers is which of the four it consults, and
@@ -3123,17 +3245,12 @@ class MpsServer:
             # this end: each .ssb names its actors, which is why 223 placement
             # scripts can all say NPC#1 and still be 223 different people.
             infos = [(actor["actorId"], actor["id"]) for actor in found.actors]
-            # ⚠️ This is the default key, not necessarily the one that was
-            # handed back: the ring's リーダー試験 and the locker's letter both
-            # pick their event into a local at 0x6304 and leave npc_event
-            # alone, so ending one of those is logged as the default 日常会話.
-            # Harmless today -- that one grants nothing, so nothing is written
-            # -- and ⛔️ writing the handed-back key here instead would be
-            # worse, because whose_event reads capture_npc_event categories and
-            # a common/general key means a different person in that numbering.
-            # The fix is to carry the key only while the answered npcId belongs
-            # to capture_npc_event (event_table_for) and None otherwise.
-            session.talking_about = session.npc_event
+            # ⭐ The key 0x6304 actually handed back, and only while it was a
+            # capture_npc_event one (`talk_key`; None for the ring's
+            # リーダー試験 and for a common/general key, whose categories
+            # number different people). Consumed here so that a script
+            # started by hand afterwards (/sc) credits nobody, as before.
+            session.talking_about, session.talk_key = session.talk_key, None
             # ⭐ The 会話中 icon goes up here and comes down in _romance_credit,
             # which is the one thing every NotifyScriptEnd path calls. The
             # scene the talker is looking at is the event, not the map, so this
@@ -6345,11 +6462,15 @@ class MpsServer:
                 # cibispawns for what the script reads and for the one
                 # reading in it that is invented.
                 cast = self._chars(session).romance(session.chara_id)
-                candidates, notes = (
-                    cibispawns.on_map(cast, session.map_id) if cast else ([], [])
+                candidates, notes, placed = (
+                    cibispawns.on_map(cast, session.map_id) if cast else ([], [], False)
                 )
                 for note in notes:
                     print(f"[{self.tag}] lobby: {note}")
+                # ⭐ A `_s101` that placed her also cleared her `d8` (see
+                # cibispawns.on_map); that is a write to the save.
+                if placed and not self._chars(session).set_romance(session.chara_id, cast):
+                    print(f"[{self.tag}] lobby: 配置の記帳を書き戻せませんでした")
                 for candidate in candidates:
                     reply += self._answer(
                         session, sequence, chat.MSG_SV_NOTIFY_NPC_CONTROL,
@@ -12297,6 +12418,8 @@ class MpsServer:
             self.accounts.save_locker(session.account_id)
         if answer.npc_event is not None:
             session.npc_event = answer.npc_event
+        if answer.npc_event_forced is not None:
+            session.npc_event_forced = answer.npc_event_forced
         if answer.npc_event_npc is not None:
             # -1 is /nev's "go back to echoing", the same shape /sel uses.
             session.npc_event_npc = (

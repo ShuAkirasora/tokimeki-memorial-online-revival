@@ -505,6 +505,17 @@ MSG_CL_REQUEST_NPC_MAP_OBJECT_EVENT = 0x6304
 MSG_SV_OK_NPC_MAP_OBJECT_EVENT = 0x6305
 MSG_SV_NG_NPC_MAP_OBJECT_EVENT = 0x6306
 
+# ⭐ The Ng's one byte is a reason, and `error_message.bin` has exactly two
+# sentences filed under 0x6306: reason 0 「選択されたメニューは現在無効です。」
+# and reason 1 「サーバー側でエラーが発生しました。（ＧＳ３スクリプトエラー）」.
+# ⭐⭐⭐ Reason 0 is what a 会話 chooser's `EVENT_CALL 0xffff` -- 「no event
+# for this menu item right now」 -- turns into on the wire (round 346): the
+# menu item is the thing the script tested first, and the sentence says so.
+# Reason 1 is the original's escape hatch for a script that failed, which is
+# this end's fallback to DEFAULT_NPC_EVENT instead (a conversation beats a
+# refusal when the fault is ours).
+NPC_EVENT_NONE_REASON = 0
+
 # The other half of that pair. 0x6301 and 0x6304 are one action landing two
 # ways, chosen by the `menu_item.bin` record's type: 0 starts an event (0x6304,
 # above), 1 opens a sub-menu (this one). Both bodies are npcId u32 then
@@ -548,20 +559,27 @@ DEFAULT_SUB_MENU = 2
 # been seen; the others in that menu have not been clicked yet.
 MENU_ITEM_TALK = 400
 
-# What we answer 0x6304 with. The client takes this pair as a capture_npc_event
-# key, reads that record's script id out of it, and asks us to start it — so
-# this constant chooses which conversation the NPC has. 16:1 is
+# INVENTED — the conversation a right-click on a chibi starts when nothing
+# here can choose one: an NPC that is not one of the five 恋愛候補生, one who
+# has not had her debut, or her own `<name>_s102` failing to run on this
+# machine. The client takes this pair as a capture_npc_event key, reads that
+# record's script id out of it, and asks us to start it. 16:1 is
 # 天宮日常会話c011 -> amm_c011.ssb, whose scriptId is 8206.
 #
-# It is one constant rather than a table because a table would have to be
-# invented: what actually picks the event on a real server is progress state
-# this end does not model. /nev changes it without a restart.
+# ⭐⭐⭐ Until round 345 this was the whole answer -- every right-click on
+# every candidate played c011 -- and the reason given was that what picks the
+# event on a real server is progress state this end does not model. Round 345
+# found the picking is not state but a script: the original ran her `_s102`
+# over her 親密さ, 進行度, today's date and five bookkeeping cells, and the
+# key it `EVENT_CALL`ed is the 0x6305 answer (2.287). Round 346
+# runs it here (`mps_session._run_talk`), so this constant is the fallback
+# and nothing else. /nev still outranks both without a restart.
 #
 # ⚠️ 16:1 is one of the 22 conversations that grant no 親密さ at all
-# (romance.TALK_GAINS), so the conversation this server starts by default is
-# worth nothing and the log says so when it ends. That is the conversation
-# being what it is, not the credit path being broken; /nev 16 12 for one that
-# pays. It stays the default because it is the one measured to play.
+# (romance.TALK_GAINS), so the conversation this fallback starts is worth
+# nothing and the log says so when it ends. That is the conversation being
+# what it is, not the credit path being broken; it stays the fallback because
+# it is the one measured to play.
 DEFAULT_NPC_EVENT = (16, 1)
 
 

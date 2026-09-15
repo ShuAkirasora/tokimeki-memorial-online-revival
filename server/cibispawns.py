@@ -56,7 +56,7 @@ NPC_CATEGORY_CAPTURE = 1
 
 #: Her ちびキャラ管理 script, by candidate. ⚠️ Checked against the keys the
 #: script calls: each must lie in her block of `cibi_control_script`.
-SCRIPT_STEMS = {"天宮": "amm", "春日": "ksg", "弥生": "yyi", "桜井": "skr", "犬飼": "ink"}
+SCRIPT_STEMS = romance.SCRIPT_STEMS
 
 # ── INVENTED — design: the doors the script cannot reach are walked anyway ───
 # Every `_s101` has an OP_END after its third (進行度, map) door, which makes
@@ -103,16 +103,24 @@ def dead_start(script: gs3vm.Script) -> int | None:
     return None
 
 
-def on_map(love: romance.Romance, map_id: int) -> tuple[list[Spawn], list[str]]:
-    """Who the scripts put on this map, and what to log about it.
+def on_map(love: romance.Romance, map_id: int) -> tuple[list[Spawn], list[str], bool]:
+    """Who the scripts put on this map, what to log about it, and whether
+    ``love`` changed under them.
 
     Only the candidates on stage are asked -- the script would refuse the
     others in its first line anyway, and skipping them saves loading it.
     Every failure is a note, never an exception: a lobby load with a broken
     placement script is a lobby without that candidate, not a black screen.
+
+    ⭐ Round 346: a `_s101` writes as well as chooses. Its label 3 clears
+    `c000[0xd800]` -- 「a メイン played and she has not been placed since」 --
+    right before each `EVENT_CALL`, and `_s102` reads that flag to refuse a
+    会話 on the next new day until she has. `absorb_talk` takes the write; the
+    third value says whether the caller has a save to make.
     """
     spawns: list[Spawn] = []
     notes: list[str] = []
+    changed = False
     for name in love.on_stage():
         script_name = f"{SCRIPT_STEMS[name]}_s101"
         script = gs3vm.load(script_name)
@@ -131,13 +139,14 @@ def on_map(love: romance.Romance, map_id: int) -> tuple[list[Spawn], list[str]]:
         except (gs3vm.UnknownCell, gs3vm.UnsupportedOp, gs3vm.Runaway) as exc:
             notes.append(f"{script_name}: {exc}; {name} stays off campus")
             continue
+        changed |= love.absorb_talk(result.writes)
         who = romance.CANDIDATES[name]
         for category, index in result.events:
             if category != romance.CIBI_EVENT_CATEGORY or not who.base <= index < who.base + who.spots:
                 notes.append(f"{script_name}: called {category}:{index}, outside {name}'s block; sent anyway")
             spawns.append(Spawn(name, (NPC_CATEGORY_CAPTURE, romance.candidate_index(name)),
                                 (category, index), dead))
-    return spawns, notes
+    return spawns, notes, changed
 
 
 def pack(spawn: Spawn) -> bytes:

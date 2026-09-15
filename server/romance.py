@@ -341,6 +341,47 @@ CTX_MENU_ITEM = 0x8103
 CTX_ENGINE_ARG = CTX_MENU_ITEM
 PROGRESS_OFFSET = 2
 
+# ⭐⭐⭐ RESTORED (round 346) -- the 会話 bookkeeping `<name>_s102` keeps, one
+# row of it per candidate. These are the CTX cells the original server's own
+# scripts read and write around a right-click on her (2.287 四):
+# the subject of the e1xx slots is her roster index, the subject of d8/d9 is
+# her 日常会話 category (16 + index), and every one of them starts at 0 -- the
+# value `sys_s000`, the original's new-game reset, writes -- so a save from
+# before this round needs no migration.
+CTX_TALK_SLOTS = {
+    "lastDaily": 0xE100,     # last 日常会話 (base + draw); -1 = a メイン was just answered
+    "lastSpecial": 0xE101,   # last 特別 draw, 0 = the last one was not 特別
+    "todayTalks": 0xE102,    # talks today; 15 + draw once しつこい has taken over
+    "lastMonthDay": 0xE103,  # month * 100 + day of the last talk
+    "lastYear": 0xE104,      # year of the last talk
+}
+#: 1 from the moment `_s104` books a メイン until `_s101` places her again;
+#: while it is 1 a right-click on a new day gets 「no 会話」 from `_s102`.
+CTX_MAIN_SEEN = 0xD800
+TALK_SLOT_DEFAULTS = {**dict.fromkeys(CTX_TALK_SLOTS, 0), "mainSeen": 0}
+#: The three-letter stem every one of her scripts is filed under.
+SCRIPT_STEMS = {"天宮": "amm", "春日": "ksg", "弥生": "yyi", "桜井": "skr", "犬飼": "ink"}
+TALK_SCRIPT = "s102"       # right-click 会話: which segment, if any
+MAIN_SEEN_SCRIPT = "s104"  # after a メイン played: the bookkeeping
+#: PC[0x3100+j]: the five 能力 as レベル. 天宮's and 桜井's `_s102` read them at
+#: 進行度 0, and ABILITY_GATES below is the same thresholds read off those scripts.
+PC_ABILITY_BASE = 0x3100
+#: NPC kind 1 -- `capture_npc`, the five candidates; `capturenpc.NPC_KIND_CAPTURE`.
+NPC_KIND_CAPTURE = 1
+
+
+def candidate_of_npc(npc_id: int) -> str | None:
+    """Her name for the four bytes a spawn or a 0x6304 carries, or None.
+
+    `1 << 16 | rosterIndex`, and the roster is CANDIDATES in order -- the
+    same numbering PC[0x3900+i] and friends count on (capturenpc.py).
+    """
+    if npc_id >> 16 != NPC_KIND_CAPTURE:
+        return None
+    names = list(CANDIDATES)
+    index = npc_id & 0xFFFF
+    return names[index] if index < len(names) else None
+
 # The two menu_item ids the locker answers to. 403 is 「ロッカー開く」; 404 is the
 # one behind it. ⚠️ Each script gates on its own id, so sending the wrong pair
 # is not a silent mistake -- the script falls through and offers nothing.
@@ -561,6 +602,13 @@ class Romance:
                 # PC[0x3910+i]: her letter is sitting in the locker. Written by
                 # lck_s103 when the gates open, cleared only by a new game.
                 "letter": int(row.get("letter", 0)),
+                # The 会話 bookkeeping her `_s102`/`_s104` keep (CTX_TALK_SLOTS
+                # and CTX_MAIN_SEEN). Absent from saves before round 346; 0 is
+                # what the original's new-game reset writes anyway.
+                "talk": {**TALK_SLOT_DEFAULTS,
+                         **{key: int(value) for key, value in
+                            dict(row.get("talk", {})).items()
+                            if key in TALK_SLOT_DEFAULTS}},
             }
         # PC[0x3a04]: whose letter event is running. -1 is what the new-game
         # reset writes, and it is what 「手紙を読まない」 puts back.
@@ -585,10 +633,16 @@ class Romance:
         row = self.state[name]
         if not row["debut"]:
             return f"{name}=未登場"
+        talk = row["talk"]
         return (
             f"{name}=進行{row['progress']}/{CANDIDATES[name].events}"
             f" 親密{row['intimacy']}/{intimacy_needed(row['progress'])}"
             f" 位置4:{cibi_key(name, row['progress'])}"
+            # The `_s102` slots, in the order the script writes them:
+            # last 日常 / last 特別 / talks today @ last day, and d8 if set.
+            f" 会話{talk['lastDaily']}/{talk['lastSpecial']}/{talk['todayTalks']}"
+            f"@{talk['lastYear']}-{talk['lastMonthDay']:04d}"
+            + ("·d8" if talk["mainSeen"] else "")
         )
 
     # ── writing ────────────────────────────────────────────────────────────
@@ -607,9 +661,8 @@ class Romance:
         return True
 
     def talk(self, name: str, today: str | None = None,
-             gain: int = GAIN_PLAIN,
-             levels: "list[int] | None" = None) -> tuple[bool, bool]:
-        """One 日常会話 worth of 親密さ. Returns ``(changed, advanced)``.
+             gain: int = GAIN_PLAIN) -> bool:
+        """One 日常会話 worth of 親密さ. True if the number moved.
 
         ``gain`` is what the script that just played is worth, which the caller
         gets from talk_gain(): a flat number for the 232 conversations that have
@@ -624,36 +677,32 @@ class Romance:
 
         ⚠️ The daily rule is the scripts' own: keep the best single grant of the
         day, so a repeat is worth the difference and a worse repeat is worth
-        nothing. Returning ``(False, False)`` for that case is not an error —
-        it is the manual's sentence happening.
+        nothing. Returning False for that case is not an error — it is the
+        manual's sentence happening.
 
-        ``levels`` is AbilitySheet.levels(), and it is the second gate: 親密さ
-        can be at the rung and her first メインイベント still not play, because
-        「能力が低い間は見られない」. 親密さ keeps climbing while that holds —
-        the script's `OP_RTN` skips the event, it does not refuse the
-        conversation — so this returns ``(True, False)``, the same shape as
-        being short of the rung.
+        ⭐⭐⭐ Round 346: this credits and nothing more. Whether the number is
+        now enough for her next メインイベント -- the 親密さ rung and, at
+        進行度 0, the 能力 gate -- is her own `_s102`'s question, asked on the
+        next right-click of a new day (`talk_cells`), and the step itself is
+        booked by `_s104` when that event has played (`absorb_talk`). Until
+        round 345 this method stepped 進行度 the moment the rung was reached,
+        which is a reading nothing in the scripts supports: 親密さ is a
+        running total, and the gates are absolute, so a rung once reached
+        stays reached.
         """
         row = self.state[name]
         if not row["debut"]:
-            return False, False
+            return False
         today = today or date.today().isoformat()
         if row["lastTalk"] != today:
             row["lastTalk"] = today
             row["todayBest"] = 0
         credit = max(0, gain - row["todayBest"])
         if credit == 0:
-            return False, False
+            return False
         row["intimacy"] += credit
         row["todayBest"] = gain
-        if row["intimacy"] < intimacy_needed(row["progress"]):
-            return True, False
-        if ability_short(name, row["progress"], levels):
-            return True, False
-        # No subtraction: 親密さ is a running total and the next rung is higher,
-        # not the same one again. What the old model called "carrying the
-        # remainder over" was an artefact of the invented constant.
-        return True, self.see_main_event(name)
+        return True
 
     def gate_of(self, name: str) -> dict:
         """``{ability index: レベル needed}`` at her current 進行度, or ``{}``.
@@ -678,28 +727,20 @@ class Romance:
         return ability_short(name, row["progress"], levels)
 
     def see_main_event(self, name: str) -> bool:
-        """One メインイベント watched: she moves to the next spot.
+        """Step her 進行度 by hand (/rom ev), or when `_s104` cannot be run.
 
-        ⚠️ Open question, round 171, deliberately not acted on: her *debut*
-        event is itself a メインイベント (その１ = category 0, id 0 — which is
-        exactly what `capture_npc` +394 points at), so playing it lands here and
-        counts as a step. The placement tables say the spot index counts main
-        events **after** the debut, which makes that one step too many.
+        ⭐⭐⭐ Round 346: this is no longer how a watched メインイベント counts.
+        The original books it in `<name>_s104` -- run after the event ends,
+        it steps `c000[0xd900]` only when `_s102` left -1 in `e100`, i.e.
+        when the event it answered was the メイン -- and `absorb_talk` takes
+        that write. So the count and its guard both live in the data; this
+        stays for steering a test and as the fallback `_romance_credit`
+        takes when the script is not on the machine.
 
-        ⚠️⚠️ It still does not bite, but round 194 changed *why*, so do not read
-        the old reason back in. It used to be «その１ never plays, because
-        initial_cast() marks the two starters as debuted without it». Now it
-        does play — that is the whole of round 194 — and the reason is the path
-        instead: this method is only ever reached through
-        `session.talking_about`, which `mps_session` assigns in exactly one
-        place, the NPC-event door. 初登校 comes through `TitleEvent`, which
-        assigns nothing, so `_romance_credit` returns before it gets here.
-        ⇒ the only other way in is still /sc by hand.
-
-        ⛔️ Which is also why `_script_debut` takes 登場 and refuses 進行度: the
-        script's own `PCEV[0x6020+i]` write would be the second count of the
-        same rung. Fixing the underlying question means deciding what `progress`
-        counts, and that is a change to what saves mean; it wants its own round.
+        ⚠️ The round-171 question -- her debut event is itself a メイン (その１,
+        category 0 id 0) and would count as a step if it came through here --
+        is closed by the same move: 初登校 reaches nothing that runs `_s104`,
+        and `_s104` counts nothing whose `e100` is not -1.
         """
         row = self.state[name]
         if not row["debut"] or row["progress"] >= CANDIDATES[name].events:
@@ -769,6 +810,37 @@ class Romance:
         """
         return {**self.data_cells(), ("CTX", (CTX_MENU_ITEM, 0)): menu_item}
 
+    def talk_cells(self, menu_item: int, levels: "list[int] | None",
+                   today: "date | None" = None) -> dict:
+        """Everything `<name>_s102` / `_s104` read: `locker_cells` plus the 会話
+        slots of all five, today's date, and the 能力 レベル.
+
+        ⭐ The date is the server's real one, the same clock `talk` keeps its
+        daily rule on -- the script wants year, month and day as three SYSTEM
+        cells and compares them with the ones it wrote last time, which is
+        how 「a new day」 and 「more than a week」 are decided (2.287 二).
+        ⚠️ ``levels`` may be None when there is no 能力 sheet to read; then the
+        cells are simply not supplied, and a script that reads them (天宮's
+        and 桜井's at 進行度 0) stops with UnknownCell rather than being
+        told every レベル is 0 -- a fallback and a log line, not a gate
+        quietly failed.
+        """
+        today = today or date.today()
+        cells = self.locker_cells(menu_item)
+        cells[("SYSTEM", 0)] = today.year
+        cells[("SYSTEM", 1)] = today.month
+        cells[("SYSTEM", 2)] = today.day
+        for name, row in self.state.items():
+            i = candidate_index(name)
+            talk = row["talk"]
+            for key, slot in CTX_TALK_SLOTS.items():
+                cells[("CTX", (slot, i))] = talk[key]
+            cells[("CTX", (CTX_MAIN_SEEN, TALK_CATEGORY_BASE + i))] = talk["mainSeen"]
+        if levels is not None:
+            for j in range(5):
+                cells[("PC", PC_ABILITY_BASE + j)] = levels[j] if j < len(levels) else 0
+        return cells
+
     def absorb(self, writes: dict) -> bool:
         """Take a script run's cell writes back into the save. True if changed.
 
@@ -800,6 +872,54 @@ class Romance:
                 changed |= self.letter_event != value
                 self.letter_event = value
         return changed
+
+    def absorb_talk(self, writes: dict) -> bool:
+        """Take the CTX writes of `_s102` / `_s104` / `_s101` back. True if changed.
+
+        ⭐⭐⭐ Three scripts, three kinds of write, and 進行度 is the one that
+        matters: `_s104` steps `c000[0xd900]` after a メイン played, and this
+        is where that becomes ``progress`` (minus PROGRESS_OFFSET, clamped to
+        her event count). `_s101` clears `d8` as it places her; `_s102` keeps
+        the five e1xx slots. Anything else a run wrote (`0x8000` 「ran」, and
+        the PC cells `absorb` handles) is left alone here.
+        """
+        names = list(CANDIDATES)
+        by_slot = {slot: key for key, slot in CTX_TALK_SLOTS.items()}
+        changed = False
+        for (family, address), value in writes.items():
+            if family != "CTX" or not isinstance(address, tuple):
+                continue
+            slot, subject = address
+            value = int(value)
+            if slot in by_slot and 0 <= subject < len(names):
+                talk = self.state[names[subject]]["talk"]
+                key = by_slot[slot]
+                changed |= talk[key] != value
+                talk[key] = value
+            elif TALK_CATEGORY_BASE <= subject < TALK_CATEGORY_BASE + len(names):
+                row = self.state[names[subject - TALK_CATEGORY_BASE]]
+                if slot == CTX_MAIN_SEEN:
+                    changed |= row["talk"]["mainSeen"] != value
+                    row["talk"]["mainSeen"] = value
+                elif slot == CTX_PROGRESS:
+                    name = names[subject - TALK_CATEGORY_BASE]
+                    want = max(0, min(value - PROGRESS_OFFSET, CANDIDATES[name].events))
+                    changed |= row["progress"] != want
+                    row["progress"] = want
+        return changed
+
+    def reset_talk(self, name: str) -> bool:
+        """Put her 会話 slots back to what a new game has (/rom <名前> x).
+
+        For steering a test: with the last-talk date at 0 the next right-click
+        is 「a new day, first time ever」, which is the one that offers her
+        メイン if 親密さ is there.
+        """
+        row = self.state[name]
+        if row["talk"] == TALK_SLOT_DEFAULTS:
+            return False
+        row["talk"] = dict(TALK_SLOT_DEFAULTS)
+        return True
 
     def waiting_letter(self) -> str | None:
         """Whose letter is in the locker, if anyone's."""

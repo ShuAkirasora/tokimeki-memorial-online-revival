@@ -938,6 +938,13 @@ class Result:
     def __init__(self) -> None:
         self.menus: list[int] = []
         self.events: list[tuple[int, int]] = []
+        # ⭐ The script said, in so many words, that there is no event: it
+        # reached `EVENT_CALL 0xffff`. Apart from an empty `events` because
+        # the two are different answers -- a run that ended some other way
+        # (OP_END with nothing called) is a script that never got to the
+        # question, and a caller falling back on that is right to; a caller
+        # falling back on this one would be overruling the script.
+        self.no_event: bool = False
         self.writes: dict[tuple[str, int], int] = {}
         # Cells the script wrote a value this machine could not produce into.
         # Kept out of `writes` on purpose -- see the DATA_WRITE case.
@@ -966,21 +973,30 @@ class Result:
 
     @property
     def event(self) -> tuple[int, int] | None:
-        """The first `capture_npc_event` key called, or None if there was none."""
+        """The `capture_npc_event` key called, or None if there was none.
+
+        ⭐ Since round 346 there is at most one: `OP_EVENT_CALL` ends the run
+        (see the instruction). `events` stays a list because a machine can be
+        run more than once over the same Result (`cibispawns` does, for the
+        dead gates) and each run may call one.
+        """
         return self.events[0] if self.events else None
 
     def __repr__(self) -> str:
         return (
             f"menus={[hex(m) for m in self.menus]} "
-            f"events={self.events} writes={sorted(self.writes)}"
+            f"events={self.events}{' (none)' if self.no_event else ''} "
+            f"writes={sorted(self.writes)}"
         )
 
     def summary(self) -> str:
         """One line for a log: what a run produced, unknowns included."""
-        parts = [f"{family}[{slot:#06x}]={value}"
-                 for (family, slot), value in sorted(self.writes.items())]
-        parts += [f"{family}[{slot:#06x}]=⊤"
-                  for family, slot in sorted(self.unknown_writes)]
+        # ⚠️ `cell_name`, not a hex format: a CTX slot is a (slot, subject)
+        # pair and has been in `writes` since round 346.
+        parts = [f"{cell_name(family, slot)}={value}"
+                 for (family, slot), value in sorted(self.writes.items(), key=repr)]
+        parts += [f"{cell_name(family, slot)}=⊤"
+                  for family, slot in sorted(self.unknown_writes, key=repr)]
         got = " ".join(f"{actor}:{keyword_id}" for actor, keyword_id in self.keywords)
         return ("writes: " + (" ".join(parts) if parts else "none")
                 + (f" · keywords (actor:id) {got}" if got else "")
@@ -1228,7 +1244,21 @@ class Machine:
         if op == OP_CTX_UPDATE:
             reg = _refer_register(args)
             if reg is not None:
-                self.cells[("CTX", _ctx_address(args))] = self._get(reg)
+                key = ("CTX", _ctx_address(args))
+                value = self._get(reg)
+                self.cells[key] = value
+                # ⭐ Round 346: recorded in `Result.writes` like a PC/PCEV
+                # write, with the same rule for a value this machine could not
+                # produce. Until now a CTX write reached only `cells`, which
+                # was enough while nothing persisted one; the 会話 chooser's
+                # five bookkeeping slots and `_s104`'s 進行度 step are CTX
+                # writes a caller has to keep (`romance.absorb_talk`).
+                if _unknown(value):
+                    self.result.unknown_writes.add(key)
+                    self.result.writes.pop(key, None)
+                else:
+                    self.result.writes[key] = value
+                    self.result.unknown_writes.discard(key)
             return i + 1
 
         if op == OP_EMIT:
@@ -1236,12 +1266,35 @@ class Machine:
             return i + 1
 
         if op == OP_EVENT_CALL:
+            # ⭐⭐⭐ A return, not a note. The event named here is the answer
+            # to the question the script was run for (0x6305's key, a
+            # placement's cibi key), and the run is over the moment it is
+            # named; 0xffff is the same return with the answer 「none」.
+            #
+            # ⚠️⚠️ Round 346 turned this from 「record it and carry on」 into a
+            # return, and the argument is a dynamic one: read
+            # `<name>_s102` (the 会話 chooser) the old way and the 日常 pool
+            # that follows the メイン arm overwrites the -1 that arm leaves
+            # in `c000[0xe100]`, so `<name>_s104` -- which advances 進行度
+            # only on `e100 < 0` -- can never fire, and the original's story
+            # could never have moved. Read it as a return and every write
+            # the three pools make sits before their own EVENT_CALL, the
+            # fallback call at the foot of each draw ladder is reached only
+            # when the die is out of range, and 「reroll until it differs
+            # from last time」 holds. Of the three readings only this one is
+            # consistent with the writers and readers of those cells
+            # (2.287 三). ⭐ Nothing already running here could
+            # tell the difference: `lck_s102` and every `_s101` follow each
+            # call with the next arm's test or a jump to the end, and the
+            # arms are exclusive, so the first call was always the only one.
             field = int.from_bytes(args[0:2], "little")
-            if field != EMIT_END:
+            if field == EMIT_END:
+                self.result.no_event = True
+            else:
                 # (id << 5) | categoryId -- five bits for the category because
                 # categories run to 20 and four bits do not hold that.
                 self.result.events.append((field & 0x1F, field >> 5))
-            return i + 1
+            return None
 
         if op == OP_JP:
             return self.script.index.get(_jump_target(args))

@@ -346,7 +346,7 @@ HELP = (
     "/cid <cat>:<id> … charaId を指定して立たせる (先生・秘書・顧問はこれ)",
     "/npc <cat>:<id> <cat>:<id> NPC制御 (2つめが台本キー)",
     "/npca この地図の恋愛候補生を配置し直す (ロビー読込時は自動) / <始> <終> [分類] で生キー",
-    "/rom [名前] [debut|talk|ev|p <n>] 恋愛の状態を見る・動かす",
+    "/rom [名前] [debut|talk|ev|x|p <n>|i <n>] 恋愛の状態を見る・動かす",
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
     "/opt [<項目> <on|off>|clear] オプション (授業/試験/通知表公開/経歴公開)",
     "/career [probe <inClass> <称号> <登校> <時間> <出席> <奥義>|probe off"
@@ -558,6 +558,9 @@ class Reply(NamedTuple):
     # see /nev. It is a separate field because it is a separate question: the
     # pair above says which record, this says which table.
     npc_event_npc: int | None = None
+    # True: the pair above outranks her own 会話 chooser (`_s102`) for the rest
+    # of the session; False: hand the choice back to her; see /nev.
+    npc_event_forced: bool | None = None
     # A new sub_menu.bin key to answer 0x6301 with; see /smenu.
     sub_menu: int | None = None
     # "auto" or "manual": how 0x5603 MsgClRequestNpcEventEnd is answered; see
@@ -779,13 +782,15 @@ def respond(
             # script's to know, so this cannot say where to go and find her.
             if love is None:
                 return Reply(["恋愛状態が読めない (キャラ未選択?)"])
-            cast, notes = cibispawns.on_map(love, map_id)
+            cast, notes, placed = cibispawns.on_map(love, map_id)
             if not cast:
-                return Reply(["この地図に立つ恋愛候補生がいない (/rom で確認)"] + notes)
+                return Reply(["この地図に立つ恋愛候補生がいない (/rom で確認)"] + notes,
+                             romance_save=placed)
             return Reply(
                 [f"ちびキャラ {len(cast)}人 " + " ".join(cibispawns.describe(c) for c in cast)]
                 + notes,
                 sends=[(MSG_SV_NOTIFY_NPC_CONTROL, cibispawns.pack(c)) for c in cast],
+                romance_save=placed,
             )
         else:
             # The probe form, kept for keys the cast rule does not reach: 4:179
@@ -855,9 +860,8 @@ def respond(
             if args and args[0].lower() not in quality:
                 return Reply(["/rom <名前> talk [best|plain|worst]"])
             levels = sheet.levels() if sheet is not None else None
-            changed, advanced = love.talk(
-                name, gain=quality[args[0].lower()] if args else romance.GAIN_PLAIN,
-                levels=levels)
+            changed = love.talk(
+                name, gain=quality[args[0].lower()] if args else romance.GAIN_PLAIN)
             if not changed:
                 # Not a failure: 「一日に何度も…あまり上がりません」 means a
                 # repeat that is no better than today's best is worth nothing.
@@ -878,16 +882,16 @@ def respond(
                      love.line(name)],
                     romance_save=True,
                 )
-            if advanced:
-                # Worth saying out loud: this is the moment she moves, and the
-                # whole point of the intimacy counter is that it eventually does
-                # something visible. /npca to see it.
-                return Reply(
-                    [f"日常会話 -> メインイベント! {love.line(name)} (/npca で反映)"],
-                    romance_save=True,
-                )
+            # ⭐ Round 346: no 「-> メインイベント!」 here any more. Whether the
+            # number is enough is her `_s102`'s question on the next
+            # right-click of a new day, and the step is `_s104`'s to book.
         elif verb == "ev":
             changed = love.see_main_event(name)
+        elif verb == "x":
+            # Round 346: the 会話 slots back to a new game's, so the next
+            # right-click is 「new day, first time」 -- the one that offers her
+            # メイン when 親密さ is there. For steering a test.
+            changed = love.reset_talk(name)
         elif verb in ("p", "i"):
             setter = love.set_progress if verb == "p" else love.set_intimacy
             try:
@@ -896,7 +900,7 @@ def respond(
                 return Reply([f"/rom <名前> {verb} <数>"])
         else:
             return Reply(
-                ["/rom [名前] [debut|talk [best|plain|worst]|ev|p <n>|i <親密さ>]"])
+                ["/rom [名前] [debut|talk [best|plain|worst]|ev|x|p <n>|i <親密さ>]"])
         return Reply([love.line(name)], romance_save=changed)
 
     if word == "card":
@@ -2139,10 +2143,14 @@ def respond(
         #   /nev 0:0 2:0    石打野球部入退部c001 out of common_npc_event
         #   /nev 64:1 3:0   担任（女）リーダー試験c002 out of general_npc_event
         #   /nev 16:1 echo  back to echoing
+        #   /nev script     ⭐ round 346: back to her own _s102 choosing
         words = rest.split()
         if not words:
-            return Reply(["/nev <cat>:<id> [<npcCat>:<npcId>|echo]"
+            return Reply(["/nev <cat>:<id> [<npcCat>:<npcId>|echo] | /nev script"
                           "  例: /nev 16:1 (天宮日常会話c011)"])
+        if words[0] == "script":
+            return Reply(["会話イベント = 彼女自身の _s102 が選ぶ (既定)"],
+                         npc_event_forced=False)
         event = parse_id_pair(words[0])
         if event is None:
             return Reply([f"イベントidが読めない: {words[0]}"])
@@ -2159,7 +2167,8 @@ def respond(
                 npc = (pair[0] << 16) | pair[1]
                 lines.append(f"npcId = {pair[0]}:{pair[1]} → "
                              f"{script.event_table_for(npc)}")
-        return Reply(lines, npc_event=event, npc_event_npc=npc)
+        lines.append("（_s102 は退く; /nev script で戻す）")
+        return Reply(lines, npc_event=event, npc_event_npc=npc, npc_event_forced=True)
 
     if word == "smenu":
         # Which sub_menu.bin key 0x6301 is answered with. The request says
