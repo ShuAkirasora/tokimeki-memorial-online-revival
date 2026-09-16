@@ -275,7 +275,11 @@ EXAM_SCHOOL_ID = 1
 # guess: the shape reader walks each Input_<reply> deserializer and reports
 # the ones that read a u16 and then loop (``counted``).
 EMPTY_LIST_REPLIES = {
-    0x0312: 0x0313,  # MsgClQueryGalleryList  -> MsgSvResultGalleryList
+    # ⚠️ 0x0312 MsgClQueryGalleryList left in round 348: the title screen's
+    # おまけ pages (ギャラリー and エンディング both) draw one candidate per
+    # entry of its answer, and the client asks exactly once per login, so an
+    # empty list was two pages with nobody on them. It is answered out of the
+    # account's own saves now, next to the ending list below.
     # ⚠️ 0x0315 MsgClQueryEndingList left in round 347: it is answered out of
     # the account's own saves now (the ending list branch next to 0x0318),
     # because the title screen's おまけ menu is built from it and an empty
@@ -427,16 +431,51 @@ MSG_SV_RESULT_CHARACTER_LIST = 0x0319
 # any character is picked, so it is an account's list, not a character's. The
 # reader (Input_MsgSvResultEndingList, 0x8f9410) takes a u16 count and then
 # that many u32s through the stream's +0x24 slot, into ten dwords at +4: so
-# ten is the most the client can hold. What each u32 means is measured on the
-# real client (2.289): eight candidate encodings, including this one, all
-# left the title menu at two buttons, so what the client does with an entry is
-# not known yet.
-# INVENTED — what one ending-list entry is: the candidate's index, the same
-# number 0x5606 carries when it picks whose credits roll. A reading, not a
-# measurement; see 2.289 for the eight encodings that were tried.
+# ten is the most the client can hold. What each u32 is, read off the client
+# in round 348 (2.290): an npc id in the `category:id` shape -- the client's
+# own check (0x404fdf) passes 0x10000..0x11ffff and nothing else, and then
+# keeps only the low half, which is what it compares with the gallery list's
+# u16 npcId and with the エンディング page's own key. The low half is the
+# candidate's index, the same number 0x5606 carries; a bare index fails the
+# check and draws nothing, which is what round 347's eight tries were.
+# INVENTED — the high half of an ending-list entry: 1. The client accepts
+# any category 1..0x11 and never reads it back; 1 is capture_npc's 恋愛候補生
+# category, the one their `<i>:<event>` keys already use.
+ENDING_LIST_CATEGORY = 1
 MSG_CL_QUERY_ENDING_LIST = 0x0315
 MSG_SV_RESULT_ENDING_LIST = 0x0316
 ENDING_LIST_MAX = 10
+# ⭐ Round 348: the other list the title screen's おまけ menu is built from.
+# The reader (Input_MsgSvResultGalleryList, 0x8f9020) takes a u16 count and
+# then, per entry, u16 npcId + u32 eventFlag[2] + u32 emotionFlag[12] -- 58
+# bytes, ten entries at most. The client asks once per login, the first time
+# ギャラリー is opened, and keeps the answer: both おまけ pages draw one
+# candidate per entry, and the エンディング page lights the ones whose npcId
+# is also in the 0x0316 list. So npcId is the candidate's index, the same
+# number 0x5606 carries -- the client files 0x5606's {npcId, eventFlag[2]}
+# into a record of this very shape. Measured on the real client (2.290).
+MSG_CL_QUERY_GALLERY_LIST = 0x0312
+MSG_SV_RESULT_GALLERY_LIST = 0x0313
+GALLERY_LIST_MAX = 10
+# The flag words, read off the client's own tests (0x9c6a20 / 0x9c69a0, the
+# two the ギャラリー page asks before it draws a candidate at all): a record
+# is `u16 npcId; u32 eventFlag[2]; u32 emotionFlag[12]`, eventFlag[r] bit n
+# (n = 1..9) is 「event n has a photo」 on route r, emotionFlag[r + e*2] bit n
+# is expression e (0..5) of that event, and the tenth slot of the page is
+# not a bit at all -- it is 「she is in the 0x0316 list」. A candidate with
+# no bit set on either route is not drawn, whatever the ending list says.
+GALLERY_ROUTES = 2
+GALLERY_EMOTIONS = 6
+GALLERY_EVENT_BITS = 9
+# INVENTED — which route a photo goes on: 0. The record has two, the page
+# lights a slot if either has the bit, and nothing here says what the second
+# route is (the client tests both and never writes one).
+GALLERY_ROUTE = 0
+# INVENTED — which events have a photo: e001 up to her 進行度 + 1, as bits
+# 1..進行度+1 (e001 is her debut, 進行度 counts the メイン events after it).
+# That the gallery's nine slots are e001..e009 in order is the reading; what
+# each slot shows on the real client is measured in 2.290.
+GALLERY_FIRST_EVENT_BIT = 1
 MSG_CL_REQUEST_CHARACTER_CREATE = 0x030C
 MSG_SV_OK_CHARACTER_CREATE = 0x030D
 MSG_SV_NG_CHARACTER_CREATE = 0x030E
@@ -6105,8 +6144,42 @@ class MpsServer:
                 return self._answer(
                     session, sequence, MSG_SV_RESULT_ENDING_LIST,
                     struct.pack(">H", len(entries))
-                    + b"".join(struct.pack(">I", i) for i in entries),
+                    + b"".join(struct.pack(">I", (ENDING_LIST_CATEGORY << 16) | i)
+                               for i in entries),
                 )
+            if msg_type == MSG_CL_QUERY_GALLERY_LIST:
+                # ⭐ Round 348. Everyone who has appeared to any character of
+                # this account, as candidate indices, deduplicated and in
+                # roster order -- the same account-level reading as the
+                # ending list, for the same reason (the menu lists people).
+                # p02_07: 「恋愛候補生がゲーム中に登場すると、おまけモードに
+                # 進むことができます」, and the manual's 登場 is Romance's debut.
+                store = self._chars(session)
+                best: dict[int, int] = {}
+                for record in store.records:
+                    love = store.romance(int(record["charaId"]))
+                    if love is not None:
+                        for i, progress in love.gallery().items():
+                            best[i] = max(best.get(i, 0), progress)
+                seen = set(best)
+                entries = sorted(seen)[:GALLERY_LIST_MAX]
+                print(f"[{self.tag}] gallery list: "
+                      + (" ".join(f"{list(romance.CANDIDATES)[i]}(進行{best[i]})" if 0 <= i < 5 else f"{i:#x}"
+                                  for i in entries)
+                         if entries else "なし"))
+                body = struct.pack(">H", len(entries))
+                for i in entries:
+                    # Bits GALLERY_FIRST_EVENT_BIT .. +進行度, never past the
+                    # ninth slot; the other route and every expression stay 0.
+                    shown = min(best[i] + 1, GALLERY_EVENT_BITS)
+                    events = sum(1 << (GALLERY_FIRST_EVENT_BIT + k) for k in range(shown)
+                                 if GALLERY_FIRST_EVENT_BIT + k <= GALLERY_EVENT_BITS)
+                    event_words = [0] * GALLERY_ROUTES
+                    event_words[GALLERY_ROUTE] = events
+                    body += struct.pack(">H", i) + struct.pack(
+                        f">{GALLERY_ROUTES + GALLERY_ROUTES * GALLERY_EMOTIONS}I",
+                        *event_words, *([0] * (GALLERY_ROUTES * GALLERY_EMOTIONS)))
+                return self._answer(session, sequence, MSG_SV_RESULT_GALLERY_LIST, body)
             if msg_type == 0x0303:
                 # Reply ids run Request/Ok/Ng in threes (0x0200/01/02 did), so
                 # MsgClRequestSchoolSelect(0x0303) answers as 0x0304.

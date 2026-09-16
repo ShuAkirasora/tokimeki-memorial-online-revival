@@ -661,6 +661,25 @@ class Romance:
         return [candidate_index(name) for name in CANDIDATES
                 if self.state[name]["ending"]]
 
+    def debuts(self) -> list[int]:
+        """Candidate indices who have appeared to this character.
+
+        In roster order. The title screen's gallery list (0x0313) is made of
+        this: p02_07 opens おまけ to 「ゲーム中に登場した恋愛候補生」, and
+        登場 here is the same debut flag `on_stage` reads.
+        """
+        return [candidate_index(name) for name in CANDIDATES
+                if self.state[name]["debut"]]
+
+    def gallery(self) -> dict[int, int]:
+        """Candidate index -> her 進行度, for everyone who has appeared.
+
+        What the gallery list's photo bits are made of: 進行度 is how many
+        メイン events she has shown this character after her debut.
+        """
+        return {candidate_index(name): self.state[name]["progress"]
+                for name in CANDIDATES if self.state[name]["debut"]}
+
     # ── writing ────────────────────────────────────────────────────────────
     def debut(self, name: str) -> bool:
         """Mark her as having appeared, by hand (the /rom console command).
