@@ -346,7 +346,7 @@ HELP = (
     "/cid <cat>:<id> … charaId を指定して立たせる (先生・秘書・顧問はこれ)",
     "/npc <cat>:<id> <cat>:<id> NPC制御 (2つめが台本キー)",
     "/npca この地図の恋愛候補生を配置し直す (ロビー読込時は自動) / <始> <終> [分類] で生キー",
-    "/rom [名前] [debut|talk|ev|x|p <n>|i <n>] 恋愛の状態を見る・動かす",
+    "/rom [名前] [debut|talk|ev|ed|x|p <n>|i <n>] 恋愛の状態を見る・動かす",
     "/card [ruler|clear|<科目> <出席> <成績> <課程> <点>] 通知表",
     "/opt [<項目> <on|off>|clear] オプション (授業/試験/通知表公開/経歴公開)",
     "/career [probe <inClass> <称号> <登校> <時間> <出席> <奥義>|probe off"
@@ -887,6 +887,11 @@ def respond(
             # right-click of a new day, and the step is `_s104`'s to book.
         elif verb == "ev":
             changed = love.see_main_event(name)
+        elif verb == "ed":
+            # Round 347: book her confession as received, so the title
+            # screen's おまけ→エンディング list carries her after the next
+            # 下校. The real writer is the 0x5606 that plays her credits.
+            changed = love.see_ending(name)
         elif verb == "x":
             # Round 346: the 会話 slots back to a new game's, so the next
             # right-click is 「new day, first time」 -- the one that offers her
@@ -900,7 +905,7 @@ def respond(
                 return Reply([f"/rom <名前> {verb} <数>"])
         else:
             return Reply(
-                ["/rom [名前] [debut|talk [best|plain|worst]|ev|x|p <n>|i <親密さ>]"])
+                ["/rom [名前] [debut|talk [best|plain|worst]|ev|ed|x|p <n>|i <親密さ>]"])
         return Reply([love.line(name)], romance_save=changed)
 
     if word == "card":

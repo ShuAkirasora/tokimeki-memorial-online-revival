@@ -276,7 +276,10 @@ EXAM_SCHOOL_ID = 1
 # the ones that read a u16 and then loop (``counted``).
 EMPTY_LIST_REPLIES = {
     0x0312: 0x0313,  # MsgClQueryGalleryList  -> MsgSvResultGalleryList
-    0x0315: 0x0316,  # MsgClQueryEndingList   -> MsgSvResultEndingList
+    # ⚠️ 0x0315 MsgClQueryEndingList left in round 347: it is answered out of
+    # the account's own saves now (the ending list branch next to 0x0318),
+    # because the title screen's おまけ menu is built from it and an empty
+    # list was the reason that menu had never appeared.
     # ⚠️ 0x0406 MsgClQueryLockerList used to be stubbed here with an empty list.
     # It is answered for real now, out of the account's own store -- see
     # item.Locker and the 0x0406 branch below -- because 0x4D0A can put things
@@ -419,6 +422,21 @@ FIXED_REPLIES = {
 
 MSG_CL_QUERY_CHARACTER_LIST = 0x0318
 MSG_SV_RESULT_CHARACTER_LIST = 0x0319
+# ⭐ The title screen's おまけ→エンディング list (manual p02_07 / p09_03). Asked
+# on the game connection right after login and again after every 下校 -- before
+# any character is picked, so it is an account's list, not a character's. The
+# reader (Input_MsgSvResultEndingList, 0x8f9410) takes a u16 count and then
+# that many u32s through the stream's +0x24 slot, into ten dwords at +4: so
+# ten is the most the client can hold. What each u32 means is measured on the
+# real client (2.289): eight candidate encodings, including this one, all
+# left the title menu at two buttons, so what the client does with an entry is
+# not known yet.
+# INVENTED — what one ending-list entry is: the candidate's index, the same
+# number 0x5606 carries when it picks whose credits roll. A reading, not a
+# measurement; see 2.289 for the eight encodings that were tried.
+MSG_CL_QUERY_ENDING_LIST = 0x0315
+MSG_SV_RESULT_ENDING_LIST = 0x0316
+ENDING_LIST_MAX = 10
 MSG_CL_REQUEST_CHARACTER_CREATE = 0x030C
 MSG_SV_OK_CHARACTER_CREATE = 0x030D
 MSG_SV_NG_CHARACTER_CREATE = 0x030E
@@ -3287,6 +3305,9 @@ class MpsServer:
                 npc_id = love.letter_event
                 print(f"[{self.tag}] npc event end — {names[npc_id]} の"
                       f"エンディングへ (0x5606 npcId={npc_id})")
+                # ⭐ Round 347: and she goes on the title screen's おまけ list
+                # from here on (Romance.see_ending; 0x0315 reads it back).
+                love.see_ending(names[npc_id])
                 # One-shot: the credits play once, and the next event out of the
                 # locker is a fresh question.
                 love.letter_event = romance.NO_LETTER_EVENT
@@ -6065,6 +6086,26 @@ class MpsServer:
                 print(f"[{self.tag}] characters: {self._chars(session).summary()}")
                 return self._answer(
                     session, sequence, MSG_SV_RESULT_CHARACTER_LIST, self._chars(session).entries()
+                )
+            if msg_type == MSG_CL_QUERY_ENDING_LIST:
+                # ⭐ Round 347. Every confession any character of this account
+                # has received, as candidate indices, deduplicated and in roster
+                # order: the account is what the client is logged in as here,
+                # and the menu this builds lists people, not playthroughs.
+                store = self._chars(session)
+                seen: set[int] = set()
+                for record in store.records:
+                    love = store.romance(int(record["charaId"]))
+                    if love is not None:
+                        seen.update(love.endings())
+                entries = sorted(seen)[:ENDING_LIST_MAX]
+                print(f"[{self.tag}] ending list: "
+                      + (" ".join(list(romance.CANDIDATES)[i] if 0 <= i < 5 else f"{i:#x}" for i in entries)
+                         if entries else "なし"))
+                return self._answer(
+                    session, sequence, MSG_SV_RESULT_ENDING_LIST,
+                    struct.pack(">H", len(entries))
+                    + b"".join(struct.pack(">I", i) for i in entries),
                 )
             if msg_type == 0x0303:
                 # Reply ids run Request/Ok/Ng in threes (0x0200/01/02 did), so

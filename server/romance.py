@@ -602,6 +602,13 @@ class Romance:
                 # PC[0x3910+i]: her letter is sitting in the locker. Written by
                 # lck_s103 when the gates open, cleared only by a new game.
                 "letter": int(row.get("letter", 0)),
+                # ⭐ Round 347: her confession has been received -- the moment
+                # 0x5606 named her and the credits rolled. This is what the
+                # title screen's おまけ→エンディング list is made of (p02_07:
+                # 「過去に告白を受けたことがある恋愛候補生」), so it is kept per
+                # candidate and never cleared by anything short of a new game.
+                # Absent from saves before round 347; 0 is what nobody has yet.
+                "ending": int(row.get("ending", 0)),
                 # The 会話 bookkeeping her `_s102`/`_s104` keep (CTX_TALK_SLOTS
                 # and CTX_MAIN_SEEN). Absent from saves before round 346; 0 is
                 # what the original's new-game reset writes anyway.
@@ -643,7 +650,16 @@ class Romance:
             f" 会話{talk['lastDaily']}/{talk['lastSpecial']}/{talk['todayTalks']}"
             f"@{talk['lastYear']}-{talk['lastMonthDay']:04d}"
             + ("·d8" if talk["mainSeen"] else "")
+            + (" ED済" if row["ending"] else "")
         )
+
+    def endings(self) -> list[int]:
+        """Candidate indices whose confession this character has received.
+
+        In roster order, which is also the order the ending list goes out in.
+        """
+        return [candidate_index(name) for name in CANDIDATES
+                if self.state[name]["ending"]]
 
     # ── writing ────────────────────────────────────────────────────────────
     def debut(self, name: str) -> bool:
@@ -658,6 +674,20 @@ class Romance:
         if self.state[name]["debut"]:
             return False
         self.state[name]["debut"] = True
+        return True
+
+    def see_ending(self, name: str) -> bool:
+        """Book her confession as received. True if this is the first time.
+
+        Written by the one server-driven exit from her `_e011` -- 0x5606 with
+        her index in it, which is what plays the credits -- and by hand from
+        /rom <名前> ed for steering a test. ⚠️ Not by reading the letter: the
+        manual's word is 告白, and 「読まない」 never gets there.
+        """
+        row = self.state[name]
+        if row["ending"]:
+            return False
+        row["ending"] = 1
         return True
 
     def talk(self, name: str, today: str | None = None,
