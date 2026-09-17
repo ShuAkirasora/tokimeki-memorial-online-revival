@@ -125,7 +125,7 @@ def summary() -> str:
 
 
 def keyword(keyword_id: int) -> "dict | None":
-    """`{attack, defence, fullScale, ability, sozai}` for one キーワード, or None.
+    """`{attack, defence, fullScale, ability, sozai, next}` for one キーワード.
 
     ⭐ attack/defence are `keyword.bin` +0x2e/+0x30 and they are in the SAME
     CURRENCY as 体力: 260-700 and 300-630 against opponents holding 550-1999.
@@ -142,6 +142,13 @@ def keyword(keyword_id: int) -> "dict | None":
     card can yield, all 94 of them inside `item.bin` categories 32-40 with no
     exceptions (2.156 二). ⚠️ Every one of the 261 rows has at least one slot,
     so an empty list means the table is old, not that this card yields nothing.
+
+    ⭐⭐ ``next`` is +46/+48/+50/+52 paired with +54/+56/+58/+60 as
+    ``[{"id": 602, "sex": 0}, …]`` -- the キーワード mastering this one hands
+    over, each with the 性別 it is handed to (0 male / 1 female / 2 either).
+    ⚠️ Unlike ``sozai`` an empty list IS ordinary: 189 of the 261 rows are
+    leaves, and mastering one of those earns nothing. club.keyword_successors
+    is the only reader and it carries the whole argument.
     """
     return _data().get("keyword", {}).get(str(keyword_id))
 

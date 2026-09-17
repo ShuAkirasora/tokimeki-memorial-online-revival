@@ -9281,8 +9281,28 @@ class MpsServer:
     def _battle_mastery(
         self, fighter: "clubbattle.Fighter", kind: int, payload: bytes,
         credit: bool,
-    ) -> None:
+    ) -> "list[int]":
         """Raise this card's 習熟度 for having been played. WRITES THE SAVE.
+
+        ⭐⭐⭐ ROUND 353: reaching 満 now also hands over what mastering this
+        card earns -- the 0x5C17 this method's own log line used to say 「would
+        be due here」. What comes back is WHICH キーワード were earned, already
+        granted and saved; the caller sends the message.
+        ⚠️⚠️ IT RETURNS THE IDS RATHER THAN THE MESSAGE, and that is not a
+        style choice -- round 353 wrote it the other way and a real client hung
+        up on the first battle. `_answer` STAMPS THE SEQUENCE NUMBER WHEN IT IS
+        CALLED, not when the bytes reach the wire, so building 0x5C17 here and
+        appending it after this action's 0x5C0F put seq 147 behind 148/149/150
+        -- a sequence number going backwards, which round 105 measured is
+        exactly what makes this client drop the connection (2.60). ⛔️ Never
+        hold a _tr_cast/_answer result back to send it later.
+        ⚠️ WHICH キーワード are earned is club.keyword_successors and the whole
+        argument lives there. ⚠️ WHERE in the turn the message goes is the
+        caller's, and it is a reading: the 入手キーワード list belongs to the
+        結果画面 0x5C1A opens, and the caller sends mid-turn on the assumption
+        the client banks it. ⛔️ What would refute that: a battle where a card
+        reaches 満 and the 結果画面 comes up with an empty list -- in which
+        case the send moves next to 0x5C1A, not the rule.
 
         ⭐⭐ p07_02: 「クラブ活動でキーワードを使用するとアップする熟練度です」.
         A card in the action stream IS that use, so this is the moment. Round
@@ -9331,7 +9351,7 @@ class MpsServer:
         different field, and an unread one.
         """
         if kind != club.DECK_ITEM_KEYWORD or len(payload) != club.DECK_ITEM_BYTES:
-            return
+            return []
         # ⚠️ Little-endian, the one field group in this protocol that is; the
         # measurement is at club.DECK_ITEM_KEYWORD.
         keyword_id, deck_use_count, _club_source = struct.unpack("<HHH", payload)
@@ -9348,7 +9368,7 @@ class MpsServer:
             missing = "no account claims them" if store is None else "they do not own it"
             print(f"[{self.tag}] 習熟度: charaId={fighter.chara_id:#x} "
                   f"played keyword {keyword_id} and {missing} — nothing to raise")
-            return
+            return []
         use_count = row[1]
         full = club.keyword_full_scale(keyword_id)
         stale = ("" if deck_use_count == use_count
@@ -9357,20 +9377,47 @@ class MpsServer:
             print(f"[{self.tag}] 習熟度: charaId={fighter.chara_id:#x} "
                   f"keyword={keyword_id} useCount {use_count} of {full} — already "
                   f"満, nothing to raise and no second 0x5C17{stale}")
-            return
+            return []
         after = club.use_count_after_use(use_count, keyword_id)
-        note = (" — reaches 満: 0x5C17 would be due here"
-                if club.keyword_is_mastered(after, keyword_id) else "")
+        reaches = club.keyword_is_mastered(after, keyword_id)
+        note = " — reaches 満" if reaches else ""
         if not credit:
             print(f"[{self.tag}] 習熟度 (replay, NOT stored): "
                   f"charaId={fighter.chara_id:#x} keyword={keyword_id} useCount "
                   f"{use_count} would go to {after} of {full}{note}{stale}")
-            return
+            return []
         row[1] = after
+        # ⭐⭐⭐ 満 hands over what this card earns. ⚠️ The sex is the OWNER's,
+        # read the same way drama.selectable_actors reads it, and a keyword the
+        # character already holds is dropped rather than re-granted: a キーワード
+        # is set membership and not a quantity, the same rule _script_keywords
+        # is under (2.151), and a second grant would reset a useCount the player
+        # has been filling.
+        earned: "list[int]" = []
+        if reaches:
+            sex = store.sex(fighter.chara_id)
+            for successor in club.keyword_successors(keyword_id, sex):
+                if state.owns_keyword(successor):
+                    continue
+                if state.grant_keyword(successor):
+                    earned.append(successor)
         store.set_club(fighter.chara_id, state)
         print(f"[{self.tag}] 習熟度: charaId={fighter.chara_id:#x} "
               f"keyword={keyword_id} useCount {use_count}->{after} of {full}"
               f"{note}{stale}")
+        if not reaches:
+            return []
+        if not earned:
+            # ⚠️ Worth a line: 「満 and nothing came of it」 has two innocent
+            # causes (a leaf row, or every eligible successor already held) and
+            # one that would not be -- a fighter whose sex this end cannot read.
+            print(f"[{self.tag}] 習熟度: keyword={keyword_id} reached 満 and "
+                  f"granted nothing (leaf row, already held, or no sex on file)"
+                  f" — no 0x5C17")
+        else:
+            print(f"[{self.tag}] 習熟度: charaId={fighter.chara_id:#x} mastered "
+                  f"{keyword_id} → 0x5C17 grants {earned}")
+        return earned
 
     def _battle_resolve(
         self, session: "_Session", battle: "clubbattle.Battle",
@@ -9469,7 +9516,14 @@ class MpsServer:
             # ⭐ Ahead of the probe, because this is about the card that was
             # actually played rather than the one /cb card swapped in — see
             # _battle_mastery. ⚠️⚠️ This one WRITES THE SAVE.
-            self._battle_mastery(fighter, kind, payload, credit_mastery)
+            # ⚠️ Computed HERE, sent after this action's 0x5C0F: the arithmetic
+            # has to see the card that was PLAYED (the probe below swaps the one
+            # 0x5C0E names), while a 0x5C17 ahead of the ActionBegin would
+            # announce the reward before the play. ⚠️⚠️ What is held back is the
+            # ID LIST, never a built message — see _battle_mastery for the
+            # sequence number that costs.
+            earned_keywords = self._battle_mastery(
+                fighter, kind, payload, credit_mastery)
             # ⚠️⚠️ PROBE ONLY, one shot, off unless /cb card armed it — see
             # Battle.card_probe. It swaps the deckItem this ActionBegin names,
             # which is the only way to make the client resolve a kind no deck
@@ -9572,6 +9626,16 @@ class MpsServer:
                 clubbattle.action_end_params(fighter.chara_id),
                 everyone,
             )
+            # ⭐⭐⭐ 0x5C17, if this play filled a 習熟度 gauge. Only the one who
+            # earned it hears it: a キーワード lands in one character's own list.
+            if earned_keywords:
+                out += self._tr_cast(
+                    session,
+                    0,
+                    clubbattle.MSG_SV_NOTIFY_BATTLE_GET_KEYWORD,
+                    clubbattle.get_keyword_params(earned_keywords),
+                    [fighter.chara_id],
+                )
         # ⭐⭐⭐ And this is what actually makes the turn run. MEASURED, round 88:
         # a real client was given 0x5C0D and both 0x5C0E/0x5C0F pairs and sat
         # perfectly still — the 「decided」 markers stayed over both heads, no

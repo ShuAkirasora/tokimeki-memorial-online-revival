@@ -133,15 +133,19 @@ MSG_CL_NOTIFY_BATTLE_TURN_END = 0x5C16
 #: * 0x5C18 GetItem IS SENT. Which クラブの素 a played キーワード can yield is
 #:   its own eight +0x36 slots (94 items inside `item.bin` 32-40, no
 #:   exceptions, 2.156 二); only the chance is invented (SOZAI_DROP_CHANCE).
-#: * 0x5C17 GetKeyword is NOT sent, and it is STOPPED rather than unknown. The
-#:   gate is restored down to one step: 習熟度 fills at +1 a use against each
-#:   card's own 満刻度 (`club.keyword_full_scale`), the 後継 are `keyword.bin`
-#:   +46..+52, and each successor carries a sex tag beside it (+54..+60, 0
-#:   male / 1 female / 2 either). ⚠️ What is missing is WHICH successor to
-#:   grant when a chain still offers two or three, and the user is holding that
-#:   question open on purpose.
+#: * ⭐⭐⭐ 0x5C17 GetKeyword IS SENT as of round 353, and the question that had
+#:   held it -- WHICH successor to grant when a chain offers two or three --
+#:   turned out to be the wrong question. The message carries a LIST, so the
+#:   answer is the whole eligible set; the argument and what would refute it
+#:   are at club.keyword_successors, and the moment it goes out is
+#:   mps_session._battle_mastery. The rest of the gate was already restored:
+#:   習熟度 fills at +1 a use against each card's own 満刻度
+#:   (`club.keyword_full_scale`), the 後継 are `keyword.bin` +46..+52, and each
+#:   successor carries a sex tag beside it (+54..+60, 0 male / 1 female /
+#:   2 either).
 #:   ⚠️ 習熟度 is not only this gate: `p07_02` says it also raises a キーワード's
 #:   attack and defence, so filling it moves more than this message.
+#:   ⚠️ 189 of the 261 rows are leaves, so 満 without a grant stays ordinary.
 #: * 0x5C19 GetClubSkill is NOT sent because 練習 has no restored trigger for
 #:   it. A 部活奥義 is MADE — 奥義の書 plus 合成アイテム, `p07_05` — and neither
 #:   reward sentence hands one over ready-made.
@@ -961,6 +965,26 @@ def action_order_params(chara_ids: "list[int]") -> bytes:
     """
     out = struct.pack(">H", len(chara_ids))
     return out + b"".join(struct.pack(">I", c) for c in chara_ids)
+
+
+def get_keyword_params(keyword_ids: "list[int]") -> bytes:
+    """0x5C17: ``keywordId[u16] = {u16}``, the キーワード just earned.
+
+    ⭐ The shape is the client's, read off its own deserializer at 0x008f1940:
+    a u16 count through the stream's uint16 slot (+0x28), then that many u16
+    ids. ⚠️ Its buffer runs from msg+4 to where the count sits at msg+0xc, so
+    FOUR is as many as it can hold -- which is also how many successor slots
+    `keyword.bin` has. Nothing here ever builds a longer one: the source list
+    is one row's slots.
+
+    ⚠️ Sending an empty list is not the same as not sending, and this server
+    does the latter -- see _battle_mastery. The list being empty is the
+    ordinary case (189 of 261 keywords are leaves), and a 結果画面 that says
+    「you got」 and then names nothing is a sentence the original never had to
+    say.
+    """
+    out = struct.pack(">H", len(keyword_ids))
+    return out + b"".join(struct.pack(">H", k) for k in keyword_ids)
 
 
 def action_begin_params(

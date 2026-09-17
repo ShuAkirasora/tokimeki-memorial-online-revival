@@ -261,6 +261,12 @@ from __future__ import annotations
 import struct
 from datetime import date
 
+# ⚠️ The one feed this module reads, and it reads exactly one column of it:
+# keyword_successors needs `keyword.bin`'s four successor slots and their 性別
+# tags, which are per-keyword data rather than a rule and so live in the feed
+# with attack/defence. Everything else here stays table-free on purpose.
+import clubdata
+
 MSG_CL_REQUEST_CLUB_ENTER = 0x5A00
 MSG_SV_OK_CLUB_ENTER = 0x5A01
 MSG_SV_NG_CLUB_ENTER = 0x5A02
@@ -493,6 +499,14 @@ KEYWORD_FULL_SCALE = {
     791: 90,  # マウス・トゥ・マウス
 }
 
+# ⭐ The 性別 tag a successor slot carries when it is open to both, the same
+# 「0=男 1=女 2=不詳/共通」 numbering `chara_sex.bin` uses and the one
+# characters.sex() hands back. Settled on five grounds in round 196 (2.152 五);
+# round 353 added a sixth from a different file -- across the 22 playable
+# ドラマイベント every keyword gate's tag admits its cast slot's sex, 20 of 20
+# with no exceptions. See keyword_successors.
+KEYWORD_SEX_EITHER = 2
+
 # ⚠️⚠️ INVENTED — how much one use of a キーワード adds to its 習熟度.
 # ⚠️ (the smallest-invention rule), and it is the ONLY invented number in this
 # loop — everything else around it is restored. How much one use of a
@@ -675,6 +689,67 @@ def use_count_after_use(use_count: int, keyword_id: int) -> int:
 def keyword_is_mastered(use_count: int, keyword_id: int) -> bool:
     """Has this キーワード reached 習熟度 MAX -- the gauge full, 0x5C17 due?"""
     return use_count >= keyword_full_scale(keyword_id)
+
+
+def keyword_successors(keyword_id: int, sex: "int | None") -> "list[int]":
+    """The キーワード a character of this 性別 earns by mastering this one.
+
+    ⭐⭐⭐ 「クラブ活動で キーワード を得るには、別の キーワード をそのクラブ活動
+    で何度も使い、習熟することが必要です」 (p08_01). This is the list that
+    sentence hands over, and both halves of it are READ: `keyword.bin`
+    +46/+48/+50/+52 are the four successor slots and +54/+56/+58/+60 are their
+    per-slot 性別 (0 male / 1 female / 2 either). A slot this character's sex
+    does not admit is the manual's own 「男子専用のものや、女子専用のものも
+    あります…そのため、同じキーワードを習熟しても、男女で入手できるキーワード
+    が異なる場合があります」. Both columns arrive through the local feed
+    (`clubdata.keyword`'s ``next``), so nothing here reads a game file.
+
+    ⭐⭐ EVERY ELIGIBLE SLOT GOES OUT -- the whole set, not one picked from it.
+    The reading that used to stand in clubbattle («which successor to grant
+    when a chain still offers two or three») had run out of candidates: three
+    tie-breaks were ruled out in round 196 and no fourth was ever found. Round
+    353 replaced the question rather than answering it, on three grounds:
+
+    * ⭐⭐⭐ 0x5C17 CARRIES A LIST, and the list is as wide as the successor
+      row. The client's own deserializer (0x008f1940) reads a u16 count and
+      then that many u16 ids into a buffer that starts at msg+4 and ends where
+      the count sits at msg+0xc -- FOUR slots, exactly as many as `keyword.bin`
+      has. ⚠️ Its neighbour 0x5C18 GetItem is a scalar, so the shape is a
+      choice the protocol made, not a container it fell into.
+    * ⭐⭐ 「Take the first eligible slot」 is refuted by the manual's own
+      worked example: 600 心眼キャッチ has three successors (601/602/753), all
+      three tagged male, and the male chain p08_01 prints runs through 602 --
+      slot ONE. Any rule that picks by slot order gets that example wrong.
+    * ⭐⭐ The two tables agree 20/20 with no exceptions: every cast slot in the
+      22 playable ドラマイベント that has a keyword gate wants a keyword whose
+      sex tag admits that slot's sex (犬飼's 9:5 wants 338, female-tagged, and
+      both its roles are female). A further pick is what would start making
+      those gates unreachable.
+
+    ⚠️ WHAT WOULD REFUTE IT: a player-side account or capture of a 結果画面
+    whose 入手キーワード list holds ONE entry where the row offered two or more
+    to that character's sex. ⛔️ The manual's example is not that evidence --
+    it prints the one link its chain needs, not the whole row.
+
+    ``sex`` is what characters.sex() returns. None -- a fighter no account
+    claims -- earns nothing: an NPC has no キーワード list to put one in.
+    """
+    if sex is None:
+        return []
+    row = clubdata.keyword(keyword_id)
+    if not row:
+        return []
+    out = []
+    for entry in row.get("next") or ():
+        try:
+            successor, slot_sex = int(entry["id"]), int(entry["sex"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if slot_sex not in (sex, KEYWORD_SEX_EITHER):
+            continue
+        if keyword_exists(successor) and successor not in out:
+            out.append(successor)
+    return out
 
 
 def club_skill_exists(category: int, skill_id: int) -> bool:
