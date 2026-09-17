@@ -597,17 +597,42 @@ CLUB_SKILL_RULER = (1, 2, 5, 9, 10, 0, 11, 50, 100, 255)
 DECK_ITEM_BYTES = 6
 DECK_ITEM_KEYWORD = 0
 DECK_ITEM_CLUB_SKILL = 1
-# ⚠️ Used only to refuse an absurd count, not as a rule the client is known to
-# obey. It was originally read off `npc_clubdeck.bin` as 「25 slots」, and round
-# 200 took that reading apart (see the module docstring: the NPC decks are
-# 8 + 8). ⭐⭐ ROUND 227 MEASURED THE CLIENT'S OWN LIMIT: a deck holds EIGHT
-# entries in total, キーワード and 部活奥義 sharing the same eight slots — with
-# eight キーワード registered the ▷ button does nothing at all until one is
-# taken out. The number here is STILL LEFT AS IT WAS: eight is the window's
-# rule and the window enforces it, so an over-long deck cannot arrive from a
-# real client, and writing 8 in here would be this end legislating for the
-# client rather than refusing an absurd count.
-DECK_CAPACITY = 25
+# How many entries one deck may hold, going out as well as coming in.
+#
+# It was originally read off `npc_clubdeck.bin` as 「25 slots」, and round 200
+# took that reading apart (see the module docstring: the NPC decks are 8 + 8).
+# ⭐⭐ ROUND 227 MEASURED THE CLIENT'S OWN LIMIT FROM THE SCREEN: a deck holds
+# EIGHT entries in total, キーワード and 部活奥義 sharing the same eight slots —
+# with eight キーワード registered the ▷ button does nothing at all until one is
+# taken out. That was left at 25 here, on the reasoning that eight is the
+# window's own rule and an over-long deck therefore cannot arrive from a real
+# client.
+#
+# ⭐⭐⭐ ROUND 354 MOVED IT TO 8, because the reasoning had the direction
+# backwards: nothing over-long arrives, but this end can SEND one, and a ninth
+# entry is not refused by the client — it lands on top of the count.
+# 0x5B01/0x5B03's shared deserializer (0x8D9430) fills one fixed object:
+#
+#     +0x04  deckId          read first
+#     +0x06  entries, 7 bytes each (kind u8 + six copied bytes)
+#     +0x3E  count u16       read BEFORE the entries, re-read every iteration
+#     +0x40  useType         read last
+#
+# (0x3E - 6) / 7 == 8 exactly, so entry 8 starts ON the count field: its kind
+# byte becomes the count's low byte and its six copied bytes run over the high
+# byte and useType. The loop re-reads the count it has just overwritten, so the
+# read never ends where the message does. ⭐ Measured: round 353 put nine
+# キーワード in デッキ１ with /kw deck, and the 部活デッキ window stopped dead
+# at 「通信中」 after this server answered 0x5B00 for deck 0 — it never asked
+# for decks 1 and 2, and never came back. ⚠️ THIS IS THE SAME SHAPE AS
+# CLUB_SKILL_LIST_PAGE's row 33 (see above), down to the count sitting
+# immediately behind the array, and it is the fourth 「the server handed the
+# client something its own object cannot hold」 fault.
+#
+# ⇒ 8 is not this end legislating for the client. It is the capacity of the
+# client's own message object, read out of the client's own reader, and it is
+# the second witness for the eight slots round 227 read off the screen.
+DECK_CAPACITY = 8
 
 # error_message.bin 462: the sentence counts 日.
 REJOIN_DAYS = 10
@@ -1197,6 +1222,13 @@ def deck_reply(deck_id: int, use_type: int = USE_TYPE_NONE,
     that came off a 0x5B03 unchanged. Anything that is not six bytes long is
     dropped rather than padded: a short payload would desynchronise the client's
     reader for every entry after it.
+
+    ⚠️⚠️ Entries past DECK_CAPACITY are dropped for the same reason, one step
+    further on: the ninth lands on the count field inside the client's own
+    message object and the window never finishes opening (see DECK_CAPACITY).
+    A deck that long cannot come off a 0x5B03, but it can come off this end's
+    own /kw deck and out of a save written before this was known, so the drop
+    happens where the bytes are built rather than only where they are stored.
     """
     body = b""
     count = 0
@@ -1204,6 +1236,8 @@ def deck_reply(deck_id: int, use_type: int = USE_TYPE_NONE,
         payload = bytes.fromhex(payload_hex)
         if len(payload) != DECK_ITEM_BYTES:
             continue
+        if count >= DECK_CAPACITY:
+            break
         body += struct.pack(">B", kind & 0xFF) + payload
         count += 1
     return (struct.pack(">BH", deck_id & 0xFF, count) + body

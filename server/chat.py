@@ -1245,10 +1245,15 @@ def respond(
                 member.grant_keyword(keyword_id)
             return Reply([member.summary()], club_save=True)
         if verb == "deck" and len(words) > 1 and words[1].lstrip("-").isdigit():
-            # Put owned キーワード into a deck without touching the client. The
-            # window can do this too (select, ▷, 更 新), but its ＯＫ button
-            # hangs on 通信中, so building the deck here is the way to get a
-            # configured character in front of the screens that read one.
+            # Put owned キーワード into a deck without touching the client.
+            # The window can do this too (select, ▷, 更 新, ＯＫ) and round 354
+            # watched it work end to end — the older note here, that its ＯＫ
+            # hangs on 通信中, is SUPERSEDED. Building the deck from this side
+            # is still how a character gets configured in one line.
+            # ⚠️⚠️ A deck may hold at most club.DECK_CAPACITY == 8 entries, and
+            # that is not a style rule: the ninth lands on the count field
+            # inside the client's own message object and the 部活デッキ window
+            # then never finishes opening (round 353 lost a round to it).
             # ⚠️ deckId is 0-based: デッキ１ on screen is 0 on the wire.
             deck_id = int(words[1])
             if not 0 <= deck_id < club.DECK_COUNT:

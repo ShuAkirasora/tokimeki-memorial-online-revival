@@ -7193,7 +7193,11 @@ class MpsServer:
                 use = member.use_type(deck_id) if member else club.USE_TYPE_NONE
                 items = member.deck(deck_id) if member else []
                 print(f"[{self.tag}] club deck {deck_id}: {len(items)} items, "
-                      f"useType={use:#04x}")
+                      f"useType={use:#04x}"
+                      + (f" — ⚠️ over {club.DECK_CAPACITY}, sending the first "
+                         f"{club.DECK_CAPACITY} (a ninth entry lands on the "
+                         f"client's count field, see club.DECK_CAPACITY)"
+                         if len(items) > club.DECK_CAPACITY else ""))
                 return self._answer(
                     session,
                     sequence,
