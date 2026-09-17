@@ -756,6 +756,14 @@ def keyword_successors(keyword_id: int, sex: "int | None") -> "list[int]":
     to that character's sex. ⛔️ The manual's example is not that evidence --
     it prints the one link its chain needs, not the whole row.
 
+    ⭐⭐⭐ ROUND 361 PUT THE OTHER SIDE OF THAT SAME TEST ON A REAL CLIENT:
+    788 ビターチョコ mastered by a female character sent 0x5C17 with
+    params=000201dc0152 -- count TWO, 476 (either) and 338 (female) -- and the
+    結果画面 drew BOTH rows (喫茶開店一日前 / 奉仕の心で), with both landing in
+    her 所持リスト. Every earlier sample had only one eligible slot, so
+    「send them all」 and 「send one」 were the same distribution until this
+    one; the refuting capture above is still what would overturn it.
+
     ``sex`` is what characters.sex() returns. None -- a fighter no account
     claims -- earns nothing: an NPC has no キーワード list to put one in.
     """
