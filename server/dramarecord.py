@@ -34,7 +34,16 @@ somewhere else and this is a hole": drama scenarios grant keywords through
 `PC_KEYWORD_UPDATE` while they play, which is a different instruction.
 
 ⚠️ The other four fields stay zero. `nPartyNum` is measured to be ignored
-(2.183), and `orderOpen`/`orderLast` have names and nothing else.
+(2.183), and `orderOpen`/`orderLast` are the list window's **sort keys**: the
+client keeps three sorted views of the list and rebuilds all three whenever it
+arrives -- by `orderOpen` descending, by `orderLast` (a 64-bit value)
+descending, and by "not cleared yet" first -- each falling back on `orderOpen`
+and finally on the dramaEventId ascending. ⭐ Which view is drawn is a field
+this build never writes anything but 0 into, so the first one is the only one
+reachable; with both numbers zero every tie falls through and the rows come out
+in dramaEventId order, which is what the screen has always shown. ⛔️ Keep
+sending zero: how the original assigned those numbers cannot be read from the
+client, and inventing a rule would be an invention, not a restoration.
 """
 from __future__ import annotations
 

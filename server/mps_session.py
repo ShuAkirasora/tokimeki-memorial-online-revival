@@ -2801,6 +2801,40 @@ class MpsServer:
               + ("記帳" if changed else "既に同じ値（記帳なし）")
               + f" · 現在の登場: {love.on_stage()}")
 
+    def _script_letter_event(self, session: "_Session", result) -> None:
+        """Let a finished `<name>_e011` say whose ending 0x5606 is about to play.
+
+        ⭐⭐⭐ Round 367, and it is the last link of the 手紙 chain. The letter
+        scripts all write `PC[0x3A04] = i` on 「手紙を読む」 and -1 on
+        「手紙を読まない」 (2.288 四), and that cell -- not a table here -- is
+        what the 0x5606 at the end of the event reads to choose whose credits
+        roll. Until this ran, the cell was computed and dropped, so every real
+        letter ended on the 0xffff sentinel and no ending was ever booked from
+        the game itself; only `/rom <名前> ed` could put one in a save.
+
+        ⚠️ The sibling of `_script_debut`, and deliberately a second method
+        rather than a widened one: that one is about who is on the map and runs
+        on a debut, this one is about an event in flight. `Romance.absorb`
+        decides which cells count for both.
+
+        ⚠️⚠️ The write is taken whatever its value, -1 included: 「読まない」
+        clearing a letter event that a previous 「読む」 armed is the script's
+        own retraction, and dropping it would leave the next 0x5606 playing
+        credits for a letter the player put back.
+        """
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return
+        value = result.writes.get(("PC", romance.PC_LETTER_EVENT))
+        if value is None:
+            return
+        changed = love.absorb(result.writes)
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] 手紙イベント PC[0x3a04]={value}: 書き戻せませんでした")
+            return
+        print(f"[{self.tag}] 手紙イベント PC[0x3a04]={value} -> "
+              + ("記帳" if changed else "既に同じ値（記帳なし）"))
+
     def _debut_standing(self, session: "_Session", found, local: int) -> None:
         """Move a 初登校 that played none of itself to where it opened.
 
@@ -3334,9 +3368,10 @@ class MpsServer:
             # ⭐ Whose ending, or none. PC[0x3a04] is the cell <キャラ>_e011
             # writes when the player opens the letter -- her index on the way in,
             # -1 on 「読まない」 -- and the ending this message plays is chosen by
-            # exactly that number. ⚠️ Until this end runs the scenario scripts
-            # too, nothing writes it, so this stays at the sentinel and the
-            # player gets the map back, which is the behaviour that predates it.
+            # exactly that number. ⭐ Round 367: the shadow VM's copy of that
+            # write is taken (`_script_letter_event`), so a letter read in the
+            # game books the ending here. Without a letter in flight this stays
+            # at the sentinel and the player simply gets the map back.
             npc_id = script.NPC_EVENT_CLEAR_TO_FIELD
             love = self._chars(session).romance(session.chara_id)
             names = list(romance.CANDIDATES)
@@ -4764,9 +4799,10 @@ class MpsServer:
                     # original server flush」 has never been observed here.
                     self._script_keywords(session, shadow.result)
                     self._script_debut(session, shadow.result)
+                    self._script_letter_event(session, shadow.result)
                     self._leader_exam_progress(session, shadow.result)
-                # ⚠️ Outside the block above, unlike its three neighbours:
-                # those three read what the shadow computed, and this one reads
+                # ⚠️ Outside the block above, unlike its four neighbours:
+                # those four read what the shadow computed, and this one reads
                 # the ip the client just named. A debut still has to be placed
                 # when there is no shadow at all -- no export, or a follower
                 # that lost its place -- and it can be, because the ending is
