@@ -552,7 +552,8 @@ MSG_SV_NG_REENTRANCE = 0x031D
 #
 # Every message this client can put on the wire is built by an object that
 # carries its message number in one two-byte instruction of its own, and every
-# such object goes out through the single send port the whole executable shares.
+# such object goes out through the one virtual send call the whole executable
+# funnels into -- reached through either of the two wrappers in front of it.
 # MsgClQueryServerVersion's number is nowhere in the executable -- nor in either
 # of the two small programs that ship beside it. MsgClQueryGameTime's is there
 # exactly once, in the prototype the message tables are built from; that

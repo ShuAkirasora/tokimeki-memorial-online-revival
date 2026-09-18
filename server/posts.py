@@ -84,6 +84,33 @@ sends, which is why it does not matter yet.
 
 from __future__ import annotations
 
+# クラス委員長選挙 -- the subsystem the 役職 label above belongs to. It ships
+# whole and cannot be started, which is why this module is deliberately only
+# one end of it.
+#
+# Two rows of `menu_item.bin` are its entries, 405 クラス委員長選挙 and 406 the
+# same for a player, and neither is reachable. Neither id sits in a slot of any
+# of the 104 id-keyed tables the client loads, and both rows carry 0 in the
+# 有効 column the client tests before it draws an item -- two independent
+# reasons, either one enough. The three `sub_menu.bin` rows behind them
+# (3 立候補受付 / 4 選挙活動中 / 5 投票) ARE enabled, and this end may answer
+# 0x6302 with any key it likes, so that looked like a way in. It is not: a
+# client answered with 3, 4 or 5 draws nothing at all and sends nothing back.
+# Measured on the real client, all three.
+#
+# The eight requests split the same way. 立候補 0x5503 and 立候補取消 0x5506
+# have no number anywhere in the executable: every message this client can put
+# on the wire carries its number in one two-byte instruction of its own, and
+# for those two there is no such instruction in any form, while every one of
+# their neighbours in the family has one. The other six do have theirs, with a
+# packer and a path to the send call behind it -- and every one of those paths
+# starts inside the window the two entries above would have opened.
+#
+# ⇒ built, not shipped. Nothing a player does on this build can send any of the
+# eight, so there is nothing here to answer.
+# UNANSWERED 0x55xx -- クラス委員長選挙: no entry on this build opens its window.
+
+
 #: `class_post.bin`, 9 rows. ⚠️⚠️ The keys are NOT 0..8: the table has 0-7 and
 #: then 9, with nothing at 8. A range check would accept a key the client
 #: cannot look up, which is the shape of thing that has crashed it before.
