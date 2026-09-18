@@ -518,6 +518,33 @@ MSG_SV_OK_SCHOOL_LOGOUT = 0x030A
 MSG_CL_REQUEST_REENTRANCE = 0x031B
 MSG_SV_OK_REENTRANCE = 0x031C
 MSG_SV_NG_REENTRANCE = 0x031D
+
+# 転校 -- moving a character to another school. This end answers none of it, and
+# that is a decision rather than an omission. The client is complete: five
+# requests, a full set of Ok/Ng answers for each, a registered listener for all
+# ten replies, its own progress and confirmation lines in the text tables
+# (転校可能か調べています / %1%に転校しますか？ / 転校に成功しました), and five live
+# error strings. What it has no sign of is a way in.
+#
+# The character-select screen -- the one 再入学する above lives on -- draws its
+# icons on a fixed 122-pixel pitch. Five are drawn; the sixth slot, between
+# 情報を見る and 再入学する, is empty, and the gap across it measures exactly two
+# pitches. That slot is 転校's: the icons are named in file order in the
+# executable, ...05info, ...06tenkou, ...07sai, and the button captions run in
+# the same order, 情報を見る / 転校する / 再入学する. So the button is not there,
+# and it is not a greyed-out button either: the official online manual for this
+# screen states that an action you cannot currently take is drawn greyed out,
+# which is how 再入学する behaves, and it lists five icons for this screen in
+# both its test-period and its release revision. The published site never uses
+# the word 転校 at all.
+#
+# ⇒ built, not shipped. Nothing a player does on this build can send any of the
+# five, so there is nothing here to answer and nothing waiting on an answer.
+# UNANSWERED 0x031E -- 転校: how many days until the character may transfer.
+# UNANSWERED 0x0321 -- 転校: check a destination school and list its free 手帳.
+# UNANSWERED 0x0324 -- 転校: reserve the character's name at the destination.
+# UNANSWERED 0x0327 -- 転校: cancel a transfer that was booked.
+# UNANSWERED 0x032A -- 転校: carry out the booked transfer.
 MSG_CL_REQUEST_LOBBY_DATA_START = 0x4000
 MSG_SV_OK_LOBBY_DATA_START = 0x4001
 MSG_CL_QUERY_POOL_MESSAGE = 0xA100
