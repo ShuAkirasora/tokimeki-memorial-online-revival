@@ -13330,6 +13330,20 @@ class MpsServer:
         does not ask. It stays: it is the honest answer to the message, it costs
         nothing, and the reasoning above about 0x0905 is unchanged -- but do not
         read its output as something a player can see.
+
+        ⭐⭐ **Round 384: the row it does ask for need not be the asker's own.**
+        A second group's booking is drawn like any other taken day and takes a
+        click, 0x0903 goes up for it, and this answers with *that* group's name
+        and *that* booking's comment and publicFlag -- which is what the
+        ``holder``/``occupant`` pair above is for. The client tells the two apart
+        in the box rather than in the list: ［予約解除］ is drawn only for the
+        viewer's own, so 0x0909 for somebody else's is unreachable from the real
+        client and 0x090B reason 4 stays a hand-made case.
+
+        ⭐ The name field is labelled リーダー名 on screen and this end sends the
+        chara who *made* the booking. They are the same person by construction --
+        the client only offers the ［予 約］ form to a leader (leaderAuthority,
+        round 368) -- so nothing here has to choose between the two readings.
         """
         room = struct.unpack_from(">H", params, 0)[0] if len(params) >= 2 else 0xFFFF
         day = multipurpose.read_date(params, 2)

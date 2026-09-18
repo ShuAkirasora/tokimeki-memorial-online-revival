@@ -98,22 +98,43 @@ they arrive on no message, and a payload of three November dates changed not one
 pixel of them -- and it decides each row's state by looking for a booking with
 that date:
 
-    no booking            → grey, not clickable: the day is free
-    booking, another 同好会 → grey, not clickable: not yours to touch
-    booking, your own      → white, and clicking opens 予約内容 with ［予約解除］
+    no booking, and you may book  → white, reads 「予約可能」, opens the ［予 約］ form
+    no booking, and you may not   → grey and unclickable, with no text at all
+    booking, anybody's            → white, the holder's name and a 予約済み icon;
+                                    clicking sends 0x0903 and opens 予約内容
+
+⚠️⚠️ **Round 384 measured that middle row, and it is not about ownership.** The
+earlier reading here -- another group's booking greys out, 「not yours to touch」
+-- is wrong. With the viewer a qualified 同好会 leader, a day held by *another*
+group draws exactly like a day held by their own: white, with the holder's name,
+and it takes a click. What greys a row is the viewer having no move to make on
+it -- a free day in the room where their group already holds one is grey, and so
+is every day for a group that may not book at all (round 300's before-and-after).
+⭐⭐ **Ownership shows up one screen later**: 予約内容 draws ［予約解除］＋［閉じる］
+for the viewer's own booking and ［閉じる］ alone for somebody else's -- same box,
+same four fields, one button apart, and the second button is *absent* rather than
+greyed. ⇒ The list says 「is this day taken」; the box says 「is it yours」.
 
 ⚠️⚠️ **An empty groupName matches every viewer**, which is the trap round 220
 fell into: one row per day with the free ones left blank drew a full white list
 of fourteen days all apparently held by the viewer's group. See BookingBook.rows.
 
-⚠️ Where the window's own fourteen days start is **still not identified**, and
-round 300 sharpened the question without answering it. It was 2026-09-06 on
-every open of a session whose clock said 2026-08-28, across three different
-payloads; it was 2026-09-20 on a client whose clock said 2026-09-11. Both are
-the ninth day after that client's today -- and both of those todays were a
-Friday, so 「today + 9」 and 「the Sunday after next」 fit the two samples
-equally well. ⭐ The cheap way to tell them apart is to read the first row on a
-day that is not a Friday, not to design an experiment for it.
+⭐⭐⭐ **Where the window's own fourteen days start: a fixed fortnight, and
+round 368 settled it with a third sample.** Two clients had agreed with 「today
++ 9」 -- 2026-09-06 read on 2026-08-28, and 2026-09-20 read on 2026-09-11 -- and
+then a client whose clock said 2026-09-18 drew **2026-09-20 again**, two days
+out. So the start is not a function of today at all. The calendar is cut into
+fixed fourteen-day terms and the window draws the next one: the anchors are
+…08-23, 09-06, 09-20, 10-04…, and the rule is arithmetic rather than a weekday
+-- the start is the smallest ``d >= today`` with ``(d - 1970-01-01).days % 14 ==
+10``. All three samples land on it. ⚠️⚠️ The first two agreed because they were
+read at the same *phase* of a term (its sixth day), which is why both came out
+nine days ahead; the note that used to stand here -- 「read it on a day that is
+not a Friday and one sample separates the two」 -- named the wrong variable, and
+the third sample was read on a Friday as well.
+
+⚠️ Not one of those fourteen days is on the wire. The whole rule lives in the
+client, and this end neither computes nor checks it (see HORIZON_DAYS).
 
 ⚠️ The calendar is the school clock, i.e. wall-clock time, the same one
 curriculum.clock runs on. A booking that falls out of the horizon is expired
@@ -165,17 +186,21 @@ WINDOW_DAYS = 14
 
 #: How far ahead this end will accept a booking date.
 #:
-#: ⚠️⚠️ Deliberately wider than WINDOW_DAYS, and the reason is an admission: the
-#: fourteen days the client draws did **not** start on its own today. Three
-#: different payloads on a client whose clock said 2026-08-28 all produced the
-#: same 2026-09-06 … 2026-09-19, and a second session (clock 2026-09-11) drew
-#: 2026-09-20 … 2026-10-03, so the start is the client's and computed from
-#: something this end has not identified -- ⚠️ both samples are the ninth day
-#: ahead, but both were read on a Friday, which leaves a weekday rule just as
-#: consistent. Refusing on a fortnight measured from *this* end's today would
-#: therefore refuse days the client is offering, which is a rule invented by
-#: accident. A horizon that covers the drawn window and nothing beyond a month
-#: is the smallest honest thing to check instead.
+#: ⚠️⚠️ Deliberately wider than WINDOW_DAYS, and round 368 turned the reason
+#: from an admission into a rule. The fourteen days the client draws are a fixed
+#: fortnight of the calendar, not a fortnight from anybody's today: the terms are
+#: anchored on …08-23, 09-06, 09-20, 10-04… and the window shows the next one, so
+#: a client can open on the last day of a term and be offered days thirteen ahead,
+#: or open two days early and be offered the same fortnight twice. See the module
+#: docstring for the three samples and the arithmetic.
+#:
+#: ⛔️ That is a reason to leave this at 30 rather than to tighten it to 14.
+#: A fortnight measured from *this* end's today would refuse days the client is
+#: offering -- the two fortnights are out of phase by up to thirteen days -- and
+#: the client cannot offer anything outside its own term anyway, so the horizon
+#: is a sanity bound on a hand-made request, not the rule. Reimplementing the
+#: client's arithmetic here would be a second copy of a rule this end never sees
+#: the inputs to.
 HORIZON_DAYS = 30
 
 #: The longest comment 0x0906 is allowed to bring back out. The field is counted
@@ -324,8 +349,17 @@ class BookingBook:
         the viewer's own, and **an empty name matches everything**, so every free
         day arrived claiming to be theirs. Measured with a marked payload --
         thirty rows, two of them named ZZZZ and YYYY: exactly those two greyed
-        out (another group's day, not yours to touch) and the twenty-eight empty
-        ones stayed white. That is the whole rule, from one experiment.
+        out and the twenty-eight empty ones stayed white.
+
+        ⚠️⚠️ **The half of that reading which said 「another group's day is grey」
+        did not survive round 384**, which put a second group's real booking in
+        front of a qualified 同好会 leader and watched it draw white and clickable.
+        The viewer in round 220 was in an ordinary group, i.e. one that could not
+        book at all, so the only rows it had any move on were the ones it read as
+        its own -- and 「another group's」 and 「nothing you can do here」 predicted
+        the same grey. ⭐ The part that does survive is the part this method
+        depends on: **an empty name is read as the viewer's own**, which is why
+        free days must not be sent at all.
 
         ⇒ A day this room has no row for is **free**. Only bookings go on the
         wire, which is also why ``booking[%d]`` is a counted list rather than the
