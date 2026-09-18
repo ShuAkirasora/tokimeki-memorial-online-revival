@@ -2135,13 +2135,20 @@ class Follower(Machine):
 
         ⚠️⚠️ **Option `k` is not register number `k`.** Only the low five
         bits of a SELITEM number are the option number; the two bits above
-        them pick one of two banks, and a script that writes a computed flag
-        often writes it to the high bank -- 113 of the 1853 choice boxes in
-        the export do, 314 options across 24 scenarios, and a box mixes the
-        banks freely (`un007` ip=6803 writes options 0, 1, 2 to numbers 32, 1
-        and 34). Reading `(CAT_SELITEM, k)` for those does not read the flag
-        the script just wrote: it reads whatever the **previous** box left at
-        that number, which is a stale value and not a hole, so it does not
+        them are the *actor* the flag belongs to -- the same thing the low
+        bit of a data-cell read carries. A flag the script works out goes to
+        its own actor's half: every one of the 577 computed flags in the
+        export lands in the half of the actor whose `OP_BA` block the write
+        sits in, with no exceptions. A constant flag always goes to actor 0's
+        half instead, even when the write itself is inside actor 1's block,
+        so the axis is only ever exercised by the computed ones. That leaves
+        113 of the 1853 choice boxes writing into actor 1's half, 314 options
+        across 24 scenarios, and a box mixes the two freely (`un007` ip=6803
+        writes options 0, 1 and 2 to numbers 32, 1 and 34 -- the two computed
+        ones to actor 1, the constant to actor 0). Reading `(CAT_SELITEM, k)`
+        for those does not read the flag the script just wrote: it reads
+        whatever the **previous** box left at that number, which is a stale
+        value and not a hole, so it does not
         degrade into "offer the line" the way ⊤ does. `_selitem_numbers`
         pairs each option with the number its own flag went to.
         """
