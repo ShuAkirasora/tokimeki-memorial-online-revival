@@ -8309,15 +8309,16 @@ class MpsServer:
             # next time the window is opened, because the client is still
             # waiting on the last one. The body is empty in both directions.
             if session.gousei_npc is None:
-                # 「部活奥義の合成は開始されていません」 -- reason 1, which
-                # cannot travel: 0x5305 reads no bytes at this client's end (see
-                # gousei.NG_END_BODY), so the reason is logged and the wire
-                # carries the bare Ng.
+                # 「部活奥義の合成は開始されていません」 -- reason 1. ⭐ It
+                # travels: the client reads one signed byte here, the same as
+                # the other two refusals in this family (gousei.ng_end_params).
+                # Until round 385 this went out empty, which left the client
+                # reading a byte that was not there.
                 print(f"[{self.tag}] 奥義合成 end: not started "
-                      f"(0x5305, reason={gousei.END_NOT_STARTED} logged only)")
+                      f"(0x5305, reason={gousei.END_NOT_STARTED})")
                 return self._answer(
                     session, sequence, gousei.MSG_SV_NG_GOUSEI_END,
-                    gousei.NG_END_BODY,
+                    gousei.ng_end_params(gousei.END_NOT_STARTED),
                 )
             print(f"[{self.tag}] 奥義合成 end: closing window at "
                   f"npcId={session.gousei_npc:#x}")

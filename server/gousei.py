@@ -85,15 +85,15 @@ THE WIRE, read out of the deserializers rather than off the field names -- 2.179
 two messages, so every width below was taken from the reader itself:
 
     0x5300 MsgClRequestGouseiStart   u32 npcId          0x8D86A0, call [eax+0x24]
-    0x5301 MsgSvOkGouseiStart        u8  nGouseiEntryMax
-    0x5302 MsgSvNgGouseiStart        u8  reason
+    0x5301 MsgSvOkGouseiStart        u8  nGouseiEntryMax 0x8D83A0, call [eax+0x2c]
+    0x5302 MsgSvNgGouseiStart        i8  reason         0x8D84A0, call [eax+0x1c]
     0x5303 MsgClRequestGouseiEnd     (empty)
     0x5304 MsgSvOkGouseiEnd          (empty)
-    0x5305 MsgSvNgGouseiEnd          (empty)  ⚠️ see NG_END_BODY
+    0x5305 MsgSvNgGouseiEnd          i8  reason         0x8D84A0, call [eax+0x1c]
     0x5306 MsgClRequestGousei        u16 bookCategoryId, u16 bookId, u16 n,
                                      n x (u16 categoryId, u16 id, u8 count)
     0x5307 MsgSvOkGousei             u16 skillCategoryId, u16 skillId, u8 完成度
-    0x5308 MsgSvNgGousei             u8  reason
+    0x5308 MsgSvNgGousei             i8  reason         0x8D84A0, call [eax+0x1c]
     0x5309 MsgSvNotifyGouseiEnd      (empty)
 
 ⭐⭐⭐ 0x5306's ENTRY IS FIVE BYTES, not the nine the shape reader reports. 0x910F90
@@ -145,8 +145,9 @@ START_CANNOT_NOW = 4    # 現在、部活奥義を合成することはできま
 START_ALREADY = 5       # 既に部活奥義を合成できる状態になっています。
 START_UNDEFINED = 6     # 未使用：：：未定義のエラーが発生しました。
 
-# 0x5305, `error_message.bin` 325-327. ⚠️ NAMED BUT NEVER SENT AS BYTES -- see
-# NG_END_BODY. Kept because the wording is what says the End is stateful.
+# 0x5305, `error_message.bin` 325-327. The wording is also what says the End is
+# stateful. ⭐ Round 385 established that this byte really does travel -- see
+# ng_end_params.
 END_NO_PLAYER = 0       # プレイヤー情報が不正です。
 END_NOT_STARTED = 1     # 部活奥義の合成は開始されていません。
 END_UNDEFINED = 2       # 未使用：：：未定義のエラーが発生しました。
@@ -167,14 +168,6 @@ NG_ID_LIST_FAILED = 10  # サーバーエラーが発生しました。（IDリ�
 NG_BOOK_CONTENT = 11    # 奥義の書の内容が正常でない
 NG_WRITE_FAILED = 12    # アイテムデータの操作もしくは部活奥義データの登録に失敗…
 NG_UNDEFINED = 13       # 未使用：：：未定義のエラーが発生しました。
-
-#: ⚠️⚠️ 0x5305 GOES OUT EMPTY, and the two witnesses disagree about that. The
-#: class's own dump string prints `reason=%d`, so a byte was clearly intended;
-#: the deserializer at the client end reads nothing at all (the shape reader: `empty`).
-#: The reader wins, because it is what decides whether a byte is looked at --
-#: 2.9's rule, and the same one that settled 0x5306's entry width. So the reason
-#: constants above are for the log, and the wire carries none of them.
-NG_END_BODY = b""
 
 #: ⭐⭐⭐ RESTORED: 完成度 は、レベル１〜１０まであり (p07_05, both editions).
 #: The floor is also restored, by the same sentence read the other way: 消費
@@ -330,6 +323,27 @@ def ok_start_params(entry_max: int) -> bytes:
 
 def ng_start_params(reason: int) -> bytes:
     """0x5302."""
+    return struct.pack(">B", reason & 0xFF)
+
+
+def ng_end_params(reason: int) -> bytes:
+    """0x5305. One byte, exactly like its two siblings in this family.
+
+    ⚠️⚠️ THIS WENT OUT EMPTY FOR A HUNDRED AND SIXTY ROUNDS, and the mistake was
+    not in the reasoning but under it. Round 226 had two witnesses that seemed
+    to disagree -- the class's own dump string prints `reason=%d`, while the
+    shape reader said the deserializer takes nothing at all -- and it picked the
+    reader, which is the right rule (2.9: the reader is what decides whether a
+    byte is looked at, and the same rule settled 0x5306's entry width).
+    ⭐⭐⭐ ONLY THERE WAS NEVER A DISAGREEMENT. The deserializer is 0x8D84A0, the
+    same one-signed-byte reader 0x5302 and 0x5308 use. The shape reader had been
+    walking a fragment of code, because it resolved this class's vtable by
+    taking the first raw byte-match of the locator address, and this is one of
+    three classes in the image whose locator address also occurs inside .text.
+    Both witnesses say `reason`, and always did.
+    ⚠️ Read the thing a tool read, not the tool, whenever that tool is the only
+    thing standing between two witnesses that ought to agree (round 385).
+    """
     return struct.pack(">B", reason & 0xFF)
 
 

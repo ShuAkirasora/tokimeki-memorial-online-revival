@@ -12,7 +12,7 @@ send to a player standing in the wrong room when it does.
     0x6002 MsgSvOkLessonReady             (empty)
     0x6003 MsgSvNgLessonReady             u8 reason
     0x6004 MsgSvNotifyLessonStartImpossible u8 reason
-    0x6100 MsgSvNotifyLessonStart         counted, 66B entries — the seat list
+    0x6100 MsgSvNotifyLessonStart         counted seat list, entries NOT fixed
     0x6103 MsgSvNotifyLessonQuestionStart the question, as three numbers
     0x6105 MsgClCastLessonAnswer          u8 questionNo, u8 choiceId
     0x6106 MsgSvNotifyLessonAnswer        u32 senderId, u8 correctAnswerflg
