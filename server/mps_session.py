@@ -568,6 +568,20 @@ MSG_SV_NG_REENTRANCE = 0x031D
 # player does can ask for either, and this end volunteers neither.
 # UNANSWERED 0x5F00 -- GameTime: the in-game month, day, hour and minute.
 # UNANSWERED 0xA003 -- ServerVersion: which build the server is running.
+
+# ServerResponse -- 0xFD00 asks, 0xFD01 answers, 0xFD02 reports the result back.
+# Eight bytes each way, sixteen in the reply and in the report: a round-trip probe.
+#
+# This one is thinner than GameTime. 0xFD02's number is nowhere in the executable, so
+# the client cannot close the loop even if it opened it, and 0xFD00's is there once, in
+# the prototype, read only by the decoders. The receiving half is thinner too: the
+# client has a MsgSvResultServerResponse handler class, but none of its sixty-four
+# message procedures is a ServerResponse procedure, so nothing would install that
+# handler or route a reply to it. ⚠️ The executable does contain a
+# 「iTSSL2_ServerResponse_Receive」 line; that belongs to the SSL implementation
+# shipped with it and names a handshake record, not this family.
+# UNANSWERED 0xFD00 -- ServerResponse: a round-trip probe this client never opens.
+# UNANSWERED 0xFD02 -- ServerResponse: the result report, whose number is not compiled in.
 MSG_CL_REQUEST_LOBBY_DATA_START = 0x4000
 MSG_SV_OK_LOBBY_DATA_START = 0x4001
 MSG_CL_QUERY_POOL_MESSAGE = 0xA100

@@ -119,6 +119,43 @@ from characters import CharacterStore
 SESSION_ID_LEN = 64
 REGISTRATION_CODE_LEN = 20
 
+# The operator interface itself -- 0xFE00..0xFE1E, eleven requests that create and
+# destroy characters, overwrite a fixed character's whole record, set item, keyword,
+# club-skill, action and position state, open a drama event on demand, and hand out a
+# free NPC account. This server answers none of them, and that is a decision.
+#
+# Nothing a player runs can ask. The retail client carries the *receiving* half of the
+# family whole: all twenty-two MsgSv replies have their message number in the usual
+# two-byte instruction, laid out in one generated block sixteen bytes apart, and a
+# SupervisorMessageProcedure translation unit dispatches every one of them to its own
+# handler and sequencer. The sending half is not there. Ten of the eleven requests have
+# no message number anywhere in the executable; the eleventh, CharacterCreate, has it
+# exactly once, in the prototype the message tables are built from -- a run-once
+# accessor makes it and only the three decoders that take an arriving message apart
+# ever read it. That is the same shape MsgClQueryGameTime has, and it is recorded for
+# the same reason: the number never reaches the send port.
+#
+# Three more readings agree. The client's rejection table carries no sentence for any
+# of the family, though it carries them for 144 other message numbers across 44
+# families -- including every request the in-client GM console can make, each with its
+# own 「ＧＭ権限がありません。」. A server that expected a player to be refused one of
+# these would have had a sentence ready. None of the client's slash commands, player or
+# developer, opens anything Supervisor. And the shape of the first request says it
+# plainly: CharacterCreate takes accountId, charaFrameId and charaId as three free
+# variables, while a player's client holds one account, never names it, and is told its
+# charaIds rather than choosing them. This is another program's interface.
+# UNANSWERED 0xFE00 -- Supervisor: create a character on any account.
+# UNANSWERED 0xFE03 -- Supervisor: destroy a character by charaId.
+# UNANSWERED 0xFE06 -- Supervisor: read a fixed character's whole record.
+# UNANSWERED 0xFE09 -- Supervisor: overwrite a fixed character's whole record.
+# UNANSWERED 0xFE0C -- Supervisor: set a character's item state.
+# UNANSWERED 0xFE0F -- Supervisor: set a character's keyword state.
+# UNANSWERED 0xFE12 -- Supervisor: set a character's club-skill state.
+# UNANSWERED 0xFE15 -- Supervisor: set a character's action state.
+# UNANSWERED 0xFE18 -- Supervisor: open a drama event on demand.
+# UNANSWERED 0xFE1B -- Supervisor: set a character's position and heading.
+# UNANSWERED 0xFE1E -- Supervisor: hand out an unused NPC account.
+
 # Account ids start at 1 and stop at 65535, and the two ends are not the same
 # kind of fact.
 #
