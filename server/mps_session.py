@@ -545,6 +545,28 @@ MSG_SV_NG_REENTRANCE = 0x031D
 # UNANSWERED 0x0324 -- 転校: reserve the character's name at the destination.
 # UNANSWERED 0x0327 -- 転校: cancel a transfer that was booked.
 # UNANSWERED 0x032A -- 転校: carry out the booked transfer.
+
+# GameTime and ServerVersion -- two queries this client is wired to receive an
+# answer for and has no way to ask. Both are decisions rather than omissions, and
+# both rest on the same reading of the client.
+#
+# Every message this client can put on the wire is built by an object that
+# carries its message number in one two-byte instruction of its own, and every
+# such object goes out through the single send port the whole executable shares.
+# MsgClQueryServerVersion's number is nowhere in the executable -- nor in either
+# of the two small programs that ship beside it. MsgClQueryGameTime's is there
+# exactly once, in the prototype the message tables are built from; that
+# prototype is made by a run-once accessor and is only ever read by the three
+# decoders that take an arriving message apart. Neither number ever reaches the
+# send port.
+#
+# The receiving halves are complete: a GameTime procedure with its own handler
+# and sequencer -- the client has a 「MsgSvResultGameTimeMsgHandle is NULL」 line
+# ready for when that handler is missing -- and a ServerVersion result handler.
+# So a server that volunteered 0x5F01 or 0xA004 would be understood. Nothing a
+# player does can ask for either, and this end volunteers neither.
+# UNANSWERED 0x5F00 -- GameTime: the in-game month, day, hour and minute.
+# UNANSWERED 0xA003 -- ServerVersion: which build the server is running.
 MSG_CL_REQUEST_LOBBY_DATA_START = 0x4000
 MSG_SV_OK_LOBBY_DATA_START = 0x4001
 MSG_CL_QUERY_POOL_MESSAGE = 0xA100
