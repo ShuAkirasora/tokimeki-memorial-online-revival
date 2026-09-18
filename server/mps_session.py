@@ -4465,9 +4465,15 @@ class MpsServer:
         #
         # ⚠️ Registers only. Cells stay per member, and that is read off the
         # scripts too: `PC_KEYWORD_UPDATE` names **which player** in its first
-        # operand (`80`/`81`, granted back to back in `un081`) while
-        # `PC_DATA_REFER`/`UPDATE` carry no such field -- so the data family
-        # means "this member" and the keyword family means "that one".
+        # operand (`80`/`81`, granted back to back in `un081`).
+        # ⚠️⚠️ Round 369 took away the other half of that sentence. It used to
+        # read 「while `PC_DATA_REFER`/`UPDATE` carry no such field, so the data
+        # family means *this* member」 -- and they do carry it, in bit 0 of the
+        # same operand (`gs3vm._refer_actor`). A cell is still one per member;
+        # what changed is that an instruction may name whose. That is why the
+        # members' shadows are introduced to each other below: 99 reads and one
+        # write in the corpus are about the other member, and until now every
+        # one of them was answered out of the reader's own save.
         # ⚠️ The 役柄 goes with the register file. One file, but a choice box
         # names which 役柄 it is asking and the answer belongs in that player's
         # own `E<n>` -- see `gs3vm.OP_INPUT_SELECT` and `gs3vm.Follower.chose`.
@@ -4498,6 +4504,19 @@ class MpsServer:
             else:
                 self._push(other, self._answer(
                     other, 0, script.MSG_SV_REQUEST_SCRIPT_READY, params))
+        # ⭐⭐ Every member's shadow gets the others by 役柄, so that a read of
+        # 「the other one's copy of this cell」 is answered out of that player's
+        # own save rather than this one's. ⚠️ A member whose scenario is not
+        # exported has no shadow and simply is not in the list: the reads that
+        # name them then come back ⊤ and are counted as cells nobody supplied,
+        # which is the same thing this end says about every cell it cannot
+        # answer. ⛔️ Not a snapshot -- the machines are shared, so a cell one
+        # member writes is what the next reader of it sees.
+        shadows = {actor_id: other.script.shadow
+                   for (actor_id, _), other in zip(cast, sessions)
+                   if other.script is not None and other.script.shadow is not None}
+        for shadow in shadows.values():
+            shadow.peers = shadows
         return out
 
     def _drama_push_members(

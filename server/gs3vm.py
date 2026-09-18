@@ -521,9 +521,45 @@ def _refer_register(args: bytes):
     This family is a stub in the client, so the layout was matched rather than
     read: the same encoding shifted left by five. The 0xffff sentinels are the
     reason for the mask -- they are not registers.
+
+    ⚠️ Bits 1-4 are the mask; bit 0 is not part of the register and is not
+    dropped here by accident -- it is the 役柄 (`_refer_actor`).
     """
     field = int.from_bytes(args[0:2], "little")
     return None if field & 0x1E else _register(field >> 5)
+
+
+def _refer_actor(args: bytes) -> int:
+    """**Whose copy of the cell** a data-family instruction names: 役柄 n.
+
+    ⭐⭐⭐ Round 369. The data families each read and write a cell that every
+    member of a play has one of, and which member is written in the operand
+    all along -- bit 0, `0` for 役柄 0 and `1` for 役柄 1. It is the same
+    field `PC_KEYWORD_UPDATE` carries (`80`/`81`, whose reading is at the
+    KEYWORD_OPS case); until round 369 it was thought to be that family's
+    alone, and everything else was read as 「this member」.
+
+    ⚠️⚠️ So 「`PC_DATA_REFER`/`UPDATE` carry no such field」 is **wrong**, and
+    the corpus says so three ways, none of them a resemblance:
+
+      * Every one of the 165 reads that feeds a `SELITEM_DISP_FLAG` chain
+        agrees with the 役柄 mask of the `OP_INPUT_SELECT` it feeds: bit 0
+        with mask 1 (80 of them), bit 1 with mask 2 (85).
+      * `un010` ip=432/436 reads `PC[0x3010]` **twice, differing in this bit
+        alone**, and compares the two. Under any other reading that
+        comparison is true no matter what, which no compiler emits.
+      * All 54 writes that set the bit name 役柄 1's copy: 53
+        `PC_KEYWORD_UPDATE`, whose 「to whom」 was already read, and one
+        `PC_DATA_UPDATE` -- `un081` ip=1653, 春日's 登場 cell, on a stretch of
+        that scenario only its 役柄 1 walks.
+
+    ⭐ 95 of the scripts are the original server's own, with no second 役柄 to
+    name, and all 751 of their data operands have the bit clear.
+
+    ⚠️ The 0xc000/0xc001 pair is read the same way for uniformity and not on
+    evidence: no CTX instruction in the corpus sets the bit.
+    """
+    return args[0] & 1
 
 
 # The letters the client's own debug strings use for the eight operand
@@ -540,11 +576,17 @@ def register_name(reg: tuple[int, int]) -> str:
     return f"{REGISTER_LETTERS.get(category, '?')}{number}"
 
 
-def cell_name(family: str, address) -> str:
-    """`PC[0x3a04]` / `CTX[0xd900@0x11]` -- how a data cell is named in a log."""
+def cell_name(family: str, address, actor: int | None = None) -> str:
+    """`PC[0x3a04]` / `CTX[0xd900@0x11]` -- how a data cell is named in a log.
+
+    ⭐ `actor` names somebody else's copy of the cell (`PC/1[0x3010]`) and is
+    None for one's own, so every line that was written before round 369 reads
+    the same byte for byte -- a name with a 役柄 in it is the unusual case and
+    looks it.
+    """
     where = (f"{address[0]:#06x}@{address[1]:#04x}"
              if isinstance(address, tuple) else f"{address:#06x}")
-    return f"{family}[{where}]"
+    return f"{family}{'' if actor is None else f'/{actor}'}[{where}]"
 
 
 def _ctx_address(args: bytes) -> tuple[int, int]:
@@ -955,6 +997,12 @@ class Result:
         # キーワード -- and because the caller persists it through a different
         # record (`club.Membership.grant_keyword`) than the 恋愛 cells.
         self.keywords: list[tuple[int, int]] = []
+        # ⭐ `(役柄, family, address) -> value` for a write that named another
+        # member's copy of a cell (`gs3vm._refer_actor`). Apart from `writes`
+        # because `writes` is this player's save and this is not: it is either
+        # already in the other member's own Result, or it reached nobody and
+        # this is the only record that it happened.
+        self.other_writes: dict[tuple, int] = {}
         # {opcode: how often it was stepped over}. See `Machine._uninstructed`.
         self.passed: Counter = Counter()
 
@@ -997,6 +1045,9 @@ class Result:
                  for (family, slot), value in sorted(self.writes.items(), key=repr)]
         parts += [f"{cell_name(family, slot)}=⊤"
                   for family, slot in sorted(self.unknown_writes, key=repr)]
+        parts += [f"{cell_name(family, slot, actor)}={value}"
+                  for (actor, family, slot), value
+                  in sorted(self.other_writes.items(), key=repr)]
         got = " ".join(f"{actor}:{keyword_id}" for actor, keyword_id in self.keywords)
         return ("writes: " + (" ".join(parts) if parts else "none")
                 + (f" · keywords (actor:id) {got}" if got else "")
@@ -1023,6 +1074,19 @@ class Machine:
     #: walking in step with a client that is stopped on the branch installs one
     #: -- see `_Die` for why that side is allowed to settle it at all.
     roll = None
+
+    #: ⭐⭐⭐ Which 役柄 of the play this machine's player is walking, and a
+    #: class attribute for the same reason `roll` is: every caller that runs a
+    #: script for one player is 役柄 0, which is what a scenario with one
+    #: member has. Only a party's members are told otherwise (`Follower`).
+    actor = 0
+
+    #: ⭐⭐ The other members' machines, by 役柄 -- how a read of somebody
+    #: else's copy of a cell is answered (`_refer_actor`). None means this run
+    #: has nobody to ask, which is the honest state for every offline caller
+    #: and for a scenario played alone: such a read is then an unknown cell
+    #: rather than this player's own, which is what it used to be read as.
+    peers: "dict[int, Machine] | None" = None
 
     def __init__(self, script: Script, cells: dict[tuple[str, int], int]) -> None:
         self.script = script
@@ -1079,13 +1143,53 @@ class Machine:
             return value
         return self.script.strings.get(value, TOP)
 
-    def _cell(self, family: str, address) -> int:
-        try:
-            return self.cells[(family, address)]
-        except KeyError:
-            raise UnknownCell(
-                f"{self.script.name}: {cell_name(family, address)}"
-            ) from None
+    def _peer_cells(self, actor: int) -> "dict | None":
+        """Another member's cells, or None when this run cannot reach them."""
+        peer = (self.peers or {}).get(actor)
+        return None if peer is None else peer.cells
+
+    def _cell(self, family: str, address, actor: int = 0) -> int:
+        cells = self.cells if actor == self.actor else self._peer_cells(actor)
+        if cells is not None:
+            try:
+                return cells[(family, address)]
+            except KeyError:
+                pass
+        raise UnknownCell(
+            f"{self.script.name}: "
+            f"{cell_name(family, address, None if actor == self.actor else actor)}"
+        ) from None
+
+    def _write_cell(self, key, value, actor: int = 0) -> None:
+        """Put a value in a data cell, in whichever member's copy is named.
+
+        ⚠️ A write of an unknown value is recorded apart from the rest, never
+        among them: `Result.writes` is what a caller persists, and "the script
+        wrote something here and this end could not say what" must not reach a
+        save file as a number.
+
+        ⚠️⚠️ A write to **another member's** copy lands in that member's own
+        machine -- their cells and their `Result`, because their caller is the
+        one that persists their save -- and is noted in `Result.other_writes`
+        either way, so a run that could not reach them says so instead of
+        writing the value into this player's save. The corpus has exactly one
+        such instruction outside the キーワード family (`_refer_actor`), and it
+        names 役柄 1's cell on a stretch only 役柄 1 walks -- so in a real play
+        it is 役柄 1 writing its own cell and this branch is not taken. ⛔️ That
+        is why this end does not try to be cleverer about it than recording it.
+        """
+        target = self if actor == self.actor else (self.peers or {}).get(actor)
+        if target is not self:
+            self.result.other_writes[(actor, *key)] = value
+            if target is None:
+                return
+        target.cells[key] = value
+        if _unknown(value):
+            target.result.unknown_writes.add(key)
+            target.result.writes.pop(key, None)
+        else:
+            target.result.writes[key] = value
+            target.result.unknown_writes.discard(key)
 
     # ── one instruction ───────────────────────────────────────────────────
     def _step(self, i: int) -> int | None:
@@ -1213,7 +1317,8 @@ class Machine:
             reg = _refer_register(args)
             if reg is not None:
                 slot = int.from_bytes(args[2:4], "little")
-                self.registers[reg] = self._cell(DATA_READ[op], slot)
+                self.registers[reg] = self._cell(
+                    DATA_READ[op], slot, _refer_actor(args))
             return i + 1
 
         if op in DATA_WRITE:
@@ -1222,43 +1327,27 @@ class Machine:
                 slot = int.from_bytes(args[2:4], "little")
                 key = (DATA_WRITE[op], slot)
                 value = self._get(reg)
-                self.cells[key] = value
-                # ⚠️ A write of an unknown value is recorded apart from the
-                # rest, never among them: `Result.writes` is what a caller
-                # persists, and "the script wrote something here and this end
-                # could not say what" must not reach a save file as a number.
-                if _unknown(value):
-                    self.result.unknown_writes.add(key)
-                    self.result.writes.pop(key, None)
-                else:
-                    self.result.writes[key] = value
-                    self.result.unknown_writes.discard(key)
+                self._write_cell(key, value, _refer_actor(args))
             return i + 1
 
         if op == OP_CTX_REFER:
             reg = _refer_register(args)
             if reg is not None:
-                self.registers[reg] = self._cell("CTX", _ctx_address(args))
+                self.registers[reg] = self._cell(
+                    "CTX", _ctx_address(args), _refer_actor(args))
             return i + 1
 
         if op == OP_CTX_UPDATE:
             reg = _refer_register(args)
             if reg is not None:
-                key = ("CTX", _ctx_address(args))
-                value = self._get(reg)
-                self.cells[key] = value
                 # ⭐ Round 346: recorded in `Result.writes` like a PC/PCEV
                 # write, with the same rule for a value this machine could not
-                # produce. Until now a CTX write reached only `cells`, which
+                # produce. Until then a CTX write reached only `cells`, which
                 # was enough while nothing persisted one; the 会話 chooser's
                 # five bookkeeping slots and `_s104`'s 進行度 step are CTX
                 # writes a caller has to keep (`romance.absorb_talk`).
-                if _unknown(value):
-                    self.result.unknown_writes.add(key)
-                    self.result.writes.pop(key, None)
-                else:
-                    self.result.writes[key] = value
-                    self.result.unknown_writes.discard(key)
+                self._write_cell(("CTX", _ctx_address(args)),
+                                 self._get(reg), _refer_actor(args))
             return i + 1
 
         if op == OP_EMIT:
@@ -1442,11 +1531,18 @@ class Follower(Machine):
     sequence from the first instruction to the last. (The other 12 are log
     fragments that do not begin at the top of a script, not disagreements.)
 
-    ⭐⭐ **It needs no 役柄 ID, and not by assuming one.** ``OP_BA``'s
+    ⭐⭐ **The walk needs no 役柄 ID, and not by assuming one.** ``OP_BA``'s
     fall-through sends nothing at all, so silence and a report are the two
     answers to that test, and the client supplies whichever one applies. Worth
     saying, because the obvious alternative -- assume the player is part 0 --
     is right for a solo cutscene and silently wrong for a multi-player event.
+
+    ⚠️⚠️ **The cells are the other half, and there the 役柄 is needed** (round
+    369): a data instruction names whose copy of the cell it means
+    (`_refer_actor`), so `actor` is what tells 「mine」 from 「theirs」 and
+    `peers` is where the other members' copies are found. ⛔️ Getting `actor`
+    wrong is no longer only a choice-box matter -- it decides which save a
+    read comes out of.
 
     ⚠️⚠️ **It follows, it does not steer.** Every branch goes where the server
     actually sent the client, never where this machine's own arithmetic would
@@ -1518,11 +1614,13 @@ class Follower(Machine):
         self.own: dict[tuple[int, int], object] = {}
 
     # -- the two rules that differ from a machine running on its own -------
-    def _cell(self, family: str, address) -> int:
-        if (family, address) not in self.cells:
-            self.missing[cell_name(family, address)] += 1
+    def _cell(self, family: str, address, actor: int = 0) -> int:
+        cells = self.cells if actor == self.actor else self._peer_cells(actor)
+        if cells is None or (family, address) not in cells:
+            self.missing[cell_name(
+                family, address, None if actor == self.actor else actor)] += 1
             return TOP
-        return self.cells[(family, address)]
+        return cells[(family, address)]
 
     def _step(self, i: int) -> int | None:
         if self.script.code[i][1] == OP_BA:
