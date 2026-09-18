@@ -460,21 +460,46 @@ GALLERY_LIST_MAX = 10
 # The flag words, read off the client's own tests (0x9c6a20 / 0x9c69a0, the
 # two the ギャラリー page asks before it draws a candidate at all): a record
 # is `u16 npcId; u32 eventFlag[2]; u32 emotionFlag[12]`, eventFlag[r] bit n
-# (n = 1..9) is 「event n has a photo」 on route r, emotionFlag[r + e*2] bit n
-# is expression e (0..5) of that event, and the tenth slot of the page is
+# (n = 1..9) opens the page's nth slot on route r, emotionFlag[r + e*2] bit n
+# is expression e (0..5) of that slot, and the tenth slot of the page is
 # not a bit at all -- it is 「she is in the 0x0316 list」. A candidate with
 # no bit set on either route is not drawn, whatever the ending list says.
 GALLERY_ROUTES = 2
 GALLERY_EMOTIONS = 6
 GALLERY_EVENT_BITS = 9
-# INVENTED — which route a photo goes on: 0. The record has two, the page
-# lights a slot if either has the bit, and nothing here says what the second
-# route is (the client tests both and never writes one).
+# ⭐ Round 398, off the client's own `gallery` table (100 rows, keyed on
+# (npcId, slot) by the only two readers in the exe): a row is
+# `u16 key; u16 npcId; u16 slot; u16 photo[2][6]; u16 staffRoll[2]`, and `slot`
+# is `eventIndex + 2`. So the page's ten slots are her events 2..11, and bit n
+# stands for her event n + 1 -- 「Scene:0n」 on the page is her `_e00(n+1)`,
+# which is also what the thumbnails are: Scene:04 draws 天宮イベント５.
+# Each photo is an entry of the client's own background table, named
+# 「<姓>表情<slot><route+1><emotion+1>」 (or 「<姓>イベント<slot>」 where the
+# picture is that event's own CG), which is what pins photo[0] to route 0 and
+# the array index to the expression index. Only slots 2, 3 and 4 are filled,
+# for exactly the five candidates the 0x0316 list already bounds, and route 1
+# was never drawn at all. The tenth slot never reads this table: it is her
+# ending, and the page takes both its 「is it open」 byte and its picture from
+# elsewhere.
+# ⚠️ The thumbnail and the full-size picture come from different places: the
+# thumbnail needs only the event bit, but opening it asks this table through
+# 0x68bd6d, so with no expression bit set the viewer had nothing to draw.
+# ⚠️ And only one expression per scene is reachable. The client picks the
+# picture with `(route == emotion) ? photo[0][emotion] : photo[1][emotion]`
+# (0x68bbe6), where every caller sweeps route 0..1 × emotion 0..5 -- so route 0
+# reaches photo[0][0] and nothing else, route 1 reaches photo[0][1], and the
+# other ten pairs land in the route-1 group, which is empty. Lighting the
+# second pair as well would need to know, per (candidate, scene), whether
+# photo[0][1] is there; where it is not, the 表情 button would turn itself on
+# (0x581418 enables it when 「first」 and 「next」 differ) and then draw nothing.
+GALLERY_EMOTION = 0
+# Route 0 is where a photo goes: it is the group the table fills, and the page
+# lights a slot if either route carries the bit (0x68bae8 loops both).
 GALLERY_ROUTE = 0
-# INVENTED — which events have a photo: e001 up to her 進行度 + 1, as bits
-# 1..進行度+1 (e001 is her debut, 進行度 counts the メイン events after it).
-# That the gallery's nine slots are e001..e009 in order is the reading; what
-# each slot shows on the real client is measured in 2.290.
+# Bit n is her event n + 1: the page's 「is this slot open」 test (0x9c6a20) and
+# its 「which picture」 test (0x9c69a0) are both handed `eventIndex + 1`, and
+# eventIndex 0 is the slot the table numbers 2. Her debut is event 1 and 進行度
+# counts the メイン events after it, so 進行度 IS the bit count.
 GALLERY_FIRST_EVENT_BIT = 1
 MSG_CL_REQUEST_CHARACTER_CREATE = 0x030C
 MSG_SV_OK_CHARACTER_CREATE = 0x030D
@@ -6288,16 +6313,23 @@ class MpsServer:
                          if entries else "なし"))
                 body = struct.pack(">H", len(entries))
                 for i in entries:
-                    # Bits GALLERY_FIRST_EVENT_BIT .. +進行度, never past the
-                    # ninth slot; the other route and every expression stay 0.
-                    shown = min(best[i] + 1, GALLERY_EVENT_BITS)
-                    events = sum(1 << (GALLERY_FIRST_EVENT_BIT + k) for k in range(shown)
-                                 if GALLERY_FIRST_EVENT_BIT + k <= GALLERY_EVENT_BITS)
+                    # Bit k is her event k + 1, so 進行度 メイン events seen is
+                    # bits 1..進行度 -- one slot fewer than this used to send.
+                    shown = min(best[i], GALLERY_EVENT_BITS)
+                    events = sum(1 << (GALLERY_FIRST_EVENT_BIT + k)
+                                 for k in range(shown))
                     event_words = [0] * GALLERY_ROUTES
                     event_words[GALLERY_ROUTE] = events
+                    # The same bits again on the one (route, expression) pair
+                    # whose picture the client can reach: opening a scene asks
+                    # the gallery table through that pair, so with these at 0
+                    # every scene opened to nothing. Where the table has no
+                    # picture the answer is the same 0xffff either way.
+                    emotion_words = [0] * (GALLERY_ROUTES * GALLERY_EMOTIONS)
+                    emotion_words[GALLERY_ROUTE + GALLERY_EMOTION * GALLERY_ROUTES] = events
                     body += struct.pack(">H", i) + struct.pack(
                         f">{GALLERY_ROUTES + GALLERY_ROUTES * GALLERY_EMOTIONS}I",
-                        *event_words, *([0] * (GALLERY_ROUTES * GALLERY_EMOTIONS)))
+                        *event_words, *emotion_words)
                 return self._answer(session, sequence, MSG_SV_RESULT_GALLERY_LIST, body)
             if msg_type == 0x0303:
                 # Reply ids run Request/Ok/Ng in threes (0x0200/01/02 did), so
