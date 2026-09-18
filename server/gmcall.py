@@ -176,6 +176,27 @@ MSG_SV_NG_GM_CALL_CANCEL = 0x6905
 #: in here on purpose -- see the docstring.
 HANDLED = frozenset({MSG_CL_REQUEST_GM_CALL, MSG_CL_REQUEST_GM_CALL_CANCEL})
 
+# UNANSWERED 0x67xx -- the GM console's own family: ＧＭチャット (request, cancel,
+# end), 強制移動 to a place or beside a character, 強制ログアウト, ＧＭメッセージ,
+# and the buttons on ＧＭコールリスト itself. The retail client carries the whole
+# console, receive half and send half alike, but no player can reach it on this
+# build. The four ＧＭ rows of the right-click menu are compiled with a criterion
+# that returns false and an action that returns without doing anything, and the
+# other way in -- a chat command that opens 「ＧＭメニュー」 -- sits among the
+# developer commands this build keeps switched off. The original server's own
+# answer is in the refusal table regardless: nine of the eleven have a row
+# reading 「ＧＭ権限がありません」, so what stands between a player and these is a
+# flag no account here can hold, not a missing handler. 0x6711 is the single
+# member an ordinary client does send, unprompted, once per session; it is
+# answered from the fixed-reply table and is not covered by this line.
+#
+# ⚠️ The 0x68xx half is a different thing and is NOT declared here. 0x6801 /
+# 0x6802 / 0x6804 are the PLAYER's side of a ＧＭチャット -- accept, refuse, and
+# speak. As soon as a server sends 0x6800 the client puts
+# 「%1%さんからＧＭチャットを申し込まれました」 on screen with a yes/no of its own,
+# and the answer goes back as 0x6801 or 0x6802. Nothing here sends 0x6800, so
+# those three are owed, not out of reach.
+
 #: 0x6902 MsgSvNgGMCall, by the client's own row numbers.
 NG_BAD_PLAYER = 0        # プレイヤー情報が不正です。
 NG_BAD_TYPE = 1          # 報告の種類が不正です。
