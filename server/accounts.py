@@ -156,6 +156,13 @@ REGISTRATION_CODE_LEN = 20
 # UNANSWERED 0xFE18 -- Supervisor: open a drama event on demand.
 # UNANSWERED 0xFE1B -- Supervisor: set a character's position and heading.
 # UNANSWERED 0xFE1E -- Supervisor: hand out an unused NPC account.
+#
+# The same decision, read the other way: twenty-two replies this end can only
+# send in answer to a request no program here can make. ⚠️ Unsent is not
+# unbuilt -- the client parses all twenty-two, so an operator tool written
+# later would find its answers understood, and that is what makes them worth a
+# line rather than a silence.
+# UNSENT 0xFExx -- Supervisor: answers to an operator interface nothing here can ask for.
 
 # Account ids start at 1 and stop at 65535, and the two ends are not the same
 # kind of fact.

@@ -190,6 +190,12 @@ HANDLED = frozenset({MSG_CL_REQUEST_GM_CALL, MSG_CL_REQUEST_GM_CALL_CANCEL})
 # member an ordinary client does send, unprompted, once per session; it is
 # answered from the fixed-reply table and is not covered by this line.
 #
+# The replies are the same decision downstream: an Ok or an Ng this end can only
+# send to a console no account here can open. ⚠️ 0x6712, the answer to that one
+# request, is outside this line the same way 0x6711 is -- it goes out every
+# session, and the code that builds it is there to be found.
+# UNSENT 0x67xx -- the GM console's replies: no player on this build can open it.
+#
 # ⚠️ The 0x68xx half is a different thing and is NOT declared here. 0x6801 /
 # 0x6802 / 0x6804 are the PLAYER's side of a ＧＭチャット -- accept, refuse, and
 # speak. As soon as a server sends 0x6800 the client puts

@@ -574,6 +574,20 @@ MSG_SV_NG_REENTRANCE = 0x031D
 # UNANSWERED 0x0324 -- 転校: reserve the character's name at the destination.
 # UNANSWERED 0x0327 -- 転校: cancel a transfer that was booked.
 # UNANSWERED 0x032A -- 転校: carry out the booked transfer.
+#
+# And the ten answers, which is the same finding from the other end: the client
+# can read every one of them -- five Ok/Ng pairs with a registered listener
+# apiece -- and nothing on this build can put it in a position to be told.
+# UNSENT 0x031F -- 転校: how many days remain until a transfer is allowed.
+# UNSENT 0x0320 -- 転校: that question could not be answered.
+# UNSENT 0x0322 -- 転校: the destination school and its free slots.
+# UNSENT 0x0323 -- 転校: that destination is refused.
+# UNSENT 0x0325 -- 転校: the name is reserved at the destination.
+# UNSENT 0x0326 -- 転校: the name could not be reserved.
+# UNSENT 0x0328 -- 転校: the booked transfer is cancelled.
+# UNSENT 0x0329 -- 転校: it could not be cancelled.
+# UNSENT 0x032B -- 転校: the transfer went through.
+# UNSENT 0x032C -- 転校: it did not.
 
 # GameTime and ServerVersion -- two queries this client is wired to receive an
 # answer for and has no way to ask. Both are decisions rather than omissions, and
@@ -597,6 +611,13 @@ MSG_SV_NG_REENTRANCE = 0x031D
 # player does can ask for either, and this end volunteers neither.
 # UNANSWERED 0x5F00 -- GameTime: the in-game month, day, hour and minute.
 # UNANSWERED 0xA003 -- ServerVersion: which build the server is running.
+#
+# Both answers stay unsent for the reason the paragraph above gives: a server
+# that volunteered either would be understood, and this one volunteers neither.
+# ⚠️ That is a decision about what this end starts saying on its own, not a
+# missing encoder -- whoever changes it will find the client ready.
+# UNSENT 0x5F01 -- GameTime: this end does not volunteer the in-game clock.
+# UNSENT 0xA004 -- ServerVersion: this end does not volunteer its build.
 
 # ServerResponse -- 0xFD00 asks, 0xFD01 answers, 0xFD02 reports the result back.
 # Eight bytes each way, sixteen in the reply and in the report: a round-trip probe.
