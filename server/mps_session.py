@@ -97,6 +97,7 @@ import exam
 import facing
 import friends
 import gmcall
+import gmchat
 import gousei
 import groups
 import gs3vm
@@ -1765,6 +1766,11 @@ class MpsServer:
         # needed. Per port on purpose: a room lives on the board of the port its
         # messages arrive at, and the sessions in it are on that same port.
         self.live: "list[_Session]" = []
+        # ＧＭチャット in progress, by charaId. On the board and not on a
+        # session because it is a pair: the operator drives it from one
+        # connection and the box appears on another. Not persisted -- see
+        # gmchat.Desk.
+        self.gmchats = gmchat.Desk()
         # Bytes to put before the tag on everything we send; see packet().
         self.header = b"\x00" * header_size
         runtime, self.packet_dir = ensure_runtime_dirs(root)
@@ -5950,6 +5956,7 @@ class MpsServer:
             # a ウェストアップ screen INSTEAD of the map, with nobody left to talk
             # to and no message coming.
             self._twoshot_partner_gone(session)
+            self._gm_chat_gone(session)
             # Who was watching this character, worked out before the removal for
             # the same reason: after it, _peers can no longer see the session at
             # all, and the answer would be the wrong map's crowd.
@@ -6508,6 +6515,7 @@ class MpsServer:
                 # reason: a partner left in front of a dead trade window.
                 self._trade_partner_gone(session)
                 self._twoshot_partner_gone(session)
+                self._gm_chat_gone(session)
                 # Same treatment as the disconnect path: 「中断」 takes this
                 # player out of the fight, and the fight carries on for whoever
                 # is left rather than being taken off the board (Fighter.gone).
@@ -7702,6 +7710,11 @@ class MpsServer:
                 # console is the 0x67xx family and nobody on this server holds
                 # 「ＧＭ権限」; see gmcall.py for why that is not a gap.
                 return self._gm_call(session, sequence, msg_type, params)
+            if msg_type in gmchat.HANDLED:
+                # ＧＭチャット, the player's half: はい / いいえ on the box a
+                # 0x6800 puts up, and the lines typed once it is open. The
+                # other half is an operator's, from /gm chat; see gmchat.py.
+                return self._gm_chat(session, sequence, msg_type, params)
             if msg_type in lesson_skill.HANDLED:
                 # お助けスキル. Eight skills, one entry point: what differs
                 # between them is which rules apply and what goes back, and both
@@ -12455,6 +12468,106 @@ class MpsServer:
             session, sequence, gmcall.MSG_SV_OK_GM_CALL, gmcall.ok_params(ahead)
         )
 
+    def _gm_chat(
+        self, session: "_Session", sequence: int, msg_type: int, params: bytes
+    ) -> bytes:
+        """ＧＭチャット's player half: 0x6801 / 0x6802 / 0x6804. See gmchat.py.
+
+        None of the three has an Ok or an Ng of its own, so what goes back is
+        not an acknowledgement but the next thing the player is meant to see:
+        0x6803 for the start of the chat, 0x6807 to take the box away, 0x6805
+        for the line they just typed. The operator on the other connection is told in the
+        chat bar, because the console that would have told them -- the GM's own
+        0x67xx window -- is not reachable on this build.
+        """
+        me = session.chara_id
+        desk = self.gmchats
+
+        def tell_gm(gm_id: "int | None", line: str) -> None:
+            """One console line to the operator, if they are still here.
+
+            ⚠️ Skipped when the operator IS the player: a one-account test
+            invites itself, and the same line twice on one screen reads as a
+            bug in the relay rather than as the test working.
+            """
+            if gm_id is None or gm_id == me:
+                return
+            other = self._session_of(gm_id)
+            if other is not None:
+                self._push(other, self._say(other, 0, line))
+
+        if msg_type == gmchat.MSG_CL_NG_GM_CHAT_RESPONSE:
+            # The client refusing on its own -- off campus, or already in a
+            # chat. It says so instead of putting the box up, and there is
+            # nothing to answer: the box the player never saw is already gone.
+            reason = gmchat.parse_reason(params)
+            gm_id = desk.waiting_for(me)
+            desk.forget(me)
+            print(f"[{self.tag}] ＧＭチャット: charaId={me:#x} refused it itself "
+                  f"(reason={reason}) [{desk.summary()}]")
+            tell_gm(gm_id, f"/gm chat: 0x{me:x} クライアントが辞退 reason={reason}")
+            return b""
+
+        if msg_type == gmchat.MSG_CL_OK_GM_CHAT_RESPONSE:
+            answer = gmchat.parse_answer(params)
+            gm_id = desk.waiting_for(me)
+            if gm_id is None:
+                # An answer to a box nothing here put up. Said and dropped: the
+                # client is not waiting for a reply and inventing one would put
+                # a window on a screen that has none open.
+                print(f"[{self.tag}] ＧＭチャット: 0x6801 from charaId={me:#x} "
+                      f"(answer={answer}) with no 申し込み on file, ignored")
+                return b""
+            if not answer:
+                # いいえ. The button has already set the client's own flag, so
+                # the 0x6807 this sends is what turns that flag into the
+                # 「ＧＭチャットを拒否しました」 box -- pressing いいえ on its
+                # own closes the box without a word. See gmchat.py.
+                desk.forget(me)
+                print(f"[{self.tag}] ＧＭチャット: charaId={me:#x} said いいえ to "
+                      f"0x{gm_id:x} [{desk.summary()}]")
+                tell_gm(gm_id, f"/gm chat: 0x{me:x} に断られた")
+                return self._answer(
+                    session, sequence, gmchat.MSG_SV_NOTIFY_GM_CHAT_CANCEL,
+                    gmchat.one_byte(gmchat.CANCEL_REFUSED),
+                )
+            desk.start(me)
+            print(f"[{self.tag}] ＧＭチャット: charaId={me:#x} said はい to "
+                  f"0x{gm_id:x} [{desk.summary()}]")
+            tell_gm(gm_id, f"/gm chat: 0x{me:x} と開始")
+            return self._answer(
+                session, sequence, gmchat.MSG_SV_NOTIFY_GM_CHAT_START, b""
+            )
+
+        # 0x6804: the line the player typed. The chat bar re-routes here by
+        # itself while a GM chat is up, so this arrives instead of 0x4900 and
+        # never alongside it.
+        said = chat.parse_cast(params)
+        gm_id = desk.gm_of(me)
+        if gm_id is None:
+            print(f"[{self.tag}] ＧＭチャット: line from charaId={me:#x} with no "
+                  f"chat open, refused: {said!r}")
+            return self._answer(
+                session, sequence, gmchat.MSG_SV_ERROR_GM_CHAT,
+                gmchat.one_byte(gmchat.ERROR_NOT_APPLIED),
+            )
+        names = self._chars(session).full_name(me)
+        family, first = names if names else (b"", b"")
+        body = gmchat.notify_params(me, family, first, said)
+        print(f"[{self.tag}] ＧＭチャット {me:#x} -> 0x{gm_id:x}: {said!r}")
+        # ⭐ The speaker's own copy is this reply: 0x6804 is a cast, so nothing
+        # appears in their window until this end says it back -- the same rule
+        # every other chat channel here follows.
+        gm_session = self._session_of(gm_id)
+        if gm_session is not None and gm_id != me:
+            self._push(
+                gm_session,
+                self._answer(gm_session, 0, gmchat.MSG_SV_NOTIFY_GM_CHAT, body),
+            )
+        return self._answer(
+            session, sequence, gmchat.MSG_SV_NOTIFY_GM_CHAT, body
+        )
+
     def _gm_console(
         self, session: "_Session", sequence: int, args: "list[str]"
     ) -> bytes:
@@ -12473,9 +12586,31 @@ class MpsServer:
 
         charaId defaults to the caller's own, so a one-account test needs no
         arguments at all. Hex is accepted, the way /group takes it.
+
+        ⭐ And the other half of answering a call, ＧＭチャット -- the 0x68xx
+        family, which is the one the retail client will hold up its own side
+        of. See gmchat.py for all of it.
+
+            /gm chat [<苗字> <名前>|<charaId>]
+                                      申し込む: put the はい/いいえ box on
+                                      their screen. No argument asks oneself,
+                                      which is what a one-account test wants;
+                                      one argument is a charaId, which is what
+                                      the two-client case wants, because a
+                                      guest's chat bar has no IME.
+            /gm say <文>              speak, once they have said はい
+            /gm cancel                withdraw the box
+            /gm end                   終了 -- closes their chat window
+
+        ⚠️ A player in a GM chat cannot type any of these: the chat bar
+        re-routes to 0x6804 while it is up. Drive it from the other
+        connection, or from runtime/console.txt.
         """
         book = self.accounts.gmcalls
         what = args[0].lower() if args else ""
+
+        if what in ("chat", "say", "cancel", "end"):
+            return self._gm_chat_console(session, sequence, what, args[1:])
 
         if not what:
             if not book.calls:
@@ -12498,6 +12633,136 @@ class MpsServer:
         call = book.take(who, what == "take")
         return self._say(session, sequence,
                          f"/gm {call.label()} [{book.summary()}]")
+
+    def _gm_chat_console(
+        self, session: "_Session", sequence: int, what: str, args: "list[str]"
+    ) -> bytes:
+        """``/gm chat|say|cancel|end``: the GM's side of a ＧＭチャット.
+
+        Split out of _gm_console because it is a different subsystem behind the
+        same word: the queue above is a store this server keeps, and this is
+        four messages going down a second connection. See gmchat.py.
+
+        ⚠️ Every one of these needs the other end to be logged in. A 0x6800
+        cannot wait for somebody: it is a box, and a box needs a screen.
+        """
+        desk = self.gmchats
+        me = session.chara_id
+
+        def deliver(other: "_Session", msg_type: int, body: bytes) -> bytes:
+            """Send one message to the other end of the pair.
+
+            ⚠️⚠️ THE SAME CONNECTION HAS TO RIDE OUT WITH THE REPLY. A push is
+            written to the socket the moment it is made, while the console
+            line it belongs to is built first and written last -- so pushing to
+            oneself puts the two sequence numbers on the wire in the wrong
+            order, and the client drops a connection whose sequence goes
+            backwards (0xA4C4D0's third refusal). A one-account test does
+            exactly that, every time.
+            """
+            if other is session:
+                return self._answer(session, sequence, msg_type, body)
+            self._push(other, self._answer(other, 0, msg_type, body))
+            return b""
+
+        if what == "chat":
+            if len(args) == 1:
+                # One argument is a charaId, hex or decimal, the way /gm take
+                # and /group join take one. It is here because the two-client
+                # case wants it: typing a 氏名 into the chat bar needs the
+                # guest's IME, and a number does not.
+                try:
+                    target = int(args[0], 0)
+                except ValueError:
+                    return self._say(session, sequence,
+                                     "/gm chat [<苗字> <名前>|<charaId>]")
+            elif args:
+                wanted = naming.full_name(
+                    args[0].encode("cp932", "replace"),
+                    args[1].encode("cp932", "replace"),
+                )
+                target = self.accounts.chara_named(wanted)
+                if target is None:
+                    return self._say(session, sequence,
+                                     f"/gm chat: 「{args[0]} {args[1]}」なし")
+            else:
+                target = me
+            other = self._session_of(target)
+            if other is None:
+                return self._say(session, sequence,
+                                 f"/gm chat: 0x{target:x} は未接続")
+            if desk.gm_of(target) is not None or desk.waiting_for(target):
+                return self._say(session, sequence,
+                                 f"/gm chat: 0x{target:x} は応対中 "
+                                 f"[{desk.summary()}]")
+            # ⚠️⚠️ The name is the operator's own character's, the id is NOT:
+            # the client throws away any 0x6800 whose applicant is an ordinary
+            # charaId, so what goes out is gmchat.GM_CHARA_ID. See gmchat.py.
+            names = self._chars(session).full_name(me)
+            family, first = names if names else (b"", b"")
+            desk.invite(target, me)
+            body = gmchat.request_params(family, first)
+            sent = deliver(other, gmchat.MSG_SV_REQUEST_GM_CHAT_RESPONSE, body)
+            print(f"[{self.tag}] ＧＭチャット: 0x{me:x} asked 0x{target:x} "
+                  f"[{desk.summary()}]")
+            # ⚠️ Nothing is said back to the caller when they asked themselves:
+            # the box is already on that screen and a console line behind it
+            # would be a second thing to read on the one screen being watched.
+            if sent:
+                return sent
+            return self._say(session, sequence,
+                             f"/gm chat -> 0x{target:x} [{desk.summary()}]")
+
+        player = desk.player_of(me)
+        if player is None:
+            return self._say(session, sequence,
+                             f"/gm {what}: 相手なし [{desk.summary()}]")
+        other = self._session_of(player)
+        if other is None:
+            desk.forget(player)
+            return self._say(session, sequence,
+                             f"/gm {what}: 0x{player:x} は未接続、忘れた")
+
+        if what == "say":
+            if desk.gm_of(player) is None:
+                return self._say(session, sequence,
+                                 f"/gm say: 0x{player:x} はまだ返事していない")
+            if not args:
+                return self._say(session, sequence, "/gm say <文>")
+            names = self._chars(session).full_name(me)
+            family, first = names if names else (b"", b"")
+            line = " ".join(args)
+            # Same id as the 申し込み, and for a second reason: 0x6805's
+            # handler draws a line from the GM category in a channel of its
+            # own, so this is what makes the GM's lines look like the GM's.
+            body = gmchat.notify_params(
+                gmchat.GM_CHARA_ID, family, first, line)
+            sent = deliver(other, gmchat.MSG_SV_NOTIFY_GM_CHAT, body)
+            print(f"[{self.tag}] ＧＭチャット 0x{me:x} -> 0x{player:x}: {line!r}")
+            # ⭐ The operator gets their own copy too, so that one screen shows
+            # both sides of the conversation: 0x6805's handler puts a line in
+            # the chat window whatever mode that client is in. One copy only
+            # when the two are the same connection.
+            if sent:
+                return sent
+            return self._answer(
+                session, sequence, gmchat.MSG_SV_NOTIFY_GM_CHAT, body
+            )
+
+        if what == "cancel":
+            msg = gmchat.MSG_SV_NOTIFY_GM_CHAT_CANCEL
+            body = gmchat.one_byte(gmchat.CANCEL_CANCELLED)
+        else:
+            msg = gmchat.MSG_SV_NOTIFY_GM_CHAT_END
+            body = gmchat.one_byte(gmchat.END_NORMAL)
+        desk.forget(player)
+        sent = deliver(other, msg, body)
+        print(f"[{self.tag}] ＧＭチャット: 0x{me:x} {what} 0x{player:x} "
+              f"[{desk.summary()}]")
+        if sent:
+            return sent
+        return self._say(session, sequence,
+                         f"/gm {what} -> 0x{player:x} [{desk.summary()}]")
 
     def _group_console(
         self, session: "_Session", sequence: int, args: "list[str]"
@@ -14836,6 +15101,49 @@ class MpsServer:
         session.twoshot_asked = None
         session.twoshot_asking = None
         session.twoshot_with = None
+
+    def _gm_chat_gone(self, session: "_Session") -> None:
+        """Take a leaving connection out of the ＧＭチャット desk, both roles.
+
+        Called next to _twoshot_partner_gone and for the same reason: the
+        client's GM chat replaces the chat bar's destination and its box has no
+        timeout, so a survivor who is not told keeps typing into a
+        conversation with nobody on the other end.
+
+        ⚠️ Which message closes it depends on how far the pair had got --
+        0x6807 takes the はい/いいえ box away, 0x680B closes the window behind
+        it -- and only one of the two is on screen at a time.
+        """
+        me = session.chara_id
+        if not me:
+            return
+        desk = self.gmchats
+        if desk.waiting_for(me) is not None or desk.gm_of(me) is not None:
+            # The player leaving. The operator is told in words; there is no
+            # message for it, because the GM's own window is the unreachable
+            # half of this family.
+            gm_id = desk.waiting_for(me) or desk.gm_of(me)
+            desk.forget(me)
+            other = self._session_of(gm_id) if gm_id != me else None
+            if other is not None:
+                self._push(other, self._say(
+                    other, 0, f"/gm chat: 0x{me:x} が退出 [{desk.summary()}]"))
+        player = desk.player_of(me)
+        if player is None:
+            return
+        talking = desk.gm_of(player) is not None
+        desk.forget(player)
+        other = self._session_of(player)
+        if other is None:
+            return
+        msg = (gmchat.MSG_SV_NOTIFY_GM_CHAT_END if talking
+               else gmchat.MSG_SV_NOTIFY_GM_CHAT_CANCEL)
+        body = gmchat.one_byte(
+            gmchat.END_NORMAL if talking else gmchat.CANCEL_PARTNER_GONE
+        )
+        self._push(other, self._answer(other, 0, msg, body))
+        print(f"[{self.tag}] ＧＭチャット: 0x{me:x} left, closed "
+              f"0x{player:x}'s {'window' if talking else 'box'}")
 
     def _twoshot_partner_gone(self, session: "_Session") -> None:
         """Tell whoever was in a twoshot with this session that it is over.
