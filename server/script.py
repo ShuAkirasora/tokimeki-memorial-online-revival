@@ -295,6 +295,23 @@ NG_PAUSE_SOLO = 0
 #: せん。」
 ERROR_RETIRE_NOT_NOW = 0
 
+# UNSENT 0x7219 -- NotifyScriptCommandPermission: actorId, kind, enable. The
+#   client acts on exactly two kinds and drops every other value on the floor.
+#   kind 0 is ［Pause］ -- it sets the flag the client tests before it will open
+#   the ポーズ window at all, which is the gate in front of the 0x720C above.
+#   kind 1 is the 裏話チャット box, the one an event scene greys out.
+#   Both switches already have a driver, and it is not this end:
+#     * The scenarios carry the opcodes themselves. CHAT_DENY ... CHAT_ALLOW
+#       bracket a stretch of script 1787 times over 209 of them, always
+#       balanced, and the operand is a 役柄 mask: each client tests its own bit
+#       and acts for itself, so the box greys out with nothing sent from here.
+#     * The ［Pause］ pair of those opcodes appears in none of the 683 scripts,
+#       and ［Pause］ is permitted unless something takes it away -- clients have
+#       sent 0x720C here 44 times without ever being told they could.
+#   So there is no permission this end holds that the client does not already
+#   have, and volunteering one would be inventing an event the scripts never
+#   ask for.
+
 # INVENTED — how long a ポーズ runs before the player is forced out of the
 # drama, in milliseconds of the client's own clock.
 #

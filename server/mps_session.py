@@ -852,6 +852,12 @@ MSG_SV_OK_MINIMAP_START = 0x3C01
 MSG_SV_NOTIFY_MINIMAP = 0x3C06
 MSG_CL_CAST_CHARA_TURN = 0x4803
 MSG_SV_NOTIFY_CHARA_TURN = 0x4804
+# UNSENT 0x4805 -- ErrorCharaTurn: every sentence in its table is a backend
+#   fault -- the character record could not be fetched, the new facing could
+#   not be stored, twice 「サーバーとの通信に失敗しました」 -- between two
+#   未使用 slots. Unlike its neighbours 0x4808 and 0x480B it carries no
+#   「現在、〜が禁止されています」 row, so there is no rule here for a player
+#   to break: a turn this end cannot store is a turn this end does not have.
 MSG_SV_NOTIFY_GM_WARP = 0x6808
 MSG_CL_REQUEST_CHARA_WARP = 0x4800
 MSG_SV_OK_CHARA_WARP = 0x4801
