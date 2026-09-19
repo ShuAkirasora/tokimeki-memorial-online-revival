@@ -4888,7 +4888,59 @@ class MpsServer:
               + (f" actor={actor.actor_id}" if actor is not None else ""))
         if session.script is None:
             print(f"[{self.tag}] script <- arrived with no script running")
+            if msg_type == script.MSG_CL_REQUEST_SCRIPT_PAUSE:
+                # ⭐ The one message here that has somewhere to say this. Its
+                # table holds a single sentence and it fits: a ポーズ with no
+                # scene to freeze is nobody-is-waiting-on-you, which is what
+                # 「一人プレイ時は強制終了されないため」 is about.
+                return self._answer(
+                    session, seen, script.MSG_SV_NG_SCRIPT_PAUSE,
+                    struct.pack(">B", script.NG_PAUSE_SOLO),
+                )
             return None
+        if msg_type == script.MSG_CL_REQUEST_SCRIPT_PAUSE:
+            # ［Pause］, or the right-click ring's 「ポーズ」 (manual p08_03).
+            on = script.parse_pause(params)
+            # ⚠️⚠️ WHO IT IS REFUSED TO is the client's own sentence read as a
+            # rule rather than as a string: 「一人プレイ時は強制終了されないた
+            # め、ポーズする必要はありません。」 A ポーズ is how you tell the
+            # OTHER PLAYERS you have stepped away, so the test is whether there
+            # is another player -- not whether there is a party. A party whose
+            # remaining 役柄 are all 代行ＮＰＣ is 一人プレイ by that sentence's
+            # own reasoning: the stand-ins play themselves and nothing stalls.
+            others = [a for a in party.actors
+                      if a.chara_id != session.chara_id and not a.is_surrogate] \
+                if party is not None else []
+            if actor is None or not others:
+                print(f"[{self.tag}] script pause on={on} refused: "
+                      f"nobody else is waiting on this scene")
+                return self._answer(
+                    session, seen, script.MSG_SV_NG_SCRIPT_PAUSE,
+                    struct.pack(">B", script.NG_PAUSE_SOLO),
+                )
+            # ⚠️ The deadline is stated in the CLIENT's clock because that is
+            # what its handler subtracts from (script.PAUSE_FORCE_FINISH_MS has
+            # the decompiled arithmetic). client_now() is 0 until the first
+            # timesync lands, which is thirty seconds after login and long
+            # before any drama -- say so rather than send a stamp from 1970.
+            base = session.client_now()
+            if base == 0:
+                print(f"[{self.tag}] ⚠️ script pause with no clock samples yet "
+                      f"-- the countdown this states will be wrong")
+            print(f"[{self.tag}] script pause: actor={actor.actor_id} on={on} "
+                  f"({len(others)} other player(s) waiting)")
+            # Everyone else is told; the presser gets the Ok instead, which is
+            # the message that carries the deadline they are counting down.
+            self._drama_push_members(
+                party, script.MSG_SV_NOTIFY_SCRIPT_PAUSE,
+                script.pause_notify_params(actor.actor_id, on),
+                skip=session.chara_id,
+            )
+            return self._answer(
+                session, seen, script.MSG_SV_OK_SCRIPT_PAUSE,
+                script.pause_ok_params(base + script.PAUSE_FORCE_FINISH_MS),
+            )
+
         if msg_type == script.MSG_CL_OK_SCRIPT_READY:
             session.script.started = True
             # Nothing but the start signal. Rounds 30-32 followed it with a
@@ -8872,6 +8924,65 @@ class MpsServer:
             if battle.all_ready():
                 out += self._battle_turn_start(session, battle)
             return out
+
+        if msg_type == clubbattle.MSG_CL_CAST_BATTLE_CHAT:
+            # The chat bar inside the fight. A cast, so nothing appears on
+            # anybody's screen -- the speaker's own included -- until this end
+            # says it back; the arrangement 0x4901 and 0x580F already use.
+            #
+            # ⭐ The body is chat.notify_params unchanged, because the client
+            # reads 0x5C01 with 0x4901's own deserializer (0x8D6230). See the
+            # table over the message ids in clubbattle.py.
+            said = chat.parse_cast(params)
+            if battle is None:
+                print(f"[{self.tag}] battle chat from charaId={chara_id:#x} "
+                      f"with no battle to say it in: {said!r}")
+                return self._answer(
+                    session, sequence, clubbattle.MSG_SV_ERROR_BATTLE_CHAT,
+                    struct.pack(">B", clubbattle.ERROR_CHAT_NOT_IN_ROOM),
+                )
+            info = self._chars(session).find(chara_id)
+            who = display_name(info) if info else "?"
+            print(f"[{self.tag}] battle chat {who}: {said!r}")
+            # ⚠️ THE FIGHT IS THE AUDIENCE, not the room it was opened out of:
+            # 練習 and フリー対戦 reach this branch with no trainingroom.Room in
+            # existence at all -- this method's docstring, one screen up.
+            return self._tr_cast(
+                session, sequence, clubbattle.MSG_SV_NOTIFY_BATTLE_CHAT,
+                chat.notify_params(chara_id, who, said),
+                [f.chara_id for f in battle.fighters],
+            )
+
+        if msg_type == clubbattle.MSG_CL_CAST_BATTLE_CHARA_EMOTION:
+            # The emotion keys, same screen. 0x5C14 carries a charaId, so it is
+            # not a private echo -- the argument command_params makes for 0x5C0C
+            # word for word -- and the body is chat.lesson_emotion_params, whose
+            # reader (0x8F1840) is the one 0x5C14 uses.
+            emotion = chat.parse_emotion(params)
+            if battle is None:
+                print(f"[{self.tag}] battle emotion {emotion} from "
+                      f"charaId={chara_id:#x} with no battle to show it in")
+                return self._answer(
+                    session, sequence,
+                    clubbattle.MSG_SV_ERROR_BATTLE_CHARA_EMOTION,
+                    struct.pack(">B", clubbattle.ERROR_EMOTION_NOT_ALLOWED),
+                )
+            print(f"[{self.tag}] battle emotion: charaId={chara_id:#x} {emotion}")
+            # ⚠️⚠️ THE ID IS RELAYED, NOT CHECKED, and that is a decision with a
+            # known precedent on the other side of it: twoshot.py refuses
+            # emotions 11..17 because 0x5404 carrying one CRASHES the client
+            # (round 214, measured). That gap belongs to `wu_emotion`, the
+            # waist-up portrait table; which table this screen draws from is
+            # unread, so a filter copied from there would be a guess that
+            # refuses real keys. What this end does is repeat an id a client
+            # chose, never manufacture one -- and if a battle ever dies on an
+            # emotion, twoshot.EMOTION_WITH_FACE is the shape of the answer.
+            return self._tr_cast(
+                session, sequence,
+                clubbattle.MSG_SV_NOTIFY_BATTLE_CHARA_EMOTION,
+                chat.lesson_emotion_params(chara_id, emotion),
+                [f.chara_id for f in battle.fighters],
+            )
 
         if msg_type == clubbattle.MSG_CL_CAST_BATTLE_COMMAND:
             return self._battle_command(session, battle, params)

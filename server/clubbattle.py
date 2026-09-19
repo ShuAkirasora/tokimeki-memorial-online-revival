@@ -97,7 +97,47 @@ import ability
 import characters
 import club
 
+#: ⭐⭐ The chat bar and the emotion keys, inside the fight. Both are casts, and
+#: in this protocol a Cast means 「repeat this to the others」 -- the argument
+#: `command_params` below already makes, citing 0x5C00 -> 0x5C01 as the settled
+#: example, while nothing here sent 0x5C01 until round 408.
+#:
+#: ⭐⭐⭐ NOT ONE BYTE OF THESE FIVE IS NEW. The client reads each of them with a
+#: deserializer it already uses for a pair this end has been answering for
+#: hundreds of rounds, vtable[0] for vtable[0]:
+#:
+#:     0x5C00 CastClubBattleChat          0x8E0590  = 0x4900  -> chat.parse_cast
+#:     0x5C01 NotifyClubBattleChat        0x8D6230  = 0x4901  -> chat.notify_params
+#:     0x5C02 ErrorClubBattleChat         0x8D84A0  = 0x4902  -> one reason byte
+#:     0x5C13 CastClubBattleCharaEmotion  0x8DB8E0  = 0x610C  -> chat.parse_emotion
+#:     0x5C14 NotifyClubBattleCharaEmotion 0x8F1840 = 0x610D  -> chat.lesson_emotion_params
+#:     0x5C15 ErrorClubBattleCharaEmotion 0x8D84A0  = 0x4902  -> one reason byte
+#:
+#: So the bodies are not a reading of these six messages, they are the readings
+#: of 0x4900/0x4901/0x4902 and 0x610C/0x610D applied where the client shares the
+#: code. What was missing was only ever the handler.
 MSG_CL_CAST_BATTLE_CHAT = 0x5C00
+MSG_SV_NOTIFY_BATTLE_CHAT = 0x5C01
+MSG_SV_ERROR_BATTLE_CHAT = 0x5C02
+MSG_CL_CAST_BATTLE_CHARA_EMOTION = 0x5C13
+MSG_SV_NOTIFY_BATTLE_CHARA_EMOTION = 0x5C14
+MSG_SV_ERROR_BATTLE_CHARA_EMOTION = 0x5C15
+
+#: The sentences 0x5C02 and 0x5C15 pick from, out of the client's own table
+#: (pseudo-id 0xFF02, the one the whole 自主トレ/クラブ対戦 group shares).
+#: Named for what the sentence says rather than for why we send it, the
+#: convention trainingroom.py set.
+#:
+#: ⚠️ Row 4 says 自主トレルーム by name because that door is the one the table
+#: was written around; it is still the only row in the table that says 「you are
+#: not in the thing this message belongs to」, which is what a battle chat with
+#: no battle is. 練習 arriving here would read the sentence slightly wide, and
+#: that is a wrong word rather than a wrong answer -- inventing a row would be
+#: the worse of the two.
+ERROR_CHAT_NOT_IN_ROOM = 4        # 自主トレルームに入っていません。
+ERROR_CHAT_FORBIDDEN = 5          # 現在、自主トレルームでのチャットが許可されていません。
+ERROR_EMOTION_NOT_ALLOWED = 15    # キャラクターの感情表現はできません。
+
 MSG_CL_NOTIFY_BATTLE_LEVEL = 0x5C03
 MSG_SV_ERROR_BATTLE_LEVEL = 0x5C04
 MSG_SV_NOTIFY_NPC_BATTLE_INFO = 0x5C05

@@ -101,6 +101,7 @@ mapgraph.py's graph is — missing means "nothing known", never an error.
 from __future__ import annotations
 
 import json
+import os
 import struct
 from collections.abc import Sequence
 from pathlib import Path
@@ -238,6 +239,99 @@ FORCED_BRANCHES: dict[int, dict[int, int]] = {}
 # ask for that names a drama script; swapping the answer is the only way in.
 FORCED_NEXT_SCRIPT: str | None = None
 
+# ⭐⭐⭐ THE ドラマイベント SESSION CONTROLS, and the whole set is documented --
+# by KONAMI, on the page that describes ドラマイベント (`manual/p08_03`):
+#
+#     ５分以上何も入力がなかった場合、自動的にドラマイベントから離脱してしまい
+#     ます。離脱後は、そのプレイヤーに代わってNPCがドラマイベントを進行させます。
+#     急な用事などで…「ポーズ」機能で他の参加者に知らせるようにしてください。
+#       ポーズの操作方法 ：画面右クリック→ポーズ もしくは ［Pause］ キー
+#       ※ポーズ中でも、５分以上何も入力がなかった場合は、自動的に離脱します。
+#       中断のしかた ：画面を右クリックして「イベント中断」を選択
+#
+# So: 0x720C is ［Pause］, 0x7205 is 「イベント中断」, 0x720B is the five-minute
+# drop, and 0x7206's `npcInfo` is the stand-in that takes the empty 役柄 over --
+# the same 代行ＮＰＣ roster proxynpc.py already holds for the other direction.
+#
+# ⭐⭐ And the client's own refusal table says what the RULE is, which is the
+# part a manual page does not give: 0x720E has exactly one sentence, 「一人プレ
+# イ時は強制終了されないため、ポーズする必要はありません。」 ⇒ pausing is a
+# thing you do TO THE OTHER PLAYERS, and a scene nobody else is waiting on is
+# refused rather than paused. 0x7207 likewise has exactly one: 「今の状態では、
+# イベントを中断することはできません。」
+#
+# ⭐⭐⭐ NONE OF THE LAYOUTS ARE NEW. Every reader here is one this end already
+# builds for, vtable[0] for vtable[0]:
+#
+#     0x720C RequestScriptPause  on                 0x8D83A0 = 0x5811 ready   u8
+#     0x720D OkScriptPause       force_finish_time  0x9B9850 = 0x5701 OkDrama u64
+#     0x720E NgScriptPause       reason             0x8D84A0 = 0x4902 error   u8
+#     0x720F NotifyScriptPause   actorId, on        0x90F220 = 0xE018 ready   u16+u8
+#     0x7206 NotifyScriptRetire  actorId,npcId,rsn  0x8FCC60 = 0x040B locker  u16+u16+u8
+#     0x7207 ErrorScriptRetire   reason             0x8D84A0 = 0x4902 error   u8
+#     0x720B NotifyScriptTimeout                    0x8F1840 = 0x610D emotion u32+u16
+MSG_CL_CAST_SCRIPT_RETIRE = 0x7205
+MSG_SV_NOTIFY_SCRIPT_RETIRE = 0x7206
+MSG_SV_ERROR_SCRIPT_RETIRE = 0x7207
+MSG_SV_REQUEST_SCRIPT_CONTINUE = 0x7208
+MSG_CL_OK_SCRIPT_CONTINUE = 0x7209
+MSG_CL_NG_SCRIPT_CONTINUE = 0x720A
+MSG_SV_NOTIFY_SCRIPT_TIMEOUT = 0x720B
+MSG_CL_REQUEST_SCRIPT_PAUSE = 0x720C
+MSG_SV_OK_SCRIPT_PAUSE = 0x720D
+MSG_SV_NG_SCRIPT_PAUSE = 0x720E
+MSG_SV_NOTIFY_SCRIPT_PAUSE = 0x720F
+
+#: The whole of 0x720E's table: 「一人プレイ時は強制終了されないため、ポーズする
+#: 必要はありません。」 Row 1 is 未使用.
+NG_PAUSE_SOLO = 0
+
+#: The whole of 0x7207's table: 「今の状態では、イベントを中断することはできま
+#: せん。」
+ERROR_RETIRE_NOT_NOW = 0
+
+# INVENTED — how long a ポーズ runs before the player is forced out of the
+# drama, in milliseconds of the client's own clock.
+#
+# ⭐ The NUMBER is the manual's: 「※ポーズ中でも、５分以上何も入力がなかった場
+# 合は、自動的に離脱してしまいます」. What is invented is the IDENTIFICATION --
+# that 0x720D's `force_finish_time` is that same five-minute deadline rather
+# than some other forced end.
+#
+# ⭐⭐ The FIELD's meaning is not invented: the client's 0x720D handler
+# (0x785679) reads it as `__alldiv(force_finish_time - <client clock>, 1000)`
+# and hands the quotient on, so it is an absolute stamp on the client's own
+# 64-bit millisecond clock and the client turns it into seconds remaining --
+# a countdown. `_Session.client_now` is this end's estimate of that clock, and
+# it is the same estimate 0x480A movement deadlines already ride on.
+#
+# ⚠️ This end does NOT yet enforce the deadline it states: nothing here counts
+# five minutes and sends 0x720B/0x7206. The number the client counts down is
+# therefore honest about when the original would have dropped the player and
+# quiet about what happens when it runs out.
+PAUSE_FORCE_FINISH_MS = int(os.environ.get("TMO_PAUSE_FORCE_MS") or 300_000)
+
+
+def parse_pause(params: bytes) -> int:
+    """0x720C's one byte: nonzero is 「pause on」. Absent reads as off."""
+    return params[0] if params else 0
+
+
+def pause_ok_params(force_finish_time: int) -> bytes:
+    """0x720D's body: when the pause will be force-ended, u64, client clock."""
+    return struct.pack(">Q", max(0, force_finish_time))
+
+
+def pause_notify_params(actor_id: int, on: int) -> bytes:
+    """0x720F's body: which 役柄 paused, and whether it is on or off.
+
+    The same (u16 actorId, u8 flag) 0xE018 carries, through the same reader --
+    which is the tell that it is addressed to the room rather than to the
+    presser: a message meant for one person does not name them.
+    """
+    return struct.pack(">HB", actor_id, on & 0xFF)
+
+
 MSG_SV_REQUEST_SCRIPT_READY = 0x7200
 MSG_CL_OK_SCRIPT_READY = 0x7201
 MSG_CL_NG_SCRIPT_READY = 0x7202
@@ -247,6 +341,15 @@ MSG_CL_NOTIFY_SCRIPT_COMMAND = 0x721B
 MSG_CL_NOTIFY_SCRIPT_COMMAND_BEGIN = 0x721C
 MSG_SV_NOTIFY_SCRIPT_COMMAND = 0x721F
 MSG_SV_NOTIFY_SCRIPT_COMMAND_BRANCH = 0x721A
+
+# UNSENT 0x7220 -- ScriptCommandBegin, server side: the client parses it and
+# then throws it away. All three of its listener registrations point at
+# 0x85D41F, the shared do-nothing handler eleven named messages share, so
+# there is no screen for it to change. ⚠️ That is a statement about this build
+# and not about the message: 0x7220 carries the client's own 0x721C plus a
+# `ctrl` byte, which is the shape of 「that actor's scene reached this command,
+# and here is who may answer it」 -- a party would have wanted it. What the
+# empty handler says is that the client as shipped does not listen.
 
 # The choice box. 0x7213 is what a 0x721c Begin{op=INPUT_SELECT} is waiting
 # for; 0x7214 brings back which line was clicked, and 0x7223 arrives unasked
