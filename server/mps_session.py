@@ -365,26 +365,10 @@ FIXED_REPLIES = {
     # The requests do carry something (0x5600 reads one u16) which is ignored;
     # whatever an event needs beyond being acknowledged is still unknown.
     0x5600: (0x5601, b""),  # MsgClRequestNpcEventStart -> MsgSvOkNpcEventStart
-    # ⭐⭐⭐ The bracket around *every* menu opened on a non-capture NPC, first
-    # seen on the wire in round 219 by right-clicking the 理事長秘書 (2:9) and
-    # picking 「校則を読む」. Both requests are empty and both Oks deserialize
-    # through 0x8CB9A0, the same zero-param stub 0x4003 and 0x5600 above use, so
-    # an Ok is the type and nothing else.
-    #
-    # ⚠️⚠️ The End is NOT a formality, and the way that shows is delayed: the
-    # 校則 window opens and closes perfectly well with neither answered, so the
-    # first click looks like a complete success. It is the *next* right-click on
-    # an NPC that stops on 「通信中 / サーバーからの返答待ちです」 -- the client
-    # still counts the bracket as open. 0x4E02's own reason 4 spells that state
-    # out (「既に交流メニューを開いています。」), which is what identifies the
-    # box: it is not the second menu failing, it is the first never closing.
-    #
-    # ⭐ Same lesson 0xE005 taught in round 217, one family over: a name that
-    # says the client does not wait for a body does not say the client does not
-    # wait for an answer. Answering these two is what makes all four of the
-    # 秘書's other doors reachable a second time.
-    0x4E00: (0x4E01, b""),  # ...MenuAccessStart -> MsgSvOkNonCaptureNpcMenuAccessStart
-    0x4E03: (0x4E04, b""),  # ...MenuAccessEnd   -> MsgSvOkNonCaptureNpcMenuAccessEnd
+    # ⭐ 0x4E00/0x4E03, the 交流メニュー bracket, used to be the two rows here.
+    # They moved to a branch of their own in round 415, because the Start is no
+    # longer an unconditional Ok: a second one on a bracket that is still open
+    # is refused. See MSG_CL_REQUEST_NPC_MENU_START.
     # ⭐ 0x5603 used to be the row below this one. It moved into the drama
     # branch in round 160, because answering it is no longer a formality: a
     # script started from a map object ends with the client sending this and
@@ -815,6 +799,86 @@ MSG_SV_NG_NEWSPAPER_START = 0x0A02
 NG_NEWSPAPER_ALREADY_OPEN = 5
 MSG_CL_REQUEST_NEWSPAPER_END = 0x0A03
 MSG_SV_OK_NEWSPAPER_END = 0x0A04
+
+# ⭐⭐⭐ The bracket around *every* menu opened on a non-capture NPC, first seen
+# on the wire in round 219 by right-clicking the 理事長秘書 (2:9) and picking
+# 「校則を読む」. Both requests are empty -- `Output_MsgClRequestNonCaptureNpc
+# MenuAccessStart`'s and the End's serializers are both 0x8CB9A0, the shared
+# zero-param stub, and every one of the 24 on the wire says `params=-` -- and
+# both Oks deserialize through the same stub, so an Ok is the type and nothing
+# else.
+#
+# ⚠️⚠️ The End is NOT a formality, and the way that shows is delayed: the 校則
+# window opens and closes perfectly well with neither answered, so the first
+# click looks like a complete success. It is the *next* right-click on an NPC
+# that stops on 「通信中 / サーバーからの返答待ちです」 -- the client still
+# counts the bracket as open.
+#
+# ⭐ Same lesson 0xE005 taught in round 217, one family over: a name that says
+# the client does not wait for a body does not say the client does not wait for
+# an answer. Answering these two is what makes all four of the 秘書's other
+# doors reachable a second time.
+MSG_CL_REQUEST_NPC_MENU_START = 0x4E00
+MSG_SV_OK_NPC_MENU_START = 0x4E01
+MSG_SV_NG_NPC_MENU_START = 0x4E02
+MSG_CL_REQUEST_NPC_MENU_END = 0x4E03
+MSG_SV_OK_NPC_MENU_END = 0x4E04
+
+# ⭐⭐⭐ RESTORED, round 415. 0x4E02 carries seven sentences and four of them
+# are labelled 未使用 in the data itself; of the three the original did send,
+# this is the one that is a rule about the player rather than a fault of its
+# own backend:
+#
+#     291  0x4E02  4  既に交流メニューを開いています。
+#
+# ⭐ Same shape as 0x0A02 reason 5 above, and the same reading: the original
+# refused a second open. It is also the one refusal in the whole 交流メニュー
+# family a player can actually walk into, which is why it was left alone for
+# four hundred rounds -- a bracket this end thinks is open and the client
+# thinks is closed refuses every right-click from then on, and the player is
+# stuck until they log in again.
+#
+# ⭐⭐⭐ Round 415 settled that, and from two directions:
+#
+#   * In the client, the End is not a call the menu code happens to make: it
+#     comes out of a *release* path. The function decrements a use count and
+#     only when it reaches zero builds the 0x4E03 request and queues it, with
+#     one guard in front -- the session pointer being non-null, i.e. still
+#     connected. So the End follows the last holder of the menu letting go,
+#     not any particular way of closing the window.
+#   * On the wire, the ordering the feared case needs was already recorded.
+#     Round 223, one connection: Start(seq 18) ... End(seq 21), *then*
+#     0x6304 npcId=2:9 menuItemId=402 (seq 22). The client closes the bracket
+#     **before** it asks for the event that takes the screen over, so a script
+#     never runs inside an open bracket. Every one of the 24 Starts in the
+#     logs is either matched by an End on the same connection or is the last
+#     thing that connection did.
+#
+# ⚠️ The flag is per connection and is not saved, so the worst a client that
+# somehow lost its End can cost is one reconnect -- the same bound as the three
+# bracket flags beside it.
+NG_NPC_MENU_ALREADY_OPEN = 4
+
+# UNSENT 0x4E05 -- MsgSvNgNonCaptureNpcMenuAccessEnd: no arm of it is sendable
+# here, and the three go three different ways.
+#   * reason 2 is 「未使用：：：未定義のエラーが発生しました」 -- dead in the data.
+#   * reason 0 is 「プレイヤー情報が不正です」, the original's own session
+#     record coming back wrong. That is the same sentence and the same
+#     judgement as 0x0A02 reason 4 above: a backend fault, not a rule. It is
+#     also 0x4E02's reason 0, which is unsent for the same reason.
+#   * reason 1 -- and 0x4E02's reason 3 -- is 「現在、選択された恋愛候補生と交流
+#     することはできません」. ⭐ It is a rule, and it is still not sendable,
+#     because nothing in the request names the 恋愛候補生 it is about: both
+#     halves of this bracket are empty on the wire and in the serializer. The
+#     table says where the subject went. Four of 0x4E02's seven sentences talk
+#     about 恋愛候補生 and three of those four are 未使用, including reason 2
+#     --「未使用：：：現在、恋愛候補生との交流機能はサポートしていません」-- and
+#     reason 5, the candidate ID list. The one sentence that would fit the
+#     family's own name, reason 1 「未使用：：：選択されたＮＰＣの情報が不正で
+#     す」, is 未使用 too. This is a reason table written for a 交流メニュー
+#     that names who it is opened on; the build that shipped has one that names
+#     nobody. ⛔️ Inventing a selection for it to refuse would be restoring the
+#     rule by inventing its subject.
 
 # ⚠️ INVENTED — how long the teacher's opening line is given, in the client's
 # own milliseconds. Only meaningful if speechEndTime really is a moment in the
@@ -1532,6 +1596,12 @@ class _Session:
         # is the only place that knows this player is reading, and a reader who
         # disconnected is not reading any more.
         self.newspaper_open = False
+        # Whether a 交流メニュー bracket is open on this connection -- the
+        # 0x4E00/0x4E03 pair. Same bracket shape as locker_open and
+        # newspaper_open above and here for the same reason, plus one of its
+        # own: 0x4E02 reason 4 refuses a second Start, and the state that
+        # refusal is about lives exactly as long as the socket does.
+        self.npc_menu_open = False
         # Whether パーティ一覧 -- the ドラマイベント matching screen -- is up on
         # this connection. Same bracket shape as the three flags above, and the
         # same reason for living here rather than on the character: the client
@@ -3566,6 +3636,19 @@ class MpsServer:
                 print(f"[{self.tag}] map object menu: short body {params.hex()}")
                 return None
             npc_id, menu_item = struct.unpack_from(">IH", params, 0)
+            # ⭐⭐⭐ RESTORED, round 415. Before anything else: is this key one
+            # the game leaves switched on? `menu_item.bin`'s 有効 column is the
+            # first of the three gates in front of a menu item and the only one
+            # a server can check, and 0x6303 reason 0 is the sentence for it.
+            # See script.NG_SUB_MENU_DISABLED.
+            if not script.menu_item_enabled(menu_item):
+                print(f"[{self.tag}] map object menu npcId={npc_id} "
+                      f"menuItemId={menu_item}: 無効 -> 0x6303 reason "
+                      f"{script.NG_SUB_MENU_DISABLED}")
+                return self._answer(
+                    session, seen, script.MSG_SV_NG_NPC_MAP_OBJECT_MENU,
+                    bytes((script.NG_SUB_MENU_DISABLED,)),
+                )
             # ⭐ The locker's own script picks the sub-menu. What it offers says
             # whether there is a letter: 0 ロッカー起動 alone when there is none,
             # 1 手紙イベント起動 then 2 ロッカー・手紙メニュー on the visit that
@@ -8014,6 +8097,31 @@ class MpsServer:
                 if changed and msg_type == item.MSG_CL_CAST_ITEM_USE:
                     out += self._item_effect(session, params)
                 return out
+            if msg_type in (MSG_CL_REQUEST_NPC_MENU_START,
+                            MSG_CL_REQUEST_NPC_MENU_END):
+                # 交流メニュー. The bracket around every menu opened on a
+                # non-capture NPC; neither half carries a byte either way. See
+                # MSG_CL_REQUEST_NPC_MENU_START for what the pair is and
+                # NG_NPC_MENU_ALREADY_OPEN for why the Start can now refuse.
+                started = msg_type == MSG_CL_REQUEST_NPC_MENU_START
+                if started and session.npc_menu_open:
+                    print(f"[{self.tag}] npc menu already open, refused "
+                          f"(reason={NG_NPC_MENU_ALREADY_OPEN})")
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_NPC_MENU_START,
+                        struct.pack(">B", NG_NPC_MENU_ALREADY_OPEN),
+                    )
+                # ⚠️ A stray End is answered Ok, not refused: 0x4E05 has no
+                # sentence for one (its reason 1 is about a 恋愛候補生, not
+                # about the bracket), exactly the way 0x0A05's 「既に校内新聞
+                # を開いています」 is marked 未使用 while 0x0A02's is live.
+                session.npc_menu_open = started
+                print(f"[{self.tag}] npc menu {'open' if started else 'close'}")
+                return self._answer(
+                    session, sequence,
+                    MSG_SV_OK_NPC_MENU_START if started else MSG_SV_OK_NPC_MENU_END,
+                    b"",
+                )
             if msg_type in (MSG_CL_REQUEST_NEWSPAPER_START,
                             MSG_CL_REQUEST_NEWSPAPER_END):
                 # 校内新聞. The bracket around the paper, and the whole of what

@@ -767,6 +767,68 @@ MSG_SV_NG_NPC_MAP_OBJECT_MENU = 0x6303
 # /smenu moves this without a restart.
 DEFAULT_SUB_MENU = 2
 
+# ⭐⭐⭐ RESTORED, round 415. The other answer 0x6301 has: `error_message.bin`
+# files exactly two sentences under 0x6303, and reason 0 is 「選択されたメニュー
+# は現在無効です。」 -- not marked 未使用, so the original sent it. What it asks
+# about is not a guess either. A menu item has to clear three gates before a
+# player can reach it (2.107 四), and the *first* of them is a column of the
+# item's own record: `menu_item.bin` +0x38, 有効, the gate the client itself
+# reads at 0x6A6E4F. That column is what `reference/menu_items.json` ships, and
+# it is the whole of what this end needs to answer the refusal.
+#
+# 11 of the 44 keys are switched off: 1 199 201 401 405 406 407 and the four
+# 2044-2047 ダミー rows. An id that is not in the table at all is refused the
+# same way -- the sentence is about the selection, and a key the game does not
+# define is not a selection this end can honour.
+#
+# ⚠️ This gates 0x6301 only. 0x6306 reason 0 is the same sentence one door
+# over, but it already has a source of its own that is nothing to do with this
+# column -- a 会話 chooser's `EVENT_CALL 0xffff` (NPC_EVENT_NONE_REASON) -- and
+# giving one reason byte two unrelated producers would make the log ambiguous
+# about which question was answered. The 有効 column is a static property of
+# the key; 0x6306's is the script's answer today.
+#
+# ⚠️ 403 ロッカー開く, the one type-1 item this build can actually reach, is
+# 有効=1, so the locker is not affected.
+NG_SUB_MENU_DISABLED = 0
+
+MENU_ITEM_PATH = (
+    Path(__file__).resolve().parent.parent / "reference" / "menu_items.json"
+)
+
+
+def _load_menu_items() -> dict[int, dict]:
+    """``{menuItemId: {"type": int, "enabled": bool}}`` -- two columns, no text.
+
+    Absent file is silent, like `_load_branches` and `_load_npc_events`: with no
+    table nothing is disabled and every 0x6301 is answered, which is exactly
+    what this server did before the table existed.
+    """
+    try:
+        raw = json.loads(MENU_ITEM_PATH.read_text(encoding="utf-8"))["items"]
+    except (OSError, ValueError, KeyError):
+        return {}
+    return {
+        int(key): {"type": int(entry["type"]), "enabled": bool(entry["enabled"])}
+        for key, entry in raw.items()
+    }
+
+
+MENU_ITEMS = _load_menu_items()
+
+
+def menu_item_enabled(menu_item: int) -> bool:
+    """Is this key one the game defines and leaves switched on?
+
+    True when there is no table, so a server without the file behaves the way
+    this one did before the column was recovered.
+    """
+    if not MENU_ITEMS:
+        return True
+    entry = MENU_ITEMS.get(menu_item)
+    return entry is not None and entry["enabled"]
+
+
 # The menu item the client sends for the speech balloon. Only this one has ever
 # been seen; the others in that menu have not been clicked yet.
 MENU_ITEM_TALK = 400

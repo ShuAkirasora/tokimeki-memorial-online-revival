@@ -858,6 +858,14 @@ starts. The client asks for an event by number and this end has to know whose it
 and the ids are both the game's own numbering. It carries the `.ssb` file names, which are
 identifiers rather than content, and no dialogue, no cast and no event titles.
 
+**`menu_items.json`** — 2.5 KiB: every menu item key the game defines, with two numbers each.
+One says what kind of door the key opens — an event, a sub-menu, or something the client
+handles by itself — and the other says whether it is switched on. Eleven of the forty-four
+are off, and that column is the question `MsgSvNgNpcMapObjectMenu`'s reason 0 asks: the
+client sends a key and this end has to know whether the game leaves it enabled. Without the
+file nothing is refused, which is what this server did before the column was recovered. It
+carries no menu names and no captions; neither column is text.
+
 **`reserved_names.json`** — 15 KiB of SHA-256, and nothing else. Two of the game's tables
 list names a new character may not be given, and this end is the one that refuses them, so
 what it needs is the ability to answer "is this exact name on the list". A digest answers
