@@ -10035,7 +10035,7 @@ class MpsServer:
             )
 
         if msg_type == clubbattle.MSG_CL_CAST_BATTLE_COMMAND:
-            return self._battle_command(session, battle, params)
+            return self._battle_command(session, sequence, battle, params)
 
         if msg_type == clubbattle.MSG_CL_NOTIFY_BATTLE_TURN_END:
             # ⭐ Empty body, and a Notify: 「I have finished playing this turn's
@@ -10098,8 +10098,8 @@ class MpsServer:
         return None
 
     def _battle_command(
-        self, session: "_Session", battle: "clubbattle.Battle | None",
-        params: bytes,
+        self, session: "_Session", sequence: int,
+        battle: "clubbattle.Battle | None", params: bytes,
     ) -> "bytes | None":
         """0x5C0A 「I pick this card, at them」 -> 0x5C0C to the whole fight.
 
@@ -10111,13 +10111,48 @@ class MpsServer:
         was worth storing — itemNum is an index into that deck and into no
         other.
 
-        ⚠️⚠️ Nothing is validated beyond 「there is a fight and you are in
-        it」. The refusals this subsystem has are the two sentences in
-        error_message (see clubbattle.COMMAND_*), and neither of them is
-        「that card is not in your deck」 or 「that target is not here」 — so a
-        server that invented a refusal for those would be inventing policy,
-        not restoring it. A choice that does not resolve is a problem for the
-        code that resolves it, which does not exist yet.
+        ⚠️⚠️ THE CARD AND THE TARGET ARE STILL NOT VALIDATED, and that has
+        not changed: neither 「that card is not in your deck」 nor 「that
+        target is not here」 is a sentence this subsystem owns, so refusing
+        them would be inventing policy. A choice that does not resolve is a
+        problem for the code that resolves it.
+
+        ⭐⭐ What IS refused, as of round 420, are the two rows of 0xFF02 that
+        belong to this door and to no other — see clubbattle.COMMAND_CANNOT_ACT
+        and COMMAND_STATE_DIFFERS for how the sixteen were allocated. Both are
+        answers to the sender alone (0x5C0B carries no charaId), and both are
+        off the path a playing client takes:
+
+        * COMMAND_STATE_DIFFERS -- there is no fight here, or you are not in
+          it. ⭐ MEASURED over 447 archived run_all logs: 6354 0x5C0A ever
+          arrived and 405 of them found no fight, EVERY ONE of them within 64
+          lines of a 0x5C1C on the same port and every one of them carrying
+          ``itemNum=0, isAttck=1, targetId=<the peer>`` -- byte for byte the
+          one deliberate probe that plays a card at a fight already torn down.
+          Not one came from a real client, which is what the wording says too:
+          a state divergence is not something a client on the normal path can
+          produce.
+        * COMMAND_CANNOT_ACT -- the sender is retired. ⭐ The client retires
+          its OWN character the moment 体力 hits zero and never says so
+          upstream (round 99, measured), so a client that knows it is down has
+          no command window to send from; this is the case where the two ends
+          have stopped agreeing about that. ⚠️ The log measurement is WEAK
+          here and is written down as weak: 44 リタイヤ events, 0 commands
+          after one -- but 43 of the 44 ended the fight in the same breath
+          (1v1), so the case barely had the chance to occur. The evidence
+          carrying this is round 99's, not the count.
+
+        ⚠️ A body too short to read stays SILENT, deliberately: 0xFF02 has no
+        「受信したデータが不正です」 row the way the chat table (0xFF00) does,
+        so there is no sentence to send and inventing one is the thing this
+        exercise is against. 228 such bodies are in the logs and all 228 are
+        one byte of 0x01, from the malformed-packet probe.
+
+        ⚠️ Order: the 制限時間 branch below stays FIRST among the two that can
+        both be true at once (a retired fighter whose command arrives after the
+        turn was played). That path is already restored and already sending,
+        and leaving it byte-identical is worth more than a guess about which
+        sentence the original would have preferred.
         """
         chara_id = session.chara_id
         parsed = clubbattle.parse_command(params)
@@ -10129,8 +10164,11 @@ class MpsServer:
         fighter = battle.find(chara_id) if battle else None
         if battle is None or fighter is None:
             print(f"[{self.tag}] battle command from charaId={chara_id:#x} "
-                  f"(item {item_num}) with no battle to put it in")
-            return None
+                  f"(item {item_num}) with no battle to put it in: reason=13")
+            return self._answer(
+                session, sequence, clubbattle.MSG_SV_ERROR_BATTLE_COMMAND,
+                struct.pack(">B", clubbattle.COMMAND_STATE_DIFFERS),
+            )
         everyone = [f.chara_id for f in battle.fighters]
         if battle.resolved:
             # ⭐ The one refusal this subsystem can make honestly, and the first
@@ -10149,6 +10187,17 @@ class MpsServer:
                 clubbattle.MSG_SV_NOTIFY_BATTLE_COMMAND,
                 clubbattle.command_params(chara_id, clubbattle.COMMAND_TOO_LATE),
                 everyone,
+            )
+        if fighter.retired:
+            # ⭐ 「行動できないキャラクターがコマンド入力を行いました」, and
+            # 「行動できない」 is a state this family names exactly once: リタイヤ,
+            # 体力 at zero. Answered to the sender alone — the others' screens
+            # have nothing to correct.
+            print(f"[{self.tag}] battle command from retired charaId="
+                  f"{chara_id:#x} (item {item_num}): reason=12")
+            return self._answer(
+                session, sequence, clubbattle.MSG_SV_ERROR_BATTLE_COMMAND,
+                struct.pack(">B", clubbattle.COMMAND_CANNOT_ACT),
             )
         fighter.command = parsed
         card = self._battle_card(fighter, item_num)
@@ -11784,6 +11833,11 @@ class MpsServer:
                            one frame says which slots have a shadow at all and
                            whether slot i means clubstatus id i. ⚠️ ``off`` is
                            all-zero, which is the shipping value.
+        ``/cb retire [@i] | off``  put fighter i's 体力 on the floor on THIS
+                           side only, no message sent; ``off`` puts it back at
+                           the ceiling. ⭐ The only way to hold a fight
+                           STANDING with somebody retired in it, which is what
+                           0x5C0B reason 12 is about — see the branch.
         ``/cb timeout [ms] | off``  make every 0x5C09 from now on name a
                            deadline this many ms ahead of the reader's own
                            clock, instead of clubbattle.TURN_TIMEOUT_MS.
@@ -12314,6 +12368,61 @@ class MpsServer:
             return self._say(
                 session, sequence,
                 f"/cb states @{seat} {counters}",
+            )
+        if what == "retire":
+            # ⭐ Put a fighter's 体力 on the floor (or back at the ceiling) on
+            # THIS side only, without a message going out. The states knob's
+            # twin: it writes a Fighter rather than the board, it is not
+            # one-shot, and it restores itself because the Fighter dies with
+            # the Board.
+            #
+            # ⚠️⚠️ Its whole job is a fight that is STANDING with somebody
+            # retired in it — the arrangement real play reaches only in a
+            # 2v2-or-bigger, and which every fight this server has ever logged
+            # skipped, because 43 of the 44 リタイヤ ever recorded wiped a side
+            # out and ended the fight in the same breath. That gap is why
+            # 0x5C0B reason 12 had no test until round 420.
+            #
+            # ⛔️ NOT gameplay and not a shortcut for one: it does not send
+            # 0x5C11, so no client is told, which is exactly the two-ends-
+            # disagree state reason 12 is the sentence for.
+            index = None
+            for token in args[1:]:
+                if token.startswith("@"):
+                    try:
+                        index = int(token[1:], 0)
+                    except ValueError:
+                        continue
+            if index is not None:
+                if not 0 <= index < len(battle.fighters):
+                    return self._say(
+                        session, sequence, f"/cb retire: no fighter @{index}",
+                    )
+                target = battle.fighters[index]
+            else:
+                target = next(
+                    (f for f in battle.fighters
+                     if f.chara_id == session.chara_id), None
+                )
+                if target is None:
+                    return self._say(
+                        session, sequence,
+                        "/cb retire: this session has no fighter here, use @i",
+                    )
+            spec = next((a for a in args[1:] if not a.startswith("@")), "")
+            if spec in ("off", "up", "-"):
+                target.vitality = target.max_vitality
+            else:
+                target.vitality = 0
+            seat = battle.fighters.index(target)
+            print(f"[{self.tag}] /cb retire: fighter @{seat} "
+                  f"{target.chara_id:#x} 体力={target.vitality}"
+                  f"/{target.max_vitality} retired={target.retired} "
+                  f"(nothing sent)")
+            return self._say(
+                session, sequence,
+                f"/cb retire @{seat} 体力={target.vitality} "
+                f"retired={target.retired}",
             )
         if what == "timeout":
             # ⚠️⚠️ A WIRE VALUE, and the only knob in here that is one. Every

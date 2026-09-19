@@ -934,6 +934,42 @@ COMMAND_OK = 0
 COMMAND_NONE_SELECTABLE = 1
 COMMAND_TOO_LATE = 2
 
+#: 0x5C0B's ``reason``, RESTORED from `error_message.bin` 760-775 -- the same
+#: sixteen-row run 0x5C02/0x5C04/0x5C15 pick from (pseudo-id 0xFF02), so the
+#: rows have to be allocated door by door rather than read as this one's arms.
+#: Fifteen of the sixteen belong elsewhere or say nothing this end can mean:
+#:
+#:   4, 5       the battle-chat door (ERROR_CHAT_* above)
+#:   7, 8, 9    the 対戦レベル door (LEVEL_* above; 9 is its backend fault)
+#:   15         the emotion door (ERROR_EMOTION_NOT_ALLOWED above)
+#:   0, 6       the developers' own 「未使用：：：」 rows -- no sentence at all
+#:   1, 2, 3    キャラクター情報／データ の取得に失敗 -- a lookup this end does
+#:              not do, on a hop this end does not have
+#:   10, 11     自主トレの開始／部活モードの継続 -- neither is a command
+#:   14         サーバーとクライアントの**ゲーム進行**が異なっています -- the
+#:              one row that could name 「that turn is already played」, and
+#:              that condition is already answered, by 0x5C0C's COMMAND_TOO_LATE
+#:              out of a table row of its own. ⛔️ Two doors must not each carry
+#:              their own test for one condition; the one already sending wins.
+#:
+#: ⭐⭐ What is left is two rows, and each of them names a shape only this door
+#: has. Both are prefixed 「サーバーエラーが発生しました。」／「サーバーと
+#: クライアントの…」 -- the original's wording for 「this should not have
+#: happened」, which is itself the reading that these sit off the normal path.
+#:
+#: ⚠️ 0x5C0B carries a reason and NOTHING else -- no charaId -- so unlike
+#: 0x5C0C it is not addressed to the fight, it is addressed to whoever asked.
+#: (The same argument command_params makes, read the other way round.)
+#:
+#: ⭐⭐⭐ MEASURED that it reaches the screen: the client's listener for it
+#: (0x766ACF) is one call, ``FUN_007AB1D9(0x5c0b, reason)`` -> the generic
+#: 「look the row up and put it in a 280x200 message box」 path, the same one
+#: the 0x5D02 family uses. So it draws the sentence and does NOT touch the
+#: fight -- no teardown, no screen change. A refusal here costs a box, not a
+#: battle.
+COMMAND_CANNOT_ACT = 12    # 行動できないキャラクターがコマンド入力を行いました。
+COMMAND_STATE_DIFFERS = 13 # サーバーとクライアントの状態が異なっています。
+
 
 def parse_command(params: bytes) -> "tuple[int, int, int] | None":
     """0x5C0A -> ``(itemNum, isAttck, targetId)``, or None if it is malformed.
