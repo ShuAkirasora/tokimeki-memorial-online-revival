@@ -1867,6 +1867,13 @@ class MpsServer:
         # フリー対戦 reach the same 0x5C** messages without one, and this server
         # only lacks those doors because it cannot place their NPCs yet.
         self.battles = clubbattle.Board()
+        # 授業 in progress, one per classroom map. ⭐⭐ Round 411: a lesson used
+        # to live on the session that was sitting it, which made every period a
+        # private one and left seven messages unsendable for want of a
+        # classmate — 0x6101 Join, 0x6108 Retire, and the four the three 他人用
+        # お助けスキル answer with. It is on the board for the same reason a
+        # fight is: two connections have to find the same room.
+        self.classrooms = lesson.Classrooms()
         # ドラマイベント bookings, on the board for the same reason the 看板 is:
         # a party is something other players look at, so it cannot live on the
         # session that made it. See drama.Board.
@@ -6460,6 +6467,12 @@ class MpsServer:
                 self._battle_carry_on(gone)
                 print(f"[{self.tag}] battle left on disconnect, "
                       f"now {self.battles.summary()}")
+            # ⭐ The 授業's twin of that, in the same place in the order and for
+            # the same reason: 0x6108's one sentence is 0x5C1B reason 0's, word
+            # for word, about a lesson instead of a fight.
+            if session.chara_id:
+                self._lesson_retire(session.chara_id)
+                session.lesson = None
             if watchers:
                 self._presence_withdraw(session, watchers)
             room = self.trainingrooms.room_of(session.chara_id) if session.chara_id else None
@@ -7015,6 +7028,10 @@ class MpsServer:
                     self._battle_carry_on(gone)
                     print(f"[{self.tag}] battle left at logout, "
                           f"now {self.battles.summary()}")
+                # Same pair as the disconnect path; see _lesson_retire.
+                if session.chara_id:
+                    self._lesson_retire(session.chara_id)
+                    session.lesson = None
                 # ⚠️⚠️ The same 0x4810 the disconnect path owes the others, for
                 # the same reason and in the same place in the order. MEASURED
                 # round 148, and the failure was neither an error nor a stale
@@ -8120,7 +8137,8 @@ class MpsServer:
                     if len(params) >= 2 else (0, 0)
                 period = session.lesson
                 refusal = (lesson.ERROR_ANSWER_TOO_LATE if period is None
-                           else period.take_answer(question_no, choice_id))
+                           else period.take_answer(session.chara_id,
+                                                   question_no, choice_id))
                 if refusal is not None:
                     print(f"[{self.tag}] answer refused: questionNo={question_no} "
                           f"choiceId={choice_id} (reason={refusal})")
@@ -8132,7 +8150,8 @@ class MpsServer:
                       f"(ours is {period.question_no}, so the client counts from "
                       f"{'one' if question_no == period.question_no else 'zero'}) "
                       f"choiceId={choice_id} "
-                      f"({'○' if period.would_be_right() else '×'} once time is up)")
+                      f"({'○' if period.would_be_right(session.chara_id) else '×'}"
+                      f" once time is up)")
                 return b""
             if msg_type == lesson.MSG_CL_CAST_LESSON_CHAT:
                 # The chat bar during 授業. A different message from the map's
@@ -8141,9 +8160,10 @@ class MpsServer:
                 # in class in round 51 arrived here and drew "no reply
                 # implemented". A Cast, so nothing appears until it is echoed.
                 #
-                # One seat, so the echo is the whole broadcast; if a second
-                # student ever shares a lesson this is where their copy goes,
-                # the way _presence_relay does it for the map.
+                # ⭐ Round 411: the echo is no longer the whole broadcast. A
+                # 授業 is a room, so a line typed at a desk goes to every desk —
+                # the same _tr_cast the questions ride on, and the reason the
+                # sender's own copy still comes back as the return value.
                 said = chat.parse_cast(params)
                 # ⭐ Round 410, and it is a rule rather than a guard:
                 # `error_message.bin` 524 「チャットは解答後に可能になります。」
@@ -8157,7 +8177,8 @@ class MpsServer:
                 # drew a box for. A deployed server has no console, so out of
                 # the box nothing takes this exit.
                 if not (chat.CONSOLE_ENABLED and said.startswith("/")):
-                    refusal = lesson.chat_refusal(session.lesson)
+                    refusal = lesson.chat_refusal(session.lesson,
+                                                  session.chara_id)
                     if refusal is not None:
                         print(f"[{self.tag}] lesson chat refused before the "
                               f"answer (reason={refusal}): {said!r}")
@@ -8168,9 +8189,10 @@ class MpsServer:
                 names = self._chars(session).full_name(session.chara_id)
                 family, first = names if names else (b"", b"")
                 print(f"[{self.tag}] lesson chat: {said!r}")
-                reply = self._answer(
+                reply = self._tr_cast(
                     session, sequence, lesson.MSG_SV_NOTIFY_LESSON_CHAT,
                     chat.split_notify_params(session.chara_id, family, first, said),
+                    self._lesson_room(session),
                 )
                 # ⭐ And this is the point of answering it at all: the console
                 # works in class again, so a lesson can be steered without
@@ -8200,7 +8222,7 @@ class MpsServer:
                     )
                 # ⚠️ No console exemption here, unlike the chat bar above: an
                 # emotion key is not a line of text and cannot carry a command.
-                refusal = lesson.chat_refusal(session.lesson)
+                refusal = lesson.chat_refusal(session.lesson, session.chara_id)
                 if refusal is not None:
                     print(f"[{self.tag}] lesson emotion refused before the "
                           f"answer (reason={refusal})")
@@ -8210,9 +8232,10 @@ class MpsServer:
                     )
                 emotion = chat.parse_emotion(params)
                 print(f"[{self.tag}] lesson emotion: {emotion}")
-                return self._answer(
+                return self._tr_cast(
                     session, sequence, lesson.MSG_SV_NOTIFY_LESSON_EMOTION,
                     chat.lesson_emotion_params(session.chara_id, emotion),
+                    self._lesson_room(session),
                 )
             if msg_type in friends.HANDLED:
                 # 友達登録 and the アドレス帳 window it fills. Grouped for the
@@ -13920,37 +13943,29 @@ class MpsServer:
     # 予鈴と本鈴
     # ------------------------------------------------------------------
 
-    def _lesson_start(self, session: "_Session", seen: int, subject: int) -> bytes:
-        """MsgSvNotifyLessonStart with one seat in it: the player's own.
+    def _seat_of(self, session: "_Session", chara_id: int, subject: int,
+                 seat_id: int) -> "bytes | None":
+        """One seatInfo, built out of whoever this charaId is.
 
+        The character is looked up through ``accounts.owner_of`` rather than in
+        the caller's own store, because a classroom holds people from several
+        accounts and a charaId does not name its owner — the same reason
+        _battle_info does it that way. The caller's store is the fallback, which
+        is what answers on a server with one account in it.
 
-        One seat, and that is not a compromise: the list is who to draw around
-        the player, not who is enrolled, and a lesson with a single student is a
-        lesson the original would have run too — nothing in the manual or in
-        error_message.bin sets a minimum. The original would have had classmates
-        to put in the other eight slots and this world has nobody else in it, so
-        the other eight stay empty rather than being filled with invented
-        students, which would be furniture rather than reconstruction.
-
-        ⚠️ First contact for 0x6100. The layout is read out of the deserializer
-        at 0x008E34F0 field by field and the counts are inside the client's own
-        buffers, but nothing here has been drawn on a screen yet.
+        Returns None when the record cannot be found, and the caller drops the
+        seat rather than drawing a student out of invented bytes.
         """
-        info = self._chars(session).find(session.chara_id)
+        store = self.accounts.owner_of(chara_id) or self._chars(session)
+        info = store.find(chara_id)
         if info is None:
-            print(f"[{self.tag}] lesson start: no charaId={session.chara_id}")
-            return self._answer(
-                session,
-                seen,
-                lesson.MSG_SV_NOTIFY_LESSON_START_IMPOSSIBLE,
-                lesson.ng_params(lesson.REASON_NOT_IN_CLASSROOM),
-            )
+            return None
         fields = parse_create_info(info)
-        card = self._chars(session).scorecard(session.chara_id)
+        card = store.scorecard(chara_id)
         probe_id = lesson.PROBE["charaid"]
-        seat = lesson.seat_params(
-            seat_id=0,
-            chara_id=session.chara_id if probe_id < 0 else probe_id,
+        return lesson.seat_params(
+            seat_id=seat_id,
+            chara_id=chara_id if probe_id < 0 else probe_id,
             family_name=fields["familyName"],
             first_name=fields["firstName"],
             sex=fields["sex"],
@@ -13973,11 +13988,88 @@ class MpsServer:
             looks=[fields[key] for key in LOOKS],
             accessory=[fields[key] for key in ACCESSORY],
         )
+
+    def _lesson_start(self, session: "_Session", seen: int, subject: int) -> bytes:
+        """MsgSvNotifyLessonStart: the seat list of the room this player just
+        walked into, and 0x6101 to everybody who was already in it.
+
+        ⭐⭐ Round 411 turned this from 「one seat, the player's own」 into a
+        room. The seat list is who to draw around the player, not who is
+        enrolled, so one student was always a lesson the original would have run
+        too — nothing in the manual or in error_message.bin sets a minimum. What
+        was missing was never a rule, it was a second account in the same
+        classroom when the bell went, and the 2026-08-06 decision that left the
+        other eight slots empty said so in its last line: 「When the server grows
+        real accounts the seats fill themselves.」
+
+        ⚠️ The two halves go to different people and must:
+
+        * the arrival gets 0x6100 with **every** seat, their own included — the
+          client builds its whole array from this one message.
+        * everybody already seated gets 0x6101 with **only** the arrival's seat.
+          ⚠️⚠️ Sending them the whole list instead would make them re-add the
+          rows they are already drawing, which is the mistake _tr_seat records
+          having made on チャットルーム's 0x580C.
+
+        ⚠️ Nobody can arrive after the first question — `p06_02`'s 「授業の途中
+        から参加することはできません」 is enforced by Bell.admit's GRACE_SECONDS,
+        so the window 0x6101 lives in is the few hundred milliseconds between
+        one client answering the bell and the next one doing so.
+
+        ⚠️ First contact for 0x6100. The layout is read out of the deserializer
+        at 0x008E34F0 field by field and the counts are inside the client's own
+        buffers, but nothing here has been drawn on a screen yet.
+        """
+        # ⚠️ The room is opened BEFORE the seat is built, because a seat needs
+        # a seatId and the seatId is the room's to hand out.
+        room = self.classrooms.open(session.map_id, subject)
+        newcomer = session.chara_id not in room.students
+        seated = room.join(session.chara_id, max(0, int(lesson.PROBE["lunch"])))
+        seat = self._seat_of(session, session.chara_id, subject, seated.seat_id)
+        if seat is None:
+            room.leave(session.chara_id)
+            if room.empty():
+                self.classrooms.close(room)
+            print(f"[{self.tag}] lesson start: no charaId={session.chara_id}")
+            return self._answer(
+                session,
+                seen,
+                lesson.MSG_SV_NOTIFY_LESSON_START_IMPOSSIBLE,
+                lesson.ng_params(lesson.REASON_NOT_IN_CLASSROOM),
+            )
+        # ⭐ 0x6101 to the people already at their desks, and only to them.
+        # Before the 0x6100 below rather than after, so that the room is
+        # announced in the order it filled.
+        out = b""
+        if newcomer:
+            for other_id in room.members():
+                if other_id == session.chara_id:
+                    continue
+                other = self._session_of(other_id)
+                if other is None:
+                    continue
+                self._push(other, self._answer(
+                    other, 0, lesson.MSG_SV_NOTIFY_LESSON_JOIN, seat))
+                print(f"[{self.tag}] lesson join: charaId={session.chara_id} "
+                      f"seat {seated.seat_id} -> 0x{other_id:08x}")
         # The teacher's opening line runs for a while and the client is told when
         # it ends, in its own clock. See lesson.start_params for why that is the
         # frame and why it may be the wrong reading.
         speech_end = session.client_now() + lesson.PROBE["speech_ms"]
-        seats = [seat] * max(0, int(lesson.PROBE["seats"]))
+        # ⭐ Everybody in the room, in seat order, with the arrival's own row in
+        # it: the client builds its whole array out of this message.
+        seats = []
+        for member in room.seated():
+            row = (seat if member.chara_id == session.chara_id
+                   else self._seat_of(session, member.chara_id, subject,
+                                      member.seat_id))
+            if row is not None:
+                seats.append(row)
+        forced = int(lesson.PROBE["seats"])
+        if forced >= 0:
+            # The probe knob, and it still means what it meant when one seat was
+            # all there was: force the count, padding with this player's own row.
+            seats = (seats + [seat] * forced)[:forced]
         start_words = lesson.PROBE["words"]
         params = lesson.start_params(
             subject,
@@ -13991,7 +14083,8 @@ class MpsServer:
             f"先生 {curriculum.SUBJECT_TEACHER[subject]}, "
             f"背景 {lesson.LESSON_BACKGROUND[subject]}, "
             f"startWordsId={struct.unpack_from('>H', params, 0)[0]}, "
-            f"speechEndTime={speech_end}, {len(seats)} seat(s)"
+            f"speechEndTime={speech_end}, {len(seats)} seat(s), "
+            f"{self.classrooms.summary()}"
         )
         # Ten questions start once the teacher has finished the 開始台詞. The
         # period drives itself from here on a deadline of its own; see
@@ -13999,12 +14092,19 @@ class MpsServer:
         # room is drawn and nothing follows — better than asking a quizId the
         # client cannot look up, and it says so in the log.
         if quiz.loaded():
-            session.lesson = lesson.Lesson(subject, session.chara_id)
+            session.lesson = room
             # 授業中 goes up now, for the people still standing on the map.
             self._presence_refresh_onlookers(session)
         else:
+            # ⚠️ Unseat again: a room nobody is going to be pumped out of would
+            # otherwise hold this charaId until the next bell, and the next
+            # arrival would be told about a classmate who is not there.
+            room.leave(session.chara_id)
+            if room.empty():
+                self.classrooms.close(room)
             print(f"[{self.tag}] lesson start: no question bank, no questions")
-        return self._answer(session, seen, lesson.MSG_SV_NOTIFY_LESSON_START, params)
+        return out + self._answer(
+            session, seen, lesson.MSG_SV_NOTIFY_LESSON_START, params)
 
     def _drains(self, session: "_Session") -> bytes:
         """Everything the server owes that nobody asked for, in order.
@@ -16431,25 +16531,27 @@ class MpsServer:
         """お助けスキル, all eight of them. See server/lesson_skill.py.
 
         Each one is: check the rules, apply the effect, answer the player, then
-        push the Notify the whole classroom is meant to see. In this server the
-        classroom is one seat, so the broadcast comes straight back — but it is
-        still sent, because it is what carries the ストレス figure the bar under
-        the character reads.
+        push the Notify the whole classroom is meant to see — which since round
+        411 is a real broadcast rather than an echo, because a 授業 is a room.
+        It carries the ストレス figure the bar under each character reads.
 
-        ⚠️ The three targeted skills (カンニング, そっと応援, ティーチング) are
-        wired but cannot succeed here: a lesson has one seat, so no `targetId`
-        ever resolves and they refuse with the reason `error_message.bin` 540 /
-        550 / 560 describes — 「選択されたキャラクターの情報を取得できませんでした」.
-        That is the original's own answer to naming a classmate who is not there,
-        not a stub.
+        ⭐⭐ **The three targeted skills work now** (カンニング, そっと応援,
+        ティーチング). They were wired and unreachable for four hundred rounds,
+        and the 2026-08-06 decision that left them that way named the condition
+        for undoing itself in its own last line: 「When the server grows real
+        accounts the seats fill themselves.」 They did. `targetId` resolves
+        against the other seats in the room, and 540 / 550 / 560 —
+        「選択されたキャラクターの情報を取得できませんでした」 — goes back to
+        meaning what it says: a classmate who is not in this room.
 
-        ✅ **Decided (2026-08-06): the other eight seats stay empty.** The
-        original filled them with other players, so anyone this server seats is
-        invented along with how well they answer, and staying identical to the
-        original is worth more than making three skills reachable. When the
-        server grows real accounts the seats fill themselves.
+        ⚠️ Naming YOURSELF is not refused, and that is deliberate restraint
+        rather than an oversight: no sentence in `error_message.bin` says so, and
+        each of the three already refuses itself in that case for a reason that
+        is written down — カンニング off your own unanswered paper is
+        「対象がまだ解答していない」, and off your answered one is 「解答済み」.
         """
         period = session.lesson
+        seated = period.student(session.chara_id) if period is not None else None
         sheet = self._chars(session).ability(session.chara_id)
         card = self._chars(session).scorecard(session.chara_id)
         test_level = card.test_level() if card is not None else 1
@@ -16457,9 +16559,10 @@ class MpsServer:
         name = lesson_skill.NAMES.get(msg_type, "?")
 
         try:
-            lesson_skill.check_common(period, msg_type, question_no, test_level)
-            answer, notify = self._skill_effect(
-                session, period, sheet, msg_type, target_id
+            lesson_skill.check_common(period, seated, msg_type, question_no,
+                                      test_level)
+            answer, notify, pushes = self._skill_effect(
+                session, period, seated, sheet, msg_type, target_id
             )
         except lesson_skill.Refused as refusal:
             print(f"[{self.tag}] skill {name} refused: {refusal.why} "
@@ -16473,23 +16576,43 @@ class MpsServer:
         if answer is not None:
             out += self._answer(session, seen, answer[0], answer[1])
         if notify is not None:
-            out += self._answer(session, 0 if out else seen, notify[0], notify[1])
+            out += self._tr_cast(session, 0 if out else seen, notify[0],
+                                 notify[1], self._lesson_room(session))
+        # ⚠️ Anything owed to ONE other person — 0x612B's shorter choice list,
+        # and the ストレス そっと応援 took off somebody else's bar. Neither is a
+        # broadcast: the list is the taught student's alone, and 0x4811 is a
+        # value about the reader.
+        for chara_id, (push_type, body) in pushes:
+            other = self._session_of(chara_id)
+            if other is None:
+                continue
+            self._push(other, self._answer(other, 0, push_type, body))
         if sheet is not None:
             self._chars(session).set_ability(session.chara_id, sheet)
             out += self._push_vitals(session, sheet)
         return out
 
-    def _skill_effect(self, session: "_Session", period, sheet,
+    def _skill_effect(self, session: "_Session", period, seated, sheet,
                       msg_type: int, target_id: int):
-        """What one skill does. Returns (answer, notify), either may be None.
+        """What one skill does. Returns (answer, notify, pushes).
 
-        `sheet` is mutated in place when a skill moves ストレス; the caller saves
-        it. Raises lesson_skill.Refused for the per-skill rules — the ones every
-        skill shares were already checked.
+        `answer` and `notify` may be None; `pushes` is a possibly empty list of
+        ``(charaId, (msgType, body))`` owed to ONE other person. ⚠️ The reply is
+        nested as a pair rather than flattened into a triple, because
+        ``(msgType, body)`` is the shape every other reply in this tree is handed
+        back in, and the static checks that ask "can this server send 0x612B?"
+        look for exactly that shape.
+
+        `sheet` is the caller's AbilitySheet, mutated in place when a skill moves
+        ストレス; the caller saves it. `seated` is the caller's own seat in the
+        room — whose answer, whose narrowed list, whose 弁当. Raises
+        lesson_skill.Refused for the per-skill rules; the ones every skill shares
+        were already checked.
         """
         chara_id = session.chara_id
         subject = period.subject
         params_row = list(sheet.params) if sheet is not None else []
+        pushes: "list[tuple[int, tuple[int, bytes]]]" = []
 
         def charge(amount: int) -> int:
             """Move ストレス by `amount` and return where it ended up."""
@@ -16507,32 +16630,36 @@ class MpsServer:
             # 「周りの生徒に助けを求めます」. Nothing happens to the caller — the
             # Notify carries `userId` and nothing else, so the original had no
             # figure to report either. What it is *for* is the classmates, who
-            # may answer with そっと応援 or ティーチング; with one seat, nobody does.
+            # may answer with そっと応援 or ティーチング; ⭐ and since round 411
+            # there can be one, which is the first time this message has had
+            # anybody to reach.
             return None, (lesson_skill.MSG_SV_NOTIFY_LESSON_HELP,
-                          lesson_skill.notify_help_params(chara_id))
+                          lesson_skill.notify_help_params(chara_id)), pushes
 
         if msg_type == lesson_skill.MSG_CL_CAST_LESSON_LUNCH:
-            if period.lunch <= 0:
+            if seated.lunch <= 0:
                 raise lesson_skill.Refused(msg_type, "お弁当を所持していない")
             if sheet is not None and sheet.stress <= 0:
                 raise lesson_skill.Refused(msg_type, "ストレスがたまっていない")
-            period.lunch -= 1
+            seated.lunch -= 1
             ok = self._rng().random() < lesson_skill.LUNCH_SUCCESS
             level = charge(lesson_skill.STRESS_LUNCH if ok else 0)
             return None, (lesson_skill.MSG_SV_NOTIFY_LESSON_LUNCH,
-                          lesson_skill.notify_lunch_params(chara_id, level, ok))
+                          lesson_skill.notify_lunch_params(chara_id, level, ok)), \
+                pushes
 
         if msg_type in (lesson_skill.MSG_CL_REQUEST_LESSON_FEELING,
                         lesson_skill.MSG_CL_REQUEST_LESSON_MEIKYOUSHISUI):
             # 直感 and 明鏡止水 are the same skill at two strengths, and the wire
             # says so: same body, same reply, same Notify without a successFlag.
             feeling = msg_type == lesson_skill.MSG_CL_REQUEST_LESSON_FEELING
-            if len(lesson_skill.live_choices(period)) <= 1:
+            if len(lesson_skill.live_choices(period, seated)) <= 1:
                 raise lesson_skill.Refused(msg_type, "選択肢が１つしかない")
             band = (lesson_skill.FEELING_ACCURACY if feeling
                     else lesson_skill.MEIKYOU_ACCURACY)
             choice = lesson_skill.pick_answer(
-                period, lesson_skill.chance(band, params_row, subject), self._rng()
+                period, seated,
+                lesson_skill.chance(band, params_row, subject), self._rng()
             )
             level = charge(lesson_skill.STRESS_FEELING if feeling
                            else lesson_skill.STRESS_MEIKYOUSHISUI)
@@ -16542,28 +16669,136 @@ class MpsServer:
                            else lesson_skill.MSG_SV_NOTIFY_LESSON_MEIKYOUSHISUI)
             return ((ok_type, lesson_skill.ok_choice_params(choice)),
                     (notify_type,
-                     lesson_skill.notify_stress_params(chara_id, level)))
+                     lesson_skill.notify_stress_params(chara_id, level)),
+                    pushes)
 
         if msg_type == lesson_skill.MSG_CL_REQUEST_LESSON_COOL:
-            lesson_skill.check_not_narrowed(period, msg_type)
+            lesson_skill.check_not_narrowed(seated, msg_type)
             ok = self._rng().random() < lesson_skill.chance(
                 lesson_skill.COOL_SUCCESS, params_row, subject
             )
             if ok:
-                period.narrowed = lesson_skill.narrow(period, self._rng())
+                seated.narrowed = lesson_skill.narrow(period, seated, self._rng())
             level = charge(lesson_skill.STRESS_COOL)
-            kept = lesson_skill.live_choices(period)
+            kept = lesson_skill.live_choices(period, seated)
             return ((lesson_skill.MSG_SV_OK_LESSON_COOL,
                      lesson_skill.ok_choice_list_params(kept)),
                     (lesson_skill.MSG_SV_NOTIFY_LESSON_COOL,
-                     lesson_skill.notify_self_params(chara_id, level, ok)))
+                     lesson_skill.notify_self_params(chara_id, level, ok)),
+                    pushes)
 
-        # The three that need a classmate. `targetId` cannot resolve in a
-        # one-seat lesson, and that is the honest refusal — see _lesson_skill.
-        raise lesson_skill.Refused(
-            msg_type, "対象が解決できない",
-            f"targetId {target_id:#x}、座席は自分だけ",
-        )
+        # ── the three that need a classmate ─────────────────────────────────
+        # ⭐⭐ All three of these branches are round 411's, and every rule in
+        # them is a sentence out of `error_message.bin` rather than a new idea;
+        # the sentence ids are on lesson_skill.REASON. What is invented is
+        # marked where it is.
+        target = period.student(target_id)
+        if target is None:
+            raise lesson_skill.Refused(
+                msg_type, "対象が解決できない",
+                f"targetId {target_id:#x} はこの教室にいない",
+            )
+
+        if msg_type == lesson_skill.MSG_CL_REQUEST_LESSON_CHEATING:
+            # 「自分の答えを他の生徒の答えと同じにして決定します」. There has to be
+            # an answer to copy: 541 「選択されたキャラクターはまだ解答していま
+            # せん」 is the original's own words for the case where there is not.
+            if target.reported is None:
+                raise lesson_skill.Refused(msg_type, "対象がまだ解答していない")
+            ok = self._rng().random() < lesson_skill.CHEATING_SUCCESS
+            if ok:
+                choice = target.reported
+            else:
+                # ⚠️ INVENTED: what 「失敗することもあります」 leaves in your hand.
+                # 0x611A carries one choiceId and has no way to carry nothing, so
+                # a failure has to hand back *some* choice; anything but the one
+                # copied is the cheapest reading of having misread the paper.
+                # ⚠️ It is a wrong COPY, not a wrong ANSWER — the choice may
+                # still be right by luck, exactly as 直感's miss may be.
+                others = [c for c in lesson_skill.live_choices(period, seated)
+                          if c != target.reported]
+                choice = self._rng().choice(others or [target.reported])
+            level = charge(lesson_skill.STRESS_CHEATING_OK if ok
+                           else lesson_skill.STRESS_CHEATING_FAILED)
+            return ((lesson_skill.MSG_SV_OK_LESSON_CHEATING,
+                     lesson_skill.ok_choice_params(choice)),
+                    (lesson_skill.MSG_SV_NOTIFY_LESSON_CHEATING,
+                     lesson_skill.notify_target_params(
+                         chara_id, level, target_id, 1 if ok else 0)),
+                    pushes)
+
+        if msg_type == lesson_skill.MSG_CL_CAST_LESSON_SUPPORT:
+            # 「あなたが応援することで、相手のストレスを少し減らすことができます」.
+            # The only skill whose whole effect lands on somebody else, and the
+            # wire says so: 0x6122's fourth slot is `targetStress`, not a
+            # successFlag — this one cannot fail, and the manual lists no way it
+            # could.
+            mine = charge(lesson_skill.STRESS_SUPPORT_GIVER)
+            theirs = self._relieve(session, target_id,
+                                   lesson_skill.STRESS_SUPPORT_TARGET)
+            return (None,
+                    (lesson_skill.MSG_SV_NOTIFY_LESSON_SUPPORT,
+                     lesson_skill.notify_target_params(
+                         chara_id, mine, target_id, theirs)),
+                    pushes)
+
+        if msg_type == lesson_skill.MSG_CL_CAST_LESSON_TEACHING:
+            # 「選択肢を半分に絞り込んであげる」 — and every one of the three rules
+            # below is about the TARGET's paper, which is why check_not_narrowed
+            # takes a seat rather than the room.
+            if target.reported is not None:
+                raise lesson_skill.Refused(msg_type, "対象が既に解答している")
+            lesson_skill.check_not_narrowed(target, msg_type)
+            ok = self._rng().random() < lesson_skill.TEACHING_SUCCESS
+            if ok:
+                target.narrowed = lesson_skill.narrow(period, target, self._rng())
+                # 0x612B MsgSvNotifyLessonTeachingToTarget, and its name is its
+                # whole specification: the shorter list goes to the person it is
+                # shorter for. ⚠️ Only on success — on a failure nothing about
+                # their paper changed, and a message saying so would be a list
+                # they already have.
+                pushes.append((target_id, (
+                    lesson_skill.MSG_SV_NOTIFY_LESSON_TEACHING_TO_TARGET,
+                    lesson_skill.ok_choice_list_params(
+                        lesson_skill.live_choices(period, target)),
+                )))
+            level = charge(lesson_skill.STRESS_TEACHING)
+            return (None,
+                    (lesson_skill.MSG_SV_NOTIFY_LESSON_TEACHING,
+                     lesson_skill.notify_target_params(
+                         chara_id, level, target_id, 1 if ok else 0)),
+                    pushes)
+
+        raise lesson_skill.Refused(msg_type, "対象が解決できない",
+                                   f"0x{msg_type:04x} は未実装")
+
+    def _relieve(self, session: "_Session", chara_id: int, amount: int) -> int:
+        """Move somebody ELSE's ストレス and tell them. Returns where it ended up.
+
+        そっと応援 is the only skill in the family whose effect lands on another
+        character, so this is the only place a 授業 writes to a sheet that is not
+        the caller's. The sheet is fetched from its owner's store — a classroom
+        holds people from several accounts — and the 0x4811/0x4812 pair goes to
+        that player's own connection, because the bar it moves is drawn under
+        their character and not under the one who helped.
+        """
+        store = self.accounts.owner_of(chara_id)
+        other = self._session_of(chara_id)
+        if store is None and other is not None:
+            store = self._chars(other)
+        sheet = store.ability(chara_id) if store is not None else None
+        if sheet is None:
+            return 0
+        if amount >= 0:
+            stress.charge(sheet, amount)
+        else:
+            sheet.stress = max(0, sheet.stress + amount)
+            if sheet.stress == 0:
+                sheet.condition = stress.HEALTHY
+        store.set_ability(chara_id, sheet)
+        if other is not None:
+            self._push(other, self._push_vitals(other, sheet))
+        return sheet.stress
 
     @staticmethod
     def _rng():
@@ -16593,33 +16828,117 @@ class MpsServer:
             )
         return out
 
+    def _lesson_retire(self, chara_id: int) -> None:
+        """Take somebody out of the 授業 they were sitting and tell the room.
+
+        ⭐ 0x6108 MsgSvNotifyLessonRetire, and round 411 is the first time this
+        server has had anybody to send it to. The byte is 0 because
+        `error_message.bin` gives this message exactly one sentence,
+        「通信が切断されたため、授業を強制終了しました。」 — the same event, in the
+        same words, as クラブ対戦's 0x5C1B reason 0, which already goes out from
+        beside this call. ⚠️ The client never reads the byte; the line it draws
+        is its own `msg_text` 598 「%1% さんが\nログアウトしました。」 with the
+        name taken from the seat it is about to remove. See lesson.py.
+
+        ⚠️ The period is NOT ended for the people still in it. A message whose
+        whole job is to announce that one student left would mean nothing in a
+        room that stopped when they did.
+        """
+        room = self.classrooms.room_of(chara_id)
+        if room is None:
+            return
+        room.leave(chara_id)
+        for other_id in room.members():
+            other = self._session_of(other_id)
+            if other is None:
+                continue
+            self._push(other, self._answer(
+                other, 0, lesson.MSG_SV_NOTIFY_LESSON_RETIRE,
+                lesson.retire_params(chara_id),
+            ))
+        print(f"[{self.tag}] lesson retire: charaId={chara_id} left, "
+              f"{self.classrooms.summary()}")
+        if room.empty():
+            self.classrooms.close(room)
+
+    def _lesson_room(self, session: "_Session") -> "list[int]":
+        """Everybody sitting the same period as this player, this one included.
+
+        ``[session.chara_id]`` when there is no period, so a caller that hands
+        it to _tr_cast still gets the sender's own copy back and nothing else —
+        which is what a lesson of one has always done.
+        """
+        period = session.lesson
+        if period is None:
+            return [session.chara_id]
+        return period.members() or [session.chara_id]
+
     def _drain_lesson(self, session: "_Session") -> bytes:
-        """Push whatever the period in progress has become due for.
+        """Push whatever the room this player is sitting in has become due for.
 
         seen=0: none of these answer a message of the client's. 0x6105 is the
         only thing it sends all lesson, and its reply is the 0x6106 that goes out
         when the timer ends rather than when the answer arrives.
+
+        ⚠️⚠️ The room is pumped once, by whichever member's socket woke first,
+        and everything it hands back goes to **every** seat — one question, one
+        0x6106 per student, one 評価. ``Lesson.pump`` is idempotent inside a
+        deadline, so the other members' wakes this instant get []. Same
+        arrangement as _drain_battle's turn timeout, and for the same reason:
+        there is no timer here, only sockets.
         """
         period = session.lesson
         if period is None:
             return b""
+        members = period.members()
         out = b""
         for msg_type, params in period.pump(datetime.now(), session.client_now()):
             name = MESSAGE_NAMES.get(msg_type, "?")
             print(f"[{self.tag}] lesson {period.question_no}/"
                   f"{lesson.QUESTIONS_PER_LESSON}: {name} (0x{msg_type:04x}) "
                   f"{params.hex()}")
-            out += self._answer(session, 0, msg_type, params)
+            out += self._tr_cast(session, 0, msg_type, params, members)
         if period.finished():
-            out += self._lesson_end(session, period)
-            session.lesson = None
-            # …and comes down again. ⚠️ After the clear, not before: the icon
-            # is computed from session.lesson.
-            self._presence_refresh_onlookers(session)
+            out += self._lesson_over(session, period, members)
         return out
 
-    def _lesson_end(self, session: "_Session", period: "lesson.Lesson") -> bytes:
+    def _lesson_over(self, session: "_Session", period: "lesson.Lesson",
+                     members: "list[int]") -> bytes:
+        """The 結果発表 for everybody in the room, and take the room down.
+
+        ⚠️ One 0x6102 each and they are all different: 出席回数, the 通算 that
+        was just filed and 能力 are one 通知表's, so this cannot be a broadcast
+        of one body the way the question was. ``members`` is the roster as it
+        was *before* pump ran, so somebody the last question unseated still gets
+        the period they sat.
+        """
+        mine = b""
+        for chara_id in members:
+            other = (session if chara_id == session.chara_id
+                     else self._session_of(chara_id))
+            if other is None:
+                continue
+            body = self._lesson_end(other, period, chara_id)
+            other.lesson = None
+            # …and comes down again. ⚠️ After the clear, not before: the icon
+            # is computed from session.lesson.
+            self._presence_refresh_onlookers(other)
+            if chara_id == session.chara_id:
+                mine += body
+            else:
+                self._push(other, body)
+        self.classrooms.close(period)
+        return mine
+
+    def _lesson_end(self, session: "_Session", period: "lesson.Lesson",
+                    chara_id: int = 0) -> bytes:
         """0x6102, the 結果発表, and the only place a lesson touches the save file.
+
+        ⚠️ ``chara_id`` names WHOSE 結果発表 this is. It is the session's own in
+        every case this server has, and it is a parameter anyway because a room
+        is now pumped by one member on behalf of all of them — reading the tally
+        off ``session`` and the room off ``period`` is exactly how a two-seat
+        lesson would file one student's answers against the other's card.
 
         Four things are filed, and the split between them is the point:
 
@@ -16642,19 +16961,24 @@ class MpsServer:
         and a lesson that quietly added 64 to one of the six would be exactly the
         perturbation. Whenever it is set, no ability is written to the save.
         """
-        card = self._chars(session).scorecard(session.chara_id)
+        chara_id = chara_id or session.chara_id
+        seated = period.student(chara_id)
+        asked = seated.asked if seated is not None else 0
+        right = seated.right if seated is not None else 0
+        card = self._chars(session).scorecard(chara_id)
         attendance = 0
         if card is not None:
             attendance = card.attend(period.subject)
-            card.answered(period.subject, period.asked, period.right)
+            card.answered(period.subject, asked, right)
             grade = card.regrade(period.subject)
-            self._chars(session).set_scorecard(session.chara_id, card)
-            print(f"[{self.tag}] lesson end: {curriculum.SUBJECTS[period.subject]} "
-                  f"{period.summary()}, 出席 {attendance} 回, "
+            self._chars(session).set_scorecard(chara_id, card)
+            print(f"[{self.tag}] lesson end: charaId={chara_id} "
+                  f"{curriculum.SUBJECTS[period.subject]} "
+                  f"{right}/{asked}, 出席 {attendance} 回, "
                   f"通算 {card.rate(period.subject):.0%}, "
                   f"成績 {curriculum.grade_letter(grade)}")
         else:
-            print(f"[{self.tag}] lesson end: no charaId={session.chara_id}, "
+            print(f"[{self.tag}] lesson end: no charaId={chara_id}, "
                   f"nothing filed")
         after, before = lesson.END_ABILITY_AFTER, lesson.END_ABILITY_BEFORE
         # The ruler being set means this period is a measurement rather than a
@@ -16663,15 +16987,16 @@ class MpsServer:
         # must not have moved ストレス either.
         measuring = not (after is None and before is None)
         if not measuring:
-            after, before = self._file_ability(session, period)
-        sheet = self._chars(session).ability(session.chara_id)
+            after, before = self._file_ability(session, period, chara_id,
+                                               right, asked)
+        sheet = self._chars(session).ability(chara_id)
         stress_now, condition_now = 0, stress.HEALTHY
         if sheet is not None and measuring:
             stress_now, condition_now = sheet.stress, sheet.condition
         elif sheet is not None:
             added, condition_now = stress.after_lesson(sheet)
             stress_now = sheet.stress
-            self._chars(session).set_ability(session.chara_id, sheet)
+            self._chars(session).set_ability(chara_id, sheet)
             print(f"[{self.tag}] lesson end: ストレス +{added} -> {stress_now} "
                   f"({stress.screen(stress_now)}/100), 体調 "
                   f"{stress.name(condition_now)}")
@@ -16679,7 +17004,7 @@ class MpsServer:
             session,
             0,
             lesson.MSG_SV_NOTIFY_LESSON_END,
-            lesson.end_params(period.end_words(), attendance,
+            lesson.end_params(period.end_words(chara_id), attendance,
                               stress=stress_now, condition=condition_now,
                               ability=after, before_ability=before),
         )
@@ -16691,7 +17016,8 @@ class MpsServer:
         return out
 
     def _file_ability(
-        self, session: "_Session", period: "lesson.Lesson"
+        self, session: "_Session", period: "lesson.Lesson",
+        chara_id: int = 0, right: int = 0, asked: int = 0,
     ) -> "tuple[list[int] | None, list[int] | None]":
         """Apply this lesson's 能力増減 to the save. Returns (after, before).
 
@@ -16703,15 +17029,16 @@ class MpsServer:
         Clamped to a u16 at both ends: the field is unsigned on the wire, so a
         run of bad lessons stops at zero rather than wrapping to レベル 256.
         """
-        sheet = self._chars(session).ability(session.chara_id)
+        chara_id = chara_id or session.chara_id
+        sheet = self._chars(session).ability(chara_id)
         if sheet is None:
             return None, None
         before = list(sheet.params)
-        delta = lesson.ability_delta(period.subject, period.right, period.asked)
+        delta = lesson.ability_delta(period.subject, right, asked)
         sheet.params = [
             max(0, min(0xFFFF, value + step)) for value, step in zip(before, delta)
         ]
-        self._chars(session).set_ability(session.chara_id, sheet)
+        self._chars(session).set_ability(chara_id, sheet)
         moved = " ".join(
             f"{name} {before[index]}→{sheet.params[index]}"
             for index, name in enumerate(ability.ABILITIES)

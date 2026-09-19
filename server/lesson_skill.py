@@ -424,15 +424,21 @@ class Refused(Exception):
         self.reason = reason_for(msg_type, situation)
 
 
-def check_common(period, msg_type: int, question_no: int, test_level: int) -> None:
+def check_common(period, student, msg_type: int, question_no: int,
+                 test_level: int) -> None:
     """The checks every skill shares, in the order the strings imply.
 
-    `period` is a lesson.Lesson. Raises Refused; returns None when allowed.
+    `period` is a lesson.Lesson (the room) and `student` is the caller's own
+    lesson.Student seat in it. Raises Refused; returns None when allowed.
+
+    ⚠️ Both, because the split matters here: the question and its clock are the
+    room's, and 「解答済み」 is one person's.
     """
     gate = LEVEL_GATE.get(msg_type)
     if gate is not None and test_level < gate:
         raise Refused(msg_type, "試験レベル不足", f"{test_level} < {gate}")
-    if period is None or period.phase != period.ASKING or period.question is None:
+    if period is None or student is None \
+            or period.phase != period.ASKING or period.question is None:
         raise Refused(msg_type, "制限時間外")
     # Lenient exactly as Lesson.take_answer is, and for the same unsettled
     # reason: whether the client counts questions from one or from zero. A stale
@@ -446,31 +452,40 @@ def check_common(period, msg_type: int, question_no: int, test_level: int) -> No
     # So having answered stops you helping yourself, not helping others.
     if msg_type in ANSWERED_IS_FINE:
         return
-    if period.reported is not None:
+    if student.reported is not None:
         raise Refused(msg_type, "解答済み")
 
 
-def check_not_narrowed(period, msg_type: int) -> None:
+def check_not_narrowed(student, msg_type: int) -> None:
     """精神集中 and ティーチング refuse once the choices are already narrowed.
 
     RESTORED: 546 「既に選択肢が絞られていますので、「精神集中」は効果がありません」
     and 558, the same sentence for ティーチング. They are the two skills whose
     reply is a counted array, so they are the two that can collide with
     themselves — nothing else in the family carries this sentence.
+
+    ⚠️ It takes a seat and not the room, and for ティーチング that seat is the
+    TARGET's: 558's 「既に選択肢が絞られていますので」 is about the list the
+    teaching would have narrowed, which is the taught student's own.
     """
-    if period.narrowed is not None:
+    if student.narrowed is not None:
         raise Refused(msg_type, "既に選択肢が絞られている",
-                      f"残り {len(period.narrowed)} 択")
+                      f"残り {len(student.narrowed)} 択")
 
 
-def live_choices(period) -> "list[int]":
-    """The choices still on the table — narrowed if a skill has narrowed them."""
-    if period.narrowed is not None:
-        return list(period.narrowed)
+def live_choices(period, student) -> "list[int]":
+    """The choices still on this seat's table — narrowed if a skill narrowed them.
+
+    ⚠️ Per seat: 精神集中 narrows the caller's list and ティーチング narrows
+    somebody else's, so two students in one room can be looking at different
+    numbers of choices for the same question.
+    """
+    if student is not None and student.narrowed is not None:
+        return list(student.narrowed)
     return list(period.question.choice_ids)
 
 
-def pick_answer(period, accuracy: float, rng=None) -> int:
+def pick_answer(period, student, accuracy: float, rng=None) -> int:
     """A choiceId for 直感 / 明鏡止水: the right one with probability `accuracy`.
 
     「必ずしも正解を選ぶとは限りません」 — so a miss returns a wrong choice
@@ -478,7 +493,7 @@ def pick_answer(period, accuracy: float, rng=None) -> int:
     question is marked.
     """
     rng = rng or random
-    choices = live_choices(period)
+    choices = live_choices(period, student)
     right = [c for c in choices if period.question.judge(c)]
     wrong = [c for c in choices if not period.question.judge(c)]
     if right and (not wrong or rng.random() < accuracy):
@@ -486,14 +501,17 @@ def pick_answer(period, accuracy: float, rng=None) -> int:
     return rng.choice(wrong or right or choices)
 
 
-def narrow(period, rng=None) -> "list[int]":
-    """Halve the live choices, always keeping the right one.
+def narrow(period, student, rng=None) -> "list[int]":
+    """Halve `student`'s live choices, always keeping the right one.
 
     A narrowing that could drop the answer would make 精神集中 a way to lose,
     which is not what 「答えを絞り込みます」 describes.
+
+    ⚠️ `student` is whose list gets shorter: the caller's for 精神集中, the
+    target's for ティーチング.
     """
     rng = rng or random
-    choices = live_choices(period)
+    choices = live_choices(period, student)
     keep = narrowed_size(len(choices))
     right = [c for c in choices if period.question.judge(c)]
     wrong = [c for c in choices if not period.question.judge(c)]

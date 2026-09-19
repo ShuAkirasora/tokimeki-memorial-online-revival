@@ -13,6 +13,8 @@ send to a player standing in the wrong room when it does.
     0x6003 MsgSvNgLessonReady             u8 reason
     0x6004 MsgSvNotifyLessonStartImpossible u8 reason
     0x6100 MsgSvNotifyLessonStart         counted seat list, entries NOT fixed
+    0x6101 MsgSvNotifyLessonJoin          one seatInfo — somebody else sat down
+    0x6108 MsgSvNotifyLessonRetire        u32 targetId, u8 reason — and got up
     0x6103 MsgSvNotifyLessonQuestionStart the question, as three numbers
     0x6105 MsgClCastLessonAnswer          u8 questionNo, u8 choiceId
     0x6106 MsgSvNotifyLessonAnswer        u32 senderId, u8 correctAnswerflg
@@ -47,6 +49,11 @@ this file adds on top of that is the lesson itself — ``Lesson`` down at the
 bottom is the ten-question loop, and it is a clocked state machine rather than a
 set of handlers because only one of its five messages is something the client
 sends.
+
+⭐⭐ ``Lesson`` is a ROOM and not one player's period (round 411). Everyone
+admitted to the same 教室 for the same 本鈴 shares one, which is the whole of
+what makes 0x6101, 0x6108 and the three 他人用 お助けスキル sendable: each of
+them needs a classmate to name.
 """
 from __future__ import annotations
 
@@ -62,6 +69,36 @@ MSG_SV_NG_LESSON_READY = 0x6003
 MSG_SV_NOTIFY_LESSON_START_IMPOSSIBLE = 0x6004
 MSG_SV_NOTIFY_BEFORE_LESSON_START = 0x6005
 MSG_SV_NOTIFY_LESSON_START = 0x6100
+# ── the two that only a room with more than one person in it can send ───────
+# 0x6101 MsgSvNotifyLessonJoin   seatInfo            — somebody else sat down
+# 0x6108 MsgSvNotifyLessonRetire targetId, reason    — somebody else got up
+#
+# ⭐ Both were unsendable for four hundred rounds for one reason: a lesson held
+# one seat, so there was never anybody to announce. The seats fill themselves
+# once two accounts are in the same classroom when the bell goes, which is what
+# `_lesson_skill`'s 2026-08-06 decision said would happen.
+#
+# ⭐⭐ 0x6108's `reason` is READ BY NOBODY, and that is measured rather than
+# assumed. The handler at 0x0076F0F7 touches `[esi+4]` — targetId — three times
+# (find the seat, unseat it, redraw) and never once reads `[esi+8]`, which is
+# where the byte lives. What it draws instead is a client-side string, `msg_text`
+# 598 「%1% さんが\nログアウトしました。」, with the leaver's name pulled out of
+# the seat record it just found. So the sentence a player sees when a classmate
+# drops is the client's own, and the server's byte only ever labelled the event
+# for the original's own sake.
+#
+# ⇒ The byte to send is 0 regardless, because `error_message.bin` gives this
+# message exactly one sentence and that is its index:
+#
+#     523  0x6108  0  通信が切断されたため、授業を強制終了しました。
+#
+# ⚠️ Which also says what the original sent it FOR: a connection that went away.
+# That is the same event, in the same words, as クラブ対戦's 0x5C1B reason 0
+# 「通信が切断されたため、クラブ活動を強制終了しました」 — and this server already
+# sends that one from the disconnect path, so this goes out beside it.
+MSG_SV_NOTIFY_LESSON_JOIN = 0x6101
+MSG_SV_NOTIFY_LESSON_RETIRE = 0x6108
+RETIRE_DISCONNECTED = 0
 MSG_SV_NOTIFY_LESSON_END = 0x6102
 MSG_SV_NOTIFY_LESSON_QUESTION_START = 0x6103
 MSG_SV_NOTIFY_LESSON_QUESTION_END = 0x6104
@@ -209,7 +246,16 @@ LESSON_BACKGROUND = (17, 17, 23, 17, 17, 38, 24, 22)
 # a constant that needs one here too. Nothing in normal play reads these except
 # through the defaults.
 PROBE = {
-    "seats": 1,        # how many seatInfo entries go out
+    # How many seatInfo entries go out. ⭐ -1 is the factory value and means
+    # 「whoever is actually in the room」, which is what it has meant since the
+    # room could hold more than one person. A non-negative value forces the
+    # count, padding with the player's own seat — that is what it did when one
+    # seat was all there was, and it is still the only way to ask 0x6100 what it
+    # does with nine of them without finding nine players.
+    # ⚠️ Forcing a count SMALLER than the roster drops real classmates off the
+    # screen, which is a probe and not a lesson; it is allowed for the same
+    # reason `charaid` is.
+    "seats": -1,
     # How long the 開始台詞 runs, and therefore how long until question one:
     # 0x6100's speechEndTime and Lesson's opening phase both read this, so the
     # knob cannot put them out of step. It was 600_000 while the only question
@@ -529,9 +575,10 @@ def words(subject: int, offset: int) -> int:
 # is nine. What has no number anywhere is a *minimum*: nothing in the manual and
 # nothing in `error_message.bin`'s 965 strings gates a lesson on how many are
 # present, and all 965 were decoded and searched. One student alone is a lesson.
-# The only thing that goes hollow is the お助けスキル set — 助けてコール asks the
-# students around you, そっと応援 and ティーチング help somebody else — and that
-# is an effect landing on nobody, not a door being shut.
+# ⭐ Round 411: what used to go hollow in a lesson of one — 助けてコール asking
+# the students around you, そっと応援 and ティーチング helping somebody else —
+# stops being hollow the moment a second account sits down. The room is what
+# fills those eight slots, and nothing is invented to do it.
 MAX_SEATS = 9
 
 # Each name is copied by the unchecked fixed reader 0xA49610 into a 12-byte slot
@@ -617,6 +664,16 @@ def start_params(
 def ng_params(reason: int) -> bytes:
     """MsgSvNgLessonReady / MsgSvNotifyLessonStartImpossible. One u8."""
     return reason.to_bytes(1, "big")
+
+
+def retire_params(target_id: int, reason: int = RETIRE_DISCONNECTED) -> bytes:
+    """MsgSvNotifyLessonRetire: u32 targetId, u8 reason. Handler 0x0076F0F7.
+
+    ``reason`` is kept as a parameter although the client never reads it — see
+    the note by MSG_SV_NOTIFY_LESSON_RETIRE — because the server still has to
+    decide, and 0 is a decision `error_message.bin` 523 made for it.
+    """
+    return struct.pack(">IB", target_id, reason & 0xFF)
 
 
 # ── 出題と採点 ──────────────────────────────────────────────────────────────
@@ -866,42 +923,28 @@ def end_params(
     return bytes(out)
 
 
-class Lesson:
-    """One period in progress, for one session: the ten questions and the tally.
+class Student:
+    """One person sitting the period, and everything that is theirs alone.
 
-    The bells in ``Bell`` decide *whether* a lesson happens; this is what
-    happens during it. It is a small clocked state machine rather than a
-    request/response handler because four of its five messages are pushes the
-    client never asks for — 0x6105 is the only thing it sends, and only if the
-    player answers at all.
-
-    ``pump`` is therefore the whole thing: it is called with the current time,
-    returns whatever is now due, and the caller sends it. Nothing here is saved;
-    a period that a disconnect interrupts is a period that did not happen, which
-    is also what walking out of the room does in the original.
+    Split out of ``Lesson`` when a classroom stopped being one seat: the
+    question, the clock and the teacher belong to the room, and the answer, the
+    narrowed list, the 弁当 and the tally belong to a person. Which side a field
+    falls on is not a style question — 精神集中 narrows *your* choices and
+    ティーチング narrows *somebody else's*, so a single ``narrowed`` on the room
+    would have made both skills act on everyone at once.
     """
 
-    # Phases, in order. Each ends at ``self.due``.
-    OPENING = "opening"    # the teacher's 開始台詞 is running
-    ASKING = "asking"      # a question is out and 残り時間 is counting down
-    GRADING = "grading"    # 正解 revealed, 評価 being said
-    OVER = "over"
-
-    def __init__(self, subject: int, chara_id: int,
-                 now: datetime | None = None) -> None:
-        self.subject = subject
+    def __init__(self, chara_id: int, seat_id: int, lunch: int = 0) -> None:
         self.chara_id = chara_id
-        self.phase = self.OPENING
-        self.due = (now or datetime.now()) + timedelta(
-            seconds=max(0, int(PROBE["speech_ms"])) / 1000
-        )
-        # 1-based, and it is what 0x6105's questionNo is checked against: a stale
-        # answer to the previous question must not count for this one.
-        self.question_no = 0
-        self.question = None      # quiz.Question, while one is out
+        # ⚠️ INVENTED: which desk. seatInfo carries a u8 `seatId` and nothing
+        # anywhere says what picks it — not `p06_02`, not `class.bin`, not
+        # `error_message.bin`. Join order is the cheapest thing that keeps them
+        # distinct, which is the one property the client can be seen to need:
+        # it draws one figure per seat. If the original seated people by 出席番号
+        # this is wrong about the arrangement and right about the count.
+        self.seat_id = seat_id
+        # This question's answer, cleared when the next one goes out.
         self.reported: int | None = None
-        self.asked = 0
-        self.right = 0
         # What 精神集中 or ティーチング has left on the table, or None for "all of
         # them". Per question: 「既に選択肢が絞られていますので…効果がありません」
         # (`error_message.bin` 546, 558) is a rule about *this* question, and the
@@ -910,17 +953,122 @@ class Lesson:
         # 「お弁当」 in hand for 早弁, and spent as they are used. It is the same
         # number 0x6100 went out with, so the buttons the client drew match what
         # this will allow. Nothing outlives the period — there is no inventory.
-        self.lunch = max(0, int(PROBE["lunch"]))
+        self.lunch = lunch
+        self.asked = 0
+        self.right = 0
+
+    def summary(self) -> str:
+        return f"{self.right}/{self.asked}"
+
+
+class Lesson:
+    """One period in progress **in one classroom**: the ten questions and who is
+    sitting them.
+
+    The bells in ``Bell`` decide *whether* a lesson happens; this is what
+    happens during it. It is a small clocked state machine rather than a
+    request/response handler because four of its five messages are pushes the
+    client never asks for — 0x6105 is the only thing it sends, and only if the
+    player answers at all.
+
+    ⭐⭐ Round 411 made it a ROOM rather than a session's private lesson, and the
+    move is the whole of what lets 0x6101, 0x6108, 0x611A, 0x611C, 0x6122,
+    0x6129 and 0x612B go out at all. Everyone admitted to the same 教室 for the
+    same 本鈴 gets the same object, so they get the same questions at the same
+    moment and can see each other in the seat list — which is what the three
+    他人用 お助けスキル need in order to have a `targetId` that resolves.
+
+    ⚠️ One room per map, not per subject: `curriculum` says what is taught at
+    this hour and there is only one of it, so two lessons cannot overlap in one
+    classroom. The subject is carried for the teacher's lines, not as part of
+    the key.
+
+    ``pump`` is therefore the whole thing: it is called with the current time,
+    returns whatever is now due for the WHOLE room, and the caller broadcasts
+    it. ⚠️⚠️ It is called once per member per wake and must stay idempotent —
+    the first call moves ``due`` forward and every other call that instant
+    returns []. That is the same arrangement クラブ対戦 uses for a turn that
+    times out (Battle.resolved), and for the same reason: there is no timer, so
+    whoever's socket wakes first drives the room.
+
+    Nothing here is saved; a period that a disconnect interrupts is a period
+    that did not happen for the person who dropped, which is also what walking
+    out of the room does in the original. ⚠️ It keeps running for everyone else
+    — that is the reading 0x6108 forces, since a message announcing that one
+    student left would be pointless in a room that ended with them.
+    """
+
+    # Phases, in order. Each ends at ``self.due``.
+    OPENING = "opening"    # the teacher's 開始台詞 is running
+    ASKING = "asking"      # a question is out and 残り時間 is counting down
+    GRADING = "grading"    # 正解 revealed, 評価 being said
+    OVER = "over"
+
+    def __init__(self, subject: int, map_id: int = 0,
+                 now: datetime | None = None) -> None:
+        self.subject = subject
+        self.map_id = map_id
+        self.phase = self.OPENING
+        self.due = (now or datetime.now()) + timedelta(
+            seconds=max(0, int(PROBE["speech_ms"])) / 1000
+        )
+        # 1-based, and it is what 0x6105's questionNo is checked against: a stale
+        # answer to the previous question must not count for this one.
+        self.question_no = 0
+        self.question = None      # quiz.Question, while one is out
+        # charaId -> Student, in the order they sat down. Ordinary dicts keep
+        # insertion order, and that order is the seat order 0x6100 goes out in.
+        self.students: "dict[int, Student]" = {}
+        self.next_seat = 0
+
+    # ── who is in the room ──────────────────────────────────────────────────
+
+    def join(self, chara_id: int, lunch: int = 0) -> "Student":
+        """Seat somebody, or hand back the seat they already have.
+
+        Re-joining is not an error: 0x6001 is sent by the client on its own, and
+        a client that tears its scene down twice for one bell would otherwise
+        take a second desk.
+        """
+        seated = self.students.get(chara_id)
+        if seated is not None:
+            return seated
+        seated = Student(chara_id, self.next_seat, lunch)
+        self.next_seat += 1
+        self.students[chara_id] = seated
+        return seated
+
+    def leave(self, chara_id: int) -> "Student | None":
+        """Unseat somebody. Returns their Student, or None if they were not in.
+
+        ⚠️ The seat number is NOT recycled. A room that reused it would put a
+        new arrival at the desk 0x6101 already announced to everybody as
+        somebody else's, and the client keys its seat array by exactly that byte.
+        """
+        return self.students.pop(chara_id, None)
+
+    def student(self, chara_id: int) -> "Student | None":
+        return self.students.get(chara_id)
+
+    def seated(self) -> "list[Student]":
+        return list(self.students.values())
+
+    def members(self) -> "list[int]":
+        return list(self.students)
+
+    def empty(self) -> bool:
+        return not self.students
 
     # ── the client's one contribution ───────────────────────────────────────
 
-    def take_answer(self, question_no: int, choice_id: int) -> "int | None":
+    def take_answer(self, chara_id: int, question_no: int,
+                    choice_id: int) -> "int | None":
         """MsgClCastLessonAnswer. None when it was taken, else a reason byte.
 
-        Refused when it names the wrong question, when nothing is out, or when
-        one has already been given — 「一度解答すると変更できませんので慎重に
-        答えを選びましょう」 makes the last of those a rule and not just
-        defensiveness.
+        Refused when it names the wrong question, when nothing is out, when the
+        sender is not in this room, or when they have already answered —
+        「一度解答すると変更できませんので慎重に答えを選びましょう」 makes the
+        last of those a rule and not just defensiveness.
 
         ⭐ Round 410: the byte a refusal carries is no longer unknown, so the
         caller sends 0x6107 instead of only logging. `error_message.bin` 521/522
@@ -932,9 +1080,12 @@ class Lesson:
         question *is* one that arrived late. lesson_skill.check_common already
         reads a stale number the same way, for the same reason.
         """
+        seated = self.students.get(chara_id)
+        if seated is None:
+            return ERROR_ANSWER_TOO_LATE
         if self.phase != self.ASKING or self.question is None:
             return ERROR_ANSWER_TOO_LATE
-        if self.reported is not None:
+        if seated.reported is not None:
             return ERROR_ANSWER_ALREADY
         # ⚠️ Whether the client counts questions from one or from zero is not
         # settled — nothing on the wire has said, and the deserializer only says
@@ -949,37 +1100,52 @@ class Lesson:
         # client, because the log line below prints what arrived.
         if question_no not in (self.question_no, self.question_no - 1):
             return ERROR_ANSWER_TOO_LATE
-        self.reported = choice_id
+        seated.reported = choice_id
         return None
 
-    def would_be_right(self) -> bool:
+    def would_be_right(self, chara_id: int) -> bool:
         """How the answer on the table will be marked when the timer ends.
 
         For the log only. The mark itself is computed in ``pump`` at the moment
         it goes out, so that this can never be the thing that decided it.
         """
+        seated = self.students.get(chara_id)
         return (
             self.question is not None
-            and self.reported is not None
-            and self.question.judge(self.reported)
+            and seated is not None
+            and seated.reported is not None
+            and self.question.judge(seated.reported)
         )
 
     # ── the clock ───────────────────────────────────────────────────────────
 
     def pump(self, now: datetime, client_now_ms: int,
              rng=None) -> "list[tuple[int, bytes]]":
-        """Whatever is due, as ``(msgType, params)`` in the order to send.
+        """Whatever the ROOM is owed, as ``(msgType, params)`` in send order.
+
+        Every one of these goes to every seat: the question, each student's
+        ○/×, and the teacher's remark are one lesson happening in front of all
+        of them. The caller broadcasts; see mps_session._drain_lesson.
 
         ``client_now_ms`` is the client's own clock — 0x6103's startTime and
         endTime live in the same frame as 0x6100's speechEndTime, so they can
         only be named through the timesync mapping. See _Session.client_now.
+        ⚠️ With two students that frame is the frame of whichever session
+        happened to drive this wake, and the two clocks are not the same one.
+        The error is the difference between two timesyncs, which is the same
+        error 0x6100's speechEndTime has always carried for one player; what is
+        new is only that it is now visibly somebody else's.
 
         Returns [] when nothing is due yet, which is the common case: this gets
-        called on every wake.
+        called on every wake, of every member.
         """
         import quiz  # local: only lessons need the bank, and only while one runs
 
         if self.phase == self.OVER or now < self.due:
+            return []
+        if not self.students:
+            # Everybody left. Nothing to ask and nobody to tell.
+            self.phase = self.OVER
             return []
 
         if self.phase == self.GRADING or self.phase == self.OPENING:
@@ -994,8 +1160,9 @@ class Lesson:
                 return []
             self.question = question
             self.question_no += 1
-            self.reported = None
-            self.narrowed = None
+            for seated in self.students.values():
+                seated.reported = None
+                seated.narrowed = None
             self.phase = self.ASKING
             self.due = now + timedelta(seconds=ANSWER_SECONDS)
             start_ms = client_now_ms
@@ -1013,29 +1180,39 @@ class Lesson:
 
         # ASKING, and 残り時間 has reached zero: reveal, then grade.
         question = self.question
-        correct = question is not None and self.reported is not None \
-            and question.judge(self.reported)
-        self.asked += 1
-        self.right += 1 if correct else 0
+        out: "list[tuple[int, bytes]]" = []
+        right_here = 0
+        for seated in self.students.values():
+            correct = (question is not None and seated.reported is not None
+                       and question.judge(seated.reported))
+            seated.asked += 1
+            seated.right += 1 if correct else 0
+            right_here += 1 if correct else 0
+            out.append((MSG_SV_NOTIFY_LESSON_ANSWER,
+                        answer_params(seated.chara_id, correct)))
         self.phase = self.GRADING
         self.due = now + timedelta(seconds=GRADING_SECONDS)
-        return [
-            (MSG_SV_NOTIFY_LESSON_ANSWER, answer_params(self.chara_id, correct)),
-            (MSG_SV_NOTIFY_LESSON_QUESTION_END,
-             question_end_params(self.grading_words(correct, rng))),
-        ]
+        out.append((MSG_SV_NOTIFY_LESSON_QUESTION_END,
+                    question_end_params(
+                        self.grading_words(right_here, len(self.students), rng))))
+        return out
 
-    def grading_words(self, correct: bool, rng=None) -> int:
+    def grading_words(self, right: int, asked: int, rng=None) -> int:
         """Which 評価台詞 the teacher uses for the question just marked.
 
-        On this question's class-wide rate, which with one student is 0% or 100%.
+        On this question's class-wide rate — 「先生が今回の問題についての正解率と
+        感想を述べます」 — which is why it counts the room and not one student.
+        ⭐ With two seats the middle band is finally reachable: one right and one
+        wrong is 50%, which is 並評価 and was unreachable while a rate could only
+        be 0% or 100%.
+
         Each band has two lines in `lesson_npc_sentence` and the choice between
         them is arbitrary, so it is random.
         """
         import random
 
         rng = rng or random
-        rate = 1.0 if correct else 0.0
+        rate = (right / asked) if asked else 0.0
         if rate >= GRADING_GOOD:
             band = WORDS_GOOD
         elif rate >= GRADING_FAIR:
@@ -1044,28 +1221,84 @@ class Lesson:
             band = WORDS_POOR
         return words(self.subject, rng.choice(band))
 
-    def end_words(self, rng=None) -> int:
-        """終了台詞, or 全問正解時台詞 if the player got every one.
+    def end_words(self, chara_id: int, rng=None) -> int:
+        """終了台詞, or 全問正解時台詞 if THIS player got every one.
 
         `lesson_npc_sentence` keeps those as separate pairs, which is the only
         statement anywhere that a perfect round is remarked on at all.
+        ⚠️ Per player, not per room: 0x6102 is the 結果発表 of one 通知表, so the
+        classmate who missed three does not take the perfect line away.
         """
         import random
 
         rng = rng or random
-        band = WORDS_PERFECT if self.right == QUESTIONS_PER_LESSON else WORDS_END
+        seated = self.students.get(chara_id)
+        perfect = seated is not None and seated.right == QUESTIONS_PER_LESSON
+        band = WORDS_PERFECT if perfect else WORDS_END
         return words(self.subject, rng.choice(band))
 
     def finished(self) -> bool:
         return self.phase == self.OVER
 
     def summary(self) -> str:
-        return f"{self.right}/{self.asked}"
+        return " ".join(f"0x{s.chara_id:08x}:{s.summary()}"
+                        for s in self.students.values()) or "（無人）"
+
+
+class Classrooms:
+    """Every 授業 in progress on this server, one per classroom map.
+
+    The same shape as clubbattle.Board and trainingroom.Rooms, and kept for the
+    same reason: a room outlives any one connection, so it cannot live on a
+    _Session. ⚠️ It is emptied by whoever notices — the last member leaving, or
+    the period ending — and not by a sweep, because there is no timer to sweep on.
+    """
+
+    def __init__(self) -> None:
+        self.rooms: "dict[int, Lesson]" = {}
+
+    def open(self, map_id: int, subject: int,
+             now: datetime | None = None) -> "Lesson":
+        """The lesson under way in this room, starting one if there is none.
+
+        ⚠️ A room whose period has ended is replaced rather than re-used: the
+        next 本鈴 is the next lesson, and its subject may differ.
+        """
+        room = self.rooms.get(map_id)
+        # ⚠️ An empty room is replaced too, and not only a finished one: a room
+        # everybody walked out of has a clock that stopped being anybody's.
+        if room is None or room.finished() or room.empty() \
+                or room.subject != subject:
+            room = Lesson(subject, map_id, now)
+            self.rooms[map_id] = room
+        return room
+
+    def room_of(self, chara_id: int) -> "Lesson | None":
+        for room in self.rooms.values():
+            if chara_id in room.students:
+                return room
+        return None
+
+    def close(self, room: "Lesson") -> None:
+        if self.rooms.get(room.map_id) is room:
+            del self.rooms[room.map_id]
+
+    def summary(self) -> str:
+        if not self.rooms:
+            return "授業 0"
+        return "授業 " + ", ".join(
+            f"map {map_id}:{len(room.students)}人"
+            for map_id, room in self.rooms.items()
+        )
 
 
 # ── the chat bar during a 授業 ──────────────────────────────────────────────
-def chat_refusal(period: "Lesson | None") -> "int | None":
+def chat_refusal(period: "Lesson | None", chara_id: int = 0) -> "int | None":
     """The 0x610B / 0x610E reason a line typed in class draws, or None.
+
+    ⚠️ Per speaker, not per room: 「解答後に可能になります」 is about whether
+    *you* have answered, so in a room of two the one who has clicked may talk
+    while the one still thinking may not.
 
     ⭐ RESTORED, and the rule is `error_message.bin` 524/526's own sentence:
     「チャットは解答後に可能になります」. While a question is out and this player
@@ -1088,6 +1321,9 @@ def chat_refusal(period: "Lesson | None") -> "int | None":
     """
     if period is None:
         return None
-    if period.phase == Lesson.ASKING and period.reported is None:
+    seated = period.student(chara_id)
+    if seated is None:
+        return None
+    if period.phase == Lesson.ASKING and seated.reported is None:
         return ERROR_CHAT_AFTER_ANSWER
     return None
