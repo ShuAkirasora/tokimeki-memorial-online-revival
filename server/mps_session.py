@@ -83,6 +83,7 @@ import billboard
 import capturenpc
 import career
 import catchcopy
+import charatype
 import chat
 import chatroom
 import club
@@ -7104,6 +7105,51 @@ class MpsServer:
                 return self._answer(
                     session, sequence,
                     catchcopy.MSG_SV_OK_CHARA_MENU_CATCHCOPY, b"",
+                )
+            if msg_type == charatype.MSG_CL_REQUEST_CHARA_TYPE_CHANGE:
+                # 体型変更 -- `menu_item` 16, which hangs off the 教頭 and not
+                # off the player: a right-click on him, then a list window and
+                # the 体型を変更してよろしいですか？ box. The body is one u16 out
+                # of chara_body_type's three rows. See charatype.py for the
+                # chain from that menu item down to the wire, for why 0/1/2 is
+                # all that can arrive, and for why the Ng side is not an answer.
+                #
+                # ⚠️ Stored against session.chara_id: like 0x4312 the request
+                # carries no id of its own, so it can only ever be about the
+                # character that sent it.
+                store = self._chars(session)
+                if len(params) < 2 or store.chara_type(session.chara_id) is None:
+                    print(f"[{self.tag}] chara type: charaId={session.chara_id} "
+                          f"params={params.hex()}, answering Ng")
+                    return self._answer(
+                        session, sequence,
+                        charatype.MSG_SV_NG_REQUEST_CHARA_TYPE_CHANGE,
+                        charatype.ng_params(),
+                    )
+                body_type = charatype.parse(params)
+                store.set_chara_type(session.chara_id, body_type)
+                print(f"[{self.tag}] chara type for charaId={session.chara_id}: "
+                      f"{charatype.describe(body_type)}")
+                # ⭐⭐ 0x5903 is this family's only broadcast and it is the ONLY
+                # way anybody already standing here can hear about the change:
+                # 0x480F, the entry that puts a character into the scene, packs
+                # sex and the sixteen looks/accessory slots and no charaType at
+                # all, so a peer who is already drawn would otherwise keep the
+                # old body until they leave and come back.
+                #
+                # ⚠️ The actor is sent a copy as well, the way _equip_replay
+                # does it: the Ok is empty and says nothing about what changed,
+                # and which of the two actually moves the client is not
+                # something this end can tell apart while it sends both.
+                notify = charatype.notify_params(session.chara_id, body_type)
+                self._presence_relay(
+                    session, charatype.MSG_SV_NOTIFY_CHARA_TYPE_CHANGE, notify
+                )
+                return self._answer(
+                    session, sequence,
+                    charatype.MSG_SV_OK_REQUEST_CHARA_TYPE_CHANGE, b"",
+                ) + self._answer(
+                    session, 0, charatype.MSG_SV_NOTIFY_CHARA_TYPE_CHANGE, notify
                 )
             if msg_type in (career.MSG_CL_QUERY_CHARA_CAREER,
                             career.MSG_CL_QUERY_CHARA_CAREER_LIST):

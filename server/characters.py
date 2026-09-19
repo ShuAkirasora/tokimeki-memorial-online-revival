@@ -1625,6 +1625,37 @@ class CharacterStore:
             return True
         return False
 
+    def chara_type(self, chara_id: int) -> "int | None":
+        """This character's 体型 out of the create block, or None if not ours.
+
+        ⚠️ It lives in the create block rather than beside `catchcopy` and the
+        other keys, because that is where it has always lived: the last u16 of
+        the 74 bytes the client sent at creation, which is also what
+        `list_entry`, `chara_info` and everything else pack. Keeping a second
+        copy in the record would mean two answers to one question.
+        """
+        info = self.find(chara_id)
+        return None if info is None else int(parse_create_info(info)["charaType"])
+
+    def set_chara_type(self, chara_id: int, body_type: int) -> bool:
+        """Write one character's 体型 back. False if it is not ours.
+
+        The create block is stored verbatim and everything else is rebuilt from
+        it on demand, so the change is made in place: charaType is its last
+        u16 and nothing else moves. ⚠️ Rewritten through parse_create_info's own idea of the layout
+        rather than a bare slice, so a block of the wrong length is refused here
+        instead of silently having its last two bytes overwritten.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            info = bytes.fromhex(str(record["info"]))
+            parse_create_info(info)  # raises unless this really is a 74B block
+            record["info"] = (info[:-2] + struct.pack(">H", body_type & 0xFFFF)).hex()
+            self._save()
+            return True
+        return False
+
     def career(self, chara_id: int) -> "career.Career | None":
         """This character's 経歴, or None if it is not ours.
 
