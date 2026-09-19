@@ -67,6 +67,7 @@ MSG_SV_NOTIFY_LESSON_QUESTION_START = 0x6103
 MSG_SV_NOTIFY_LESSON_QUESTION_END = 0x6104
 MSG_CL_CAST_LESSON_ANSWER = 0x6105
 MSG_SV_NOTIFY_LESSON_ANSWER = 0x6106
+MSG_SV_ERROR_LESSON_ANSWER = 0x6107
 # The 授業 screen keeps a chat bar of its own. It is a separate pair from the
 # map's 通常会話 (0x4900/0x4901) even though the box on screen is the same one:
 # during a lesson the client casts 0x6109 and never 0x4900, which is why a
@@ -78,6 +79,37 @@ MSG_SV_ERROR_LESSON_CHAT = 0x610B
 MSG_CL_CAST_LESSON_EMOTION = 0x610C
 MSG_SV_NOTIFY_LESSON_EMOTION = 0x610D
 MSG_SV_ERROR_LESSON_EMOTION = 0x610E
+
+# ── the three refusals the 授業 screen can draw ─────────────────────────────
+# ⭐ RESTORED from `error_message.bin`, the same table lesson_skill's eight
+# refusals came out of and read exactly the same way: each 102-byte record opens
+# with (u16 own id, u16 message id, u8 reason), so a message's sentences are a
+# list and `reason` is an index into it.
+#
+#     521  0x6107  0  解答がゲームサーバ側の制限時間内に間に合いませんでした。
+#     522  0x6107  1  既に解答しています。
+#     524  0x610B  0  チャットは解答後に可能になります。
+#     525  0x610B  1  チャットができない状態です。
+#     526  0x610E  0  チャットは解答後に可能になります。
+#     527  0x610E  1  チャットができない状態です。
+#     528  0x610E  2  指定された感情表現の情報が不正です。
+#
+# ⭐⭐ All three used to be answered with silence, and the comment on
+# `take_answer` said why: 「what it draws is unknown」. It was never unknown --
+# it was in this table the whole time, one lookup away. ⚠️ The reusable half of
+# that: a branch this end declines to take 「because we do not know what the
+# client would show」 is a question `error_message.bin` answers, not a design
+# question.
+#
+# ⭐⭐⭐ 524/526 are also a *rule*, and one nothing else states: 「チャットは
+# 解答後に可能になります」 -- during a question, the chat bar is shut until you
+# have answered. Neither manual page says so; the sentence exists because the
+# original server sent the byte that selects it.
+ERROR_ANSWER_TOO_LATE = 0
+ERROR_ANSWER_ALREADY = 1
+ERROR_CHAT_AFTER_ANSWER = 0
+ERROR_CHAT_NOT_POSSIBLE = 1
+ERROR_EMOTION_BAD_INFO = 2
 
 # 一般教室校舎 has an 「自分の教室」 pseudo-map at key 128 that no ordinary warp
 # leads to. Not used here — the room a lesson happens in is a real map, the one
@@ -882,20 +914,28 @@ class Lesson:
 
     # ── the client's one contribution ───────────────────────────────────────
 
-    def take_answer(self, question_no: int, choice_id: int) -> bool:
-        """MsgClCastLessonAnswer. True if it was taken.
+    def take_answer(self, question_no: int, choice_id: int) -> "int | None":
+        """MsgClCastLessonAnswer. None when it was taken, else a reason byte.
 
         Refused when it names the wrong question, when nothing is out, or when
         one has already been given — 「一度解答すると変更できませんので慎重に
         答えを選びましょう」 makes the last of those a rule and not just
-        defensiveness. There is a MsgSvErrorLessonAnswer (0x6107, one u8) for
-        saying so, but what it draws is unknown and a silent refusal costs the
-        player nothing, so the caller only logs.
+        defensiveness.
+
+        ⭐ Round 410: the byte a refusal carries is no longer unknown, so the
+        caller sends 0x6107 instead of only logging. `error_message.bin` 521/522
+        is the whole of this message's vocabulary and it distinguishes exactly
+        the two cases already separated here — 「解答がゲームサーバ側の制限時間内
+        に間に合いませんでした。」 and 「既に解答しています。」
+        ⚠️ A stale `questionNo` draws the first of those rather than a third
+        sentence, because the table has no third: an answer to the previous
+        question *is* one that arrived late. lesson_skill.check_common already
+        reads a stale number the same way, for the same reason.
         """
         if self.phase != self.ASKING or self.question is None:
-            return False
+            return ERROR_ANSWER_TOO_LATE
         if self.reported is not None:
-            return False
+            return ERROR_ANSWER_ALREADY
         # ⚠️ Whether the client counts questions from one or from zero is not
         # settled — nothing on the wire has said, and the deserializer only says
         # it is a u8. Both are accepted, because the cost of guessing wrong is a
@@ -908,9 +948,9 @@ class Lesson:
         # Which one it is will be obvious the first time this runs against a
         # client, because the log line below prints what arrived.
         if question_no not in (self.question_no, self.question_no - 1):
-            return False
+            return ERROR_ANSWER_TOO_LATE
         self.reported = choice_id
-        return True
+        return None
 
     def would_be_right(self) -> bool:
         """How the answer on the table will be marked when the timer ends.
@@ -1021,3 +1061,33 @@ class Lesson:
 
     def summary(self) -> str:
         return f"{self.right}/{self.asked}"
+
+
+# ── the chat bar during a 授業 ──────────────────────────────────────────────
+def chat_refusal(period: "Lesson | None") -> "int | None":
+    """The 0x610B / 0x610E reason a line typed in class draws, or None.
+
+    ⭐ RESTORED, and the rule is `error_message.bin` 524/526's own sentence:
+    「チャットは解答後に可能になります」. While a question is out and this player
+    has not answered it, the 授業 chat bar is shut — so a 0x6109 or a 0x610C
+    arriving there is refused rather than echoed. Nothing else in the project
+    states that rule: both manual pages describe the chat bar as simply being
+    there.
+
+    ⚠️⚠️ THE SECOND SENTENCE IS DELIBERATELY NOT CLAIMED. 525/527 「チャットが
+    できない状態です」 is the refusal for a cast that reaches this end with no
+    period at all, and the case it would fire on here is a line typed in the
+    seconds between 0x6102 結果発表 and the client leaving the classroom, where
+    ``session.lesson`` is already None. Whether the original counted that as
+    「できない状態」 is unmeasured, and being wrong in the permissive direction
+    echoes a line the player meant to send while being wrong in the strict one
+    puts a red sentence on screen for it — the same call, in the same words,
+    that _addressed_chat's 内緒話 note and _drama_chat's 選択肢 note make.
+    ⭐ Reopen it the moment a 0x6109 is measured arriving from a screen that is
+    not a lesson.
+    """
+    if period is None:
+        return None
+    if period.phase == Lesson.ASKING and period.reported is None:
+        return ERROR_CHAT_AFTER_ANSWER
+    return None

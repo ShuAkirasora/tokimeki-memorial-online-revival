@@ -544,6 +544,18 @@ MSG_CL_REQUEST_SCHOOL_LOGIN = 0x0306
 MSG_SV_OK_SCHOOL_LOGIN = 0x0307
 MSG_CL_REQUEST_SCHOOL_LOGOUT = 0x0309
 MSG_SV_OK_SCHOOL_LOGOUT = 0x030A
+MSG_SV_NG_SCHOOL_LOGOUT = 0x030B
+# ⭐ RESTORED, round 410. 0x030B has two sentences in `error_message.bin` and
+# only the first is a situation this end can be in:
+#
+#     12  0x030B  0  ログインしていませんので、ログアウトは不要です。
+#     13  0x030B  1  あなたのアカウントは有効ではありません。
+#
+# 「ログインしていません」 is `session.chara_id == 0` exactly — a connection
+# between 下校 and the next 登校 is nobody, which the branch below says in those
+# words when it clears the field. Reason 1 is the account state this end does
+# not keep (accounts.py holds no 有効/無効 column), so it stays unsent.
+NG_SCHOOL_LOGOUT_NOT_LOGGED_IN = 0
 MSG_CL_REQUEST_REENTRANCE = 0x031B
 MSG_SV_OK_REENTRANCE = 0x031C
 MSG_SV_NG_REENTRANCE = 0x031D
@@ -619,6 +631,48 @@ MSG_SV_NG_REENTRANCE = 0x031D
 # UNSENT 0x5F01 -- GameTime: this end does not volunteer the in-game clock.
 # UNSENT 0xA004 -- ServerVersion: this end does not volunteer its build.
 
+# ⭐⭐⭐ The original's own faults. Twelve refusals whose every live sentence
+# describes something going wrong *inside the original server* rather than
+# anything a player did, and the evidence is the client's own error table: a
+# refusal exists because a server sent the byte that selects it, so the sentence
+# it selects says what the branch was for.
+#
+# Look 0x3C02 up in that table and the shape is the same every time — 「システムエラー
+# が発生しました」, 「サーバーエラーが発生しました」, 「キャラクター情報の取得に
+# 失敗しました」, 「サーバーとの通信に失敗しました」, 「…を取得できませんでした」.
+# Those are a backend answering badly: a record fetched from a database that was
+# not there, a call to another service that did not come back. ⚠️ This end has no
+# such layer. Every record these twelve would report on is already in memory
+# before the request arrives (characters.json, options.json, the deck, the map),
+# and when something does go wrong here it raises: the handler unwinds, the
+# connection's `finally` runs and the socket closes. There is no path in this
+# server that turns an internal fault into a composed refusal, and adding one to
+# make these ids reportable would be inventing a failure mode rather than
+# restoring one.
+#
+# ⭐ Two of the twelve are stronger than that, because the data itself marks the
+# branch dead: 0x430B's *only* sentence is 「未使用：：：システムエラーが発生し
+# ました。」, and the one state rule 0x0A05 could have carried is 「未使用：：：
+# 既に校内新聞を開いています。」 — the original reserved that slot on the End side
+# and used it on the Start side only, which is why 0x0A02 *is* sent.
+#
+# ⚠️ Each line names its own sentences. This is a judgement per id, not a
+# category discount: an id whose list turns out to hold a rule (「既に…」,
+# 「…できません」, 「…が不正です」) is not here, and 0x6402/0xA102 are two that
+# were kept out for exactly that reason.
+# UNSENT 0x0302 -- SchoolList: only 「システムエラーが発生しました」, a fetch this end does not do.
+# UNSENT 0x0305 -- SchoolSelect: 「サーバーエラーが発生しました」 and one 未使用 slot.
+# UNSENT 0x0402 -- LockerAccessStart: both sentences are 「キャラクター情報の取得に失敗しました」.
+# UNSENT 0x0405 -- LockerAccessEnd: the same sentence again, and nothing else.
+# UNSENT 0x0702 -- Option: 「設定内容を取得できませんでした」 between two 未使用 slots.
+# UNSENT 0x0A05 -- NewspaperAccessEnd: a session-record fault, plus 「未使用：：：既に校内新聞を開いています」.
+# UNSENT 0x3C02 -- MinimapStart: 「グループメンバーの現在位置取得に失敗しました」 / 「キャラクター情報の取得に失敗しました」.
+# UNSENT 0x3C05 -- MinimapEnd: 「サーバーエラーが発生しました」 / the same fetch failing.
+# UNSENT 0x4002 -- LobbyDataStart: 「他プレイヤーの画面表示に失敗しました」 / the same fetch failing.
+# UNSENT 0x4005 -- LobbyDataEnd: that fetch failing / 「申し込み機能のキャンセルに失敗しました」.
+# UNSENT 0x430B -- Curriculum: its one and only sentence is labelled 未使用 in the data.
+# UNSENT 0x5B02 -- ClubDeckList: 「部活デッキの登録内容を取得できませんでした」 / 「サーバーとの通信に失敗しました」.
+
 # ServerResponse -- 0xFD00 asks, 0xFD01 answers, 0xFD02 reports the result back.
 # Eight bytes each way, sixteen in the reply and in the report: a round-trip probe.
 #
@@ -647,6 +701,18 @@ MSG_CL_REQUEST_MINIMAP_START = 0x3C00
 # Ok is enough to put a full page of β2 news on the screen.
 MSG_CL_REQUEST_NEWSPAPER_START = 0x0A00
 MSG_SV_OK_NEWSPAPER_START = 0x0A01
+MSG_SV_NG_NEWSPAPER_START = 0x0A02
+# ⭐ RESTORED, round 410. 0x0A02 has eight sentences and five of them are
+# labelled 未使用 in the data itself; of the three the original did send, this is
+# the only one that is a rule rather than a fault of its own backend:
+#
+#     109  0x0A02  5  既に校内新聞を開いています。
+#
+# ⚠️ Its twin on the End side is 未使用 (「未使用：：：既に校内新聞を開いて
+# います。」, 0x0A05 reason 5) — the original refused a second open and did not
+# refuse a stray close, so this end does the same. See the UNSENT block above
+# for why 0x0A05 goes unsent entirely.
+NG_NEWSPAPER_ALREADY_OPEN = 5
 MSG_CL_REQUEST_NEWSPAPER_END = 0x0A03
 MSG_SV_OK_NEWSPAPER_END = 0x0A04
 
@@ -6903,6 +6969,21 @@ class MpsServer:
                 # in, MsgClRequestSchoolLogin sets it again, and if it instead
                 # sends a lobby start without one, adding nobody beats adding the
                 # character who just left.
+                # ⭐ Round 410: the one refusal this pair has. 「ログインして
+                # いませんので、ログアウトは不要です。」 (`error_message.bin` 12)
+                # is a 下校 that arrives when nobody is logged in, which is
+                # `chara_id == 0` — the state the line at the bottom of this
+                # branch sets. Without it a stray 0x0309 runs the whole teardown
+                # for charaId 0: every take_down, every part notice and every
+                # partner-gone call fired at a character that is not there.
+                if not session.chara_id:
+                    print(f"[{self.tag}] school logout with nobody logged in, "
+                          f"refused (reason="
+                          f"{NG_SCHOOL_LOGOUT_NOT_LOGGED_IN})")
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_SCHOOL_LOGOUT,
+                        struct.pack(">B", NG_SCHOOL_LOGOUT_NOT_LOGGED_IN),
+                    )
                 print(
                     f"[{self.tag}] school logout for charaId={session.chara_id}, "
                     f"last on map {session.map_id} "
@@ -7742,6 +7823,13 @@ class MpsServer:
                 # answering it correctly when it does arrive, which costs
                 # nothing; it is not a subsystem players can reach today.
                 started = msg_type == MSG_CL_REQUEST_NEWSPAPER_START
+                if started and session.newspaper_open:
+                    print(f"[{self.tag}] newspaper already open, refused "
+                          f"(reason={NG_NEWSPAPER_ALREADY_OPEN})")
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_NEWSPAPER_START,
+                        struct.pack(">B", NG_NEWSPAPER_ALREADY_OPEN),
+                    )
                 reply_type = (MSG_SV_OK_NEWSPAPER_START
                               if started
                               else MSG_SV_OK_NEWSPAPER_END)
@@ -8021,13 +8109,25 @@ class MpsServer:
                 # 「残り時間が０になると」, not at the click, so the 0x6106 this
                 # earns is sent by the clock in _drain_lesson. A Cast has no
                 # reply by convention anyway.
+                # ⭐ Round 410: a refusal is no longer silent. 0x6107 carries
+                # one u8 and `error_message.bin` 521/522 is its whole
+                # vocabulary — 「解答がゲームサーバ側の制限時間内に間に合いません
+                # でした。」 and 「既に解答しています。」 — which is exactly the
+                # pair Lesson.take_answer already separates. An answer that
+                # arrives as the timer runs out is the first of those two, and
+                # the sentence names the server's clock out loud.
                 question_no, choice_id = struct.unpack_from(">BB", params, 0) \
                     if len(params) >= 2 else (0, 0)
                 period = session.lesson
-                if period is None or not period.take_answer(question_no, choice_id):
-                    print(f"[{self.tag}] answer ignored: questionNo={question_no} "
-                          f"choiceId={choice_id}")
-                    return b""
+                refusal = (lesson.ERROR_ANSWER_TOO_LATE if period is None
+                           else period.take_answer(question_no, choice_id))
+                if refusal is not None:
+                    print(f"[{self.tag}] answer refused: questionNo={question_no} "
+                          f"choiceId={choice_id} (reason={refusal})")
+                    return self._answer(
+                        session, sequence, lesson.MSG_SV_ERROR_LESSON_ANSWER,
+                        struct.pack(">B", refusal),
+                    )
                 print(f"[{self.tag}] answer: questionNo={question_no} "
                       f"(ours is {period.question_no}, so the client counts from "
                       f"{'one' if question_no == period.question_no else 'zero'}) "
@@ -8045,6 +8145,26 @@ class MpsServer:
                 # student ever shares a lesson this is where their copy goes,
                 # the way _presence_relay does it for the map.
                 said = chat.parse_cast(params)
+                # ⭐ Round 410, and it is a rule rather than a guard:
+                # `error_message.bin` 524 「チャットは解答後に可能になります。」
+                # says the bar is shut while a question is out and unanswered.
+                # See lesson.chat_refusal, including why its second sentence is
+                # left unclaimed.
+                #
+                # ⚠️ A console line is exempt, and only a console line: with
+                # --console on, a 「/」 line is the operator's door into a lesson
+                # (this branch is the reason it exists) and not chat the client
+                # drew a box for. A deployed server has no console, so out of
+                # the box nothing takes this exit.
+                if not (chat.CONSOLE_ENABLED and said.startswith("/")):
+                    refusal = lesson.chat_refusal(session.lesson)
+                    if refusal is not None:
+                        print(f"[{self.tag}] lesson chat refused before the "
+                              f"answer (reason={refusal}): {said!r}")
+                        return self._answer(
+                            session, sequence, lesson.MSG_SV_ERROR_LESSON_CHAT,
+                            struct.pack(">B", refusal),
+                        )
                 names = self._chars(session).full_name(session.chara_id)
                 family, first = names if names else (b"", b"")
                 print(f"[{self.tag}] lesson chat: {said!r}")
@@ -8060,6 +8180,34 @@ class MpsServer:
                 # 「/emotion」 in class. Never seen -- see chat.lesson_emotion_params
                 # for why it is answered anyway -- and the echo is all there is
                 # to do with it: the client draws the icon from the id it sent.
+                #
+                # ⭐ Round 410: 0x610E's three sentences are 0x610B's two plus
+                # 「指定された感情表現の情報が不正です。」 (`error_message.bin`
+                # 528), so the same rule applies to the emotion keys as to the
+                # bar, and a body with no key in it is the third.
+                # ⚠️⚠️ NO id FILTER. 528 is not a licence to invent a table of
+                # valid emotions: which table this screen draws from is unread,
+                # and the precedent is クラブ対戦's 0x5C14, which forwards the
+                # id the client chose for the same reason — this end never
+                # refuses a real key to be safe. What *is* refused is a body
+                # that carries no id at all, which the client cannot have meant.
+                if len(params) < 2:
+                    print(f"[{self.tag}] lesson emotion refused: body is "
+                          f"{len(params)} byte(s), no emotion in it")
+                    return self._answer(
+                        session, sequence, lesson.MSG_SV_ERROR_LESSON_EMOTION,
+                        struct.pack(">B", lesson.ERROR_EMOTION_BAD_INFO),
+                    )
+                # ⚠️ No console exemption here, unlike the chat bar above: an
+                # emotion key is not a line of text and cannot carry a command.
+                refusal = lesson.chat_refusal(session.lesson)
+                if refusal is not None:
+                    print(f"[{self.tag}] lesson emotion refused before the "
+                          f"answer (reason={refusal})")
+                    return self._answer(
+                        session, sequence, lesson.MSG_SV_ERROR_LESSON_EMOTION,
+                        struct.pack(">B", refusal),
+                    )
                 emotion = chat.parse_emotion(params)
                 print(f"[{self.tag}] lesson emotion: {emotion}")
                 return self._answer(
