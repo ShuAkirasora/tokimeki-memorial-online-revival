@@ -21,6 +21,28 @@ MSG_QUERY_LOGIN_SERVER = 0x0B00
 MSG_RESULT_LOGIN_SERVER = 0x0B01
 MSG_ERROR_LOGIN_SERVER = 0x0B02
 
+# ⭐⭐ And it is never sent, which is a judgement rather than a gap. A refusal
+# is a rule only when this end can both *compute* it and has standing to *answer*
+# for it, and both fail here. The request is what shows it: MsgClQueryLoginServer
+# serialises **empty** -- the client's own dump prints
+# 「MsgClQueryLoginServer(0x0b00), 」and nothing after the comma -- so neither
+# sentence can be about anything the player sent.
+#
+# Read them and they are not rules at all -- they are the original's deployment
+# answering badly, the same shape as the twelve in mps_session:
+#
+#     0  ログインサーバーへの接続に失敗しました。       a hop to another host that did not come back
+#     1  現在、非常に混雑しています。少し時間をおいて…  a pool of login servers with no room left
+#
+# Both belong to a load balancer standing *in front of* login servers it reaches
+# over the network. This one is not that: the address it hands out is
+# configuration read at startup, there is no second host to fail to reach, and
+# there is no pool to be full of -- the login server is one process on the
+# machine that answers this query. Sending either would mean inventing a backend
+# to have a fault in, and reason 1 would mean inventing a capacity number as
+# well; nothing in the client carries one.
+# UNSENT 0x0B02 -- ErrorLoginServer: an empty request, and both sentences are the original's own load balancer failing (a hop to a login server, or a full pool) -- this end is the login server's own machine and has neither.
+
 MSG_LOGIN_SERVER_LOGIN = 0x7000
 
 # Between the packet type and the message parameters sits a 4-byte field.

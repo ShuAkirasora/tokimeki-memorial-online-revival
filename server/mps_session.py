@@ -256,6 +256,43 @@ MSG_SV_NG_LOGIN = 0x7002
 MSG_CL_NOTIFY_AUTH_CODE = 0x0020
 MSG_CL_REQUEST_GAME_LOGIN = 0x0200
 MSG_SV_OK_GAME_LOGIN = 0x0201
+MSG_SV_NG_GAME_LOGIN = 0x0202
+
+# ⭐⭐⭐ The game server's own door, and it is a second door rather than a
+# repeat of the first. 0x7002 asks "may this registration code in at all"
+# (codes.py); this one is asked afterwards, by a connection that already holds
+# a relay ticket, and the three sentences it can answer with say what it is for:
+#
+#     0  既にログインしています。他者による不正の疑いがある場合は…   this account is on already
+#     1  アカウントが登録されていません。                            this end cannot name the account
+#     2  クライアントのアップデートが必要です。…                     the build at the other end is wrong
+#
+# Every one of the three is a rule this end can both *compute* and *answer for*
+# -- two halves worth stating separately, because a refusal can fail either one
+# on its own. It can compute them because the request carries what each is about
+# (the version string, and the accountId the ticket already named) and because
+# the live list on this port is this object's own; it may answer for them
+# because the ticket was minted here and the connection table is nobody else's.
+#
+# ⚠️ Which is what the request's shape is worth reading for: a refusal that
+# needs a field is only a rule when the field is there. This one's request is
+# version[12+1] + u32 accountId, so it is -- unlike 0x0B02 next door, whose
+# request is empty and whose two sentences are backend faults instead.
+REASON_GAME_LOGIN_ALREADY_ON = 0
+REASON_GAME_LOGIN_NO_ACCOUNT = 1
+REASON_GAME_LOGIN_UPDATE = 2
+
+# What the client puts in that version field, measured rather than reasoned:
+# 474 logins across the rounds on disk, game port and school port alike, and one
+# value. ⚠️ The string is in no file the game ships -- not tmo.exe, not Data --
+# so the client composes it from numbers of its own and only the composed form
+# crosses the wire; this is that form, which is the only thing this end ever
+# sees. The build is the 発売時版 and the updater beside it serves no updates,
+# so the refusal is inert for every client that exists. That is the point: the
+# rule is the original's, restored, not a gate of ours -- and an install that
+# ever did answer differently is exactly the one reason 2 was written for.
+CLIENT_VERSION = b"00.01.13.00"
+VERSION_FIELD_LEN = 13
 
 # Which school 0x6603 MsgSvOkExamReady says the exam is at.
 #
@@ -1645,6 +1682,13 @@ class _Session:
         # in handle(); None until then, which _chars reads as "not local".
         self.peer_host: str | None = None
         self.chara_id = 0  # whoever MsgClRequestSchoolLogin named, 0 before 登校
+        # Whether MsgClRequestGameServerLogin has been answered Ok on this
+        # connection. ⚠️ Not the same as having an account: 0x0020 names the
+        # connection, 0x0200 logs it in, and the refusal 0x0202 reason 0
+        # (「既にログインしています」) is about the second of those. A tool that
+        # echoes a ticket to watch the wire has done the first only, and
+        # refusing a player because of it would be this server's own doing.
+        self.logged_in = False
         # When 登校 happened, by the monotonic clock; 0.0 = not at school.
         # 累計登校時間 on the 経歴 card is the sum of the spans this opens, so
         # every path that ends one has to close it -- 下校 and the disconnect
@@ -2174,6 +2218,64 @@ class MpsServer:
             f"[{self.tag}] connection is account {account_id} ({how}); "
             f"characters: {session.characters.summary()}"
         )
+
+    def _game_login_refusal(
+        self, session: "_Session", params: bytes
+    ) -> "tuple[int, str] | None":
+        """Which of MsgSvNgGameServerLogin's three sentences this login selects.
+
+        ⚠️ Order is this end's, not the original's -- nothing recoverable says
+        which it checked first. It runs outward-in: the build at the other end,
+        then who the connection is, then what else that account is doing, so
+        that the answer names the nearest thing wrong rather than a consequence
+        of it.
+        """
+        # 2 -- the version field, read to its NUL the way a C string is. The
+        # field is fixed-length and NUL-padded (「version[12+1]」), so a client
+        # whose string is shorter leaves the tail zeroed rather than short.
+        version = bytes(params[:VERSION_FIELD_LEN]).split(b"\x00", 1)[0]
+        if version != CLIENT_VERSION:
+            return (
+                REASON_GAME_LOGIN_UPDATE,
+                f"version {version!r}, this server serves {CLIENT_VERSION!r}",
+            )
+        # 1 -- a connection this end cannot name. It reaches here when the
+        # authCode in 0x0020 was never issued here, which today only printed a
+        # warning and carried on. ⚠️ The loopback fallback is left alone: it is
+        # the single-player convenience _fallback_account exists for, and a
+        # local client that skipped the ticket is not an unknown account.
+        if not session.account_id and self._fallback_account(session) is None:
+            return (
+                REASON_GAME_LOGIN_NO_ACCOUNT,
+                "no authCode of ours named this connection",
+            )
+        account_id = session.account_id or self._fallback_account(session)
+        # 0 -- the same account, logged in on this port already. ⚠️ Only this
+        # port: the school connection is a second MpsServer with a live list of
+        # its own, and one player holds a game and a school connection at once
+        # by design, so a shared list here would refuse the player their own
+        # second hop.
+        #
+        # ⚠️⚠️ What this costs is a client that dies without its socket dying
+        # with it: the entry leaves self.live when the connection's teardown
+        # runs, and a half-open socket delays that until TCP notices. The
+        # original wore the same cost -- its sentence tells the player to call
+        # customer support -- and the alternative, dropping the check, would be
+        # discounting a rule for being inconvenient. Nothing here kicks the older
+        # connection: the client carries a message for being told to log out
+        # (0x0001) and this end volunteers nothing.
+        for other in self.live:
+            if other is session or not other.logged_in:
+                continue
+            if other.account_id != account_id:
+                continue
+            if other.writer is None or other.writer.is_closing():
+                continue
+            return (
+                REASON_GAME_LOGIN_ALREADY_ON,
+                f"account {account_id} is already logged in from {other.peer_host}",
+            )
+        return None
 
     def _fallback_account(self, session: "_Session") -> int | None:
         """The account an unnamed connection may fall back to, or None.
@@ -6981,6 +7083,19 @@ class MpsServer:
                             f"[{self.tag}] ⚠ accountId={echoed} in 0x0200 but the "
                             f"authCode said account {session.account_id}"
                         )
+                refused = self._game_login_refusal(session, params)
+                if refused is not None:
+                    reason, why = refused
+                    print(f"[{self.tag}] game login refused, reason={reason}: {why}")
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_GAME_LOGIN,
+                        struct.pack(">B", reason),
+                    )
+                # ⭐ Only now is this connection logged in to the game server,
+                # and that is the flag the duplicate check above reads. A
+                # connection that echoed an authCode and stopped there has not
+                # logged in -- the message that does it is this one.
+                session.logged_in = True
                 return self._answer(
                     session, sequence, MSG_SV_OK_GAME_LOGIN, struct.pack(">H", 0)
                 )
