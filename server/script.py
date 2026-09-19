@@ -111,6 +111,9 @@ BRANCH_PATH = Path(__file__).resolve().parent.parent / "reference" / "branches.j
 NPC_EVENT_PATH = (
     Path(__file__).resolve().parent.parent / "reference" / "npc_events.json"
 )
+SCRIPT_ID_PATH = (
+    Path(__file__).resolve().parent.parent / "reference" / "script_ids.json"
+)
 
 
 def _load_branches() -> dict[int, dict]:
@@ -928,6 +931,70 @@ def _load_npc_events() -> dict[tuple[int, int], list[dict]]:
 
 
 NPC_EVENTS = _load_npc_events()
+
+
+def _load_script_ids() -> frozenset[int]:
+    """Every number the game names a script by -- 717 of them.
+
+    ⭐⭐⭐ This is the table the two event doors resolve their u16 against
+    before answering, and it is the difference between a refusal that restores
+    the original and one that publishes this end's own gap. `error_message.bin`
+    gives 0x5602 and 0x6C02 a `reason 0` that says the parameter / the event
+    script information is wrong -- neither is marked 未使用, so the original
+    server did send them -- but the only thing this end could previously say
+    about an id was "no export here", which is a statement about this machine,
+    not about the game. The game's own index answers the actual question.
+
+    ⭐ Six blocks, `scriptId >> 12` naming which table a script belongs to,
+    each one packed solid from `nibble << 12` with no hole and no overlap:
+    0x0000+ the 71 ドラマイベント, 0x2000+/0x4000+/0x6000+/0x8000+ the
+    394/22/6/1 rows of the four NPC event tables, 0xE000+ the 223 placement
+    scripts. The four middle blocks equal the four tables as sets, which is
+    what makes "not in here" mean "no such script" rather than "not in the
+    table I happened to look at".
+
+    ⚠️ The numbers travel without the file stem each one belongs to. Both
+    tests below are membership tests -- nothing here reads a name -- and the
+    other column would make this a transcription of the game's index rather
+    than the one column the server uses. The 423 stems that do get named in a
+    log are already in `npc_events.json`.
+
+    Absent file is silent, like `_load_branches`: with no table, `is_script_id`
+    says yes to everything and both doors answer exactly as they did before it
+    existed. A refusal that depends on a file is never the failure mode when
+    the file is the thing that is missing.
+    """
+    try:
+        raw = json.loads(SCRIPT_ID_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    return frozenset(int(ident) for ident in raw.get("ids", ()))
+
+
+SCRIPT_IDS = _load_script_ids()
+
+#: The 423 the client can name through 0x5600: the four NPC event tables are
+#: the only place its `npcEventId` is ever read from (each record's +0x36), so
+#: an id outside them did not come off a record. ⚠️ Derived from the event
+#: tables rather than from the id blocks above, so that a copy with one file
+#: and not the other still gets the narrower of the two answers right.
+NPC_EVENT_SCRIPT_IDS = frozenset(
+    event["scriptId"] for events in NPC_EVENTS.values() for event in events
+)
+
+
+def is_script_id(script_id: int) -> bool:
+    """Does the game's own index name a script by this number?
+
+    ⚠️ True when the index is missing, on purpose -- see `_load_script_ids`.
+    """
+    return not SCRIPT_IDS or script_id in SCRIPT_IDS
+
+
+def is_npc_event_script_id(script_id: int) -> bool:
+    """Is this one of the ids a 0x6305 event record can hand the client?"""
+    return not NPC_EVENT_SCRIPT_IDS or script_id in NPC_EVENT_SCRIPT_IDS
+
 
 # The ring item behind 「リーダー試験を受ける」. 402 is what the client sends;
 # `menu_item.bin` 37:402 is the row, and its type is 0, so it lands as a 0x6304
@@ -1845,6 +1912,23 @@ MSG_CL_QUERY_DRAMAEVENT_MATCHING_POSSIBLE = 0x4200
 MSG_SV_RESULT_DRAMAEVENT_MATCHING_POSSIBLE = 0x4201
 MSG_CL_REQUEST_NPC_EVENT_START = 0x5600
 MSG_SV_OK_NPC_EVENT_START = 0x5601
+MSG_SV_NG_NPC_EVENT_START = 0x5602
+
+# ⭐⭐⭐ The one arm of 0x5602 this end can reach, and which sentence it is.
+#
+# `error_message.bin` gives 0x5602 six reasons: 0 「パラメータが不正です。」,
+# 1-4 「恋愛イベントの開始に失敗しました。」 (one sentence, four internal
+# causes) and 5, marked 未使用. The four middle ones are a back end failing at
+# something this end does not do, so they go the way 0x4805 did -- nowhere.
+# Reason 0 is a rule about the request itself, and the game ships the table it
+# is judged against (`is_npc_event_script_id`).
+#
+# ⚠️⚠️ ⛔️ The refusal is NOT "no export for this id". An id that is in the
+# event tables but has no .ssb here is this end's gap, and answering a gap with
+# a failure the original never had would be inventing one; that path still gets
+# the stub below. Only an id that is in no table at all -- one no event record
+# could have handed the client -- is 「パラメータが不正です」.
+NG_NPC_EVENT_START_BAD_PARAM = 0
 # The closing half of the same bracket. Round 160 read the client's own list of
 # what this subsystem can be told: the debug strings that sit beside
 # `.\client\procedure\NpcEventMessageProcedure.cpp` name exactly five server
@@ -1880,6 +1964,23 @@ MSG_SV_NG_TITLE_EVENT_START = 0x6C02
 MSG_CL_REQUEST_TITLE_EVENT_END = 0x6C03
 MSG_SV_OK_TITLE_EVENT_END = 0x6C04
 MSG_SV_NG_TITLE_EVENT_END = 0x6C05
+
+# ⭐⭐ 0x6C02 reads exactly like 0x5602 one field over: reason 0
+# 「イベントスクリプト情報が不正です。」 is a rule about the u16 that came in,
+# and 1-4 are one sentence 「チュートリアルイベントの開始に失敗しました。」 over
+# four back-end causes. None is marked 未使用, so the original sent all five.
+#
+# ⚠️ The table this one is judged against is the wider one: which table the
+# client picks a title event out of has never been found (0x2000 and 0x20F3
+# both came off the wire, and both happen to sit in capture_npc_event), so the
+# narrowest thing this end can honestly say is `is_script_id` -- the game's own
+# index names no script by this number. ⛔️ Refusing everything outside the
+# tutorial pair would be this end deciding what a title event may be.
+NG_TITLE_EVENT_START_BAD_SCRIPT = 0
+
+# ⚠️⚠️ The two closing halves, 0x5605 and 0x6C05, are `# UNSENT` -- see
+# MSG_CL_REQUEST_NPC_EVENT_END and MSG_CL_REQUEST_TITLE_EVENT_END in
+# mps_session.py for which sentence rules each of them out.
 
 #: The two scenarios that come through the タイトルイベント door, by scriptId.
 #: ⭐ Read off the wire rather than listed by hand: the client asked for 0x2000

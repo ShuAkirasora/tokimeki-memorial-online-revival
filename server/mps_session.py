@@ -742,6 +742,37 @@ MSG_SV_NG_REENTRANCE = 0x031D
 # UNSENT 0x430B -- Curriculum: its one and only sentence is labelled 未使用 in the data.
 # UNSENT 0x5B02 -- ClubDeckList: 「部活デッキの登録内容を取得できませんでした」 / 「サーバーとの通信に失敗しました」.
 
+# ⭐⭐⭐ The three refusals of the script-event brackets, and why these three go
+# here while their Start-side siblings 0x5602 and 0x6C02 are sent (round 414).
+#
+# Five ids open and close three doors that each name a scriptId: 0x5600/0x5603
+# NpcEvent, 0x5700 DramaEvent, 0x6C00/0x6C03 TitleEvent. Reading the sentences
+# one at a time rather than by family splits them two ways, and the split is not
+# where the family boundaries are.
+#
+# ⭐ The two **closing** halves are ruled out by a shape, not by a judgement
+# call: 0x5603 and 0x6C03 both carry **no body at all** -- measured on the wire
+# for 0x5603 (`params=-` in every log that has one) and by the shape reader for
+# 0x6C03 -- so the one rule arm each of them has, 「パラメータが不正です」 and
+# 「イベントスクリプト情報が不正です」, is about a parameter that does not
+# exist. Whatever the original judged there was its own record of the event in
+# flight, which is the back end again. What is left is 0x5605's 「キャラクター
+# データの取得に失敗しました」 (with reasons 1-4 all marked 未使用) and
+# 0x6C05's 「チュートリアルイベントを正常に終了できませんでした」 ×4.
+#
+# ⭐⭐ 0x5702 is ruled out by the **absence** of a rule arm, and the absence is
+# legible because its two siblings have one: 0x5602 reason 0 and 0x6C02 reason 0
+# each say 「…が不正です」 about the u16 that came in, and 0x5702 -- whose
+# request carries a scriptId *and* an actorId, so it has more to judge, not less
+# -- has no such sentence anywhere in its four. It is 「ドラマイベントの開始に
+# 失敗しました」 three times over plus one 未使用. The authors wrote a bad-
+# parameter branch for the two doors they wanted one on, and this is not one of
+# them. ⛔️ So reading 「開始に失敗しました」 as "your scriptId was wrong"
+# would be putting a branch back that the table says was never there.
+# UNSENT 0x5605 -- NpcEventEnd: an empty request, so only 「キャラクターデータの取得に失敗しました」 is live.
+# UNSENT 0x6C05 -- TitleEventEnd: an empty request, so only 「チュートリアルイベントを正常に終了できませんでした」 is live.
+# UNSENT 0x5702 -- DramaEventStart: 「ドラマイベントの開始に失敗しました」 ×3 and one 未使用; no bad-parameter arm exists.
+
 # ServerResponse -- 0xFD00 asks, 0xFD01 answers, 0xFD02 reports the result back.
 # Eight bytes each way, sixteen in the reply and in the report: a round-trip probe.
 #
@@ -3567,6 +3598,18 @@ class MpsServer:
             # or the client reaches the load with no id and says スクリプト
             # エラー ID:65535 (round 37).
             script_id = struct.unpack_from(">H", params, 0)[0] if params else 0
+            if not script.is_script_id(script_id):
+                # ⭐ 「イベントスクリプト情報が不正です。」 -- the game's own
+                # index (reference/script_ids.json) names no script by this
+                # number, so nothing the client could have read out of a table
+                # says it. See script.NG_TITLE_EVENT_START_BAD_SCRIPT for why
+                # the test is the whole index and not the tutorial pair.
+                print(f"[{self.tag}] title event {script_id:#06x} is no "
+                      f"script id — 0x6C02 reason 0")
+                return self._answer(
+                    session, seen, script.MSG_SV_NG_TITLE_EVENT_START,
+                    struct.pack(">B", script.NG_TITLE_EVENT_START_BAD_SCRIPT),
+                )
             found = script.by_script_id(script_id)
             if found is None:
                 # ⚠️ Both halves of the pair are exported now -- `amm_e001` at
@@ -3607,6 +3650,20 @@ class MpsServer:
             # missing, when every 0x72xx went out on the campus screen and came
             # back "受信ハンドラが設定されていません".
             npc_event_id = struct.unpack_from(">H", params, 0)[0] if params else 0
+            # ⭐ 「パラメータが不正です。」 -- checked before the Ok goes out,
+            # because the Ok is a promise to push a script behind it. The four
+            # event tables are the only place the client reads this u16 from
+            # (each record's +0x36), so an id outside all four did not come off
+            # a record. ⚠️ `/sc next` is armed below and is exempt on purpose:
+            # a script forced by hand never travelled through an event table.
+            if (script.FORCED_NEXT_SCRIPT is None
+                    and not script.is_npc_event_script_id(npc_event_id)):
+                print(f"[{self.tag}] npc event {npc_event_id:#06x} is in no "
+                      f"event table — 0x5602 reason 0")
+                return self._answer(
+                    session, seen, script.MSG_SV_NG_NPC_EVENT_START,
+                    struct.pack(">B", script.NG_NPC_EVENT_START_BAD_PARAM),
+                )
             reply = self._answer(session, seen, script.MSG_SV_OK_NPC_EVENT_START, b"")
             found = None
             if script.FORCED_NEXT_SCRIPT is not None:
