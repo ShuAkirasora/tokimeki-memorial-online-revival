@@ -430,6 +430,32 @@ FIXED_REPLIES = {
 
 MSG_CL_QUERY_CHARACTER_LIST = 0x0318
 MSG_SV_RESULT_CHARACTER_LIST = 0x0319
+MSG_SV_ERROR_CHARACTER_LIST = 0x031A
+# ⭐⭐⭐ RESTORED, round 412 -- and this comment is the one place the whole
+# 0x03xx family's refusal is written down, because all four of them say the
+# same thing: THESE DOORS READ AN IDENTITY AND THIS END NEVER ASKED WHETHER
+# IT RESOLVES. 0x0318 / 0x0312 / 0x0315 / 0x0306 each take the account (or the
+# charaId) the client names and answer out of whatever store comes back.
+#
+#     34  0x031A  0  あなたのアカウントは有効ではありません。
+#     35  0x031A  1  あなたのアカウントデータが見つかりませんでした。
+#     36  0x031A  2  キャラクターデータが見つかりませんでした。
+#     37  0x031A  3  未使用：：：恋人キャラクターのデータが見つかりませんでした。
+#
+# Reason 1 is 「this connection never said which account it is」, a state this
+# end has had a name for since _fallback_account: a stranger who speaks the
+# packet layer -- its bootstrap key is a plaintext string, so anyone can -- and
+# skips the authCode gets a detached, empty store. Until now that store
+# answered with an empty list, i.e. with the same bytes a brand new account
+# gets, so the client bounced off the school screen with nothing said.
+#
+# ⛔️ Reason 0 is not claimed: accounts.py holds no 有効/無効 column, the same
+# line round 410 wrote for 0x030B reason 1 (2.343 四).
+# ⛔️ Reason 2 is not claimed either, and the reason is that the live three here
+# are 0x0308's reasons 3/4/5 in the same order -- the two tables cross-check
+# each other. 「キャラクターデータ」 is the load step under 「アカウントデータ」,
+# and this end has no second load: the record is already in memory.
+ERROR_CHARACTER_LIST_NO_ACCOUNT = 1
 # ⭐ The title screen's おまけ→エンディング list (manual p02_07 / p09_03). Asked
 # on the game connection right after login and again after every 下校 -- before
 # any character is picked, so it is an account's list, not a character's. The
@@ -448,6 +474,7 @@ MSG_SV_RESULT_CHARACTER_LIST = 0x0319
 ENDING_LIST_CATEGORY = 1
 MSG_CL_QUERY_ENDING_LIST = 0x0315
 MSG_SV_RESULT_ENDING_LIST = 0x0316
+MSG_SV_ERROR_ENDING_LIST = 0x0317
 ENDING_LIST_MAX = 10
 # ⭐ Round 348: the other list the title screen's おまけ menu is built from.
 # The reader (Input_MsgSvResultGalleryList, 0x8f9020) takes a u16 count and
@@ -460,7 +487,24 @@ ENDING_LIST_MAX = 10
 # into a record of this very shape. Measured on the real client (2.290).
 MSG_CL_QUERY_GALLERY_LIST = 0x0312
 MSG_SV_RESULT_GALLERY_LIST = 0x0313
+MSG_SV_ERROR_GALLERY_LIST = 0x0314
 GALLERY_LIST_MAX = 10
+# ⭐ RESTORED, round 412. The おまけ pair carries two sentences each and they
+# are the same two:
+#
+#     30/32  0x0314 / 0x0317  0  あなたのアカウントは有効ではありません。
+#     31/33  0x0314 / 0x0317  1  おまけデータが見つかりません。
+#
+# ⚠️⚠️ 「おまけデータが見つかりません」 IS NOT 「the list came out empty」, and
+# what rules that out is already written above: the client asks 0x0315 right
+# after login and 0x0312 the first time the page opens -- the ending list is
+# not asked because the player pressed おまけ. A refusal on an empty list would
+# therefore greet every brand new account with a red box at login, before it
+# could possibly have an ending. So the sentence is about the account, not
+# about the count, and it is the same fact 0x031A reason 1 states: no account,
+# hence no おまけ data of anyone's to find. Reason 0 goes unsent for the reason
+# 0x031A's does.
+ERROR_OMAKE_NO_ACCOUNT = 1
 # The flag words, read off the client's own tests (0x9c6a20 / 0x9c69a0, the
 # two the ギャラリー page asks before it draws a candidate at all): a record
 # is `u16 npcId; u32 eventFlag[2]; u32 emotionFlag[12]`, eventFlag[r] bit n
@@ -542,6 +586,31 @@ NG_DESTROY_NO_CHARA_INFO = 2
 NG_DESTROY_IS_GROUP_LEADER = 9
 MSG_CL_REQUEST_SCHOOL_LOGIN = 0x0306
 MSG_SV_OK_SCHOOL_LOGIN = 0x0307
+MSG_SV_NG_SCHOOL_LOGIN = 0x0308
+# ⭐⭐ RESTORED, round 412. Six sentences, and the block they fall into is what
+# says which one goes with which fact:
+#
+#      6  0x0308  0  ログインに失敗しました。
+#      7  0x0308  1  未使用：：：入力されたレジストレーションコードは現在使用されています。
+#      8  0x0308  2  キャラクター情報が見つかりませんでした。
+#      9  0x0308  3  あなたのアカウントは有効ではありません。
+#     10  0x0308  4  あなたのアカウントデータが見つかりませんでした。
+#     11  0x0308  5  キャラクターデータが見つかりませんでした。
+#
+# ⭐ Rows 3/4/5 are 0x031A's rows 0/1/2 word for word and in the same order --
+# the account-load step, shared between the two doors. Row 2 sits in front of
+# that block, i.e. it is the earlier question: the charaId this request names
+# is not one of the ones the list we just sent carries. `CharacterStore.find`
+# is exactly that test ("or None if it is not ours"), and until now this
+# handler took the id on trust and built a whole session around it -- 組,
+# position, 経歴 and the bells all came back out of a record that does not
+# exist.
+#
+# ⚠️ Row 0 「ログインに失敗しました」 is not claimed: it names no state. Row 5 is
+# not claimed for the reason 0x031A row 2 is not. Row 3 is the 有効 column
+# accounts.py does not have.
+NG_SCHOOL_LOGIN_NO_SUCH_CHARACTER = 2
+NG_SCHOOL_LOGIN_NO_ACCOUNT = 4
 MSG_CL_REQUEST_SCHOOL_LOGOUT = 0x0309
 MSG_SV_OK_SCHOOL_LOGOUT = 0x030A
 MSG_SV_NG_SCHOOL_LOGOUT = 0x030B
@@ -2121,6 +2190,19 @@ class MpsServer:
                 )
                 session.characters = CharacterStore(None)
         return session.characters
+
+    def _named(self, session: "_Session") -> bool:
+        """Has this connection said which account it is?
+
+        ⭐ The question every 0x03xx door asks before it answers; the whole
+        argument is at MSG_SV_ERROR_CHARACTER_LIST. Going through _chars first
+        is the point of the helper rather than an accident of it: that is where
+        a loopback connection is handed the local fallback, so single-player
+        play and the smoke suite stay named and only a stranger who skipped the
+        authCode comes back False.
+        """
+        self._chars(session)
+        return bool(session.account_id)
 
     def _packet(self, session: "_Session", tag: int, body: bytes) -> bytes:
         header = b"" if tag in (TAG_KEX1, TAG_KEX2, TAG_KEX3) else self.header
@@ -6772,6 +6854,14 @@ class MpsServer:
                 # 238 bytes per entry; see characters.py for where each field
                 # came from. An empty list here is what sent the client back to
                 # the school screen right after it made a character.
+                if not self._named(session):
+                    print(f"[{self.tag}] character list from an unnamed "
+                          f"connection ({session.peer_host}): "
+                          f"0x031A アカウントデータが見つかりませんでした")
+                    return self._answer(
+                        session, sequence, MSG_SV_ERROR_CHARACTER_LIST,
+                        struct.pack(">B", ERROR_CHARACTER_LIST_NO_ACCOUNT),
+                    )
                 print(f"[{self.tag}] characters: {self._chars(session).summary()}")
                 return self._answer(
                     session, sequence, MSG_SV_RESULT_CHARACTER_LIST, self._chars(session).entries()
@@ -6781,6 +6871,13 @@ class MpsServer:
                 # has received, as candidate indices, deduplicated and in roster
                 # order: the account is what the client is logged in as here,
                 # and the menu this builds lists people, not playthroughs.
+                if not self._named(session):
+                    print(f"[{self.tag}] ending list from an unnamed connection "
+                          f"({session.peer_host}): 0x0317 おまけデータが見つかりません")
+                    return self._answer(
+                        session, sequence, MSG_SV_ERROR_ENDING_LIST,
+                        struct.pack(">B", ERROR_OMAKE_NO_ACCOUNT),
+                    )
                 store = self._chars(session)
                 seen: set[int] = set()
                 for record in store.records:
@@ -6804,6 +6901,13 @@ class MpsServer:
                 # ending list, for the same reason (the menu lists people).
                 # p02_07: 「恋愛候補生がゲーム中に登場すると、おまけモードに
                 # 進むことができます」, and the manual's 登場 is Romance's debut.
+                if not self._named(session):
+                    print(f"[{self.tag}] gallery list from an unnamed connection "
+                          f"({session.peer_host}): 0x0314 おまけデータが見つかりません")
+                    return self._answer(
+                        session, sequence, MSG_SV_ERROR_GALLERY_LIST,
+                        struct.pack(">B", ERROR_OMAKE_NO_ACCOUNT),
+                    )
                 store = self._chars(session)
                 best: dict[int, int] = {}
                 for record in store.records:
@@ -6877,6 +6981,29 @@ class MpsServer:
                 # the shared ``xor eax,eax; ret 8`` stub, and its dump function
                 # (0x8F75F0) prints the message name and no fields.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+                # ⭐⭐ Round 412: who is asking, and is that one of theirs. Both
+                # refusals are MSG_SV_NG_SCHOOL_LOGIN's own rows -- see it for
+                # which row goes with which fact and for the three that stay
+                # unsent. ⚠️ Ahead of every line below on purpose: what follows
+                # builds a whole session (組, position, 経歴, the bells) around
+                # this id, and it used to build one out of a record that was
+                # not there.
+                if not self._named(session):
+                    print(f"[{self.tag}] 登校 from an unnamed connection "
+                          f"({session.peer_host}): 0x0308 "
+                          f"アカウントデータが見つかりませんでした")
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_SCHOOL_LOGIN,
+                        struct.pack(">B", NG_SCHOOL_LOGIN_NO_ACCOUNT),
+                    )
+                if self._chars(session).find(chara_id) is None:
+                    print(f"[{self.tag}] 登校 names charaId={chara_id}, which is "
+                          f"not this account's ({self._chars(session).summary()}): "
+                          f"0x0308 キャラクター情報が見つかりませんでした")
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_SCHOOL_LOGIN,
+                        struct.pack(">B", NG_SCHOOL_LOGIN_NO_SUCH_CHARACTER),
+                    )
                 session.chara_id = chara_id
                 # ⭐ The 組 comes off the record, not off characters.IN_CLASS:
                 # under CLASS_ASSIGNMENT="balanced"/"random" two characters on
