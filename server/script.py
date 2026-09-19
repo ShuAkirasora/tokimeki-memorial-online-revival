@@ -249,9 +249,13 @@ FORCED_NEXT_SCRIPT: str | None = None
 #       ※ポーズ中でも、５分以上何も入力がなかった場合は、自動的に離脱します。
 #       中断のしかた ：画面を右クリックして「イベント中断」を選択
 #
-# So: 0x720C is ［Pause］, 0x7205 is 「イベント中断」, 0x720B is the five-minute
-# drop, and 0x7206's `npcInfo` is the stand-in that takes the empty 役柄 over --
-# the same 代行ＮＰＣ roster proxynpc.py already holds for the other direction.
+# So: 0x720C is ［Pause］, 0x7205 is 「イベント中断」, 0x7227/0x7228 are the
+# five-minute drop's warning and its cancel, and 0x7206's `npcInfo` is the
+# stand-in that takes the empty 役柄 over -- the same 代行ＮＰＣ roster
+# proxynpc.py already holds for the other direction.
+# ⚠️ Round 408 had 0x720B in that sentence, on the strength of its name and of
+# this paragraph having a timeout in it. It is a different timeout; the whole
+# correction is with MSG_SV_NOTIFY_SCRIPT_NO_INPUT_WARNING below.
 #
 # ⭐⭐ And the client's own refusal table says what the RULE is, which is the
 # part a manual page does not give: 0x720E has exactly one sentence, 「一人プレ
@@ -269,7 +273,8 @@ FORCED_NEXT_SCRIPT: str | None = None
 #     0x720F NotifyScriptPause   actorId, on        0x90F220 = 0xE018 ready   u16+u8
 #     0x7206 NotifyScriptRetire  actorId,npcId,rsn  0x8FCC60 = 0x040B locker  u16+u16+u8
 #     0x7207 ErrorScriptRetire   reason             0x8D84A0 = 0x4902 error   u8
-#     0x720B NotifyScriptTimeout                    0x8F1840 = 0x610D emotion u32+u16
+#     0x7227 NoInputWarning      force_finish_time  0x9B9850 = 0x5701 OkDrama u64
+#     0x720B NotifyScriptTimeout scriptCommand{ip,op} 0x8F1840 = 0x610D emotion u32+u16
 MSG_CL_CAST_SCRIPT_RETIRE = 0x7205
 MSG_SV_NOTIFY_SCRIPT_RETIRE = 0x7206
 MSG_SV_ERROR_SCRIPT_RETIRE = 0x7207
@@ -305,10 +310,11 @@ ERROR_RETIRE_NOT_NOW = 0
 # a countdown. `_Session.client_now` is this end's estimate of that clock, and
 # it is the same estimate 0x480A movement deadlines already ride on.
 #
-# ⚠️ This end does NOT yet enforce the deadline it states: nothing here counts
-# five minutes and sends 0x720B/0x7206. The number the client counts down is
-# therefore honest about when the original would have dropped the player and
-# quiet about what happens when it runs out.
+# ⭐ Round 409 made this end enforce the deadline it states: the same five
+# minutes run whether or not a ポーズ is up (「※ポーズ中でも、５分以上何も入力
+# がなかった場合は、自動的に離脱します」), and pressing ［Pause］ is itself an
+# input, so `base + PAUSE_FORCE_FINISH_MS` and the idle clock's deadline are
+# the same instant by construction rather than by agreement.
 PAUSE_FORCE_FINISH_MS = int(os.environ.get("TMO_PAUSE_FORCE_MS") or 300_000)
 
 
@@ -331,6 +337,89 @@ def pause_notify_params(actor_id: int, on: int) -> bytes:
     """
     return struct.pack(">HB", actor_id, on & 0xFF)
 
+
+#: 0x7206's `reason`, and the whole of what this end can honestly say about it.
+#:
+#: ⚠️⚠️ THE CLIENT NEVER READS IT. Its handler (0x78550E) takes `actorId` out
+#: of the body, compares it with its own 役柄 (`+0x30`), and branches on that
+#: and nothing else: somebody else's retire draws 「%1%さんが\nパーティーから抜
+#: けました。」 (`msg_text` 573) and its own takes it out of the play. `npcId`
+#: and `reason` are never loaded. ⇒ a second value here would be a number with
+#: no way to be right and no way to be caught being wrong -- a field with one
+#: observable value cannot be measured, however long it is stared at -- so both
+#: ways out of a 役柄 -- 「イベント中断」 and the five minutes -- send 0.
+RETIRE_REASON = 0
+
+
+def retire_notify_params(actor_id: int, npc_id: int,
+                         reason: int = RETIRE_REASON) -> bytes:
+    """0x7206's body: ``npcInfo={actorId, npcId}`` then ``reason``.
+
+    ⭐ `npcId` is a bare u16 rather than the `{categoryId, id}` pair 0xE01D
+    sends, because every stand-in comes out of one table: category 6 is
+    `proxy_npc.bin` and there is no second roster a 代行ＮＰＣ could be from.
+    It is filled from the surrogate that actually took the slot -- unread by
+    this build, but a fact rather than a guess, which is the difference
+    between leaving it truthful and inventing it.
+    """
+    return struct.pack(">HHB", actor_id, npc_id, reason & 0xFF)
+
+
+def no_input_warning_params(force_finish_time: int) -> bytes:
+    """0x7227's body: when the player will be dropped, u64, client clock.
+
+    The same field `pause_ok_params` builds, under the same name in the
+    client's own dump -- 「このまま操作しない場合、まもなくドラマイベントから離
+    脱します。」 (`msg_text` 570) has no %1% in it, so the client shows the
+    sentence and not the number; the stamp is what its countdown runs on.
+    """
+    return struct.pack(">Q", max(0, force_finish_time))
+
+
+# INVENTED — how long before the drop the warning goes out, in milliseconds.
+#
+# ⭐ The DEADLINE is not invented (see PAUSE_FORCE_FINISH_MS: the manual's five
+# minutes). What is invented is where inside those five minutes 0x7227 fires.
+# Nothing says: the sentence it raises is 「まもなく」, with no number in it, so
+# the client cannot be caught disagreeing with any choice. One minute is picked
+# to match 0x720D's own unit -- 「あと約%1%分」 counts in whole minutes, and a
+# warning that arrives with less than one of them left would round to 0.
+SCRIPT_IDLE_WARN_LEAD_MS = int(os.environ.get("TMO_SCRIPT_IDLE_WARN_MS") or 60_000)
+
+
+#: 0x7227/0x7228 are the other half of the manual's five minutes, and the two
+#: of them are why 0x720B is NOT that five minutes (see below). The pair is a
+#: warning and its cancel: 0x7227 carries a `force_finish_time` -- the SAME
+#: field name 0x720D carries, as the client's own dump method prints it -- and
+#: 0x7228 is empty.
+MSG_SV_NOTIFY_SCRIPT_NO_INPUT_WARNING = 0x7227
+MSG_SV_NOTIFY_SCRIPT_CANCEL_NO_INPUT_WARNING = 0x7228
+
+# ⭐⭐⭐ WHAT EACH OF THEM PUTS ON SCREEN, in the game's own words. `msg_text`
+# 566-574 is this family end to end, one contiguous run, and it settles two
+# things a manual page could not:
+#
+#   566 イベントを中断しますか？                       <- the 0x7205 confirm box
+#   567 参加者が１人になりました\n続けますか？          <- 0x7208, and see below
+#   569 ポーズ中！…あと約%1%分でドラマイベントから離脱します。   <- 0x720D
+#   570 このまま操作しない場合、まもなくドラマイベントから離脱します。 <- 0x7227
+#   572 %1%さんが\nポーズ中です。                      <- 0x720F
+#   573 %1%さんが\nパーティーから抜けました。            <- 0x7206
+#   574 制限時間終了。\n先に進みます。                   <- 0x720B
+#
+# ⚠️⚠️ 574 IS THE CORRECTION. Round 408 read 0x720B as the five-minute drop
+# because the manual's paragraph has a five-minute drop in it and 0x720B is the
+# only member of the family named 「Timeout」. It is not: its body is
+# `scriptCommand={ip=%d,op=%d,}` (u32 + u16), its handler (0x78412e) switches on
+# that op -- 0x7000 OP_INPUT_SELECT down one arm, 0x7001/0x7002 OP_INPUT_STRING
+# and OP_INPUT_STRING_PAGE down the other -- and it closes the matching input
+# widget. It is the expiry of the deadline the SAME widget was opened with:
+# 0x7213, 0x7215 and 0x7218 each carry a u64 the client turns into 「あと N
+# 秒」 with the identical `__alldiv(stamp - clock, 1000)`. ⇒ 0x720B ends one
+# script command, never a player's participation. ⭐ The judgement worth keeping
+# is the shape of the mistake: **a family's own run of `msg_text` rows outranks
+# a paragraph of the manual**, because the manual describes the feature and the
+# table is what the code draws.
 
 MSG_SV_REQUEST_SCRIPT_READY = 0x7200
 MSG_CL_OK_SCRIPT_READY = 0x7201

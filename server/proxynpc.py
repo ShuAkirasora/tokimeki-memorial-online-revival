@@ -139,3 +139,30 @@ def create_info(row: dict) -> bytes:
 def names(row: dict) -> tuple[bytes, bytes]:
     """Family and given name as the drama roster wants them (NUL-padded)."""
     return _name(row["familyName"]), _name(row["firstName"])
+
+
+def stand_in(sex: int, taken: "set[tuple[int, int]]") -> "tuple[int, dict] | None":
+    """A 代行ＮＰＣ of this 役柄's sex that this party has not cast yet.
+
+    ⭐ THE TWO CONSTRAINTS ARE THE CLIENT'S, not this end's. 0xE01D's own list
+    「ＮＰＣの設定」 offers 「the five whose sex matches the 役柄」, and two of
+    the 27 refusal sentences guard exactly this pair -- 22 「…性別が違うため」
+    and 18 「選択された代行ＮＰＣは、既に役柄が割り当てられています」. A
+    stand-in the server picks for a 離脱 is going into the same cast as one the
+    leader picks by hand, so it answers to the same two rules.
+
+    ⚠️ INVENTED — *which* of the free ones. Nothing anywhere says, and the
+    party has at most four 役柄 against five stand-ins per sex, so there is
+    always more than one right answer and no way to be caught taking the wrong
+    one. Lowest id first, which is the order the client's own list draws them
+    in (`proxy_npc.bin` order) and therefore the one a player has seen.
+    ⛔️ Not a knob: it is a choice among equals, not a number to tune.
+    """
+    rows = ((int(key.split(":")[1]), row) for key, row in _rows().items())
+    for ident, row in sorted(rows, key=lambda pair: pair[0]):
+        if int(row["sex"]) != int(sex):
+            continue
+        if (CATEGORY, ident) in taken:
+            continue
+        return ident, row
+    return None

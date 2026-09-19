@@ -1490,6 +1490,19 @@ class _Session:
         self.walk: tuple[tuple[int, int], tuple[int, int], int, int] | None = None
         # The script this session is playing, if any. See script.py.
         self.script: script.Runner | None = None
+        # ⭐⭐⭐ THE MANUAL'S FIVE MINUTES, as a clock rather than a sentence:
+        # `time.monotonic()` of the last thing this player did inside a
+        # ドラマイベント, or 0.0 when the clock is not running. 「５分以上何も
+        # 入力がなかった場合、自動的にドラマイベントから離脱してしまいます」
+        # (manual p08_03) -- and `_drain_script_idle` is where it is counted.
+        # ⚠️ Monotonic, like `battle_due`: the drop is a duration, and hanging
+        # it off the wall clock would put a player's place in a play at the
+        # mercy of an NTP step.
+        self.script_idle_at: float = 0.0
+        # Whether 0x7227 has already gone out for the current silence, so that
+        # the warning is sent once and 0x7228 is sent only when there is one to
+        # cancel.
+        self.script_idle_warned: bool = False
         # What the next MsgSvQueryScriptCommandSelect carries, or None to let
         # the script's own option count decide. /sel overrides it; per-session
         # for the same reason /nev is, and because the meaning of `select` is
@@ -1691,6 +1704,17 @@ class _Session:
         # the mercy of the wall clock.
         if self.battle_due:
             left = max(0.0, self.battle_due - time.monotonic())
+            seconds = left if seconds is None else min(seconds, left)
+        # ⭐ And the ドラマイベント's five minutes are the fourth. Unlike the
+        # three above, nothing on screen is counting it down until 0x7227 goes
+        # out -- but the same argument applies to the moment it fires: a
+        # warning that says 「まもなく」 and then leaves a minute of slack
+        # before the drop is a warning about nothing.
+        if self.script_idle_at:
+            end = self.script_idle_at + script.PAUSE_FORCE_FINISH_MS / 1000
+            if not self.script_idle_warned:
+                end -= script.SCRIPT_IDLE_WARN_LEAD_MS / 1000
+            left = max(0.0, end - time.monotonic())
             seconds = left if seconds is None else min(seconds, left)
         return seconds
 
@@ -4866,6 +4890,266 @@ class MpsServer:
             + self._answer(session, seen, drama.MSG_SV_NOTIFY_JOIN, roster)
         )
 
+    # ------------------------------------------------------------------
+    # 離脱 and リタイア: the two ways a 役柄 empties while a play is running,
+    # and what the room is told about it. See script.py for the manual page and
+    # for `msg_text` 566-574, which is this whole corner in the game's words.
+    # ------------------------------------------------------------------
+
+    def _script_others(
+        self, party: "drama.Party | None", chara_id: int
+    ) -> "list[drama.Actor]":
+        """The other PEOPLE in this party -- stand-ins do not count.
+
+        ⭐ The predicate the client itself uses, read off the one sentence
+        0x720E has: 「一人プレイ時は強制終了されないため、ポーズする必要はあり
+        ません。」 Both halves of that sentence are rules, and this is the
+        subject of both -- a scene nobody else is waiting on cannot be paused,
+        and 「強制終了されない」 says in as many words that it is not dropped
+        for silence either. A party whose remaining 役柄 are all 代行ＮＰＣ is
+        一人プレイ by that sentence's own reasoning: the stand-ins play
+        themselves and nothing stalls.
+        """
+        if party is None:
+            return []
+        return [a for a in party.actors
+                if a.chara_id != chara_id and not a.is_surrogate]
+
+    def _script_touch(self, session: "_Session") -> bytes:
+        """Something arrived from this player: restart the five minutes.
+
+        ⭐⭐⭐ WHAT COUNTS AS 「入力」, and why it is the whole 0x72xx stream
+        rather than a list of the messages a finger produces. The client walks
+        its own copy of the .ssb and reports every instruction it executes
+        (0x721B), so a player clicking through dialogue keeps a 0x72xx arriving
+        every few seconds and a player who has walked away stops the stream
+        dead. That is exactly what the original could see, too -- it had the
+        same wire and no other window into the room. ⚠️ A scene that plays
+        itself for five minutes therefore keeps its player in, which is the
+        right way round: 「何も入力がなかった」 is about a stalled event, and
+        one that is still advancing is not stalled.
+
+        ⭐ 0x6Bxx joins it because party chat is unambiguously somebody at the
+        keyboard; the manual's own advice for stepping away is to *tell the
+        others*, which is a line of chat or a ポーズ.
+        """
+        if session.script is None or not self._script_others(
+                self.dramaparties.party_of(session.chara_id), session.chara_id):
+            return self._script_idle_stop(session)
+        return self._script_idle_restart(session)
+
+    def _script_idle_stop(self, session: "_Session") -> bytes:
+        """Stop the clock, and take the warning off screen if one is up.
+
+        ⚠️⚠️ The cancel is the half that is easy to forget, and forgetting it
+        is worse than never warning: 0x7228 is the only thing that clears
+        「このまま操作しない場合、まもなくドラマイベントから離脱します。」, so a
+        clock that is stopped without one leaves that sentence sitting on a
+        screen whose player is doing fine. Round 409's own 離脱 run found it --
+        the moment the OTHER member left, this one stopped being force-endable
+        (`_script_others` went empty) and its warning was orphaned.
+        """
+        session.script_idle_at = 0.0
+        if not session.script_idle_warned:
+            return b""
+        session.script_idle_warned = False
+        print(f"[{self.tag}] script idle: clock off, cancelling the warning")
+        return self._answer(
+            session, 0, script.MSG_SV_NOTIFY_SCRIPT_CANCEL_NO_INPUT_WARNING, b"")
+
+    def _script_idle_restart(self, session: "_Session") -> bytes:
+        """Put the five minutes back to the top, cancelling any warning."""
+        out = self._script_idle_stop(session)
+        session.script_idle_at = time.monotonic()
+        return out
+
+    def _drain_script_idle(self, session: "_Session") -> bytes:
+        """Count the manual's five minutes, warn once, then empty the 役柄.
+
+        ⭐⭐⭐ RESTORED, not invented, and the paragraph is KONAMI's (p08_03):
+        「５分以上何も入力がなかった場合、自動的にドラマイベントから離脱してし
+        まいます。離脱後は、そのプレイヤーに代わってNPCがドラマイベントを進行さ
+        せます」. ⚠️ 「※ポーズ中でも、５分以上何も入力がなかった場合は、自動的
+        に離脱します」 — so a ポーズ does not stop this clock, and nothing here
+        looks at whether one is up. Pressing ［Pause］ *is* an input, which is
+        why 0x720D's `force_finish_time` and this deadline are the same instant
+        without either having to know about the other.
+
+        ⚠️⚠️ This is also the timeout `_player_wait` says it does not have.
+        That note is still right about what it refuses to invent -- the pacing
+        of a scene -- and this is the other thing: not a limit on how long an
+        instruction may take, but a limit on how long a chair may be empty,
+        with a page of the manual behind it and a stand-in to take the part.
+        """
+        if not session.script_idle_at:
+            return b""
+        party = self.dramaparties.party_of(session.chara_id)
+        actor = party.actor_of(session.chara_id) if party is not None else None
+        if (session.script is None or actor is None
+                or not self._script_others(party, session.chara_id)):
+            return self._script_idle_stop(session)
+        assert party is not None
+        # ⭐⭐⭐ A member parked at a rendezvous is not the member who walked
+        # away, and this is the line that keeps the five minutes pointed at the
+        # right one. `OP_PLAYER_SYNC` holds a client with nothing to press and
+        # nothing to report until this end releases it -- so its silence is
+        # this server's doing, and counting it would drop the player who is
+        # waiting BEFORE the player who is missing, taking the play down with
+        # them. ⚠️ Only the rendezvous: a choice box or a text field is a stop
+        # that is asking for exactly the 入力 the manual is counting, and those
+        # go on ticking.
+        begun = session.script.begun
+        if begun is not None and begun[1] == script.OP_PLAYER_SYNC:
+            return self._script_idle_restart(session)
+        idle = time.monotonic() - session.script_idle_at
+        force = script.PAUSE_FORCE_FINISH_MS / 1000
+        if idle >= force:
+            print(f"[{self.tag}] script idle: actor={actor.actor_id} silent for "
+                  f"{idle:.0f}s -- 離脱、代行ＮＰＣが進行させる")
+            session.script_idle_at = 0.0
+            session.script_idle_warned = False
+            return self._script_retire(session, 0, party, actor)
+        if (not session.script_idle_warned
+                and idle >= force - script.SCRIPT_IDLE_WARN_LEAD_MS / 1000):
+            session.script_idle_warned = True
+            left = int((force - idle) * 1000)
+            print(f"[{self.tag}] script idle: actor={actor.actor_id} silent for "
+                  f"{idle:.0f}s -- 警告、あと {left}ms")
+            # seen=0: nothing asked for this.
+            return self._answer(
+                session, 0, script.MSG_SV_NOTIFY_SCRIPT_NO_INPUT_WARNING,
+                script.no_input_warning_params(session.client_now() + left))
+        return b""
+
+    def _script_retire(
+        self, session: "_Session", seen: int,
+        party: "drama.Party", actor: "drama.Actor",
+    ) -> bytes:
+        """Take this player out of the running play and stand an NPC in.
+
+        ⭐ The answer to 0x7205 is 0x7206 and there is no Ok in the family: the
+        client's handler (0x78550e) compares the `actorId` in the body with its
+        own 役柄 and takes *itself* out of the drama when they match, so the
+        retiring player's copy is the reply and everybody else's is the same
+        bytes pushed. One message, two meanings, decided by a field -- the same
+        shape 0xE009 has.
+
+        ⚠️ The 役柄 is refilled rather than emptied, because that is what the
+        manual promises the people who stay: 「離脱後は、そのプレイヤーに代わっ
+        てNPCがドラマイベントを進行させます」. A `Party.actors` entry that is a
+        surrogate is exactly what 0xE01D already produces, so nothing
+        downstream needs a second notion of an empty seat -- `_scenario_members`
+        looks members up by session and a stand-in has none, which is what
+        makes the barrier this player was holding release below.
+        """
+        event = next(
+            (e for e in script.drama_events()
+             if e["genre"] == party.genre and e["index"] == party.index),
+            None,
+        )
+        slot = next(
+            (s for s in (event or {}).get("cast", [])
+             if int(s["slot"]) == actor.actor_id),
+            None,
+        )
+        taken = {a.npc for a in party.actors if a.npc is not None}
+        picked = (proxynpc.stand_in(int(slot["sex"]), taken)
+                  if slot is not None else None)
+        if picked is None:
+            # ⚠️ Unreachable with the shipped roster -- four 役柄 against five
+            # stand-ins of each sex -- so this is about the roster file being
+            # absent or the event being outside `drama_events.json`, not about
+            # running out. The seat empties and the play goes on without it;
+            # refusing the 離脱 instead would pin a player to a chair.
+            npc_id = 0xFFFF
+            party.actors.remove(actor)
+            print(f"[{self.tag}] ⚠️ script retire: no 代行ＮＰＣ for "
+                  f"actor={actor.actor_id} -- the 役柄 is left empty")
+        else:
+            npc_id, row = picked
+            actor.chara_id = proxynpc.chara_id(proxynpc.CATEGORY, npc_id)
+            actor.family, actor.first = proxynpc.names(row)
+            actor.npc = (proxynpc.CATEGORY, npc_id)
+            # Same reading as 0xE01D's: a stand-in does not keep a room waiting.
+            actor.ready = 1
+            print(f"[{self.tag}] script retire: actor={actor.actor_id} -> "
+                  f"代行ＮＰＣ {proxynpc.CATEGORY}:{npc_id}")
+        body = script.retire_notify_params(actor.actor_id, npc_id)
+        # The leaver is no longer in `party.actors` under their own charaId, so
+        # there is nobody to skip: everybody still in the room is somebody else.
+        self._drama_push_members(
+            party, script.MSG_SV_NOTIFY_SCRIPT_RETIRE, body)
+        out = self._answer(
+            session, seen, script.MSG_SV_NOTIFY_SCRIPT_RETIRE, body)
+        session.script = None
+        session.script_idle_at = 0.0
+        session.script_idle_warned = False
+        # ⭐⭐ Whatever this player was being waited for, they are not coming.
+        self._release_held_branches(party)
+        self._script_unblock(party, session)
+        return out + self._script_ask_continue(party)
+
+    def _script_unblock(self, party: "drama.Party", gone: "_Session") -> None:
+        """Release a rendezvous the member who just left was holding.
+
+        ⚠️⚠️ Without this a 離脱 trades one hang for another: `OP_PLAYER_SYNC`
+        holds until every member playing the scenario has arrived, and the one
+        who walked away has stopped arriving at anything. `_scenario_members`
+        already stops counting them the moment their `script` goes to None --
+        this is only the nudge that makes the barrier look again.
+
+        `gone` is passed as the `session` argument precisely because it is no
+        longer in the list, so every release is pushed rather than returned.
+        """
+        for actor in list(party.actors):
+            other = self._session_of(actor.chara_id)
+            if (other is None or other.script is None
+                    or other.script.begun is None
+                    or other.script.begun[1] != script.OP_PLAYER_SYNC):
+                continue
+            waiting = self._scenario_members(other)
+            missing = [
+                s for s in waiting
+                if s.script is None or s.script.begun is None
+                or s.script.begun[1] != script.OP_PLAYER_SYNC
+            ]
+            if missing:
+                continue
+            print(f"[{self.tag}] script retire: {len(waiting)} 人そろった、解除")
+            self._player_release(waiting, gone, 0)
+            return
+
+    def _script_ask_continue(self, party: "drama.Party") -> bytes:
+        """0x7208 「参加者が１人になりました\n続けますか？」.
+
+        ⭐⭐⭐ THE QUESTION IS ANSWERED BY `msg_text` 567, which is the row this
+        message puts on screen: 「参加者が１人になりました」 — so the moment
+        this end is supposed to ask is the moment a play drops to one person,
+        and it is a transition rather than a state (it 「なりました」). That is
+        why this is only ever called from a retire: a party that *started* with
+        one person never became one, and the client's own 0x720E sentence says
+        a 一人プレイ is not force-ended anyway.
+
+        ⚠️ Stand-ins are not 参加者 here for the same reason they are not in
+        `_script_others`: the sentence is asking somebody whether it is still
+        worth playing, and five NPCs would make the question absurd.
+
+        The body is empty and the answer is the client's -- 0x7209 to carry on,
+        0x720A with a reason to stop.
+        """
+        players = party.players
+        if len(players) != 1:
+            return b""
+        other = self._session_of(players[0].chara_id)
+        if other is None or other.script is None:
+            return b""
+        print(f"[{self.tag}] script: 参加者が１人になりました -> "
+              f"asking actor={players[0].actor_id} whether to continue")
+        # seen=0: this is the server asking, not answering.
+        self._push(other, self._answer(
+            other, 0, script.MSG_SV_REQUEST_SCRIPT_CONTINUE, b""))
+        return b""
+
     def _script_incoming(
         self, session: "_Session", seen: int, msg_type: int, params: bytes
     ) -> bytes | None:
@@ -4896,6 +5180,14 @@ class MpsServer:
                 return self._answer(
                     session, seen, script.MSG_SV_NG_SCRIPT_PAUSE,
                     struct.pack(">B", script.NG_PAUSE_SOLO),
+                )
+            if msg_type == script.MSG_CL_CAST_SCRIPT_RETIRE:
+                # 「今の状態では、イベントを中断することはできません。」 — the
+                # whole of 0x7207's table, and 「今の状態」 is this one: there
+                # is no play to walk out of.
+                return self._answer(
+                    session, seen, script.MSG_SV_ERROR_SCRIPT_RETIRE,
+                    struct.pack(">B", script.ERROR_RETIRE_NOT_NOW),
                 )
             return None
         if msg_type == script.MSG_CL_REQUEST_SCRIPT_PAUSE:
@@ -4940,6 +5232,39 @@ class MpsServer:
                 session, seen, script.MSG_SV_OK_SCRIPT_PAUSE,
                 script.pause_ok_params(base + script.PAUSE_FORCE_FINISH_MS),
             )
+        if msg_type == script.MSG_CL_CAST_SCRIPT_RETIRE:
+            # 「中断のしかた：画面を右クリックして『イベント中断』を選択」, and
+            # the client puts 「イベントを中断しますか？」 (`msg_text` 566) up
+            # before it sends this, so what arrives here is already confirmed.
+            if actor is None or party is None:
+                # In a script but not in a play: /sc on a solo scenario, or a
+                # 会話. There is no 役柄 to empty and no room to tell, and
+                # 0x7206 has nothing to put in its `actorId`.
+                print(f"[{self.tag}] script retire refused: not in a party")
+                return self._answer(
+                    session, seen, script.MSG_SV_ERROR_SCRIPT_RETIRE,
+                    struct.pack(">B", script.ERROR_RETIRE_NOT_NOW),
+                )
+            return self._script_retire(session, seen, party, actor)
+        if msg_type == script.MSG_CL_OK_SCRIPT_CONTINUE:
+            # 「続けますか？」 -> はい. Nothing to do and nothing to answer:
+            # the play is already running and this only says to leave it that
+            # way. ⚠️ Worth a line anyway -- it is the one place the log can
+            # show that somebody chose to carry on alone.
+            print(f"[{self.tag}] script continue: 続ける")
+            return None
+        if msg_type == script.MSG_CL_NG_SCRIPT_CONTINUE:
+            # 「続けますか？」 -> いいえ. The same door 0x7205 goes through:
+            # the player is leaving a play they are still in, so the room -- by
+            # now one stand-in and whatever else -- is told the same way.
+            reason = params[0] if params else 0
+            print(f"[{self.tag}] script continue: やめる reason={reason}")
+            if actor is None or party is None:
+                session.script = None
+                session.script_idle_at = 0.0
+                session.script_idle_warned = False
+                return None
+            return self._script_retire(session, seen, party, actor)
 
         if msg_type == script.MSG_CL_OK_SCRIPT_READY:
             session.script.started = True
@@ -8108,12 +8433,22 @@ class MpsServer:
             if msg_type >> 8 == 0xE0 or msg_type in DRAMA_DOORS:
                 return self._drama_incoming(session, sequence, msg_type, params)
             if msg_type >> 8 == 0x6B:
-                return self._drama_chat(session, sequence, msg_type, params)
+                # ⭐ Party chat is 「入力」 too; see _script_touch.
+                cancel = self._script_touch(session)
+                reply = self._drama_chat(session, sequence, msg_type, params)
+                return (cancel + (reply or b"")) or None
             if msg_type >> 8 == 0x72:
                 # The script subsystem. Everything in it is unproven, so the
                 # branch logs first and acts second: a reply we did not expect
                 # is the finding, not a failure.
-                return self._script_incoming(session, sequence, msg_type, params)
+                #
+                # ⚠️⚠️ The five-minute clock is restarted HERE and not inside
+                # `_script_incoming`, because that method is re-entered from
+                # `_release_held_branches` with a message this end synthesised.
+                # A release this server generated is not a player typing.
+                cancel = self._script_touch(session)
+                reply = self._script_incoming(session, sequence, msg_type, params)
+                return (cancel + (reply or b"")) or None
             if msg_type in NOTIFICATIONS:
                 return None
             if msg_type in FIXED_REPLIES:
@@ -13537,6 +13872,7 @@ class MpsServer:
         out += self._drain_lesson(session)
         out += self._drain_exam(session)
         out += self._drain_battle(session)
+        out += self._drain_script_idle(session)
         out += self._drain_vitals(session)
         out += self._drain_pending_say(session)
         return out
