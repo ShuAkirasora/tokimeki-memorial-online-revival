@@ -87,6 +87,14 @@ import struct
 MSG_CL_CAST_CHARA_POSE = 0x4806
 MSG_SV_NOTIFY_CHARA_POSE = 0x4807
 MSG_SV_ERROR_CHARA_POSE = 0x4808
+# UNSENT 0x4808 -- ErrorCharaPose: the same shape as 0x4805 ErrorCharaTurn, one
+#   row longer. Seven of its eight sentences are 未使用 slots or backend faults
+#   -- the character record could not be fetched, the pose could not be stored,
+#   and twice 「サーバーとの通信に失敗しました」, once for the caster and once
+#   for the relay to everyone in sight. The eighth, 「現在、ポーズ変更は禁止
+#   されています」, is a rule, and nothing on this end can turn that state on:
+#   see mps_session's note on that sentence, above MSG_SV_NG_CHARA_WARP.
+#   ⇒ a pose this end cannot store is a pose this end does not have.
 MSG_SV_NOTIFY_CHARACTER_STRESS = 0x4811
 MSG_SV_NOTIFY_CHARACTER_CONDITION = 0x4812
 

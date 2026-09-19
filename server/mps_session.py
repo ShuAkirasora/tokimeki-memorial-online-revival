@@ -953,6 +953,53 @@ MSG_SV_NOTIFY_CHARA_TURN = 0x4804
 #   未使用 slots. Unlike its neighbours 0x4808 and 0x480B it carries no
 #   「現在、〜が禁止されています」 row, so there is no rule here for a player
 #   to break: a turn this end cannot store is a turn this end does not have.
+# ⭐⭐⭐ 「現在、〜が禁止されています」 -- the sentence that stands between this
+# end and four of the movement family's refusals, written down once here
+# because ten of the shipped error rows use it word for word: pose, movement,
+# 感情表現, 看板作成, a GM's 強制移動, a GM's テレポート, ＧＭコール, chat,
+# 仲良しグループ作成 and item handling. Four separate searches say nothing on
+# this end can turn that state on:
+#
+#   * The scenario language cannot. Of the 209 opcodes only two pairs carry
+#     ALLOW/DENY, and they cover ［Pause］ and the 裏話 chat -- neither of which
+#     is one of the ten, and both of which already have a driver that is not
+#     this end.
+#   * No shipped table carries it. Decoding every row of all 104 id tables and
+#     searching the plain text for 禁止 turns up these ten sentences, the
+#     name filters (「禁止語」/「禁止用語」) and 「この場所は自主トレ禁止
+#     エリアです」 -- and that last one is the contrast that makes the reading:
+#     the game words a rule about a *place* as 「この場所は…」 and has map data
+#     behind it, while 「現在、…」 is a rule about a *moment*.
+#   * The GM protocol has no such command. 0x6700-0x6724, 0x6800-0x680B and
+#     0x6900-0x6905 are chat, warp, logout, message and call; two of them are
+#     refused *by this very sentence*, which makes the state something a GM is
+#     subject to rather than something a GM switches on.
+#   * The one moment this end does hold -- a scenario running -- never has to
+#     refuse anything, and that is measured rather than assumed: across the
+#     archived run_all logs there are 5718 scenario windows that both open
+#     (0x7203) and close (0x7204/0x7206/0x720B), and inside them the client
+#     sends no move, no turn, no warp, no pose, no 感情表現 and no chat. Not
+#     one, in any of them. The client stops sending while a scene has the
+#     screen, so a server that refused there would be refusing nothing.
+#
+# ⇒ the four rows are a state the original operator had and this end does not,
+# and the way to add one is to invent an operator's console, not to guess.
+
+# UNSENT 0x4802 -- NgCharaWarp: 「マップ切り替え前／後の座標が不正です」 and
+#   「その場所に入ることはできません」 are the only rows that are not a backend
+#   fault or a 未使用 slot, and all three ask this end to overrule a coordinate
+#   the client has stated.
+#   ⚠️ It cannot, and the archived logs say why: 0x4800 is not only a doorway.
+#   Of 704 warp requests on record, 37 name exactly the cell the server itself
+#   had just restored the character to, so a coordinate refusal would have this
+#   end refusing its own saved number. Every one of the 8 requests the collision
+#   graph calls invalid (6 outside map 3's 24x34, 2 onto a cell it reads as
+#   having no floor) is of that kind, in the seat rows of Ａ組教室, and every
+#   one came from the real client. explain_warp already reports instead of
+#   rejecting for this reason; this is that decision, counted.
+#   「その場所に入ることはできません」 would need a per-map "may not enter"
+#   flag, and map.bin has none: every flag combination the 12 拡張用 / 空き部室
+#   placeholders carry is also carried by rooms that are really there.
 MSG_SV_NOTIFY_GM_WARP = 0x6808
 MSG_CL_REQUEST_CHARA_WARP = 0x4800
 MSG_SV_OK_CHARA_WARP = 0x4801
@@ -1040,6 +1087,26 @@ MOVEMENT_NAMES = {
 }
 
 MSG_SV_NOTIFY_CHARA_MOVE = 0x480A
+# UNSENT 0x480B -- ErrorCharaMove: eight sentences, and not one of them is a
+#   rule this end may act on.
+#   * 「移動可能な場所がありません」 and 「移動経路の設定に失敗しました」 are a
+#     pathfinder's two failures, and there is no pathfinder here. The client
+#     walks the route itself and states only where it is going, so a refusal
+#     here would be a second opinion about a walk already worked out -- and it
+#     would be spent on the one path every player is on all the time.
+#   * 「移動前／移動先の座標が不正です」 is the same overrule 0x4802 cannot
+#     make, on a message that arrives 4295 times in the archived logs against
+#     704 warps. ⚠️ The collision data has never been contradicted by the game:
+#     the two WALKABILITY counterexamples on record both come from a synthetic
+#     client of ours stepping onto cells it chose, not from the client. That is
+#     an argument for leaving the tripwire where it is, not for turning it into
+#     a refusal -- it is walkability that is corroborated, while which map a
+#     session believes it is on is exactly what drifts.
+#   * 「キャラクターを識別することができませんでした」 is a backend fault: the
+#     cast names no character, so the only one it can mean is the session's own.
+#   * 「現在、移動が禁止されています」 -- see the note on that sentence above
+#     MSG_SV_NG_CHARA_WARP.
+#   * two 未使用 slots, top and bottom.
 
 
 # id -> name, so a warp target can be named the moment it arrives instead of
