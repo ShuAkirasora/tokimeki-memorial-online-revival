@@ -4075,6 +4075,28 @@ class MpsServer:
             )
 
         if msg_type == script.MSG_CL_REQUEST_DRAMA_EVENT_MATCHING_START:
+            if session.drama_matching:
+                # 「既にドラマイベントマッチングに入っています。」 -- 0xFF01
+                # row 12, and the only one of the 27 sentences that is about
+                # this door rather than about something inside the room
+                # (2.277 四 put 1/5/14/18/22 at the 代行ＮＰＣ door). What it
+                # refuses a second time is the bracket `drama_matching` has
+                # tracked since round 229, and the row is not marked 未使用, so
+                # the original sent it.
+                # ⚠️⚠️ MEASURED BEFORE IT WAS WRITTEN, which a refusal sitting
+                # on a path players walk has to be: 365 run logs, cut into
+                # process lifetimes and then into one-connection stretches per
+                # listener, hold ZERO cases of a game client re-sending 0xE000
+                # with the screen still open. The 400 that exist are all this
+                # project's own protocol smoke, which used to ask twice without
+                # pressing 「やめる」 in between -- a player cannot, because the
+                # list is full-screen and the NPC is behind it. See 2.352.
+                print(f"[{self.tag}] drama matching already open, refused "
+                      f"(0xE001, reason={drama.NG_ALREADY_MATCHING})")
+                return self._answer(
+                    session, seen, script.MSG_SV_NG_DRAMA_EVENT_MATCHING_START,
+                    struct.pack(">B", drama.NG_ALREADY_MATCHING),
+                )
             kept = keys[: script.DRAMA_EVENT_MAX]
             # ⭐ The party list used to go out empty on the grounds that an
             # invented party is a second thing that can be wrong. It is not

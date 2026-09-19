@@ -206,6 +206,13 @@ NG_BAD_EVENT = 2            # 選択されたドラマイベントの情報が�
 NG_BAD_PARTY = 4            # 選択されたパーティの情報が不正です。
 NG_BAD_ACTOR = 5            # 選択された登場人物の情報が不正です。
 NG_BAD_PASSWORD = 7         # パスワードが正しくありません。
+#: 既にドラマイベントマッチングに入っています。 -- the one row of the 27 that
+#: belongs to the door itself rather than to anything inside the room: 0xE000
+#: opens the パーティ一覧 screen and 0xE005 closes it, and this is what a second
+#: 0xE000 arriving while it is still open earns. ⚠️ Not marked 未使用 in
+#: error_message.bin, so the original sent it; the bracket it is about is the
+#: one `_Session.drama_matching` already tracks. See 2.352.
+NG_ALREADY_MATCHING = 12
 NG_ACTOR_TAKEN = 14         # 選択された登場人物は、他のキャラクターが担当…
 NG_NO_ROOM = 15             # この場所では、これ以上パーティを登録できません。
 NG_NOT_IN_PARTY = 16        # パーティに参加していません。
