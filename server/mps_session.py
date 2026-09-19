@@ -98,6 +98,7 @@ import gmcall
 import gousei
 import groups
 import gs3vm
+import ignores
 import item
 import konami_id
 import lesson
@@ -4333,6 +4334,22 @@ class MpsServer:
             linked = (not friendly) or self.accounts.friends.linked(me, address_id)
             reachable = linked and self._session_of(address_id) is not None
             listeners = [me, address_id] if reachable else []
+            # 受信拒否. ⭐ The one place in this server that earns 0xFF00 row 4,
+            # and the only thing that makes /ignore more than a list: both of
+            # these channels are 『名前指定でのメッセージ』, which is what the
+            # client's own help text says the feature refuses. See ignores.py.
+            # ⚠️ After reachability on purpose -- an addressee who is not online
+            # has nobody to refuse with, and 「チャット相手が存在していません」 is
+            # what the sender would have been told before they ever ignored
+            # anybody, so silence about the list is also the truth here.
+            if reachable and self.accounts.ignores.holds(address_id, me):
+                print(f"[{self.tag}] {channel} from charaId={me:#x} to {where}: "
+                      f"on their 受信拒否 list, refused "
+                      f"(reason={chat.ERROR_CHAT_IGNORED})")
+                return self._answer(
+                    session, seen, error,
+                    struct.pack(">B", chat.ERROR_CHAT_IGNORED),
+                )
         if not listeners:
             print(f"[{self.tag}] {channel} from charaId={me:#x} to {where}: "
                   f"nobody to hear it, refused "
@@ -6216,6 +6233,9 @@ class MpsServer:
                     # And out of any 仲良しグループ, which for a leader means the
                     # group goes with them -- see groups.GroupBook.leave.
                     self.accounts.groups.forget(chara_id)
+                    # And off both ends of every 受信拒否 list, for the reason
+                    # the address book gives -- see ignores.IgnoreBook.forget.
+                    self.accounts.ignores.forget(chara_id)
                     print(f"[{self.tag}] deleted charaId={chara_id}; left: {self._chars(session).summary()}")
                     return self._answer(session, sequence, MSG_SV_OK_CHARACTER_DESTROY, b"")
                 print(f"[{self.tag}] destroy: no charaId={chara_id}, answering Ng")
@@ -7569,6 +7589,13 @@ class MpsServer:
                 # window that lists nobody is what answering only the query
                 # gets you.
                 return self._friends(session, sequence, msg_type, params)
+            if msg_type in ignores.HANDLED:
+                # 受信拒否: the /ignore and /refer commands from the chat bar.
+                # Grouped with the address book rather than with chat because
+                # what they edit is a list of people, and because the place the
+                # list is read from is a refusal two families away; see
+                # ignores.py and _addressed_chat.
+                return self._ignore(session, sequence, msg_type, params)
             if msg_type in groups.HANDLED:
                 # 仲良しグループ: 「グループ情報」 and the 勧誘 handshake behind
                 # the PC 交流メニュー's 「グループ登録申込み」; see _groups.
@@ -15304,6 +15331,79 @@ class MpsServer:
             session, seen, friends.MSG_SV_RESULT_FRIEND_STATE,
             struct.pack(">IB", target, state),
         )
+
+    def _ignore(self, session: "_Session", seen: int,
+                msg_type: int, params: bytes) -> bytes:
+        """受信拒否: /ignore on, /ignore off and /refer. See server/ignores.py.
+
+        ⚠️ The only family in this server a player reaches by TYPING A NAME.
+        Everything else that names somebody names them by charaId, because
+        everything else starts from a row or an avatar that the client already
+        holds a record for. Here the client holds nothing: it copies the two
+        words after the command into an 11+11 byte pair and sends them. So the
+        first thing this does is turn a 氏名 back into a character, by the
+        vendor's own definition of what makes two 氏名 the same one -- see
+        accounts.chara_named and naming.full_name.
+
+        ⚠️⚠️ ANSWERING THESE THREE IS NOT WHAT MAKES THE FEATURE WORK. The list
+        they edit is read in _addressed_chat, and that is where a player finds
+        out it did anything.
+        """
+        book = self.accounts.ignores
+        me = session.chara_id
+
+        if msg_type == ignores.MSG_CL_QUERY_IGNORE_RECEIVE_LIST:
+            # /refer. The client draws 「受信拒否」 and one 「受信拒否%1%」 line
+            # per row into the 会話ログ window, out of its own text -- this end
+            # sends nothing but the names.
+            rows = []
+            for other in book.of(me):
+                info = self._peer_chara(other)
+                if info is None:
+                    # Same case, and same reasoning, as the address book's:
+                    # a row cannot be built without a record, and which id went
+                    # missing is worth saying out loud.
+                    print(f"[{self.tag}] 受信拒否 list: no record for "
+                          f"charaId={other}, skipping the row")
+                    continue
+                rows.append(ignores.entry(info))
+            print(f"[{self.tag}] 受信拒否 list for charaId={me}: {len(rows)} row(s)")
+            return self._answer(
+                session, seen, ignores.MSG_SV_RESULT_IGNORE_RECEIVE_LIST,
+                ignores.list_params(rows),
+            )
+
+        adding = msg_type == ignores.MSG_CL_REQUEST_IGNORE_RECEIVE
+        ok = (ignores.MSG_SV_OK_IGNORE_RECEIVE if adding
+              else ignores.MSG_SV_OK_LISTEN_RECEIVE)
+        ng = (ignores.MSG_SV_NG_IGNORE_RECEIVE if adding
+              else ignores.MSG_SV_NG_LISTEN_RECEIVE)
+        what = "受信拒否" if adding else "受信拒否解除"
+
+        read = ignores.parse_name(params)
+        if read is None:
+            print(f"[{self.tag}] {what} from charaId={me}: body too short for a "
+                  f"氏名, refused (reason={ignores.NG_BAD_INFO})")
+            return self._answer(
+                session, seen, ng, struct.pack(">B", ignores.NG_BAD_INFO))
+        family, first = read
+        wanted = naming.full_name(family, first)
+        target = self.accounts.chara_named(wanted)
+        if target is None:
+            # ⚠️ The only refusal past a body that parsed. Oneself and a repeat
+            # are NOT refused; ignores.py says why the missing rows are read as
+            # missing rules rather than as rules this end has to invent.
+            print(f"[{self.tag}] {what} from charaId={me} of {wanted!r} "
+                  f"refused: no such 氏名 "
+                  f"(reason={ignores.NG_NO_SUCH_CHARA})")
+            return self._answer(
+                session, seen, ng, struct.pack(">B", ignores.NG_NO_SUCH_CHARA))
+
+        changed = book.add(me, target) if adding else book.remove(me, target)
+        print(f"[{self.tag}] {what}: charaId={me} "
+              f"{'now refuses' if adding else 'now hears'} {target} "
+              f"({'changed' if changed else 'no change'}); {book.summary()}")
+        return self._answer(session, seen, ok, b"")
 
     def _lesson_skill(self, session: "_Session", seen: int,
                       msg_type: int, params: bytes) -> bytes:

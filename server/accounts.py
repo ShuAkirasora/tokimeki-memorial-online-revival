@@ -101,6 +101,7 @@ import codes
 import friends
 import gmcall
 import groups
+import ignores
 import item
 import konami_id
 import multipurpose
@@ -260,6 +261,10 @@ class AccountStore:
         self.friends = friends.FriendBook(self.dir)
         # Beside it, and for the same reason: a 仲良しグループ spans accounts.
         self.groups = groups.GroupBook(self.dir)
+        # And beside those: 受信拒否 is one player's decision about their own
+        # inbox, but the person it names belongs to whatever account they belong
+        # to, so the list cannot live inside either one. See ignores.py.
+        self.ignores = ignores.IgnoreBook(self.dir)
         # And beside it: a 多目的室 booking belongs to a group, so it spans
         # accounts for exactly the same reason, and the seven rooms are the
         # school's rather than any one player's.
@@ -505,6 +510,49 @@ class AccountStore:
         that is up to date.
         """
         found: "set[bytes]" = set()
+        for _chara_id, info in self._every_character():
+            name = naming.name_in(info)
+            if name:
+                found.add(name)
+        return found
+
+    def chara_named(self, name: bytes) -> "int | None":
+        """The charaId answering to a 氏名, or None if nobody does.
+
+        ⭐ The reverse of names_in_use, over the same walk and the same rule:
+        the key is naming.full_name(), so 苗字 ＝ コナミ／名前 ＝ 太郎 is found
+        by 「コナ ミ太郎」 as well. That is the vendor's own definition of one
+        氏名 (naming.py quotes the manual and its four worked examples), and it
+        is what 受信拒否 has to compare with -- the player types the split, the
+        records hold their own.
+
+        Names are unique across the school -- names_in_use is what makes them so
+        -- which is why one 氏名 can stand for one character at all. ⚠️ Where
+        two somehow collide, the lowest charaId wins, so that the answer does not
+        depend on the order a directory happens to be read in.
+
+        ⚠️ A record with no charaId is a name and not a character: it still
+        counts as taken (names_in_use reads the same walk) but nothing can be
+        addressed to it, so it is skipped rather than answered with 0.
+        """
+        if not name:
+            return None
+        found: "int | None" = None
+        for chara_id, info in self._every_character():
+            if chara_id <= 0 or naming.name_in(info) != name:
+                continue
+            if found is None or chara_id < found:
+                found = chara_id
+        return found
+
+    def _every_character(self) -> "list[tuple[int, bytes]]":
+        """``(charaId, info)`` for every character on this server, off disk.
+
+        The walk names_in_use and chara_named share; see names_in_use for why it
+        reads the directories rather than the store cache, and why a loaded
+        store is preferred where there is one.
+        """
+        found: "list[tuple[int, bytes]]" = []
         if not self.dir.exists():
             return found
         for child in sorted(self.dir.iterdir()):
@@ -531,9 +579,11 @@ class AccountStore:
                     info = bytes.fromhex(str(record["info"]))
                 except ValueError:
                     continue
-                name = naming.name_in(info)
-                if name:
-                    found.add(name)
+                try:
+                    chara_id = int(record.get("charaId", 0))
+                except (TypeError, ValueError):
+                    continue
+                found.append((chara_id, info))
         return found
 
     def _reserved(self) -> set[int]:

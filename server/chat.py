@@ -291,11 +291,18 @@ MSG_SV_ERROR_SECRET_CHAT = 0x4A02
 #: The one sentence these three refuse with: 「チャット相手が存在していません。」
 #: It is the 0xFF00 row that says a line had nobody to reach -- an addressee who
 #: is not connected, and a 仲良しチャット cast by somebody in no group.
-#: ⚠️ Row 4, 「指定されたキャラクターは、現在受信を拒否しています。」, is the
-#: other one these channels could earn. Nothing here sends it: the four wire
-#: options (options.py) hold no 受信拒否 flag, and the client keeps an /ignore
-#: command of its own (CLIENT_RESERVED) whose effect has never been measured.
+#: ⚠️ Row 4 is the other one these channels could earn; see ERROR_CHAT_IGNORED.
 ERROR_CHAT_NO_PARTNER = 3
+
+#: 「指定されたキャラクターは、現在受信を拒否しています。」 -- the addressee has
+#: the sender on their 受信拒否 list. The only row in the whole error table that
+#: mentions 受信拒否, which is what scopes it: it is sent for the two ADDRESSED
+#: channels, 0x4600 友達チャット and 0x4A00 内緒話, and for neither 0x4900 nor
+#: 0x4700, because the client's own help text scopes the feature to
+#: 『名前指定でのメッセージ』 and a group is not a name. See ignores.py, which
+#: implements /ignore and /refer -- two of the CLIENT_RESERVED names, and the
+#: only ones there that turn back into work for this end.
+ERROR_CHAT_IGNORED = 4
 
 #: 「受信したチャットデータが不正です。」 -- the 0xFF00 row for a body that does
 #: not hold what its message says it holds. 0x4600 and 0x4A00 open with a u32

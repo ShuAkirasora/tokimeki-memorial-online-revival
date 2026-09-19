@@ -117,7 +117,10 @@ six-slot interaction menu behind it: the address book (ask, accept, decline, rem
 friendly group (found one, invite, accept, expel, leave, disband, hand the leadership on,
 set its catchphrase and whether it is listed), a name card, the career card with an
 achievement list under it, and a report card that opens only if the person it belongs to
-ticked the box for it.
+ticked the box for it. Lines can be addressed as well as broadcast — to one person, to a
+friend who is off the map, or to everybody in your group — and anyone you would rather not
+hear from at all goes on a list of your own, typed as `/ignore on <family> <given>` and
+reviewed with `/refer`, after which their addressed lines never reach you.
 
 **School.** The timetable is the client's own, and the bells ring off it without being
 asked — a warning bell, a start bell, and if you are sitting in your own classroom when the
