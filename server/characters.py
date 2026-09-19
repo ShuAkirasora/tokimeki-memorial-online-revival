@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING
 
 import ability
 import career
+import catchcopy
 import club
 import curriculum
 import dramarecord
@@ -708,6 +709,7 @@ def list_entry(
     couple_names: "tuple[bytes, bytes, bytes] | None" = None,
     couple_in_class: int = 0,
     in_class: int | None = None,
+    catch_copy: bytes = b"",
 ) -> bytes:
     """Build one 238-byte MsgSvResultCharacterListFromAccount entry.
 
@@ -744,7 +746,14 @@ def list_entry(
     out += struct.pack(">HH",
                        IN_CLASS if in_class is None else in_class,
                        in_club)  # inClass (0 = A組), inClub
-    out += b"\x00" * GROUP_NAME_LEN  # catchCopy
+    # ⭐ catchCopy. Twenty-one zeros until round 400, which is how long the
+    # field had a name and no writer -- see catchcopy.py for the button that
+    # fills it. ⛔️ Nothing on THIS screen draws it: the character-select card
+    # and its 「情報を見る」 page are as silent about it as they are about the
+    # three 役職 fields beside them. It is packed here because the entry is the
+    # record and the record now has the value, not because a pixel depends on
+    # it -- 0x6501 is the copy the name card reads.
+    out += catchcopy.field(catch_copy)
     out += struct.pack(">BB", couple_flag, 1)  # coupleFlag, newbieFlag
     # ⭐ Three hard zeros until round 156. ``title`` is the 称号 out of the 経歴
     # -- one per character, not one per message -- and the other two are
@@ -909,6 +918,7 @@ def chara_info(
     class_post: int = 0,
     club_post: int = posts.NO_CLUB_POST,
     in_class: int | None = None,
+    catch_copy: bytes = b"",
 ) -> bytes:
     """Build the 139-byte MsgSvResultCharaInfo (0x6501) parameter block.
 
@@ -942,7 +952,10 @@ def chara_info(
     out += struct.pack(">HHH", PERIOD,
                        IN_CLASS if in_class is None else in_class,
                        in_club)  # period, inClass, inClub
-    out += b"\x00" * GROUP_NAME_LEN  # catchCopy
+    # ⭐⭐ catchCopy, and THIS is the copy that shows: 「キャッチコピー：%1%」
+    # (`msg_text` 223) is one of the five lines of the right-click name card,
+    # which is built from this message. See catchcopy.py.
+    out += catchcopy.field(catch_copy)
     # ⚠️ coupleFlag is derived, never stored: one field cannot say 「恋人あり」
     # while the other says who, so the flag is 1 exactly when there is an id.
     # Both were hard zeros until round 154 and a character with no 恋人 is still
@@ -1370,6 +1383,7 @@ class CharacterStore:
                     club_post=held.club_post,
                     tutorial_flag=1 if self.debut_pending(chara_id) else 0,
                     in_class=self.in_class(chara_id),
+                    catch_copy=self.catch_copy(chara_id),
                 )
             )
         if self.records and LIST_PROBES:
@@ -1573,6 +1587,40 @@ class CharacterStore:
             if int(record["charaId"]) != chara_id:
                 continue
             record["options"] = opts.to_json()
+            self._save()
+            return True
+        return False
+
+    def catch_copy(self, chara_id: int) -> bytes:
+        """This character's キャッチコピー, empty for none or not ours.
+
+        ⚠️ Bytes, not str, all the way through: what the player typed is cp932
+        off the wire and it goes back out as cp932, so nothing here has to pick
+        a replacement character for a byte this end cannot read. Stored hex for
+        the same reason the create block is.
+
+        ⚠️ Asked about a peer's charaId far more often than about our own --
+        the name card 0x6501 draws is somebody else's -- so the caller looks it
+        up in the owner's store, the way `options` and `career` are looked up.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            saved = record.get("catchcopy")
+            if not isinstance(saved, str):
+                return b""
+            try:
+                return catchcopy.parse(bytes.fromhex(saved))
+            except ValueError:
+                return b""
+        return b""
+
+    def set_catch_copy(self, chara_id: int, line: bytes) -> bool:
+        """Write one character's キャッチコピー back. False if it is not ours."""
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            record["catchcopy"] = catchcopy.parse(line).hex()
             self._save()
             return True
         return False

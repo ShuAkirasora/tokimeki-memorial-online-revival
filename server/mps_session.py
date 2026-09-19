@@ -82,6 +82,7 @@ import accounts
 import billboard
 import capturenpc
 import career
+import catchcopy
 import chat
 import chatroom
 import club
@@ -6876,6 +6877,10 @@ class MpsServer:
                         title=title,
                         class_post=held.class_post,
                         club_post=held.club_post,
+                        # ⭐ Out of the owner's store for the same reason the
+                        # 役職 are: the line belongs to the character being
+                        # looked at, and this card is usually somebody else's.
+                        catch_copy=owner.catch_copy(chara_id),
                     ),
                 )
             if msg_type == curriculum.MSG_CL_QUERY_CURRICULUM:
@@ -7072,6 +7077,33 @@ class MpsServer:
                 print(f"[{self.tag}] capture npc list: {capturenpc.describe(body)}")
                 return self._answer(
                     session, sequence, capturenpc.MSG_SV_RESULT_CAPTURE_NPC_LIST, body
+                )
+            if msg_type == catchcopy.MSG_CL_REQUEST_CHARA_MENU_CATCHCOPY:
+                # 「キャッチコピー」 + [更 新] on the character's own 個人情報
+                # page. The body is one fixed 21-byte field and there is
+                # nothing to decide about it: no table in this build states a
+                # rule for this string, so what the player typed is what the
+                # record keeps. See catchcopy.py for the width, for the button
+                # and for why the Ng side is not used as an answer.
+                #
+                # ⚠️ Stored against session.chara_id and never against an id in
+                # the body, because there is no id in the body: this message
+                # can only ever be about the character sending it.
+                line = catchcopy.parse(params)
+                store = self._chars(session)
+                if not store.set_catch_copy(session.chara_id, line):
+                    print(f"[{self.tag}] catchcopy: no charaId={session.chara_id}, "
+                          f"answering Ng")
+                    return self._answer(
+                        session, sequence,
+                        catchcopy.MSG_SV_NG_CHARA_MENU_CATCHCOPY,
+                        catchcopy.ng_params(),
+                    )
+                print(f"[{self.tag}] catchcopy for charaId={session.chara_id}: "
+                      f"{catchcopy.describe(line)}")
+                return self._answer(
+                    session, sequence,
+                    catchcopy.MSG_SV_OK_CHARA_MENU_CATCHCOPY, b"",
                 )
             if msg_type in (career.MSG_CL_QUERY_CHARA_CAREER,
                             career.MSG_CL_QUERY_CHARA_CAREER_LIST):
