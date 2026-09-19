@@ -40,6 +40,7 @@ which is why ours are named the way they are. See CLIENT_RESERVED.
 
 from __future__ import annotations
 
+import os
 import struct
 from datetime import timedelta
 from typing import NamedTuple
@@ -99,6 +100,46 @@ CLIENT_RESERVED = (
     "soundformat", "messagekey", "messagekeyformat",
     "online", "localtime", "where", "random", "command",
 )
+
+#: The environment variable that opens the console. See CONSOLE_ENABLED.
+CONSOLE_ENV = "TMO_CONSOLE"
+_CONSOLE_ON = {"1", "true", "yes", "on"}
+
+# INVENTED — whether the chat bar is a console at all. Off unless $TMO_CONSOLE
+# is set, or --console is passed to run_all.py.
+#
+# ⭐⭐⭐ WHY THIS EXISTS, AND WHY THE FACTORY VALUE IS False
+# --------------------------------------------------------
+# Every command reachable through this module is one we made up. That is not a
+# judgement call, it is mechanical: the client keeps CLIENT_RESERVED for itself
+# and turns those words into messages of their own, so a word arriving here
+# with its slash intact is by definition a word the game never had. 「/ignore」
+# and 「/refer」 are the shape of the rule, not exceptions to it — the client
+# swallows both and sends 0x43xx, which ignores.py answers; nothing of theirs
+# comes through this door.
+#
+# So the console is a development tool that happens to live behind the one
+# free-text field a player has, and on a server carrying players it is a way to
+# rewrite anybody's save: 「/couple」 writes a second account's 恋人, 「/cid」,
+# 「/card」, 「/ab」 and 「/item」 rewrite the speaker's, and 「/gm」 speaks to
+# another player under the ＧＭ's name. None of that is reachable in the real
+# game by any means, so leaving it open makes this server's behaviour
+# different from the one being restored — which is the thing this project is
+# least willing to be.
+#
+# ⚠️ The factory value is therefore False, and the deployed state is the
+# factory state: a unit file that says nothing gets no console. Turning it on
+# is a deliberate act in the environment the server is started in, which is an
+# authority a player connecting over the network does not have.
+#
+# ⭐⭐ It is a knob so that a development session can turn it off and see what a
+# player sees, and 「/knob reset」 re-reads the environment rather than the
+# literal below (see knobs.py) — but note that turning it back ON cannot be
+# done from the chat bar, by construction. The way in when the server is
+# already running is runtime/console.txt, which is deliberately NOT gated:
+# writing to that file means a shell on the machine, which is the same
+# authority the environment variable needs. See MpsServer._drain_console.
+CONSOLE_ENABLED = os.environ.get(CONSOLE_ENV, "").strip().lower() in _CONSOLE_ON
 
 
 def clip(text: str, limit: int) -> bytes:

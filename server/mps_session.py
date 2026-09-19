@@ -13067,12 +13067,31 @@ class MpsServer:
                                             f"{'両側' if both else '片側のみ'} "
                                             f"(相手の再入場で反映)")
 
-    def _apply_chat(self, session: "_Session", sequence: int, said: str) -> bytes:
+    def _apply_chat(self, session: "_Session", sequence: int, said: str,
+                    from_chat: bool = True) -> bytes:
         """Run one console line and pack whatever it asked for.
 
         Split out of the chat branch so that runtime/console.txt can reach the
         same commands — see _drain_console for why that had to exist.
+
+        ⭐⭐⭐ `from_chat` is which of those two doors the line came through, and
+        it is the whole of the console's access control. A line typed into the
+        game's chat bar runs only while chat.CONSOLE_ENABLED, which is off
+        unless the server was started with --console or $TMO_CONSOLE; a line
+        read out of runtime/console.txt always runs, because putting it there
+        took a shell on this machine. Read chat.CONSOLE_ENABLED for why a
+        deployed server has no console at all.
+
+        ⚠️ The default is True, i.e. the gated side, so that a third caller
+        added later is refused rather than quietly let through. A caller that
+        really is the operator says so.
         """
+        if from_chat and not chat.CONSOLE_ENABLED:
+            # ⭐ Nothing is said back. The line has already gone out as ordinary
+            # chat by the time we get here, which is exactly what the game would
+            # do with a word its own table does not hold -- so what the player
+            # sees is their own line, and no hint that this end read it.
+            return b""
         if said.split()[:1] == ["/cb"]:
             return self._battle_probe(session, sequence, said.split()[1:])
         if said.split()[:1] == ["/seq"]:
@@ -16419,7 +16438,7 @@ class MpsServer:
             print(f"[{self.tag}] console: {line}")
             # seen=0: take_seq only ever moves forward, so a push that answers
             # no message of its own is safe to number this way.
-            reply += self._apply_chat(session, 0, line)
+            reply += self._apply_chat(session, 0, line, from_chat=False)
         return reply
 
     async def run(self) -> asyncio.AbstractServer:

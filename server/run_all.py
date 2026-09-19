@@ -32,6 +32,7 @@ def _utf8_output() -> None:
             pass  # already replaced with something that is not a text stream
 
 import accounts
+import chat
 import clubbattle
 import knobs
 import mps_session
@@ -124,6 +125,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     ap.add_argument(
+        "--console",
+        action="store_true",
+        default=chat.CONSOLE_ENABLED,
+        help=(
+            "let the game's chat bar run this server's own commands (/go, /cid, "
+            "/knob, /gm ...). Off by default, and the default is what a deployed "
+            "server runs with: every one of those commands is this project's "
+            "invention, several rewrite a save, and none of them exists in the "
+            "game being restored. For development. Also settable with $TMO_CONSOLE."
+        ),
+    )
+    ap.add_argument(
         "--registration-cert",
         default=os.environ.get("TMO_REGISTRATION_CERT"),
         metavar="PATH",
@@ -206,6 +219,13 @@ async def main(
     # tuned on purpose.
     for knob, _stock, value in knobs.load():
         print(f"[system] ⚠️ knob {knob.key}={knobs.show(value)} (from {knobs.SAVE_PATH.name})")
+    # ⚠️ Loud, and only when it is open: a console on a server with players on
+    # it is the one setting here that changes what another account can do to
+    # yours. Silence means the deployed state. See chat.CONSOLE_ENABLED.
+    if chat.CONSOLE_ENABLED:
+        print("[system] ⚠️⚠️ console OPEN -- the chat bar runs this server's own "
+              "commands, which are not in the game and can rewrite saves. "
+              "Development only; a deployed server leaves this off.")
     if open_host == LOOPBACK:
         print(
             "[system] loopback only -- a game on another machine reaches nothing."
@@ -388,6 +408,13 @@ if __name__ == "__main__":
     # command line becomes the variable the rest of the process already watches.
     if _args.packet_log:
         os.environ[PACKET_LOG_ENV] = "1"
+    # Same idea for the console, except that chat.CONSOLE_ENABLED is read once
+    # at import: set both, so that a later `/knob reset` -- which re-evaluates
+    # the right-hand side, environment and all -- lands back on what was asked
+    # for here rather than switching the console off under the operator.
+    if _args.console:
+        os.environ[chat.CONSOLE_ENV] = "1"
+        chat.CONSOLE_ENABLED = True
     asyncio.run(
         main(
             _args.advertise_ip,
