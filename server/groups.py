@@ -217,6 +217,26 @@ MSG_SV_NG_CLUB_LIKE_REGISTER = 0x0802
 MSG_CL_QUERY_CHARA_GROUP_LIST = 0x622A
 MSG_SV_RESULT_CHARA_GROUP_LIST = 0x622B
 MSG_SV_ERROR_CHARA_GROUP_LIST = 0x622C
+# ⭐⭐⭐ 0x622C IS NOT SENT (round 417), and reading it takes one extra step
+# because its sentences are not its own: FUN_008163e9 redirects the whole 0x62xx
+# family to the shared pseudo table 0xFF07 (see refusals.py). That table holds
+# 32 rows for eleven messages, so ⚠️ **which of the 32 belong to this id is not
+# written anywhere** -- the original server picked, and the client just indexes.
+# ⛔️ So the rows cannot be read one at a time here the way a private table can.
+#
+# ⭐ What settles it instead is the request, which is measurable:
+# `Output_MsgClQueryCharaGroupList`'s dump (0x8D1FB0) prints the message name and
+# **no fields**, and `_group_list` in mps_session.py had already said so from the
+# other side -- "the request is empty, no page number, no filter". With nothing
+# in the request, every rule-shaped row in 0xFF07 is about some *other* message's
+# parameters (自分自身に申し込む…, グループ名が…, 既に申し込んで…), and the
+# rows this id could ever have used are the two fetch failures, 22 and 24
+# (仲良しグループもしくは同好会の情報 / メンバー一覧を取得できませんでした).
+#
+# ⚠️ 「所属していません」 (row 15) is not an arm for this one: 0x622A lists the
+# 公開 groups on the server, not the asker's own, so not being in a group is
+# an empty list rather than a refusal -- which is what this end already sends.
+# UNSENT 0x622C -- CharaGroupList: an empty request; the only 0xFF07 rows left for it are the two fetch failures.
 MSG_SV_NOTIFY_CHARA_GROUP_LIST = 0x622D
 
 HANDLED = frozenset({

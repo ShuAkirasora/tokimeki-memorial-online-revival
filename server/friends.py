@@ -58,6 +58,28 @@ from characters import NAME_LEN, parse_create_info
 MSG_CL_QUERY_FRIEND_LIST = 0x6400
 MSG_SV_RESULT_FRIEND_LIST = 0x6401
 MSG_SV_ERROR_FRIEND_LIST = 0x6402
+# ⭐⭐⭐ 0x6402 IS NOT SENT (round 417). It was explicitly kept OUT of
+# mps_session's twelve, on the grounds that one of its four sentences reads like
+# a rule rather than a backend fault:
+#
+#   reason 0  キャラクターの情報が不正です。
+#   reason 1  アドレス帳に登録されたキャラクター一覧の取得に失敗しました。
+#   reason 2  未使用：：：…   reason 3  未使用：：：…
+#
+# ⚠⚠ That reading asked the wrong question. 「…が不正です」 is only a rule
+# when there is something in the request for it to be about, and
+# `Output_MsgClQueryFriendList`'s dump (0x8D35B0) prints the message name and
+# **no fields**: 0x6400 carries no body. The module docstring says the same
+# thing from the other side -- opening アドレス帳 sends nothing, the client
+# asks this once at login and never again -- so the only キャラクター this
+# refusal could be about is the asker's own record, which this end has in
+# memory before the request arrives.
+#
+# ⇒ Both live arms are the original's store answering badly: reason 1 says so
+# outright, and reason 0 is the same fault one step earlier. This is the shape
+# round 414 used on 0x5603/0x6C03 -- an empty request makes a bad-parameter arm
+# about a parameter that does not exist -- and it is what settles this id.
+# UNSENT 0x6402 -- FriendList: an empty request, so both live sentences are the original's store failing.
 MSG_CL_REQUEST_FRIEND_ADD_REQUEST = 0x6403
 MSG_SV_OK_FRIEND_ADD_REQUEST = 0x6404
 MSG_SV_NG_FRIEND_ADD_REQUEST = 0x6405

@@ -113,6 +113,7 @@ import naming
 import ngwords
 import npcspawns
 import options
+import pool
 import posts
 import proxynpc
 import quiz
@@ -332,13 +333,11 @@ FIXED_REPLIES = {
     # next one seen arrived minutes later, in the middle of starting the *next*
     # conversation. Do not use it as a "the map is back" signal.
     0x4003: (0x4004, b""),  # MsgClRequestLobbyDataEnd   -> MsgSvOkLobbyDataEnd
-    # MsgClQueryPoolMessage -> MsgSvResultPoolMessage: the lobby asks this about
-    # its own charaId right after MsgClQueryCharaInfo. The answer is a single u16
-    # the dump (0x915A40) calls nNum, i.e. how many pooled messages are waiting;
-    # the bodies would follow as MsgSvNotifyPoolMessage (0xA103), which carries a
-    # counted string plus ImportanceLevel and category. Nobody is writing to this
-    # player, so nNum is 0 and no notify is owed.
-    0xA100: (0xA101, bytes(2)),
+    # ⚠️ 0xA100 MsgClQueryPoolMessage left this table in round 417. It was the
+    # last 一覧 query still stubbed here, and it is the one whose request carries
+    # something to judge -- a u32 charaId, four bytes on the wire -- so a stub
+    # was answering "no messages" to a name this end may not even know. It is
+    # answered in _pool_message now; server/pool.py has the reading.
     # MsgClQueryGMCallList -> MsgSvResultGMCallList: asked once shortly after the
     # scene is up, and nothing visibly waits on it — the client went on walking
     # and warping while it went unanswered. Cheap to satisfy anyway.
@@ -711,8 +710,17 @@ MSG_SV_NG_REENTRANCE = 0x031D
 #
 # ⚠️ Each line names its own sentences. This is a judgement per id, not a
 # category discount: an id whose list turns out to hold a rule (「既に…」,
-# 「…できません」, 「…が不正です」) is not here, and 0x6402/0xA102 are two that
-# were kept out for exactly that reason.
+# 「…できません」, 「…が不正です」) is not here, and 0x6402/0xA102 were the two
+# kept out for exactly that reason.
+#
+# ⚠⚠ CORRECTION (round 417), and it splits those two apart. Asking only
+# "does a sentence read like a rule" is half a question: 「…が不正です」 is a
+# rule only when the request holds something for it to be about. Measured on
+# the client's own serialisers, 0x6400's request is **empty** and 0xA100's
+# carries a u32 charaId. ⇒ 0x6402 joins the twelve above (its 「情報が不正」 is
+# about a record this end already holds -- see friends.py), while 0xA102 does
+# not: it is sent now, out of _pool_message. ⭐ The same measurement settled
+# 0x4502 and 0x622C the same way, each beside its own family.
 # UNSENT 0x0302 -- SchoolList: only 「システムエラーが発生しました」, a fetch this end does not do.
 # UNSENT 0x0305 -- SchoolSelect: 「サーバーエラーが発生しました」 and one 未使用 slot.
 # UNSENT 0x0402 -- LockerAccessStart: both sentences are 「キャラクター情報の取得に失敗しました」.
@@ -2776,6 +2784,38 @@ class MpsServer:
         session.say_armed = False
         lines, session.pending_say = session.pending_say, []
         return b"".join(self._say(session, 0, line) for line in lines)
+
+    def _pool_message(self, session: "_Session", seen: int,
+                      params: bytes) -> "bytes | None":
+        """0xA100 -> 0xA101 nNum, or 0xA102 when the charaId names nobody.
+
+        ⭐⭐ This is the one 一覧 query on this protocol whose request carries a
+        parameter, which is the whole reason its Error sibling is sent while
+        0x4502, 0x6402 and 0x622C are not. server/pool.py has the reading, the
+        five sentences, and what the logs can and cannot say about the charaId.
+
+        ⚠⚠ THE REFUSAL MUST NOT BLOCK THE ROAD. Every login runs through here:
+        the lobby asks this at the end of the reload that follows a cutscene,
+        and `_drain_pending_say` rides out behind the answer. So the only
+        request refused is one naming an id no account here claims -- the
+        asker's own id is always claimed, so a real client keeps walking.
+        """
+        chara_id = pool.request_chara_id(params)
+        if chara_id is None:
+            print(f"[{self.tag}] メッセージプール: short query {params.hex()}")
+            return None
+        if self.accounts.owner_of(chara_id) is None:
+            print(f"[{self.tag}] メッセージプール: charaId={chara_id} "
+                  f"names nobody ⇒ 0xA102 reason {pool.NG_BAD_CHARA}")
+            return self._answer(
+                session, seen, pool.MSG_SV_ERROR_POOL_MESSAGE,
+                pool.error_params(pool.NG_BAD_CHARA),
+            )
+        # ⛔️ Nothing can write into this pool on this server -- see pool.py's
+        # note on 0xA103 -- so the count is zero and no Notify is owed.
+        return self._answer(
+            session, seen, pool.MSG_SV_RESULT_POOL_MESSAGE, pool.result_params(0),
+        )
 
     # ── the shadow VM ────────────────────────────────────────────────────
     #
@@ -7456,7 +7496,7 @@ class MpsServer:
                 # 0x4000, then the character and the NPCs go down, then it asks
                 # for its own info and its pooled messages. This is the earliest
                 # point a *push* survives; see _drain_pending_say. Falls through
-                # to the table for the Ok.
+                # to _pool_message for the answer itself.
                 if session.pending_say:
                     session.say_armed = True
                 # ⚠️ The ストレスバー is in the same boat, and it took a screenshot
@@ -8987,6 +9027,8 @@ class MpsServer:
                 return (cancel + (reply or b"")) or None
             if msg_type in NOTIFICATIONS:
                 return None
+            if msg_type == MSG_CL_QUERY_POOL_MESSAGE:
+                return self._pool_message(session, sequence, params)
             if msg_type in FIXED_REPLIES:
                 reply_type, reply_params = FIXED_REPLIES[msg_type]
                 return self._answer(session, sequence, reply_type, reply_params)

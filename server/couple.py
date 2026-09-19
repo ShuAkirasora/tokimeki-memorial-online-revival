@@ -135,10 +135,31 @@ ENTRY_LEN = 84
 #: ceiling to respect rather than one the client will enforce.
 COUPLE_LIST_PAGE = 32
 
-#: The only reason byte anything here sends. ⚠️ Unlike 0x4201's seven, this
-#: family's reasons have not been read out of `error_message.bin` -- nothing has
-#: ever made the client show one, because nothing has ever sent 0x4500. Use
-#: the error-message table before assigning a second value to this.
+# ⭐⭐⭐ 0x4502 IS NOT SENT, AND THE READING THAT SETTLES IT IS TWO
+# MEASUREMENTS, NOT A JUDGEMENT CALL (round 417).
+#
+# ⚠️ The note that used to sit here said this family's reasons "have not been
+# read out of `error_message.bin`". They have been looked for now, and the
+# answer is stronger than "not yet read": **0x4502 has no row in that table at
+# all**, and it is not one of the 57 ids that FUN_008163e9 redirects to a shared
+# pseudo table either. Its neighbours on both sides do have rows (0x4402, 0x4802
+# …), so this is an id the authors left wordless rather than a gap in our
+# export. Whatever reason byte went out here, the client had nothing to say.
+#
+# ⭐ The second measurement is the request. `Output_MsgClQueryCoupleList`'s dump
+# (0x9BA650) prints the message name and **no fields**: 0x4500 carries no body.
+# So there is no parameter for a refusal to be about -- the same shape that
+# ruled out 0x5603 and 0x6C03 in round 414, where an empty request made their
+# one 「パラメータが不正です」 arm about something that does not exist.
+#
+# ⇒ What is left for this id to report is the original's own store failing to
+# hand over a list it was asked for, which is the back end this server does not
+# have (mps_session's twelve, same reasoning).
+# UNSENT 0x4502 -- CoupleList: an empty request, and no sentence anywhere in error_message.bin.
+
+#: The reason byte `error_params` writes when something does call it. ⚠️ Nothing
+#: does -- see the UNSENT line above. Kept because the i8 slot was read off the
+#: deserializer and the encoder is what records its width.
 NG_NO_LIST = 0
 
 
