@@ -1407,6 +1407,17 @@ def _season() -> int | None:
     return curriculum.season() if source == "clock" else None
 
 
+# ⚠️ INVENTED — the u16 in front of the relay ticket. Both login answers carry
+# it, and nothing in the client says what it should hold: the deserializer reads
+# it into the message object at +4, and no handler the message is ever delivered
+# to touches that offset again. So any value is accepted and 0 is the one this
+# end picked.
+# ⛔️ Unread does not mean optional. It is a field of the parameter block, and
+# dropping it shifts every field behind it -- see ng_login_params for what that
+# looks like from the player's side.
+LOGIN_PARAM_SIZE = 0
+
+
 def ok_login_params(
     host_be: int = 0x0100007F,
     port: int = GAME_PORT,
@@ -1426,7 +1437,8 @@ def ok_login_params(
     authCode straight back to the game server as MsgClNotifyAuthCode, which is
     how the connection it opens there gets an account.
     """
-    return struct.pack(">HIHIIB", 0, host_be, port, auth_code, account_id, 0)
+    return struct.pack(">HIHIIB", LOGIN_PARAM_SIZE, host_be, port, auth_code,
+                       account_id, 0)
 
 
 def ng_login_params(reason: int) -> bytes:
@@ -1441,7 +1453,7 @@ def ng_login_params(reason: int) -> bytes:
     disconnection, the login screen simply keeps saying 「接続処理を行っています」
     until it is closed. Measured; it cost a round trip to find.
     """
-    return struct.pack(">HB", 0, reason)
+    return struct.pack(">HB", LOGIN_PARAM_SIZE, reason)
 
 
 def ok_school_select_params(
