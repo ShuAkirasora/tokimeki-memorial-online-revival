@@ -135,6 +135,46 @@ MSG_SV_OK_GOUSEI = 0x5307
 MSG_SV_NG_GOUSEI = 0x5308
 MSG_SV_NOTIFY_GOUSEI_END = 0x5309
 
+# UNSENT 0x5309 -- nothing in this build ends a 合成 bracket without the player
+# asking, so there is no moment at which this server could send it.
+#
+# ⭐⭐⭐ WHAT IT IS, read off the client rather than off the name. The body is
+# empty, here and in both halves of the 0x5303/0x5304 pair. Its handler is a
+# virtual of its own on the 合成 procedure's listener, a different slot from the
+# one MsgSvOkGouseiEnd lands in, and it takes no argument where all three
+# refusals in this family (0x5302, 0x5305, 0x5308) take a reason byte. So it is
+# neither an error nor a broadcast -- an empty body can only be about the
+# recipient -- and two slots for one outcome is how a client separates 「closed
+# because you asked」, which also has to release the wait the request put it in,
+# from 「closed although you did not ask」. ⭐ It draws nothing either: the seven
+# text tables carry no forced-end wording for 合成 at all, so the window simply
+# goes away.
+#
+# ⭐⭐ WHY NOTHING HERE CAN PRODUCE THAT MOMENT, one path at a time:
+#   * The player's side is MEASURED. Seven windows over two client sessions
+#     (rounds 224 and 226): between 0x5300 and 0x5303 the client sends nothing
+#     but 0x4D00 MsgClQueryItemList and 0x5306 -- no move, no chat, no menu, no
+#     logout -- and all seven were closed by the player's own 0x5303. The window
+#     is modal. ⚠️ That is a measurement of the player's side only; it rules out
+#     a second way for the player to leave and nothing else, so the rest of the
+#     paths are ruled out on their own terms below.
+#   * No lesson or exam pulls anybody out of a window: the bell only notifies,
+#     and it is skipped outright for a player who is not already in the
+#     classroom.
+#   * The only scene teardown this end can push is the chat console's warp
+#     (0x6808), and the player cannot type into the chat bar while the window is
+#     modal.
+#   * A lost connection takes `gousei_npc` with the session, which is what a
+#     per-connection bracket is for and needs no message.
+#   * The only ends the family itself names that are not the player's are its
+#     own backend failures -- 0x5308 reason 10 (IDリスト取得失敗) and reason 12,
+#     the item-store write. This server has no separate store to fail.
+#
+# ⚠️ REOPEN IT when any of those stops being true: a forced screen change while
+# the window is up, an operator close, or a store that can fail in the middle of
+# a 合成. That is this message's trigger, and this line goes when one arrives.
+# Until then the state has exactly one way out and that way is answered.
+
 # 0x5302, `error_message.bin` 318-324. The two marked 未使用 are named so that
 # 「there is no code for this」 stays distinguishable from 「I did not look」.
 START_NO_PLAYER = 0     # プレイヤー情報が不正です。
