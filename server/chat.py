@@ -171,6 +171,38 @@ def parse_cast(params: bytes) -> str:
     return raw.decode("cp932", "replace")
 
 
+def cast_readable(params: bytes) -> bool:
+    """Does this body actually hold the counted string it promises?
+
+    `parse_cast` is deliberately forgiving -- it returns "" for a body with no
+    count in it at all, and cuts a count that runs off the end down to what
+    arrived -- because every door that reads a cast wants a string back. This
+    is the same body read as a question instead, and it is the one thing
+    0x4900 refuses: see ERROR_CHAT_BAD_DATA and MSG_SV_ERROR_NORMAL_CHAT.
+
+    Two shapes fail, and they are the same fault seen from both ends: fewer
+    than two bytes, so there is no count; or a count that promises more bytes
+    than arrived. Anything else is a cast, including an empty line -- the
+    client sends 1 for a bare terminator and nothing shorter, but a count of 0
+    is a well-formed empty string rather than a broken body, and this end has
+    never had a reason to tell a player their empty line was malformed.
+
+    MEASURED, 448 run_all logs, every 0x4900 ever seen by either listener:
+    74127 casts, and not one of them fails either test -- nor does one carry
+    trailing bytes, an early NUL, or a missing terminator. So this refusal
+    costs a real client nothing; what it answers is a body no serializer of
+    theirs can produce.
+
+    (The two addressed channels test only their own minimum, `len < 6`, in
+    `parse_addressed`. Their Errors already go out and are not part of the
+    same piece of work; extending this reading to them is its own.)
+    """
+    if len(params) < 2:
+        return False
+    (length,) = struct.unpack_from(">H", params, 0)
+    return 2 + length <= len(params)
+
+
 def notify_params(sender_id: int, name: str, text: str) -> bytes:
     """A MsgSvNotifyNormalChat body, clamped to what the client can hold.
 
@@ -328,6 +360,52 @@ MSG_SV_ERROR_GROUP_CHAT = 0x4702
 MSG_CL_CAST_SECRET_CHAT = 0x4A00
 MSG_SV_NOTIFY_SECRET_CHAT = 0x4A01
 MSG_SV_ERROR_SECRET_CHAT = 0x4A02
+
+#: 0x4900's own refusal door -- the map-wide channel's Error, and the last one
+#: of the family this server had never sent.
+#:
+#: ⭐⭐ THE CLIENT NAMES THIS DOOR ITSELF. Handler 0x770C42 is a dozen lines of
+#: housekeeping and then the shared presenter ``FUN_006FA4D3(box, title, msgId,
+#: reason)``, which looks the sentence up with 0x81702A -- the same lookup
+#: refusals.py describes -- and the window's title up with 0x816A4A. The title
+#: is a plain row number in the handler's own body, and the three that sit next
+#: to each other in this listener read straight out of `msg_text.bin`::
+#:
+#:     0x4902  798  「チャットエラー」
+#:     0x4A02  799  「内緒話エラー」
+#:     0x4702  800  「仲良しチャットエラー」
+#:
+#: ⇒ a 0x4902 draws the box its two neighbours already draw, and those two have
+#: been watched drawing it. Nothing about this one's presentation is guessed.
+MSG_SV_ERROR_NORMAL_CHAT = 0x4902
+
+# ⭐⭐⭐ WHICH OF 0xFF00's ELEVEN ROWS THIS DOOR CAN EARN. The table is shared by
+# every chat channel's Error (refusals.py), so 「the family has eleven rows」 is
+# not 「this door has eleven arms」. Row by row, for 0x4902:
+#
+#   0  未使用：：：エラーなし                        -- no sentence
+#   1  受信したチャットデータが不正です。            -- ⭐ THIS DOOR: see cast_readable
+#   2  現在、チャットが禁止されています。            -- not this end's to send: the
+#      script language's CHAT_ALLOW/CHAT_DENY pair (ssc_ops 0x7006/0x7007) is the
+#      only thing that forbids a chat, each client runs its own copy of the
+#      brackets, and the mask only asks about the reader's own 役柄. 1787 matched
+#      pairs in the library and not a byte of them crosses the wire.
+#   3  チャット相手が存在していません。              -- an addressee, and this channel
+#      has none: 通常会話 goes to whoever is on the map, and the speaker always
+#      hears their own line. See ERROR_CHAT_NO_PARTNER, which the three addressed
+#      channels send.
+#   4  指定されたキャラクターは、現在受信を拒否しています。 -- 受信拒否 is scoped to
+#      『名前指定でのメッセージ』 by the client's own help text. See
+#      ERROR_CHAT_IGNORED.
+#   5  チャットメッセージの送信に失敗しました。      -- a backend this end does not have
+#   6  キャラクターの情報が不正です。                -- likewise
+#   7  キャラクターデータの取得に失敗しました。      -- likewise
+#   8  キャラクター情報の取得に失敗しました。        -- likewise
+#   9  キャラクターの情報が不正です。ツーショットチャットを継続できません。
+#      -- names ツーショット, so it belongs to 0x5402/0x5405, not here
+#  10  チャットメッセージの送信に失敗しました。      -- a backend this end does not have
+#
+# ⇒ one arm, and the ten that are not arms are named rather than left silent.
 
 #: The one sentence these three refuse with: 「チャット相手が存在していません。」
 #: It is the 0xFF00 row that says a line had nobody to reach -- an addressee who

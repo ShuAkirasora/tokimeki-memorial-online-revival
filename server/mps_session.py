@@ -9140,6 +9140,21 @@ class MpsServer:
                 # the speaker's own words reach them the same way everyone else's
                 # would. See chat.py for both messages' layouts and for why the
                 # server, not the client, has to keep the strings short.
+                #
+                # ⭐ The one thing this door refuses: a body that does not hold
+                # the counted string it promises. 0xFF00 row 1 is the sentence
+                # for exactly that, the three addressed channels already send
+                # it, and 0x4902 is the door -- see chat.cast_readable for the
+                # reading and chat.MSG_SV_ERROR_NORMAL_CHAT for the other ten
+                # rows and why none of them is this door's.
+                if not chat.cast_readable(params):
+                    print(f"[{self.tag}] chat: body does not hold its counted "
+                          f"string ({len(params)} bytes), refused "
+                          f"(reason={chat.ERROR_CHAT_BAD_DATA})")
+                    return self._answer(
+                        session, sequence, chat.MSG_SV_ERROR_NORMAL_CHAT,
+                        struct.pack(">B", chat.ERROR_CHAT_BAD_DATA),
+                    )
                 said = chat.parse_cast(params)
                 info = self._chars(session).find(session.chara_id)
                 who = display_name(info) if info else "?"
