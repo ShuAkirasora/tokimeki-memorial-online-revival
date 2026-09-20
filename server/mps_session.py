@@ -820,6 +820,7 @@ MSG_SV_OK_LOBBY_DATA_START = 0x4001
 MSG_CL_QUERY_POOL_MESSAGE = 0xA100
 MSG_SV_NOTIFY_CHARACTER_ADD = 0x480F
 MSG_SV_NOTIFY_CHARACTER_DEL = 0x4810
+MSG_SV_NOTIFY_ACTION_ICON = 0x4100
 MSG_CL_QUERY_CHARA_INFO = 0x6500
 MSG_SV_RESULT_CHARA_INFO = 0x6501
 MSG_SV_ERROR_CHARA_INFO = 0x6502
@@ -2755,13 +2756,76 @@ class MpsServer:
     def _presence_refresh_onlookers(
         self, session: "_Session", also: "set[int] | None" = None
     ) -> None:
-        """Redraw this character for everybody whose map scene is actually up."""
+        """Redraw this character for everybody whose map scene is actually up.
+
+        ⚠️ For a change to the *entry* -- the 仲良しグループ it names, the record
+        it carries. When the only thing that moved is the icon over the head,
+        _presence_icon_onlookers says so in one message instead of taking the
+        character out of the scene and putting it back.
+        """
         self._presence_refresh(session, skip=self._presence_blocked(session, also))
+
+    def _presence_icon_onlookers(
+        self, session: "_Session", also: "set[int] | None" = None
+    ) -> None:
+        """Change the icon over this character's head for the people watching."""
+        self._presence_icon(session, skip=self._presence_blocked(session, also))
+
+    def _presence_icon(
+        self, session: "_Session", skip: "set[int] | None" = None
+    ) -> None:
+        """0x4100: set the icon over this character's head, in place.
+
+        The byte travels on the 0x480F entry too, which is how somebody who
+        walks onto the map sees the right icon on everybody already standing
+        there. But that entry is an *add*: until this message went in, the only
+        way to change the byte for the people who are already looking was to
+        delete the character and hand it straight back (_presence_refresh), and
+        every state that moves an icon -- a locker, a trade, a 看板, a 会話 --
+        went out as that pair. This is the message the client has for the job:
+        its handler (0x77ac0c) reads charaId and the action byte and hands the
+        two of them to the scene's character list. Nothing is rebuilt, nothing
+        blinks, and the entry the onlooker holds keeps everything else in it.
+
+        ⚠️ Same audience as the pair it replaces, and for now for the same
+        reason: only peers whose map scene is actually up. Round 96 measured
+        what 0x4810+0x480F does to a client on a 結果画面 (it took one and
+        closed the connection); nothing on this wire says whether a lone 0x4100
+        is kinder, so the skip set stays until something measures it.
+
+        ⚠️⚠️ No copy to the subject, and that is the open half of this message.
+        The handler carries a branch that runs only when the byte is 10
+        (自主トレ募集中) *and* the charaId is the receiver's own: it reaches for
+        the dialog on top of the current scene and calls one method on it. So
+        the original server did send this one back to the character it is
+        about, at least in that case. What that call does to the 看板作成 window
+        is not known, and the only way to find out is to put the copy on the
+        wire in front of a real client and look -- a measurement, not a guess.
+        Until then this end tells the onlookers and leaves the subject alone,
+        which is the rule 0x480F already follows.
+        """
+        action = self._presence_action(session)
+        body = struct.pack(">IB", session.chara_id, action)
+        told = 0
+        for other in self._peers(session):
+            if skip is not None and other.chara_id in skip:
+                continue
+            self._push(
+                other, self._answer(other, 0, MSG_SV_NOTIFY_ACTION_ICON, body)
+            )
+            told += 1
+        if told:
+            print(f"[{self.tag}] icon: charaId={session.chara_id} "
+                  f"action={action} -> {told} onlooker(s)")
 
     def _presence_refresh(
         self, session: "_Session", skip: "set[int] | None" = None
     ) -> None:
         """Redraw this character on everybody else\'s screen.
+
+        ⚠️ The heavy one, and no longer the way an icon changes: 0x4100 does
+        that in place (_presence_icon). What is left for this pair is a change
+        to the entry itself, which has no message of its own.
 
         Delete then add, because 0x480F is an *add*: round 67 measured what the
         room roster does when the same row arrives twice (it counted the person
@@ -3625,7 +3689,7 @@ class MpsServer:
         # who gets credited and have nothing to say about the icon.
         if session.npc_talking:
             session.npc_talking = False
-            self._presence_refresh_onlookers(session)
+            self._presence_icon_onlookers(session)
         if talking_about is None:
             return b""
         found = romance.whose_event(talking_about[0])
@@ -4012,7 +4076,7 @@ class MpsServer:
             # scene the talker is looking at is the event, not the map, so this
             # refresh is for the people still standing on it.
             session.npc_talking = True
-            self._presence_refresh_onlookers(session)
+            self._presence_icon_onlookers(session)
             return reply + self._script_start(session, seen, found, 0, infos)
 
         if msg_type == script.MSG_CL_REQUEST_NPC_EVENT_END:
@@ -4182,7 +4246,7 @@ class MpsServer:
             # _drama_party_gone: that one runs on the disconnect and 下校 paths,
             # where the character is leaving the map rather than standing on it
             # without an icon.
-            self._presence_refresh_onlookers(session)
+            self._presence_icon_onlookers(session)
             reply = self._answer(session, seen, drama.MSG_SV_OK_PART, b"")
             reply += self._answer(
                 session, seen, drama.MSG_SV_NOTIFY_PART,
@@ -4378,7 +4442,7 @@ class MpsServer:
         # manual's own 「マッチング中を含む」 puts the icon on a party that is
         # still 参加者募集中, and that is the half of it the leader spends
         # standing on the map where somebody can see it.
-        self._presence_refresh_onlookers(session)
+        self._presence_icon_onlookers(session)
         # ⭐ And the row itself goes to everybody standing on the list, which is
         # what makes a party built next to you appear without reopening the
         # screen. The leader is `skip` because their own copy is two lines down.
@@ -4739,7 +4803,7 @@ class MpsServer:
             ))
             # ⭐ …and the ドラマイベント中 icon over their head comes down, the
             # same as it does at 離脱.
-            self._presence_refresh_onlookers(kicked)
+            self._presence_icon_onlookers(kicked)
         record = drama.party_record(party)
         notice = drama.part_params(
             actor_id, drama.PART_KICKED, party.leader_actor_id, party.password,
@@ -5406,7 +5470,7 @@ class MpsServer:
             first=full[1],
         ))
         print(f"[{self.tag}] drama party joined: {self.dramaparties.summary()}")
-        self._presence_refresh_onlookers(session)
+        self._presence_icon_onlookers(session)
         record = drama.party_record(party)
         roster = drama.join_params(party)
         # Everybody already in the room needs the roster too — 0xE009 is the
@@ -8407,7 +8471,7 @@ class MpsServer:
                 session.newspaper_open = started
                 print(f"[{self.tag}] newspaper {'open' if started else 'close'}")
                 out = self._answer(session, sequence, reply_type, b"")
-                self._presence_refresh_onlookers(session)
+                self._presence_icon_onlookers(session)
                 return out
             if msg_type in (item.MSG_CL_REQUEST_LOCKER_ACCESS_START,
                             item.MSG_CL_REQUEST_LOCKER_ACCESS_END):
@@ -8427,7 +8491,7 @@ class MpsServer:
                 session.locker_open = started
                 print(f"[{self.tag}] locker {name}")
                 out = self._answer(session, sequence, reply_type, b"")
-                self._presence_refresh_onlookers(session)
+                self._presence_icon_onlookers(session)
                 return out
             if msg_type == item.MSG_CL_QUERY_LOCKER_LIST:
                 # ⭐ The account's store, not the character's -- item.Locker has
@@ -9431,13 +9495,13 @@ class MpsServer:
         battle = self.battles.open(fighters)
         # クラブ活動中 goes up over everybody who is fighting. ⚠️ The fighters
         # themselves are excluded: they are leaving the map scene for the fight,
-        # and the 0x4810+0x480F pair is only safe for a client looking at the
-        # map (round 96). The audience is the bystanders standing around them.
+        # and the audience for an icon is whoever is looking at the map. The
+        # bystanders standing around them are that audience.
         combatants = {f.chara_id for f in fighters}
         for fighter in fighters:
             other = self._session_of(fighter.chara_id)
             if other is not None:
-                self._presence_refresh_onlookers(other, also=combatants)
+                self._presence_icon_onlookers(other, also=combatants)
         sides = {t: [f.info_row() for f in battle.side(t)] for t in trainingroom.TEAMS}
         counts = "/".join(str(len(sides[t])) for t in trainingroom.TEAMS)
         print(f"[{self.tag}] battle info: Ａ/Ｂ={counts}, {self.battles.summary()}")
@@ -11717,9 +11781,11 @@ class MpsServer:
             # and the fight itself (クラブ活動中 sits on every fighter while one
             # is on, so every fighter's byte changes when it ends). So the
             # refresh is no longer conditional on having led the room.
-            # ⚠️⚠️ It must not reach the fighters — that pair is what
-            # 「通信が断たれました」 came out of; see _presence_refresh. They do
-            # not need it either: pressing ［終 了］ sends 0x4000, and that
+            # ⚠️⚠️ It must not reach the fighters. The 0x4810+0x480F pair this
+            # used to go out as is what 「通信が断たれました」 came out of (see
+            # _presence_refresh), and 0x4100 keeps that skip set until somebody
+            # measures a lone icon against a 結果画面 — see _presence_icon. They
+            # do not need it either: pressing ［終 了］ sends 0x4000, and that
             # branch rebuilds the whole scene with a freshly computed action
             # byte for every peer. ⚠️ Note self.battles.close() has already run,
             # so battle_of() no longer knows these are the people on a 結果画面
@@ -11727,7 +11793,7 @@ class MpsServer:
             for who in ({chara_id, room.leader_id} if was_leader else {chara_id}):
                 other = self._session_of(who)
                 if other is not None:
-                    self._presence_refresh(other, skip=skip)
+                    self._presence_icon(other, skip=skip)
             if room.members:
                 if room not in emptied:
                     emptied.append(room)
@@ -13039,7 +13105,10 @@ class MpsServer:
             room = board.open(chara_id, headline, limit, family, first)
             print(f"[{self.tag}] trainingroom opened {room.summary()}")
             # The board over their head is how anybody else gets in.
-            self._presence_refresh(session)
+            # ⚠️ Onlookers only. This one used to go to every peer on the map,
+            # lesson and fight included, because it predates the skip set; now
+            # it obeys the same rule as every other icon.
+            self._presence_icon_onlookers(session)
             out = self._answer(session, sequence, trainingroom.MSG_SV_OK_ADD, b"")
             # An empty 0x580C, and it stays: the leader is the only member, so
             # the roster without them is 「nobody else is here」, which is both
@@ -13100,11 +13169,11 @@ class MpsServer:
             print(f"[{self.tag}] trainingroom left, now {board.summary()}")
             # Take the board down again -- and put one up over whoever Board.part
             # promoted, if it promoted anybody.
-            self._presence_refresh(session)
+            self._presence_icon_onlookers(session)
             if room.members and chara_id == leader_id:
                 promoted = self._session_of(room.leader_id)
                 if promoted is not None:
-                    self._presence_refresh(promoted)
+                    self._presence_icon_onlookers(promoted)
             if room.members and chara_id == leader_id:
                 print(f"[{self.tag}] ⚠ leader left a room that still has "
                       f"{len(room.members)} in it; promoted {room.leader_id:#x}, "
@@ -13337,7 +13406,7 @@ class MpsServer:
             # ⚠️ Before the Ok and not after: the icon is the only way anybody
             # reaches 0x4B06, so raising it is part of putting the 看板 up
             # rather than a decoration that can lag behind.
-            self._presence_refresh_onlookers(session)
+            self._presence_icon_onlookers(session)
             return self._answer(session, sequence, billboard.MSG_SV_OK_ADD, b"")
 
         if msg_type == billboard.MSG_CL_REQUEST_DEL:
@@ -13352,7 +13421,7 @@ class MpsServer:
                 )
             print(f"[{self.tag}] billboard down {sign.summary()}, "
                   f"now {board.summary()}")
-            self._presence_refresh_onlookers(session)
+            self._presence_icon_onlookers(session)
             return self._answer(session, sequence, billboard.MSG_SV_OK_DEL, b"")
 
         if msg_type == billboard.MSG_CL_REQUEST_INFO:
@@ -13466,11 +13535,11 @@ class MpsServer:
         owner_id = room.owner_id
         self.chatrooms.part(chara_id)
         self._cr_part_notice(room, chara_id)
-        self._presence_refresh_onlookers(session)
+        self._presence_icon_onlookers(session)
         if room.members and chara_id == owner_id:
             promoted = self._session_of(room.owner_id)
             if promoted is not None:
-                self._presence_refresh_onlookers(promoted)
+                self._presence_icon_onlookers(promoted)
             print(f"[{self.tag}] チャットルーム owner left a room that still "
                   f"has {len(room.members)} in it; handed it to "
                   f"{room.owner_id:#x}, and no message in this family says so")
@@ -13519,7 +13588,7 @@ class MpsServer:
             print(f"[{self.tag}] chatroom opened {room.summary()}")
             # Before the Ok, the way the 看板 goes up before its own: the icon
             # is the only way anybody else reaches 0x4C83.
-            self._presence_refresh_onlookers(session)
+            self._presence_icon_onlookers(session)
             out = self._answer(session, sequence, chatroom.MSG_SV_OK_ADD, b"")
             # An empty 0x4C8A, and it stays empty: the owner's own client seats
             # them, so 「who else is here」 is nobody. See _cr_seat's seats_self.
@@ -13568,7 +13637,7 @@ class MpsServer:
             # and keeps it (it outranks this one); everybody else in the room
             # is in a conversation and now says so. The leaving half is in
             # _chatroom_part, which was already refreshing for the door's sake.
-            self._presence_refresh_onlookers(session)
+            self._presence_icon_onlookers(session)
             out = self._answer(
                 session, sequence, chatroom.MSG_SV_OK_JOIN, room.join_params()
             )
@@ -14774,7 +14843,7 @@ class MpsServer:
         if quiz.loaded():
             session.lesson = room
             # 授業中 goes up now, for the people still standing on the map.
-            self._presence_refresh_onlookers(session)
+            self._presence_icon_onlookers(session)
         else:
             # ⚠️ Unseat again: a room nobody is going to be pumped out of would
             # otherwise hold this charaId until the next bell, and the next
@@ -16052,9 +16121,9 @@ class MpsServer:
             return
         self._trade_clear(other)
         # ⚠️ The survivor only. This runs on the disconnect and 下校 paths, and
-        # ``session`` is on its way off the map -- re-announcing it would put a
-        # character back into a scene the very next message takes it out of.
-        self._presence_refresh_onlookers(other)
+        # ``session`` is on its way off the map -- an icon for somebody the very
+        # next message takes out of the scene is a byte nobody will ever see.
+        self._presence_icon_onlookers(other)
         print(f"[{self.tag}] トレード: charaId={session.chara_id} went away, "
               f"telling {partner}")
         self._push(other, self._answer(
@@ -16195,8 +16264,8 @@ class MpsServer:
             # sits on top of the map rather than replacing it (the ウェストアッ
             # プ screen is the one that replaces it), so the scene the pair
             # edits is still up at both ends.
-            self._presence_refresh_onlookers(session)
-            self._presence_refresh_onlookers(other)
+            self._presence_icon_onlookers(session)
+            self._presence_icon_onlookers(other)
             print(f"[{self.tag}] トレード: charaId={me} accepted {asker} "
                   f"(answer={answer}); the table is open")
             return self._trade_notify_both(
@@ -16227,8 +16296,8 @@ class MpsServer:
                   f"{other.chara_id}")
             self._trade_clear(session)
             self._trade_clear(other)
-            self._presence_refresh_onlookers(session)
-            self._presence_refresh_onlookers(other)
+            self._presence_icon_onlookers(session)
+            self._presence_icon_onlookers(other)
             # ⭐ The reading that used to be here was right and pointed at the
             # wrong list: a clean close does carry the developers' own name for
             # 「nothing went wrong」, but 0x510D/0x510E read 0xFF04, where that
@@ -16591,9 +16660,9 @@ class MpsServer:
                 continue
             self._twoshot_clear(other)
             # ⚠️ The survivor only, and only their icon: ``session`` is leaving
-            # the map on this path (disconnect or 下校), so re-announcing it
-            # would put a character back into a scene it is being taken out of.
-            self._presence_refresh_onlookers(other, also={session.chara_id})
+            # the map on this path (disconnect or 下校), so an icon for them is
+            # a byte about a character the next message takes out of the scene.
+            self._presence_icon_onlookers(other, also={session.chara_id})
             print(f"[{self.tag}] ツーショット: charaId={session.chara_id} went "
                   f"away, telling {who}")
             self._push(other, self._answer(
@@ -16781,8 +16850,8 @@ class MpsServer:
         # members are named right here.
         # ⚠️ What it costs: neither of them sees the other's icon go up. That
         # is nothing today -- there is no map on their screens to draw it on.
-        self._presence_refresh_onlookers(session, also={other.chara_id})
-        self._presence_refresh_onlookers(other, also={session.chara_id})
+        self._presence_icon_onlookers(session, also={other.chara_id})
+        self._presence_icon_onlookers(other, also={session.chara_id})
         print(f"[{self.tag}] ツーショット: charaId={me} accepted {asker} "
               f"(answer={answer}); place {place} "
               f"({MAP_NAMES.get(session.map_id, '?')} {session.pos})")
@@ -16867,8 +16936,8 @@ class MpsServer:
         # back from that screen does NOT rebuild the scene the way it does
         # after a cutscene, each of these two keeps 会話中 over the other until
         # something else redraws them. Preferring the stale icon is deliberate.
-        self._presence_refresh_onlookers(session, also={other.chara_id})
-        self._presence_refresh_onlookers(other, also={session.chara_id})
+        self._presence_icon_onlookers(session, also={other.chara_id})
+        self._presence_icon_onlookers(other, also={session.chara_id})
         # ⭐ NOTIFY_END is 0xFF04's slot 15, 「未使用：：：終了メッセージ」 -- the
         # developers' own name for this exact message, marked 未使用 because a
         # normal ending is not something to put a sentence on screen about. The
@@ -17602,7 +17671,7 @@ class MpsServer:
             other.lesson = None
             # …and comes down again. ⚠️ After the clear, not before: the icon
             # is computed from session.lesson.
-            self._presence_refresh_onlookers(other)
+            self._presence_icon_onlookers(other)
             if chara_id == session.chara_id:
                 mine += body
             else:
