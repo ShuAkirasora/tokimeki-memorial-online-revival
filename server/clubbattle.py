@@ -874,10 +874,14 @@ def turn_start_row(
 
     ⚠️ No ``speed`` here, and no ``clubId`` — 0x5C06 carries those once, at the
     top of the fight, and this message carries only what a turn can change.
-    That asymmetry is the reason this is worth sending: ``vitality`` and
-    ``energy`` appear in both messages, so giving them different values here
-    is the only reading anyone gets of which value the client treats as the
-    maximum and which as the current one.
+
+    ⛔️ What used to stand here — that sending vitality/energy different values
+    from 0x5C06's is the only way to read which one the client treats as the
+    maximum — was already dead and this docstring had not caught up. Rounds 84
+    and 98 ran exactly that experiment and no bar moved; and the client's
+    handler for this message reads charaId out of each row and nothing else,
+    so no value put in these fields can reach a screen. The row still goes out
+    complete because the original's message carries it.
     """
     counters = list(states or [])[:NUM_OF_CLUB_STATUS]
     counters += [0] * (NUM_OF_CLUB_STATUS - len(counters))
@@ -1781,8 +1785,13 @@ class Fighter:
     ⭐ And the mirror image of it: with the bars knocked down by 0x5C11 they
     STAYED down for three turns while every 0x5C09 carried the maximum. The
     client owns this state; this message is not how it is told about it.
-    ⚠️ Which leaves 0x5C09's vitality/energy with no reader found anywhere yet.
-    They are still sent because the original's message carries them.
+    ⚠️ Which left 0x5C09's vitality/energy with no reader found anywhere yet.
+    ⭐⭐ That is now settled from the other side as well: the client's handler
+    for 0x5C09 reads turn, timeoutTime, the row count and charaId, and touches
+    no other offset in the message — so vitality, energy and the eight counters
+    have no reader in the client, and the two experiments above were measuring
+    something that could not have moved. They are still sent because the
+    original's message carries them.
 
     ⚠️ All of that is MEASUREMENT (which message moves a current value). The
     INVENTION next to it — how much a hit takes off, and whether this server
@@ -1809,11 +1818,16 @@ class Fighter:
         #: ⚠️⚠️ NO GAMEPLAY WRITES THIS, and none ever has: 0x5C11 is what puts
         #: a status on a character and the client keeps it by itself (see the
         #: class docstring), so every 0x5C09 this server has sent since the
-        #: message existed carried eight zeros. That makes the whole field
-        #: UNMEASURED rather than known-inert — zero is its neutral value, and
-        #: 「the client ignores these」 fits the evidence exactly as well as
-        #: 「they drive the lamps」 does. ``/cb states`` is the one
-        #: writer, and it is a probe.
+        #: message existed carried eight zeros.
+        #: ⭐⭐ That used to leave the field UNMEASURED: 「the client ignores
+        #: these」 fitted the evidence exactly as well as 「they drive the
+        #: lamps」 did, and zero is the neutral value either way. ⛔️ It does
+        #: not any more. The client's handler for 0x5C09 walks the row array
+        #: taking charaId out of each entry and touches no other offset inside
+        #: it, so these counters have no reader in the client at all. They are
+        #: still sent — the original's message carries them — but nothing put
+        #: here can reach a screen. ``/cb states`` is the one writer, and it is
+        #: a probe.
         self.states = [0] * NUM_OF_CLUB_STATUS
         #: Set by 0x5C07 — 「my battle scene is up」, not 「I am ready to play」.
         self.ready = False
@@ -1921,9 +1935,10 @@ class Fighter:
     def afflict(self, ailment: int) -> None:
         """Set (or, for clubstatus 0, clear) this fighter's ステータス異常.
 
-        ⚠️ The counters in ``states`` are what 0x5C09 carries, and NOTHING has
-        ever read them back — the client keeps its own copy from 0x5C11 and the
-        field is unmeasured rather than known-inert (see the ``states`` comment).
+        ⚠️ The counters in ``states`` are what 0x5C09 carries, and the client
+        does not read them: it keeps its own copy from 0x5C11, and its handler
+        for 0x5C09 takes only charaId out of each row (see the ``states``
+        comment).
         They are written here anyway so that the two ends agree on paper; the
         one that reaches the screen is the 0x5C11 the caller sends.
         """
