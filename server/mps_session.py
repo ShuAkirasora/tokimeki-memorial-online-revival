@@ -73,6 +73,7 @@ from characters import (
     describe,
     display_name,
     door_markers,
+    info_changed,
     marker_names,
     minimap_params,
     parse_create_info,
@@ -821,6 +822,7 @@ MSG_CL_QUERY_POOL_MESSAGE = 0xA100
 MSG_SV_NOTIFY_CHARACTER_ADD = 0x480F
 MSG_SV_NOTIFY_CHARACTER_DEL = 0x4810
 MSG_SV_NOTIFY_ACTION_ICON = 0x4100
+MSG_SV_NOTIFY_CHARACTER_INFO_CHANGED = 0x4813
 MSG_CL_QUERY_CHARA_INFO = 0x6500
 MSG_SV_RESULT_CHARA_INFO = 0x6501
 MSG_SV_ERROR_CHARA_INFO = 0x6502
@@ -2867,6 +2869,128 @@ class MpsServer:
             who = f"{told} onlooker(s)" + (" + self" if mine else "")
             print(f"[{self.tag}] icon: charaId={session.chara_id} "
                   f"action={action} -> {who}")
+
+    # ------------------------------------------------------------------
+    # 0x4813: the mutable half of a character record, to the people watching.
+    # See characters.info_changed for the nine fields, for the handler that is
+    # their specification, and for why the subject is never one of the people.
+    # ------------------------------------------------------------------
+
+    def _info_fields(self, session: "_Session") -> "tuple | None":
+        """The nine values 0x4813 carries about this connection's character.
+
+        None when there is nothing to say: no character bound, or a connection
+        that has not named an account. ⚠️ Read off ``session.characters``
+        rather than through ``_chars``, which binds a fallback account and
+        prints about it -- a watcher that runs on every packet must not have
+        side effects of its own.
+        """
+        store = session.characters
+        if store is None or not session.chara_id:
+            return None
+        chara_id = session.chara_id
+        held = store.posts(chara_id) or posts.Posts()
+        group_name, group_id, _authority, _qualification = (
+            self.accounts.groups.fields(chara_id)
+        )
+        return (
+            store.title(chara_id),
+            held.class_post,
+            held.club_post,
+            store.in_club(chara_id),
+            store.lover(chara_id),
+            group_id,
+            group_name,
+            store.catch_copy(chara_id),
+        )
+
+    def _info_watch(self) -> "dict[int, tuple]":
+        """What every live character's nine fields were before this packet.
+
+        ⭐⭐ WHY A WATCHER AND NOT A CALL AT EACH SITE. Nine fields, and the
+        code that moves them is spread over six subsystems that have nothing
+        else to do with each other: the キャッチコピー button, 入部 and 退部,
+        the 仲良しグループ book (where somebody else's request moves *your*
+        row -- a kick, a disband), the 経歴's 称号, the 役職 knob and /couple.
+        A notify wired into each of those is a notify that goes missing the
+        next time one of them grows a path, and the failure is silent: a stale
+        line on somebody else's screen that nothing complains about. The one
+        thing all of them have in common is that they happen while a packet is
+        being answered, so that is where the comparison goes.
+
+        ⚠️ A character that was not standing here before the packet is not in
+        the map and so never compares as changed. That is the right side to err
+        on: somebody who has just logged in or warped in is announced with
+        0x480F, whose entry carries these values already.
+        """
+        watched = {}
+        for other in self.live:
+            fields = self._info_fields(other)
+            if fields is not None:
+                watched[other.chara_id] = fields
+        return watched
+
+    def _info_changed(
+        self, before: "dict[int, tuple]", actor: "_Session"
+    ) -> bytes:
+        """Send 0x4813 for every watched character whose nine fields moved.
+
+        ⚠️⚠️ Returns the copies addressed to ``actor`` instead of pushing them,
+        and that is not tidiness: the packet loop writes a handler's reply
+        AFTER the handler returns, while _push writes immediately, so a copy
+        pushed down the acting connection here takes a higher sequence number
+        and reaches the wire first. That is 0xA4C4D0's third reject branch --
+        the same inversion the subject's own 0x4100 copy is queued to avoid
+        (see _drain_own_icon), met from the other side: there the subject was
+        the character that changed, here the actor is somebody else's onlooker
+        (A runs /couple, so B's row moves too, and A is standing next to B).
+        Anything for the actor is returned so the loop can put it after the
+        reply.
+        """
+        mine = b""
+        for other in self.live:
+            fields = self._info_fields(other)
+            was = before.get(other.chara_id)
+            if fields is None or was is None or fields == was:
+                continue
+            (title, class_post, club_post, in_club, lover,
+             group_id, group_name, catch_copy) = fields
+            body = info_changed(
+                other.chara_id,
+                title=title,
+                class_post=class_post,
+                club_post=club_post,
+                in_club=in_club,
+                lover_chara_id=lover,
+                group_id=group_id,
+                group_name=group_name,
+                catch_copy=catch_copy,
+            )
+            # ⚠️ The same skip set the icon uses, and for the same reason it
+            # is not obviously needed: this message edits the chara store and
+            # not the map scene, so the 結果画面 that round 96 measured
+            # 0x4810+0x480F killing has nothing to do here -- but nothing has
+            # measured a lone 0x4813 there either, and being wrong costs a
+            # dropped client. Nothing is lost by waiting: the 0x480F entry the
+            # skipped peer gets when the character is next handed to it states
+            # all nine again.
+            skip = self._presence_blocked(other)
+            told = 0
+            for peer in self._peers(other):
+                if peer.chara_id in skip:
+                    continue
+                blob = self._answer(
+                    peer, 0, MSG_SV_NOTIFY_CHARACTER_INFO_CHANGED, body
+                )
+                if peer is actor:
+                    mine += blob
+                else:
+                    self._push(peer, blob)
+                told += 1
+            if told:
+                print(f"[{self.tag}] info changed: charaId={other.chara_id} "
+                      f"-> {told} onlooker(s)")
+        return mine
 
     def _presence_refresh(
         self, session: "_Session", skip: "set[int] | None" = None
@@ -6977,7 +7101,15 @@ class MpsServer:
                         print(f"[{self.tag}] <- tag=0x{tag:04x} ({name}) undecipherable: {exc}")
                         continue
                     print(f"[{self.tag}] <- tag=0x{tag:04x} ({name}) {len(body)}B: {body.hex()}")
+                    watched = self._info_watch()
                     reply = self._reply(session, tag, body)
+                    # 0x4813 for whatever this packet moved. The comparison
+                    # runs here because here is where the handler's writes are
+                    # the newest thing there is; what comes back is the copies
+                    # for this connection, which go after its reply and not
+                    # down the socket ahead of it.
+                    reply = (reply or b"") + self._info_changed(
+                        watched, session)
                     reply = (reply or b"") + self._drains(session)
                     if not reply:
                         continue

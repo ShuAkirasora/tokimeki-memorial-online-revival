@@ -974,6 +974,68 @@ def chara_info(
     return bytes(out)
 
 
+#: 0x4813's body, and the width is the deserializer's rather than a sum of
+#: guesses: 0x901C50 reads u32, u16, u16, u16, u16, u8, u32, u32 and two
+#: 21-byte fixed fields, in that order and with nothing between them.
+INFO_CHANGED_SIZE = 63
+
+
+def info_changed(
+    chara_id: int,
+    title: int = 0,
+    class_post: int = 0,
+    club_post: int = posts.NO_CLUB_POST,
+    in_club: int = 0,
+    lover_chara_id: int = 0,
+    group_id: int = NO_GROUP,
+    group_name: bytes = b"",
+    catch_copy: bytes = b"",
+) -> bytes:
+    """One 0x4813 MsgSvNotifyCharacterInfoChanged: the record's mutable half.
+
+    This is `chara_info` minus everything that cannot change: no name, no sex,
+    no birthday, no looks, no abilities. What is left is the nine fields the
+    client keeps in its own per-charaId chara store, and the message exists to
+    overwrite them there without touching anything else.
+
+    ⭐ THE HANDLER IS THE SPECIFICATION. 0x77FE62 is nine calls in a row, one
+    per field, each of them `(store, charaId, value)`: friendGroupName
+    (0x6F8F22), friendGroupId (0x6F8F47), catchCopy (0x6F902B), inClub
+    (0x6F906D), coupleFlag (0x6F9089), title (0x6F90A3), classPost (0x6F90BF),
+    clubPost (0x6F90DB) and loverCharaId (0x6F90F7). Every one of them looks
+    the charaId up in the same std::map and returns without writing when there
+    is no record, so a notify about somebody a client has never been told about
+    is a no-op rather than a fault.
+
+    ⭐⭐ IT IS NEVER FOR THE SUBJECT, and that is read off the client rather
+    than assumed. Each of those setters has a sibling that takes no charaId and
+    fills in its own (0x6F891C, "my charaId"), and those siblings are what the
+    Ok handlers call: 0x4313 OkCharaMenuCatchcopy runs 0x6F91D2 -> 0x6F9190,
+    0x5A01 OkClubEnter and 0x5A04 OkClubPart both run 0x6F91BA. So the client
+    maintains its own row out of its own replies, and 0x4813 is how everybody
+    else's row is kept up to date. ⚠️ This is the opposite answer to the one
+    round 441 measured for 0x4100, where no such sibling exists and the subject
+    has to be told about itself -- the two are not one rule, and the thing to
+    look for is the own-id wrapper.
+
+    ⚠️ ``coupleFlag`` is derived here exactly as `chara_info` derives it: the
+    flag says whether there is a 恋人 and ``loverCharaId`` says who, so one is
+    1 precisely when the other is set.
+    """
+    out = bytearray()
+    out += struct.pack(">I", chara_id)
+    out += struct.pack(">HHHH", title, class_post, club_post, in_club)
+    out += struct.pack(">B", 1 if lover_chara_id else 0)
+    out += struct.pack(">II", lover_chara_id, group_id)
+    out += group_name.ljust(GROUP_NAME_LEN, b"\x00")[:GROUP_NAME_LEN]
+    out += catchcopy.field(catch_copy)
+    if len(out) != INFO_CHANGED_SIZE:
+        raise AssertionError(
+            f"info_changed is {len(out)}B, reader wants {INFO_CHANGED_SIZE}"
+        )
+    return bytes(out)
+
+
 class CharacterStore:
     """The characters this account has made, kept across server restarts.
 
