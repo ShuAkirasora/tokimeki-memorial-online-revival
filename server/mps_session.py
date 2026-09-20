@@ -1793,6 +1793,12 @@ class _Session:
         # client has to be told about it to take the bar away.
         self.sent_stress = -1
         self.sent_condition = -1
+        # The icon byte this session is owed about ITSELF, waiting for the next
+        # drain. ⚠️ It waits rather than being pushed because the push would be
+        # numbered before the reply of the handler that raised the icon, and the
+        # client rejects a reply whose sequence number went backwards -- which is
+        # the whole point of the /seq probe. None is "owes nothing".
+        self.icon_due: "int | None" = None
         # The markers standing in the scene, cached so the lobby's stand-ins and
         # the answers to MsgClQueryCharaInfo about them cannot disagree. Warping
         # changes the map, so this is rebuilt rather than computed once.
@@ -2753,6 +2759,24 @@ class MpsServer:
                 blocked.add(peer.chara_id)
         return blocked
 
+    def _presence_self_blocked(self, session: "_Session") -> bool:
+        """The same test, run over the subject instead of the onlookers.
+
+        _presence_blocked walks _peers, which by construction never contains the
+        character the message is about -- so when 0x4100 grew a copy for the
+        subject there was nothing standing between that copy and a client whose
+        map scene is down for exactly the reasons the peer test names. A lesson
+        and a fight take the map away from whoever is in one, their own included,
+        and this end already knows about both.
+
+        ⭐ Nothing is lost by holding the copy back: the lobby entry carries the
+        byte too (see the 0x4000 branch), so the state is stated again the moment
+        the scene comes back.
+        """
+        if session.lesson is not None:
+            return True
+        return self.battles.battle_of(session.chara_id) is not None
+
     def _presence_refresh_onlookers(
         self, session: "_Session", also: "set[int] | None" = None
     ) -> None:
@@ -2793,16 +2817,29 @@ class MpsServer:
         closed the connection); nothing on this wire says whether a lone 0x4100
         is kinder, so the skip set stays until something measures it.
 
-        ⚠️⚠️ No copy to the subject, and that is the open half of this message.
-        The handler carries a branch that runs only when the byte is 10
-        (自主トレ募集中) *and* the charaId is the receiver's own: it reaches for
-        the dialog on top of the current scene and calls one method on it. So
-        the original server did send this one back to the character it is
-        about, at least in that case. What that call does to the 看板作成 window
-        is not known, and the only way to find out is to put the copy on the
-        wire in front of a real client and look -- a measurement, not a guess.
-        Until then this end tells the onlookers and leaves the subject alone,
-        which is the rule 0x480F already follows.
+        ⭐⭐⭐ And a copy to the subject, which is not a courtesy: the client
+        reads its OWN byte back as a local gate. 看板作成 (0x47a7bd) looks its
+        own charaId up in the scene, reads the byte off it (0x6def7d: the icon
+        object hanging at +0x148, its value at +0x2c) and refuses with
+        「他の行動中は看板を作成できません」 when it is anything other than zero
+        -- `!= 0`, not `== 10`. A subject who is never told his own byte has
+        that gate switched off for good, which is what round 441 measured from
+        the other side: pushing one by hand made the refusal appear, clearing it
+        made it go away.
+
+        ⭐ The wire has no notion of a subject. Both paths that write the byte
+        take a charaId and look it up -- 0x480F through 0x6cc54c and 0x4100
+        through 0x6cb9c9 -- and neither compares it against the receiver's own
+        before setting it. The one self-specific thing in the handler is an
+        extra branch at action==10 which reaches for the topmost dialog and
+        calls one virtual method on it; the reach is null-guarded at both ends
+        (0x7051a5 hands back a null handle when no dialog is up), and round 441
+        watched it land on a live 看板作成 window without moving a pixel.
+
+        ⚠️ Same skip set as the onlookers, plus _presence_self_blocked for the
+        subject's own screen: a lone 0x4100 has still never been measured against
+        a 結果画面, so the one hard rule -- ``skip`` names who this must not
+        reach -- keeps applying to the subject too.
         """
         action = self._presence_action(session)
         body = struct.pack(">IB", session.chara_id, action)
@@ -2814,9 +2851,22 @@ class MpsServer:
                 other, self._answer(other, 0, MSG_SV_NOTIFY_ACTION_ICON, body)
             )
             told += 1
-        if told:
+        mine = ((skip is None or session.chara_id not in skip)
+                and not self._presence_self_blocked(session))
+        if mine:
+            # ⚠️⚠️ Queued, not pushed, and this is the one thing about the
+            # subject's copy that is not like an onlooker's: it goes down the
+            # connection whose handler is running right now, and _push writes
+            # immediately while that handler's reply is written after it returns.
+            # The copy would take the lower sequence number and the reply the
+            # higher one, which is 0xA4C4D0's third reject branch -- see /seq,
+            # which exists to demonstrate exactly that. _drains runs after the
+            # reply is built, so the number comes out on the right side of it.
+            session.icon_due = action
+        if told or mine:
+            who = f"{told} onlooker(s)" + (" + self" if mine else "")
             print(f"[{self.tag}] icon: charaId={session.chara_id} "
-                  f"action={action} -> {told} onlooker(s)")
+                  f"action={action} -> {who}")
 
     def _presence_refresh(
         self, session: "_Session", skip: "set[int] | None" = None
@@ -7750,6 +7800,18 @@ class MpsServer:
                         pos=session.pos,
                         map_id=session.map_id,
                         direction=session.direction,
+                        # ⭐⭐ The icon over the player's OWN head, and it has to
+                        # be on this entry for the same reason it is on every
+                        # peer's: 0x6cc54c sets the byte from the entry before it
+                        # gets anywhere near the 「is this me」 branch below it,
+                        # so this is the one road the byte has into the client
+                        # when a scene is built from nothing. It used to default
+                        # to 0 here, which meant every rebuild -- a warp, a
+                        # cutscene, ［終 了］ on a 結果画面 -- handed the player a
+                        # clean byte no matter what he was actually in the middle
+                        # of, and with it the local gate 看板作成 reads off that
+                        # byte (see _presence_icon).
+                        action=self._presence_action(session),
                         group_id=self.accounts.groups.id_of(session.chara_id),
                     )
                 ]
@@ -14865,6 +14927,7 @@ class MpsServer:
         gets its 正解発表 on time.
         """
         out = self._drain_console(session)
+        out += self._drain_own_icon(session)
         out += self._drain_bells(session)
         out += self._drain_lesson(session)
         out += self._drain_exam(session)
@@ -14873,6 +14936,22 @@ class MpsServer:
         out += self._drain_vitals(session)
         out += self._drain_pending_say(session)
         return out
+
+    def _drain_own_icon(self, session: "_Session") -> bytes:
+        """The 0x4100 about this character, to this character. See _presence_icon.
+
+        ⚠️ It has to be built here rather than at the moment the icon moved: the
+        sequence number is stamped when the bytes are made, and the whole reason
+        this one waits is to be stamped after the reply of the handler that moved
+        it.
+        """
+        action, session.icon_due = session.icon_due, None
+        if action is None or not session.chara_id:
+            return b""
+        return self._answer(
+            session, 0, MSG_SV_NOTIFY_ACTION_ICON,
+            struct.pack(">IB", session.chara_id, action),
+        )
 
     def _drain_battle(self, session: "_Session") -> bytes:
         """Close a クラブ対戦 turn whose 制限時間 has run out.
