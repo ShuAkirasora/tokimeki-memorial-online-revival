@@ -448,7 +448,8 @@ class AccountStore:
             return cached
         path = self._locker_path(account_id)
         saved: "dict | None" = None
-        if path.exists():
+        stocked = path.exists()
+        if stocked:
             try:
                 loaded = json.loads(path.read_text(encoding="utf-8"))
                 saved = loaded if isinstance(loaded, dict) else None
@@ -456,6 +457,21 @@ class AccountStore:
                 print(f"[accounts] ignoring unreadable {path}: {exc}")
         locker = item.Locker(saved)
         self._lockers[account_id] = locker
+        if not stocked:
+            # ⭐ 「初回ログイン時に選択できるのは「丸眼鏡」のみです（「丸眼鏡」
+            # １個がロッカーに入っています）」 -- manual/p03_03, and see
+            # item.INITIAL_LOCKER for why the character-creation screen is the
+            # one that reads it.
+            #
+            # ⚠️ THE FILE'S ABSENCE IS THE FLAG, and it has to be: an account
+            # that took the 丸眼鏡 out has an empty locker and a file, and must
+            # not be handed another one. Writing it back immediately is what
+            # makes this happen once -- the flag would otherwise stay false for
+            # every login that never saved.
+            locker.stock_new_account()
+            self.save_locker(account_id)
+            print(f"[accounts] account {account_id}: new ロッカー, "
+                  f"{locker.summary()}")
         return locker
 
     def save_locker(self, account_id: int) -> bool:

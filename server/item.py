@@ -302,6 +302,38 @@ NO_DISCARD: "dict[int, tuple[tuple[int, int], ...]]" = {
 # rule players run into. None keeps the refusal written and unsent.
 LOCKER_CAPACITY: "int | None" = None
 
+# What an account's ロッカー holds before anyone has put anything in it.
+#
+# ⭐⭐⭐ RESTORED, and `manual/p03_03` 容姿選択 states it outright rather than
+# implying it:
+#
+#     アクセサリー（装飾アイテム）は、ロッカーに入っているアイテムを選択する
+#     ことができます。
+#     初回ログイン時に選択できるのは「丸眼鏡」のみです（「丸眼鏡」１個が
+#     ロッカーに入っています）。
+#
+# So the accessory list on 容姿選択 is not a list of everything the game has --
+# it is this locker, and a brand-new account's copy of it has exactly one row.
+# 3:5 is 丸眼鏡 in `item.bin` (the other 眼鏡 is 3:4 四角眼鏡, which the sentence
+# excludes by naming only one).
+#
+# ⭐⭐ WHY THE CHARACTER-CREATION SCREEN IS A LOCKER CLIENT AT ALL, which is the
+# half the manual cannot say: the title/character-select sequencer registers its
+# own 0x0407/0x0408/0x0409 listeners at 0x7871d7 -- alongside 0x0301 school
+# list, 0x030D character create, 0x0319 character list and 0x031C 再入学, and
+# with no in-game message among them -- so the locker is queried by that screen
+# and not merely inherited from the in-game one at 0x77DF3E. And it is queried
+# for tab 0: the client sends `0x0406 params=0000` there, and tab 0 is 装飾,
+# whose categories are 0..3. Category 3 is the face accessories.
+#
+# ⚠️ WHAT IS NOT RESTORED, and is deliberately not implemented: whether wearing
+# an accessory spends the row. Nothing read so far says the original decremented
+# the locker when 容姿 was registered, and picking either answer would invent a
+# rule -- one 丸眼鏡 shared by three 生徒手帳, or one that the first character
+# takes away from the other two. Seeding is the documented half; the spending is
+# not, so the row stays put and the question stays open.
+INITIAL_LOCKER: "tuple[tuple[int, int, int], ...]" = ((3, 5, 1),)
+
 # How many rows one 0x4D03 may carry.
 #
 # ⭐⭐⭐ NOT A MEASUREMENT AND NOT A GUESS: 0x4D03's deserializer is the SAME
@@ -851,6 +883,18 @@ class Locker:
                 del self.rows[index]
             return existing[2]
         return None
+
+    def stock_new_account(self) -> None:
+        """Put INITIAL_LOCKER in. Only for a locker no save file exists for.
+
+        ⚠️ The caller decides that, not this method: an account that emptied
+        its locker has a save file holding no rows, and re-stocking that one
+        would hand out a second 丸眼鏡 every time it logged in. See
+        accounts.AccountStore.locker, which is the one place that knows whether
+        the file was there.
+        """
+        for category, item_id, count in INITIAL_LOCKER:
+            self.receive(category, item_id, count)
 
     def for_tab(self, tab: int) -> "list[list[int]]":
         return filter_tab(self.rows, tab)
