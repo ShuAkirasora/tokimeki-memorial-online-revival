@@ -2503,9 +2503,14 @@ def respond(
             return Reply(["選択肢の既定に戻した (台本の選択肢数)"], select=(-1, -1))
         try:
             select = int(words[0], 0)
-            timer = int(words[1], 0) if len(words) > 1 else script.DEFAULT_SELECT_TIMER
+            # ⚠️ A literal `timerCount`, and since round 444 that is a STAMP on
+            # the client's clock rather than a duration -- no argument means
+            # 「no countdown」, which is what a box the script puts no limit on
+            # gets anyway. To watch one count, pass a stamp (`script.
+            # input_deadline`), not 60000.
+            timer = int(words[1], 0) if len(words) > 1 else script.NO_DEADLINE
         except ValueError:
-            return Reply(["/sel <select> [timer]  例: /sel 7 60000"])
+            return Reply(["/sel <select> [timer]  例: /sel 7 0"])
         return Reply(
             [f"QuerySelect select={select} timer={timer}"],
             select=(select, timer),
@@ -2517,22 +2522,27 @@ def respond(
         # ⭐ What goes into a text box's `timerCount`. The knob exists for one
         # question -- what that field counts in -- and round 249 asked it:
         # `/inp 5000`, open a box, and the box was still up fourteen seconds
-        # later. ⛔️ So it is not five seconds' worth of anything; the reading
-        # is still open (see script.INPUT_TIMER). ⚠️ It has to be set before
-        # the box opens; the duration goes out with the box and a second one
-        # does not reach it, the same way `/sel` cannot widen a box already
-        # drawn. No argument puts the shipped constant back.
+        # later. ⭐⭐ Round 444 answered it out of the client's three handlers:
+        # the field is an absolute stamp on the client's own clock, so 5000 was
+        # an instant in 1970 and the ring was right to read 0:00 (see
+        # script.input_deadline). ⚠️ It has to be set before the box opens; the
+        # duration goes out with the box and a second one does not reach it,
+        # the same way `/sel` cannot widen a box already drawn.
+        #
+        # ⭐ No argument is the factory value, and the factory value is now
+        # 「read the instruction」 rather than a constant: the box gets the
+        # 制限時間(秒) its own command declares.
         words = rest.split()
         if not words:
-            script.INPUT_TIMER = script.DEFAULT_SELECT_TIMER
+            script.INPUT_TIMER = None
         else:
             try:
                 script.INPUT_TIMER = int(words[0], 0)
             except ValueError:
                 return Reply(["/inp <timerCount>  例: /inp 5000  (引数なしで既定)"])
-        return Reply([f"文字入力欄 timerCount={script.INPUT_TIMER}"
-                      + ("（既定）" if script.INPUT_TIMER
-                         == script.DEFAULT_SELECT_TIMER else "")])
+        if script.INPUT_TIMER is None:
+            return Reply(["文字入力欄 timerCount=台本の制限時間（既定）"])
+        return Reply([f"文字入力欄 timerCount={script.INPUT_TIMER}"])
 
     if word == "pwt":
         # ⭐ The knob that tells "the wait has not elapsed" apart from "nobody

@@ -2225,6 +2225,64 @@ class Follower(Machine):
             return None
         return int.from_bytes(self.script.code[self.pos][2][2:4], "little")
 
+    def input_seconds(self) -> int | None:
+        """制限時間(秒) for the input command the client is stopped on.
+
+        ⭐⭐⭐ **The deadline is the instruction's own, and it has been in the
+        export all along.** `OP_INPUT_SELECT`'s `+2` is
+        `(choosers << 12) | seconds` (round 236 read it off the decoding slot's
+        own field list, 「選択肢数：%1%\n制限時間(秒)：%2%\n選択者数(自分含む)：
+        %3%」) and `OP_INPUT_STRING`'s `+2` low byte is the same number (round
+        248, off the client's decoder at 0x73537a). Until round 444 this end
+        read neither: it sent one shipped constant to every box.
+
+        ⭐⭐ Over the whole 778-script export the field takes **three values and
+        no others** -- 946 boxes at 60s, 775 at 0, 132 at 60s with two choosers
+        -- and every one of the 21 free-text boxes reads 180. ⇒ this is a
+        number to be read, not a duration to be chosen.
+
+        **0 is 「no limit」, not 「expire now」**, and that is the client's own
+        reading rather than a preference: its three handlers branch on the
+        stamp being zero and take a path that puts no countdown up at all
+        (`script.input_deadline`).
+
+        None when this end is not on an input command -- the caller's cue that
+        there is no deadline to state.
+        """
+        if self.lost:
+            return None
+        args = self.script.code[self.pos][2]
+        op = self.script.code[self.pos][1]
+        if op == OP_INPUT_SELECT and len(args) >= 2:
+            return int.from_bytes(args[0:2], "little") & 0x0FFF
+        if op in INPUT_STRING_OPS and len(args) >= 1:
+            return args[0]
+        return None
+
+    def timed_out(self) -> str | None:
+        """The box expired unanswered: step over it, writing nothing.
+
+        ⭐ The counterpart of `chose` and the twin of `passed_box`: 「制限時間終
+        了。\n先に進みます。」 (`msg_text` 574) is the game's own description of
+        what happens, and 「先に進みます」 is a step with no answer in it.
+
+        ⚠️⚠️ **The register keeps whatever it held**, and that is the one thing
+        about a timeout this end cannot measure: nobody clicked, so there is no
+        answer to write, and what the *client's* own copy of the register ends
+        up holding is not visible from here. For a choice box that is the same
+        position `passed_box` already leaves this end in, and the branch chain
+        just after reads a stale `E<n>`. ⛔️ Inventing a click to fill it would
+        be worse: it would put a number the player never chose into a register
+        the play then acts on.
+        """
+        if self.lost:
+            return self.lost
+        op = self.script.code[self.pos][1]
+        if op != OP_INPUT_SELECT and op not in INPUT_STRING_OPS:
+            return self._lose("a box timed out and this end is not on one")
+        self.pos += 1
+        return None
+
     def passed_box(self) -> str | None:
         """Step over a choice box without an answer: it was somebody else's.
 

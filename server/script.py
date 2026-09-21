@@ -103,6 +103,7 @@ from __future__ import annotations
 import json
 import os
 import struct
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -1641,31 +1642,77 @@ def command_variable_params(entries: Sequence[tuple[int, int, object]]) -> bytes
     )
 
 
-# `timerCount` is a duration in units unknown, and stayed unknown: the box does
-# not close on its own within any span anybody has watched it, and round 249
-# put that on a screen -- see INPUT_TIMER below, which is the knob that tried.
-# 60000 is "a minute if these are milliseconds". 0 is avoided because "0 = no
-# limit" and "0 = expire now" are equally plausible readings and one of them
-# loses.
-DEFAULT_SELECT_TIMER = 60000
+# ⭐⭐⭐ `timerCount` IS AN ABSOLUTE STAMP ON THE CLIENT'S OWN CLOCK, and round
+# 444 read it rather than guessing at it. All three messages that carry the
+# field -- 0x7213 (0x7844b3), 0x7215 (0x7845bc) and 0x7218 (0x784696) -- end in
+# the identical arithmetic, and it is the arithmetic 0x720D's handler was
+# already known to use (`PAUSE_FORCE_FINISH_MS`):
+#
+#     if (body.timerCount == 0)  setCountdown(0);
+#     else                       setCountdown(__alldiv(timerCount - now(), 1000));
+#
+# ⇒ the number on the wire is an instant, the client subtracts its own clock
+# from it and draws the remainder in seconds, and a stamp already in the past
+# comes out at or below zero.
+#
+# ⚠️⚠️ THIS IS THE CORRECTION ROUND 249 COULD NOT SEE. That round put 5000 on a
+# real client's text box, watched the box sit there fourteen seconds later with
+# its countdown ring reading 0:00, and concluded the unit was unknown. Both
+# halves of what it saw follow from the reading above: 5000 and 60000 are alike
+# stamps in 1970, so both render as 0:00, and neither is a deadline the client
+# would act on. ⭐ The judgement worth keeping: **a field that renders the same
+# for every value you try is not a field whose unit is unknown -- it is a field
+# you are feeding the wrong KIND of number.**
+#
+# ⭐ **Zero is 「no limit」 and the client says so itself**: the zero test is a
+# branch of its own, and what it passes on is not a stamp at all.
+NO_DEADLINE = 0
 
-# ⭐ The knob that asked that question, and the answer it got: not that.
+
+def input_deadline(client_now: int, seconds: int | None) -> int:
+    """The `timerCount` to state for a box with `seconds` on its instruction.
+
+    ⭐ `seconds` is `gs3vm.Follower.input_seconds()` -- the command's own
+    制限時間(秒), which is 0 or 60 for a choice box and 180 for a text box, over
+    the whole export and with no fourth value. 0 and None alike come out as
+    `NO_DEADLINE`: the first is a box the script put no limit on, the second is
+    a box this end has no export for, and neither is a deadline this end may
+    state.
+
+    ⚠️ `client_now` is `_Session.client_now()`, which reads 0 until the first
+    timesync lands. A stamp built on 0 is a stamp in 1970 -- exactly the thing
+    the note above is about -- so that case states no deadline either.
+    """
+    if not seconds or client_now <= 0:
+        return NO_DEADLINE
+    return client_now + seconds * 1000
+
+
+def timeout_params(wire_ip: int, op: int) -> bytes:
+    """0x720B's body: the Begin's own {ip, op}, the same pair 0x721D echoes.
+
+    ⭐ The client's handler (0x78412e) switches on `op` alone -- 0x7000 down
+    one arm and 0x7001/0x7002 down the other -- and closes the matching input
+    widget. ⚠️ It never loads `ip`; that field goes out truthful rather than
+    read, the same way `retire_notify_params`'s `npcId` does.
+
+    ⚠️⚠️ **It closes the box and nothing else.** The call that lets the
+    interpreter go again is 0x9f002c, and 0x721D's handler is the one that
+    makes it -- 0x720B's goes nowhere near it. So a timeout is two messages on
+    this end, exactly the way an answered box is: the box closes, and then the
+    closing bracket ends the command.
+    """
+    return struct.pack(">IH", wire_ip, op)
+
+
+# The knob that asked what the unit was, kept now that the question is answered.
 #
-# The milliseconds reading had one thing going for it -- the instruction itself
-# carries a limit in seconds (the client's own dump calls that field
-# 制限時間(秒), and it reads 60 for every INPUT_SELECT that declares one and 180
-# for every INPUT_STRING), so 60000 is what this end would send for a declared
-# 60 if the wire field were a thousand times finer. ⛔️ Round 249 put 5000 on a
-# real client's text box and watched it: the box was still up fourteen seconds
-# later with the typed line intact. Both kinds of box also draw a countdown
-# ring, and it read 0:00 the whole time -- at 5000 and at 60000 alike.
-#
-# ⇒ The unit stays unknown, 60000 stays what goes out, and ⛔️ nobody should
-# take "60000 = 60s × 1000" as licence to reinterpret the 775 INPUT_SELECT
-# boxes that declare 0. Reopen this when something makes that ring move.
-# Factory value is the constant above: a session that never touches the knob
-# sends exactly what every session before it sent.
-INPUT_TIMER = DEFAULT_SELECT_TIMER
+# ⭐ **None is the factory value and it means 「read the instruction」**, so a
+# session that never touches the knob sends what the script declares. A number
+# forces that literal `timerCount` onto every text box instead, which is what
+# it takes to put a stamp on screen and watch it count -- ⛔️ and it is a raw
+# wire value, not seconds: `/inp` a stamp, not a duration.
+INPUT_TIMER: int | None = None
 
 # Every bit set, for a select whose option count this end does not know.
 SELECT_ALL = 0xFFFFFFFF
@@ -1679,8 +1726,13 @@ SELECT_BITS = 32
 
 
 def select_query(computed: tuple[int, int, int] | None = None
-                 ) -> tuple[int, int, str]:
-    """`(select, timerCount, why)` for the INPUT_SELECT the client stopped on.
+                 ) -> tuple[int, str]:
+    """`(select, why)` for the INPUT_SELECT the client stopped on.
+
+    ⚠️ It used to hand back a `timerCount` as well. That field is not a
+    property of the mask and never was -- it is the instruction's own deadline
+    turned into a stamp (`input_deadline`) -- so it is built at the call site
+    now, where the clock is.
 
     `computed` is `gs3vm.Follower.select()` for *this* box — `(mask, unknown,
     options)`, one bit per option in each of the first two — or None when there
@@ -1719,16 +1771,16 @@ def select_query(computed: tuple[int, int, int] | None = None
     before it is a script that offers nothing, so it falls back and says so.
     """
     if computed is None:
-        return SELECT_ALL, DEFAULT_SELECT_TIMER, "no shadow"
+        return SELECT_ALL, "no shadow"
     mask, unknown, options = computed
     if not 0 < options <= SELECT_BITS:
-        return SELECT_ALL, DEFAULT_SELECT_TIMER, f"{options} options declared"
+        return SELECT_ALL, f"{options} options declared"
     offered = (mask | unknown) & ((1 << options) - 1)
     if offered == 0:
-        return SELECT_ALL, DEFAULT_SELECT_TIMER, "⚠️ the shadow offers nothing"
+        return SELECT_ALL, "⚠️ the shadow offers nothing"
     if offered == (1 << options) - 1:
-        return offered, DEFAULT_SELECT_TIMER, "the shadow, every line on"
-    return offered, DEFAULT_SELECT_TIMER, (
+        return offered, "the shadow, every line on"
+    return offered, (
         f"the shadow, {bin(offered).count('1')} of {options} lines")
 
 
@@ -1756,6 +1808,18 @@ class Runner:
         # because the release has to echo it back verbatim, and the client is
         # the only one who knows which instruction it stopped on.
         self.begun: tuple[int, int] | None = None
+        # ⭐⭐⭐ The deadline on the box `begun` is, as this end counts it:
+        # `time.monotonic()` of the instant 0x720B is owed, or 0.0 for a box
+        # the script put no 制限時間 on. ⚠️ Monotonic for the same reason the
+        # idle clock is -- what goes out on the wire is a stamp on the
+        # *client's* clock (`input_deadline`), and the two are different
+        # questions: one is what the player's countdown reads, the other is
+        # when this end acts.
+        self.input_due: float = 0.0
+        # The stamp that went out with the box, kept because a 禁止語 refusal
+        # (0x7218) has to state it again and the deadline has not moved: the
+        # 制限時間 belongs to the command, not to the attempt.
+        self.input_stamp: int = 0
         # ⭐ The `MsgClNotifyScriptCommand` body of an OP_BR this end has taken
         # in but not answered, because the condition reads a party member's
         # click that has not arrived yet (`mps_session._click_fence`). Outside a
@@ -1794,6 +1858,29 @@ class Runner:
         # (`select_query`). ⚠️ Everything else here still answers what it
         # answered before this existed.
         self.shadow = None
+
+    def arm_input(self, stamp: int, seconds: int | None) -> None:
+        """A box just went up: start counting its 制限時間 on this end too.
+
+        ⭐ Both halves come from the same instruction, and the reason to keep
+        both is that they are stated in different clocks: `stamp` is what the
+        player's countdown ring is drawn from and `seconds` is what this end
+        waits. ⛔️ Deriving one from the other at the far end would put the
+        moment 0x720B goes out at the mercy of how well the timesync happens
+        to be tracking.
+
+        ⚠️ A box with no limit -- 775 of the export's 1853, and every box whose
+        script this copy has not exported -- arms nothing. There is no deadline
+        to enforce, and inventing one would end conversations the game does not
+        end.
+        """
+        self.input_stamp = stamp
+        self.input_due = (time.monotonic() + seconds) if (stamp and seconds) else 0.0
+
+    def disarm_input(self) -> None:
+        """The box is gone: answered, refused past, timed out, or abandoned."""
+        self.input_due = 0.0
+        self.input_stamp = 0
 
     def chose(self, result: int) -> None:
         """Remember a MsgClResultScriptCommandSelect and start counting.

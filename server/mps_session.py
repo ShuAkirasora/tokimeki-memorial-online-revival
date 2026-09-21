@@ -2098,6 +2098,13 @@ class _Session:
                 end -= script.SCRIPT_IDLE_WARN_LEAD_MS / 1000
             left = max(0.0, end - time.monotonic())
             seconds = left if seconds is None else min(seconds, left)
+        # ⭐ And a box's own 制限時間 is the fifth, and the closest in kind to
+        # the first three: the client is drawing 「あと N 秒」 off the stamp this
+        # end named, so 0x720B owes it the moment that reading hits zero rather
+        # than whenever the next timesync happens to land.
+        if self.script is not None and self.script.input_due:
+            left = max(0.0, self.script.input_due - time.monotonic())
+            seconds = left if seconds is None else min(seconds, left)
         return seconds
 
     def markers(self) -> tuple[tuple[str, int, int], ...]:
@@ -5803,6 +5810,80 @@ class MpsServer:
                 script.no_input_warning_params(session.client_now() + left))
         return b""
 
+    def _drain_script_input(self, session: "_Session") -> bytes:
+        """The 制限時間 on the box this player is stopped on, counted here.
+
+        ⭐⭐⭐ RESTORED, round 444, and the deadline is the script's own: every
+        `OP_INPUT_SELECT` carries 制限時間(秒) in its `+2` operand and every
+        `OP_INPUT_STRING` in the low byte of its own, 0 or 60 for a choice box
+        and 180 for a text box over the whole export
+        (`gs3vm.Follower.input_seconds`). What expires is ONE COMMAND, not the
+        player's place in the play -- 「制限時間終了。\n先に進みます。」
+        (`msg_text` 574) -- which is what tells this apart from
+        `_drain_script_idle`, whose five minutes end a 役柄.
+
+        ⭐⭐ **This end is the only side that can do it.** The client draws the
+        countdown and stops there: its own handlers turn the stamp into 「あと N
+        秒」 and nothing in them closes the box when N reaches zero. That is the
+        same division of labour the game states out loud elsewhere -- 「コマン
+        ド選択がゲームサーバ側の制限時間内に間に合いませんでした」 (クラブ対戦)
+        and 「解答がゲームサーバ側の制限時間内に間に合いませんでした」 (授業)
+        are both about a limit the SERVER holds.
+        """
+        if session.script is None or not session.script.input_due:
+            return b""
+        if time.monotonic() < session.script.input_due:
+            return b""
+        begun = session.script.begun
+        session.script.disarm_input()
+        if begun is None:
+            # The box went away without anybody passing through here -- the
+            # play ended, or the member retired. Nothing to close.
+            return b""
+        return self._script_timeout(session, begun)
+
+    def _script_timeout(self, session: "_Session",
+                        begun: tuple[int, int]) -> bytes:
+        """Close an expired box (0x720B) and end its command (0x721D).
+
+        ⚠️⚠️ **Two messages, not one, and the second is not optional.** The
+        client's 0x720B handler (0x78412e) switches on the `op` and closes the
+        matching widget; the call that lets the interpreter go again is
+        0x9f002c, and 0x721D's handler is the only one in the family that makes
+        it. A 0x720B on its own would take the box off the screen and leave the
+        script standing exactly where it was.
+
+        ⚠️ The shadow steps over the box writing nothing (`Follower.timed_out`)
+        -- there is no answer to write -- so the ladder just after it reads a
+        stale `E<n>`. ⛔️ That is a known cost and the alternative is worse: see
+        `timed_out` for why a made-up click is not the way out of it.
+        """
+        begun_ip, begun_op = begun
+        local = session.script.script.local_ip(begun_ip)
+        session.script.begun = None
+        shadow = session.script.shadow
+        if shadow is not None:
+            why = shadow.timed_out()
+            if why:
+                print(f"[{self.tag}] vm follower stopped here: {why}")
+        print(f"[{self.tag}] ⏱ 制限時間終了 ip={local} op={begun_op:#06x} — "
+              f"0x720B で閉じて 0x721D で先に進む")
+        # ⭐ The same bookkeeping an answer does, for the same reason: a member
+        # this end is holding at `_click_fence` is waiting for this box to be
+        # *done with*, and a box that timed out is done with. ⛔️ Leaving the
+        # tally alone would hold them until the play ended.
+        if begun_op == gs3vm.OP_INPUT_SELECT:
+            session.script.answered[local] = (
+                session.script.answered.get(local, 0) + 1)
+        out = self._answer(session, 0, script.MSG_SV_NOTIFY_SCRIPT_TIMEOUT,
+                           script.timeout_params(begun_ip, begun_op))
+        out += self._answer(session, 0,
+                            script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
+                            script.command_end_params(begun_ip, begun_op))
+        self._release_held_branches(
+            self.dramaparties.party_of(session.chara_id))
+        return out
+
     def _script_retire(
         self, session: "_Session", seen: int,
         party: "drama.Party", actor: "drama.Actor",
@@ -6837,6 +6918,7 @@ class MpsServer:
                 if shadow is not None:
                     shadow.flowed()
             other.script.begun = None
+            other.script.disarm_input()
             reply = self._answer(other, seen if other is session else 0,
                                  script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
                                  script.command_end_params(begun_ip, begun_op))
@@ -6880,9 +6962,21 @@ class MpsServer:
             print(f"[{self.tag}] 入力ボックス ip={local_ip} op=0x{op:04x} -> "
                   f"{gs3vm.register_name(box['register'])} "
                   f"{box['characters']}字以内 · 例：" + "／".join(box["answers"]))
+        # ⭐ The same deadline the choice box states, out of the same field:
+        # `OP_INPUT_STRING`'s `+2` low byte, which reads 180 on every one of
+        # the export's 21 text boxes. ⚠️ `/inp` forces a literal stamp instead,
+        # and then this end enforces nothing -- the knob is for looking at the
+        # widget, not for moving the deadline.
+        seconds = shadow.input_seconds() if shadow is not None else None
+        timer = script.input_deadline(session.client_now(), seconds)
+        if script.INPUT_TIMER is not None:
+            timer, seconds = script.INPUT_TIMER, None
+        session.script.arm_input(timer, seconds)
+        print(f"[{self.tag}] -> NotifyScriptCommandInput timer={timer}"
+              + (f"（制限時間 {seconds}s）" if seconds else "（制限時間なし）"))
         return self._answer(session, seen,
                             script.MSG_SV_NOTIFY_SCRIPT_COMMAND_INPUT,
-                            script.input_params(script.INPUT_TIMER))
+                            script.input_params(timer))
 
     def _script_input_result(self, session: "_Session", seen: int,
                              params: bytes) -> "bytes | None":
@@ -6908,9 +7002,12 @@ class MpsServer:
         if hit is not None:
             print(f"[{self.tag}] ⚠️ 入力に禁止語「{hit}」 -> "
                   f"NgScriptCommandInput reason={ngwords.SCRIPT_INPUT_REASON}")
+            # ⭐ The SAME stamp the box went up with, not a fresh one: the
+            # box stays up and the 制限時間 belongs to the command rather than
+            # to the attempt, so one countdown runs across both tries.
             return self._answer(
                 session, seen, script.MSG_SV_NG_SCRIPT_COMMAND_INPUT,
-                script.input_ng_params(script.INPUT_TIMER,
+                script.input_ng_params(session.script.input_stamp,
                                        ngwords.SCRIPT_INPUT_REASON))
         text = shown.decode("cp932", "replace")
         print(f"[{self.tag}] ⭐ 入力された文字列「{text}」")
@@ -6927,6 +7024,7 @@ class MpsServer:
             return reply
         begun_ip, begun_op = session.script.begun
         session.script.begun = None
+        session.script.disarm_input()
         return reply + self._answer(
             session, seen, script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
             script.command_end_params(begun_ip, begun_op))
@@ -6969,10 +7067,20 @@ class MpsServer:
             print(f"[{self.tag}] vm select mask={mask:#x} of {options} options"
                   + (f" ⊤={unknown:#x} (⊤ goes out set)" if unknown
                      else " (no ⊤)"))
-        select, timer, why = script.select_query(computed)
+        select, why = script.select_query(computed)
+        # ⭐⭐⭐ Round 444: the 制限時間 is the instruction's own, and what goes
+        # on the wire is an instant on the client's clock rather than a
+        # duration (`script.input_deadline`). A box the script put no limit on
+        # -- 775 of the export's 1853 -- states none, and so does a box whose
+        # script this copy has not exported: `seconds` is None and there is
+        # nothing to read.
+        seconds = shadow.input_seconds() if shadow is not None else None
+        timer = script.input_deadline(session.client_now(), seconds)
         if session.select_override is not None:
             select, timer = session.select_override
             why = "/sc select override"
+            seconds = None
+        session.script.arm_input(timer, seconds)
         # The export no longer decides the answer, only what the log can say
         # the box is about to show. Having no entry is ordinary — a stub has
         # none — so it is reported as an absence rather than as a fault.
@@ -6983,7 +7091,8 @@ class MpsServer:
         else:
             print(f"[{self.tag}] 選択肢 ip={local_ip}（文面は台本にしかない）")
         print(f"[{self.tag}] -> QueryScriptCommandSelect select={select:#x} "
-              f"timer={timer} ({why})")
+              f"timer={timer} ({why}"
+              + (f", 制限時間 {seconds}s" if seconds else ", 制限時間なし") + ")")
         return self._answer(session, seen,
                             script.MSG_SV_QUERY_SCRIPT_COMMAND_SELECT,
                             script.select_params(select, timer))
@@ -7019,6 +7128,7 @@ class MpsServer:
                 session.script.awaiting[actor] = local_ip
         begun = session.script.begun
         session.script.begun = None
+        session.script.disarm_input()
         if begun is None:
             return b""
         return self._answer(session, seen,
@@ -15065,6 +15175,7 @@ class MpsServer:
         out += self._drain_exam(session)
         out += self._drain_battle(session)
         out += self._drain_script_idle(session)
+        out += self._drain_script_input(session)
         out += self._drain_vitals(session)
         out += self._drain_pending_say(session)
         return out
