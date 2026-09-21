@@ -14919,8 +14919,13 @@ class MpsServer:
         ⚠️ This is the only way into the store right now, and it is a stand-in
         for two things that do not exist here: the リーダー試験 NPC event, which
         is what awards 「リーダー資格」 in the real game, and the 0x6200 create
-        handshake, which is what the client would send once the button that
-        sends it is reachable. Both write exactly what this writes.
+        handshake. ⭐ The second half of that stopped being true in round 459 --
+        0x6200 is answered now (_group_create) and 「/_cgroup」 reaches it, so
+        `/group create` is a shortcut rather than a stand-in. It still differs in
+        one way worth keeping: it skips every refusal the wire path applies, so
+        it can found a group for somebody with no リーダー資格 and under any name.
+        That is what makes it useful for putting a test on either side of a rule
+        in one line, and it is why it is not simply routed through the handler.
 
         ⭐ Most of this takes effect on a client that is already logged in only
         after a 登校. All four fields ride in MsgSvResultCharaInfo, which the
@@ -16011,6 +16016,10 @@ class MpsServer:
                 msg_type: int, params: bytes) -> bytes:
         """仲良しグループ. See server/groups.py.
 
+        ⭐⭐⭐ Round 459 answered the last one, 0x6200 作成, and with it the
+        family has no unanswered client message left. See _group_create for what
+        had kept it out: a reason nobody re-checked, not a missing decoder.
+
         ⭐ The toolbar's seventh icon opens a three-row menu -- グループ情報 /
         グループ解散 / グループ引継 -- and only the first of those is answered
         here. What made the menu appear at all is not a message: it is
@@ -16039,6 +16048,8 @@ class MpsServer:
         """
         book = self.accounts.groups
         me = session.chara_id
+        if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_CREATE:
+            return self._group_create(session, seen, params)
         if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_UPDATE:
             return self._group_update(session, seen, params)
         if msg_type == groups.MSG_CL_REQUEST_CHARA_GROUP_KICK:
@@ -16425,6 +16436,149 @@ class MpsServer:
               f"room {room} on {booking.day.isoformat()}")
         return self._answer(
             session, seen, multipurpose.MSG_SV_OK_MULTIPURPOSE_ROOM_CANCEL, b"",
+        )
+
+    def _group_create(self, session: "_Session", seen: int, params: bytes) -> bytes:
+        """［作 成］ in the 「仲良しグループ作成」 window: 0x6200 -> 0x6201/0x6202.
+
+        ⭐⭐⭐ Round 459. What this message needed was never a decoder -- it was
+        somebody checking whether the button exists. It had been excused since
+        round 142 as 「an NPC event this server cannot stage」, and that is wrong
+        twice over:
+
+          * 作成 is not on the 理事長秘書's ring. It is not on anybody's ring.
+            menu.bin's twenty menus over menu_item.bin's forty-four items were
+            enumerated whole and the string does not occur; her five icons are
+            校則参照 / グループ一覧参照 / 同好会登録 / 多目的室予約 / リーダー試験.
+          * The window that sends it is opened by the client's own 「/_cgroup」,
+            measured in round 297 drawing グループ名, キャッチコピー, a 公開▽
+            dropdown and ［作 成］ -- and 「zero on the wire until ［作 成］ is
+            pressed」 was written down at the time, which is this message.
+
+        ⭐ The body was read out of the client rather than guessed. The message
+        struct's constructor takes (name, catchcopy, publicFlag) and caps the two
+        strings at 0x15 and 0x1f bytes -- the same twenty-and-a-NUL the record
+        spends on friendGroupName. On the wire both travel as this family's one
+        counted-string convention, so the shape is
+
+            u16 nameLen + name  |  u16 ccLen + catchcopy  |  u8 publicFlag
+
+        the same three fields ［更 新］ (0x620A) carries two of.
+
+        ⭐⭐ Every refusal below is the client's own sentence. 0xFF07 has a row
+        for each way founding a group can fail, which is unusual in this protocol
+        and is what let this be written without inventing a byte:
+
+            12  リーダー資格 not awarded yet
+            17  already in a group (or a 同好会)
+            19  the name box was empty
+            20  over MAX_GROUP_NAME bytes
+            21  somebody already has that name
+            29  禁止語 in the name
+
+        ⚠️ The *order* is a choice, as it is in _clublike_register: the original's
+        is not knowable from the table. Rank before name is the one deliberate
+        part of it -- a player without リーダー資格 should not be told their name
+        is taken, because that answers a question they were never allowed to ask.
+
+        ⚠️⚠️ 禁止語 (reason 29) is a SECOND gate and a real client cannot reach
+        it. The client checks the group name itself before it sends: ［作 成］
+        with 「ラブホテル」 typed in put up 「グループ名に禁止用語が含まれて
+        います」 -- msg_text 296, a sentence of its own, note 禁止用語 rather than
+        0xFF07 29's 禁止語 -- and NOTHING went on the wire. The predicate is
+        0x41328B, called from the ［作 成］ handler beside a 空白文字 check
+        (msg_text 865); what table it reads has not been read out.
+        ⭐ The control matters and was run: 「テスト」 is katakana too and it went
+        out normally, so what the client refused was the word, not the script.
+        ⇒ this branch is kept for the same reason NG_CLUBLIKE_PUBLIC_REQUIRED is
+        -- a rule the client enforces first is still this end's rule, and this
+        end cannot assume every sender checks first -- but ⛔️ 「the player will
+        see sentence 29」 is not a thing to expect. Same shape as round 299's
+        公開▽ on a 同好会.
+
+        ⚠️ The name is checked, the キャッチコピー is not -- 0xFF07 has a row for
+        a forbidden *name* and none for a forbidden catchcopy, and answering 29
+        for the wrong box would put a sentence on screen that names the field the
+        player did not type in.
+
+        ⭐ Two more things a real client settled (round 459):
+          * ［作 成］ stays greyed until BOTH boxes have text, so neither an
+            empty name nor an empty catchcopy ever arrives from a real one.
+            Same gate 同好会登録's ［登 録］ has.
+          * A 0x6201 closes the 作成 window and opens 仲良しグループ情報 on the
+            new group; a 0x6202 puts 0xFF07's row up word for word in a
+            「仲良しグループエラー」 box (reason 17 was watched doing it).
+
+        ⚠️ The 公開 byte is round-tripped rather than clamped, for the reason
+        GroupBook.update spells out. A brand-new group cannot be a 同好会 yet, so
+        NG_CLUBLIKE_PUBLIC_REQUIRED cannot arise here -- 同好会登録 (0x0800) is a
+        separate door and it forces 公開 on at the moment it goes through.
+
+        ⚠️ Like /group create, the name reaches the player's own screen only
+        after a 登校: friendGroupName rides in MsgSvResultCharaInfo, which the
+        client asks for once. friendGroupId rides in the 0x480F entry too, which
+        is why the onlookers are refreshed -- the group icon on other people's
+        screens keeps up without one.
+        """
+        book = self.accounts.groups
+        me = session.chara_id
+        name = groups.read_counted(params)
+        catchcopy = groups.read_counted(params, 2 + len(name))
+        public = params[4 + len(name) + len(catchcopy)] \
+            if len(params) > 4 + len(name) + len(catchcopy) else 1
+        trimmed = name.split(b"\x00")[0]
+        shown = trimmed.decode("cp932", "replace")
+        copy_bytes = catchcopy.split(b"\x00")[0]
+        copy_shown = copy_bytes.decode("cp932", "replace")
+
+        def refuse(reason: int, why: str) -> bytes:
+            print(f"[{self.tag}] group create by charaId={me} "
+                  f"({shown!r}) refused: {why} (reason={reason})")
+            return self._answer(
+                session, seen, groups.MSG_SV_NG_CHARA_GROUP_CREATE,
+                struct.pack(">B", reason),
+            )
+
+        if me not in book.qualified:
+            return refuse(groups.NG_NOT_LEADER_RANK, "no リーダー資格")
+        mine = book.of(me)
+        if mine is not None:
+            return refuse(groups.NG_ALREADY_IN_A_GROUP,
+                          f"already in {mine.label()}")
+        if not trimmed:
+            return refuse(groups.NG_NAME_MISSING, "the name box was empty")
+        # ⭐ Logged raw for the reason _group_update logs its catchcopy length:
+        # the client's own edit-box limit falls out of the first name anybody
+        # types instead of having to be read out of a dialog resource. If this
+        # never exceeds MAX_GROUP_NAME the box caps it, which is worth knowing.
+        print(f"[{self.tag}] group create by charaId={me}: "
+              f"name[{len(trimmed)}]={shown!r} "
+              f"catchcopy[{len(catchcopy)}]={copy_shown!r} "
+              f"public={public}")
+        if len(trimmed) > groups.MAX_GROUP_NAME:
+            return refuse(groups.NG_NAME_TOO_LONG,
+                          f"{len(trimmed)} bytes > {groups.MAX_GROUP_NAME}")
+        taken = book.named(trimmed)
+        if taken is not None:
+            return refuse(groups.NG_NAME_TAKEN, f"{taken.label()} has it")
+        hit = self.accounts.ngwords.hit_bytes(trimmed)
+        if hit is not None:
+            return refuse(groups.NG_NAME_FORBIDDEN, f"禁止語「{hit}」")
+        # ⚠️ The bytes that arrived -- NOT name_bytes(shown); Group pads. Decoding
+        # to str and re-encoding runs anything undecodable through "replace"
+        # twice, and what the player typed is what the roster has to echo back.
+        group = book.create(me, trimmed, public=public, catchcopy=copy_bytes)
+        if group is None:
+            # ⚠️ Unreachable through the check above; kept because the store is
+            # the only thing here that can fail for a reason this end did not
+            # predict, and 0xFF07 reason 31 is the row the original kept for
+            # exactly that (「通常ではありえないエラー」).
+            return refuse(refusals.NG_INTERNAL, "the store refused the write")
+        print(f"[{self.tag}] ⭐ group create: {group.label()} founded by "
+              f"charaId={me} (re-login to see the name)")
+        self._presence_refresh_onlookers(session)
+        return self._answer(
+            session, seen, groups.MSG_SV_OK_CHARA_GROUP_CREATE, b"",
         )
 
     def _group_update(self, session: "_Session", seen: int, params: bytes) -> bytes:

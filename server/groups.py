@@ -52,9 +52,18 @@ the rows is what found the third one: 引継 and 解散 are what a *leader* is
 offered, and the menu a member gets has 脱退 in their place, so a family that
 looked like two unanswered rows was three.
 
-⚠️ What is left in 0x62xx after that is 0x6200 create (the button that sends it
-is an NPC event this server cannot stage) and 0x622A グループ一覧 (同じ, 理事長
-秘書). 0x4700 グループチャット is a 会話ツール message, not this menu's, and
+⭐⭐⭐ Round 459 closed the family: 0x6200 作成 is answered too, and what had
+kept it out was a sentence rather than a wall. It had been written down as
+「an NPC event this server cannot stage」 -- twice wrong. The right-click
+namespace was enumerated whole (menu.bin's 20 menus over menu_item.bin's 44
+items) and **no item anywhere is 作成**: the 理事長秘書's ring is exactly 校則
+参照 / グループ一覧参照 / 同好会登録 / 多目的室予約 / リーダー試験. The window
+that does send it is opened from the client's own 「/_cgroup」 command, which
+was already measured opening 「仲良しグループ作成」 (グループ名・キャッチコピー・
+公開▽ and a ［作 成］ button) in round 297. ⇒ this end had been refusing to
+answer a message the client can send today.
+
+0x4700 グループチャット is not this menu's either: it is a 会話ツール message and
 round 334 answered it there.
 
 The store is one file for the whole server, for the reason friends.FriendBook
@@ -71,16 +80,19 @@ from pathlib import Path
 import refusals
 from characters import GROUP_NAME_LEN, NAME_LEN, NO_GROUP
 
-# The three the family is missing, marked so that the message audit counts them
-# as decided rather than as forgotten. Reasons are one line each here and at
-# length in the docstring above.
-# UNANSWERED 0x6200 -- 作成: the button that sends it is an NPC event (理事長秘書)
-#   this server cannot stage, so nothing can reach it; /group create stands in.
-# ⭐⭐⭐ 0x622A IS NO LONGER ONE OF THEM, and the sentence above is what round 219
-#   falsified: 「this server cannot stage」 stopped being true in round 217, when
-#   /cid put the 理事長秘書 on the map by charaId alone. Her ring has five icons
-#   and 「グループ一覧を見る」 is one of them, so the door was never behind a wall
-#   -- it was behind a spawn. 0x622A is handled below.
+# ⭐⭐⭐ NOTHING IN THIS FAMILY IS UNANSWERED ANY MORE (round 459). The two
+# entries that used to stand here, 0x6200 作成 and 0x622A グループ一覧, were both
+# excused by the same sentence -- 「the button that sends it is an NPC event the
+# server cannot stage」 -- and that sentence was falsified twice, five rounds and
+# a hundred and forty rounds apart:
+#   * 0x622A, round 219: /cid puts the 理事長秘書 on the map by charaId alone, and
+#     「グループ一覧を見る」 is one of the five icons on her ring. The door was
+#     never behind a wall, it was behind a spawn.
+#   * 0x6200, round 459: it is not on her ring at all -- it is not on ANY ring,
+#     menu.bin and menu_item.bin have no 作成 item in the whole namespace. It
+#     comes from a window, and 「/_cgroup」 opens that window (round 297).
+# ⭐ The lesson is the one worth keeping: a reason written down once does not
+# re-check itself, and both of these stayed shut long after they had opened.
 # ⭐ 0x4700 グループチャット is not one of them either, since round 334: it is a
 # 会話ツール message rather than this menu's, and it is answered in
 # mps_session._social_chat -- the roster it broadcasts to is Group.members, so
@@ -240,6 +252,7 @@ MSG_SV_ERROR_CHARA_GROUP_LIST = 0x622C
 MSG_SV_NOTIFY_CHARA_GROUP_LIST = 0x622D
 
 HANDLED = frozenset({
+    MSG_CL_REQUEST_CHARA_GROUP_CREATE,
     MSG_CL_QUERY_CHARA_GROUP_INFO,
     MSG_CL_REQUEST_CHARA_GROUP_UPDATE,
     MSG_CL_REQUEST_CHARA_GROUP_INVITE_REQUEST,
@@ -302,6 +315,14 @@ CLUBLIKE_NG_STORE = 8
 #: reads like a measured one is the kind of thing nobody re-checks later.
 CLUBLIKE_TEST_LEVEL = 3
 
+#: How much グループ名 0x6200 is allowed to carry, and the one length in this
+#: family that is NOT a judgement call: 0xFF07 reason 20 spells it out --
+#: 「グループ名の入力は最大２０バイト（全角１０文字分）までです。」 ⇒ twenty
+#: bytes, which is also why the record's field is GROUP_NAME_LEN = 21: twenty
+#: and the NUL. ⭐ Contrast MAX_CATCHCOPY right below, which is invented because
+#: no sentence and no fixed-width field states it.
+MAX_GROUP_NAME = 20
+
 #: 「仲良しグループ」は１５人まで登録できます (p05_05 §3). The client checks
 #: nothing about the size before it sends 0x6218 -- the icon is live whatever
 #: the roster holds -- so this end is the only place the manual's number can be
@@ -330,6 +351,16 @@ NG_GROUP_FULL = refusals.NG_GROUP_FULL                # これ以上メンバー
 #: Exact, and the reason 除名 of oneself is refused at all: the original wrote a
 #: sentence for it.
 NG_KICK_SELF = refusals.NG_KICK_SELF
+#: ⭐⭐ The four rows 0x6202 MsgSvNgCharaGroupCreate selects between, plus the
+#: rank gate in front of them. All five exact -- 0xFF07 carries a sentence for
+#: every single way グループ作成 can fail, which is what made this handler
+#: writable without inventing a reason byte (round 459).
+NG_NOT_LEADER_RANK = refusals.NG_NOT_LEADER_RANK    # リーダーになる資格をまだ…
+NG_NAME_MISSING = refusals.NG_NAME_MISSING          # グループ名が指定されていません
+NG_NAME_TOO_LONG = refusals.NG_NAME_TOO_LONG        # 最大２０バイトまでです
+NG_NAME_TAKEN = refusals.NG_NAME_TAKEN              # 既に使用されています
+NG_NAME_FORBIDDEN = refusals.NG_NAME_FORBIDDEN      # 禁止語が含まれています
+
 #: 「既に申し込んでいます。」 -- exact, for a second 勧誘 or 引継 while one is open.
 NG_ALREADY_ASKED = refusals.NG_ALREADY_ASKED
 #: 「自分自身に申し込むことはできません。」 -- exact.
@@ -759,14 +790,40 @@ class GroupBook:
         """A fresh group id. Never zero: zero is what 無所属 is written as."""
         return max(self.groups, default=0) + 1
 
-    def create(self, leader: int, name: bytes, public: int = 1) -> "Group | None":
-        """Found a group. None if this character is already in one."""
+    def create(self, leader: int, name: bytes, public: int = 1,
+               catchcopy: bytes = b"") -> "Group | None":
+        """Found a group. None if this character is already in one.
+
+        ⭐ ``catchcopy`` arrives with the name because 0x6200 carries both --
+        the ［作 成］ dialog has a グループ名 box and a キャッチコピー box, and
+        one message takes them together. The console command leaves it empty,
+        which is the only difference between the two callers.
+
+        ⚠️ The caller decides whether the name is acceptable; this only writes.
+        Same split create/join/promote all keep, and it is what lets
+        _group_create answer with the client's own sentence for each way a name
+        can be refused instead of with a bool.
+        """
         if self.of(leader) is not None:
             return None
-        group = Group(self._mint(), name, leader, public=public)
+        group = Group(self._mint(), name, leader, public=public,
+                      catchcopy=catchcopy)
         self.groups[group.id] = group
         self._save()
         return group
+
+    def named(self, name: bytes) -> "Group | None":
+        """The group holding this name, or None. 0xFF07 reason 21's question.
+
+        ⚠️ Compared on the trimmed bytes, not on the padded field: the record
+        pads to GROUP_NAME_LEN and the wire does not, so comparing the stored
+        21-byte field against what arrived would make every name look free.
+        """
+        wanted = name.split(b"\x00")[0]
+        for group in self.groups.values():
+            if group.name.split(b"\x00")[0] == wanted:
+                return group
+        return None
 
     def join(self, group_id: int, chara_id: int) -> bool:
         group = self.groups.get(group_id)
