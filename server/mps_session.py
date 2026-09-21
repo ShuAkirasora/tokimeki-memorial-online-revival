@@ -818,6 +818,15 @@ MSG_SV_NG_REENTRANCE = 0x031D
 # shipped with it and names a handshake record, not this family.
 # UNANSWERED 0xFD00 -- ServerResponse: a round-trip probe this client never opens.
 # UNANSWERED 0xFD02 -- ServerResponse: the result report, whose number is not compiled in.
+# ⭐ Round 451 put a second, mechanical witness under the sentence above, from a
+# side the paragraph had not looked at: the client's own table of listener
+# registrations. CSequencerLoadTest declares one handler there and installs
+# none, which is 「nothing would install that handler」 read off the binary
+# rather than argued from the procedure list. And that is what a push would
+# meet: a real client answers an id with no registered handler with one line of
+# its own log, 「受信ハンドラが設定されていません」, and draws nothing (2.366 一).
+# UNSENT 0xFD01 -- ServerResponse: the reply to a probe that is never asked, to a
+#   handler this build declares and never registers.
 MSG_CL_REQUEST_LOBBY_DATA_START = 0x4000
 MSG_SV_OK_LOBBY_DATA_START = 0x4001
 MSG_CL_QUERY_POOL_MESSAGE = 0xA100
@@ -1061,10 +1070,65 @@ MSG_SV_NOTIFY_NORMAL_CHAT = 0x4901
 # used to stand here said the 会話ツール window had never been opened, so
 # nothing would ever send them, and round 334 sent all three from a real
 # client. See chat.py for the two ways in.
-# Marked in the form the message audit reads, so that it counts them as
-# decided rather than as forgotten.
-# UNANSWERED 0x480C -- 表情 on the map. Its lesson twin (0x610C) is answered
-#   because the pair was being measured anyway; this one has no measured layout.
+# ⭐⭐⭐ RESTORED, round 451. 表情 on the map -- the fourth and last emotion
+# channel, and the only one that had never been answered. The note that stood
+# here said 「this one has no measured layout」, and that was the whole of the
+# reason; the layout was never missing, only unread. All four channels are the
+# same three messages byte for byte, out of the client's own deserialisers:
+#
+#     0x480C Cl CastCharaEmotion    emotion u16          (reads=2)
+#     0x480D Sv NotifyCharaEmotion  charaId u32, emotion u16  (reads=4+2)
+#     0x480E Sv ErrorCharaEmotion   reason u8            (reads=1)
+#
+# -- identical to 0x610C/D/E (lesson), 0x5403/4/5 (twoshot) and 0x5C13/4/5
+# (クラブ対戦), three families this end already answers. So chat.parse_emotion
+# and chat.lesson_emotion_params are exact here rather than merely compatible,
+# the same way twoshot.py's docstring argues it for 0x5404.
+#
+# ⭐ WHO HEARS IT is not guessed either: it is written in the client's own
+# refusal table. 0x480E reason 5 is 「サーバーとの通信に失敗しました。可視範囲に
+# いるキャラクターの感情表現に失敗しました。」 -- the visible-range broadcast is
+# what this message is *for*, which is _presence_relay, the same relay 0x4806
+# 座る and 0x4901 通常会話 go out on. And the handler (0x77AC9F) reads +4 and +8
+# and hands the pair (charaId, emotion) straight to a virtual, so the notify is
+# about somebody else's character, not a private echo.
+#
+# ⚠️ Why twoshot needed its own message rather than reusing this one, in
+# twoshot.py's words: 感情 in a waist-up screen is a face, here it is an icon
+# over a head.
+MSG_CL_CAST_CHARA_EMOTION = 0x480C
+MSG_SV_NOTIFY_CHARA_EMOTION = 0x480D
+MSG_SV_ERROR_CHARA_EMOTION = 0x480E
+
+# ⭐⭐ 「感情表現に失敗しました。」, 0x480E reason 2. The door has eight rows and
+# this is the only one that is about the expression itself: 1 and 3 are
+# 「キャラクター(データ|情報)の取得に失敗しました」, 4 and 5 are 通信 faults of
+# a backend this server does not have, 0 and 7 are marked 未使用 in the table,
+# and 6 is 「現在、感情表現は禁止されています。」.
+# ⛔️ 6 IS DELIBERATELY NOT SENT. 「現在、…」 names a moment, so the question it
+# asks is who switches it on at that moment, and nothing read so far answers
+# that -- 2.346 already falsified reading the ten 禁止 sentences as one shared
+# switch. An invented ban on the map's most ordinary gesture is not a
+# restoration.
+ERROR_EMOTION_FAILED = 2
+
+# ⭐⭐⭐ WHICH KEYS THE MAP CAN DRAW, and unlike the waist-up screen there is no
+# gap in the middle. `cibi_emotion.bin` is 25 rows keyed 0..24 with nothing
+# missing: 0 通常, 1..17 the seventeen icons of the 感情アイコンウィンドウ
+# (楽しい 笑う 恥ずかしい ときめき 怒る 悲しい 泣く 驚く 呆れる 困る 疑問
+# ひらめき かがやき 沈黙 グー チョキ パー), 18..21 ダミー, then 22 座る,
+# 23 ときたま, 24 眠り.
+#
+# ⚠️⚠️ THE RANGE IS A CRASH GUARD, NOT A TASTE TEST, and the precedent is
+# measured: twoshot.py refuses 11..17 because `wu_emotion.bin` skips 11..23 and
+# 0x5404 carrying a faceless key KILLED the client in round 214 -- a null from a
+# table fetch dereferenced on the spot, the same shape as the three crashes
+# item.py records for keys `item.bin` does not have. Here the table has no hole,
+# so every key the icon window can produce passes, and only a key that is in no
+# row at all is refused. ⛔️ That is also why there is no filter *inside* the
+# range: 0x610D and 0x5C14 both forward the id the client chose, and this end
+# does not refuse a real key to be safe.
+CIBI_EMOTION_KEYS = range(0, 25)
 
 #: The three the 宛先 box and the client's own /secretchat, /friendchat and
 #: /groupchat reach. One branch for all of them: they differ in who hears the
@@ -9435,6 +9499,38 @@ class MpsServer:
                 )
                 return self._answer(
                     session, sequence, stress.MSG_SV_NOTIFY_CHARA_POSE, pose_params
+                )
+            if msg_type == MSG_CL_CAST_CHARA_EMOTION:
+                # 感情アイコン over the head: the 感情アイコンウィンドウ's 17
+                # buttons and the Fn keys behind them. See the constants above
+                # for the layout, for who hears it, and for the key range.
+                #
+                # ⭐ A cast, so the icon appears for nobody until this end sends
+                # it back -- the caster's own icon reaches them the same way a
+                # peer's does, exactly as 0x4900 通常会話 does one door over.
+                if len(params) < 2:
+                    print(f"[{self.tag}] emotion refused: body is "
+                          f"{len(params)} byte(s), no emotion in it")
+                    return self._answer(
+                        session, sequence, MSG_SV_ERROR_CHARA_EMOTION,
+                        struct.pack(">B", ERROR_EMOTION_FAILED),
+                    )
+                emotion = chat.parse_emotion(params)
+                if emotion not in CIBI_EMOTION_KEYS:
+                    # ⚠️ The crash guard, not a taste test -- see CIBI_EMOTION_KEYS.
+                    print(f"[{self.tag}] emotion refused: {emotion} is not a "
+                          f"cibi_emotion key")
+                    return self._answer(
+                        session, sequence, MSG_SV_ERROR_CHARA_EMOTION,
+                        struct.pack(">B", ERROR_EMOTION_FAILED),
+                    )
+                print(f"[{self.tag}] emotion charaId={session.chara_id} -> {emotion}")
+                emotion_params = chat.lesson_emotion_params(session.chara_id, emotion)
+                self._presence_relay(
+                    session, MSG_SV_NOTIFY_CHARA_EMOTION, emotion_params
+                )
+                return self._answer(
+                    session, sequence, MSG_SV_NOTIFY_CHARA_EMOTION, emotion_params
                 )
             if msg_type in MOVEMENT_SHAPES:
                 # Ground truth for coordinates. Every one of these is the client

@@ -443,7 +443,14 @@ def parse_addressed(params: bytes) -> "tuple[int, str] | None":
 
 
 def parse_emotion(params: bytes) -> int:
-    """The `emotion` a MsgClCastLessonEmotion (0x610C) carries, one u16."""
+    """The `emotion` a MsgClCastLessonEmotion (0x610C) carries, one u16.
+
+    ⭐ Shared by all four emotion channels: 0x610C 授業, 0x5C13 クラブ対戦 and,
+    since round 451, 0x480C on the map. Each of their deserialisers reads the
+    same single u16 and nothing else -- ツーショット's 0x5403 is those same two
+    bytes again but keeps its own reader in twoshot.py, because that door has a
+    key range of its own.
+    """
     if len(params) < 2:
         return 0
     (emotion,) = struct.unpack_from(">H", params, 0)
@@ -459,6 +466,11 @@ def lesson_emotion_params(sender_id: int, emotion: int) -> bytes:
     ⚠️ Unlike its chat twin this one is ahead of the client: no 0x610C has ever
     been seen. It is here because the pair is one feature and one of them being
     answered is the state that reads as a bug later.
+
+    ⭐ Three notifies use these exact six bytes, and not by resemblance: 0x610D,
+    クラブ対戦's 0x5C14 and -- round 451 -- the map's 0x480D all deserialise
+    through the client's 0x8F1840. ツーショット's 0x5404 is a fourth, named
+    ``senderId`` in its own dump; twoshot.py's docstring records that reading.
     """
     return struct.pack(">IH", sender_id, emotion)
 
