@@ -2315,6 +2315,56 @@ def is_tutorial(script_id: "int | None") -> bool:
     return script_id is not None and script_id in TUTORIAL_SCRIPTS
 
 
+# ── Who answers a data cell ─────────────────────────────────────────────────
+#
+# ⭐⭐⭐ NOBODY ON THE CLIENT DOES. Every one of the fifteen data-family
+# opcodes this bytecode has -- `0x8000` SYSTEM, `0x8080` SCHOOL, `0x8100/1`
+# PLAYER, `0x8180/1` PC, `0x8182/3` PC item, `0x8184/5` PC keyword and
+# `0x8200`-`0x8204` PC event variable -- lands on one of three shared slot
+# functions in this build (`0x73150b`, `0x7314eb`, `0x7314fb`), and all three
+# skip their operands and return 0. So a `REFER` is answered by this server or
+# by nobody, and an `UPDATE` is taken by this server or written into the air.
+#
+# ⚠️ 「the client cannot hold it」 is NOT 「the value cannot reach the client」.
+# The three SYSTEM cells (year, month, day) are answered here and are read back
+# on screen inside 台詞: a scenario stops at SYNC_VARIABLE and this end sends the
+# registers it computed. The stubs move the whole data plane to this side; they
+# do not close it.
+#
+# ⭐⭐ WHICH CELLS THIS END HAS TO PRODUCE OUT OF NOTHING: the ones the corpus
+# READS and never WRITES. 461 cells are touched by the 683 client scenarios and
+# 18 of them are read-only, which makes that list a lower bound on the state the
+# original server kept. Eight are answered here today:
+#
+#     SYSTEM[0] / [1] / [2]   year, month, day          romance.talk_cells
+#     PC[0x3013]              the player's sex          romance.PC_PLAYER_SEX
+#     PC[0x301C]              自分のクラス               PC_IN_CLASS, below
+#     PC[0x3103]              能力 3                    romance.PC_ABILITY_BASE
+#     PC[0x3590]              試験レベル - 1             PC_TEST_LEVEL_FROM_ZERO
+#     PLAYER[0x2001]          the tutorial's question   PLAYER_TUTORIAL_ASK
+#
+# ⛔️ The other ten are deliberately left unanswered, and the reasons differ:
+#
+#   * `PC[0x3010]`, `PC[0x3011]`, `PC[0x3012]` and `SCHOOL[0x1001]` are STRINGS.
+#     All five `<キャラ>_e011` -- the confession scenarios -- copy the same five
+#     values into a per-candidate record nothing in the corpus ever reads back:
+#     `SCHOOL[0x1001]`, `PC[0x301C]`, then those three strings, into
+#     `PLAYER[0x2110+i]` .. `PLAYER[0x2150+i]`. One member of that tuple is
+#     known (the 組), which reads the rest as 「school, class, and the player's
+#     names」 -- an ending's heading. ⚠️ That is a reading, not a name off
+#     anything, and which string is which name has no second witness. The shadow
+#     VM holds integers, so taking these would need a string channel first.
+#   * `PC[0x3201]` and `PC[0x3203]` are two axes of `personalityParam`. No
+#     message in the protocol carries them and no scenario in either corpus
+#     writes them, so this end has no source; supplying 0 would be exactly the
+#     zero that reads like an answer that `data_cells` refuses to send.
+#   * `PC[0x3015]` and `PC[0x3016]` are read as a pair and handed straight to a
+#     talk line. The save's only adjacent pair of numeric profile fields is the
+#     birthday, but the block is not laid out in the wire record's field order,
+#     so 「the next two after sex」 is a guess and not a decode.
+#   * `PC[0x3704]` has one read in the whole corpus and no reading yet;
+#     `PC[0x7000]` is only ever compared against 0 inside multiplayer events.
+#
 #: 自分のクラス, 0 = Ａ組 .. 25 = Ｚ組. Pinned by value range in 2.143 四 (26
 #: constants in the tutorial's dispatch tree, 26 classrooms in `map.bin`) and
 #: read by both `<キャラ>_e011` and the tutorial. ⭐ The tutorial dispatches on it
