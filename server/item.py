@@ -900,6 +900,70 @@ class Locker:
         return filter_tab(self.rows, tab)
 
 
+# The two 装飾 categories a school uniform is made of, which are the ones
+# `manual/p02_06` takes back when a character is deleted. 装飾 is four
+# categories and their first rows name them -- 0 制服, 1 リボン, 2 ウサ耳,
+# 3 チーク -- so the manual's three words 「制服・リボン・ネクタイ」 are two
+# categories, not three: ties live in category 1 alongside ribbons (1:237 is
+# ＧＭ用ネクタイ), which is the boys' half of the same slot. Categories 2 and 3
+# are not in that sentence and are not taken back, worn or not.
+UNIFORM_CATEGORIES = (0, 1)
+
+
+def surrender_to_locker(
+    inv: "Inventory", locker: "Locker"
+) -> "tuple[list[list[int]], list[list[int]]]":
+    """Move a deleted character's items into their account's ロッカー.
+
+    ⭐⭐⭐ The rule is `manual/p02_06`'s, under the 削除 button. Deleting a
+    character erases its game information 一部のアイテムを除き -- and the items
+    it excepts are listed as four bullets: every 装飾 item but 「キャラクターが
+    身につけていた制服・リボン・ネクタイ」, and every 消費, 奥義 and 合成 item.
+    Those 「保持されるアイテムは、全てロッカーに入ります」, with the proviso
+    「ロッカーがいっぱいだった場合、入りきらないアイテムは削除されます」.
+
+    ⭐⭐ Those four bullets are EVERY tab the item tables have: TABS is 装飾,
+    消費, 奥義, 合成, 行事, 経歴, and the last two draw nothing out of any
+    categoryId either table owns. So the rule is not a list of exceptions to
+    pick through -- it is "everything carried, minus the uniform being worn".
+
+    ⚠️ 「身につけていた」 is doing work and is not decoration: a spare 制服 in the
+    bag is a 装飾アイテム like any other and survives. That is why this reads
+    ``inv.worn`` rather than the category alone, and why a row holding three of
+    a worn item loses ONE -- the sentence takes back the garment the character
+    had on, not the stack it came out of.
+
+    ⚠️ The last line is the reason this cannot simply be ``locker.receive`` in a
+    loop: 「入りきらないアイテムは削除されます」 is partial, so a stack that only
+    half fits leaves its half behind rather than bouncing whole. What "full"
+    means here is LOCKER_CAPACITY (still None, so only ROW_MAX's u8 ever bites)
+    -- and p02_06 is a second witness that the limit existed at all, which until
+    now rested on 0x4D0C spending a sentence on 「ロッカーがいっぱいです」.
+
+    Returns ``(moved, dropped)``, both as ``[categoryId, id, count]`` rows, for
+    the caller to log. Nothing is taken out of ``inv``: the record it belongs to
+    is about to stop existing.
+    """
+    moved: "list[list[int]]" = []
+    dropped: "list[list[int]]" = []
+    for row in inv.rows:
+        category, item_id, carried = row
+        count = carried
+        if category in UNIFORM_CATEGORIES and inv.is_worn(category, item_id):
+            count -= 1
+        held = locker.held(category, item_id)
+        room = 0 if (held == 0 and locker.full()) else ROW_MAX - held
+        fits = max(0, min(count, room))
+        if fits and locker.receive(category, item_id, fits):
+            moved.append([category, item_id, fits])
+        else:
+            fits = 0
+        lost = carried - fits
+        if lost:
+            dropped.append([category, item_id, lost])
+    return moved, dropped
+
+
 def _refusal(msg_type: int, reason: int) -> "tuple[list[tuple[int, bytes]], bool]":
     """One refusal and nothing written. Every path out of the four operations
     below goes through this or through a success, because the one thing none of

@@ -7799,6 +7799,32 @@ class MpsServer:
                 # answer rather than silence, which would leave the dialog
                 # spinning forever.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+                # ⭐⭐⭐ What the character leaves behind, BEFORE the record goes:
+                # `manual/p02_06` says the items survive the deletion and go into
+                # the account's ロッカー, all of them but the uniform being worn,
+                # and that whatever will not fit is destroyed. The rule and the
+                # sentence it is transcribed from are in item.surrender_to_locker;
+                # the order here is the whole of this end's part in it, since
+                # CharacterStore.remove drops the record and the "items" dict
+                # inside it in one go.
+                #
+                # ⚠️ A failed lookup on either side is not a reason to refuse the
+                # deletion: the player asked for the character to go, and an
+                # account with no readable ロッカー still gets that. It loses the
+                # items, which is the same outcome this server had before.
+                leftovers = self._chars(session).items(chara_id)
+                locker = self._locker(session)
+                if leftovers is not None and locker is not None:
+                    moved, dropped = item.surrender_to_locker(leftovers, locker)
+                    if moved:
+                        self.accounts.save_locker(session.account_id)
+                    if moved or dropped:
+                        print(f"[{self.tag}] charaId={chara_id} leaves "
+                              f"{sum(row[2] for row in moved)} item(s) in the "
+                              f"ロッカー"
+                              + (f", {sum(row[2] for row in dropped)} destroyed"
+                                 if dropped else "")
+                              + f"; {locker.summary()}")
                 if self._chars(session).remove(chara_id):
                     # Out of everybody's アドレス帳 as well. A row is built from
                     # the character's own record, so an edge to a deleted one
