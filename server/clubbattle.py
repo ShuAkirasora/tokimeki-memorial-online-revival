@@ -188,7 +188,12 @@ MSG_CL_NOTIFY_BATTLE_TURN_END = 0x5C16
 #:   ⚠️ 189 of the 261 rows are leaves, so 満 without a grant stays ordinary.
 #: * 0x5C19 GetClubSkill is NOT sent because 練習 has no restored trigger for
 #:   it. A 部活奥義 is MADE — 奥義の書 plus 合成アイテム, `p07_05` — and neither
-#:   reward sentence hands one over ready-made.
+#:   reward sentence hands one over ready-made. The one place a 部活奥義
+#:   comes into existence on this build is 奥義合成, and that hands it over
+#:   inside its own 0x53xx bracket -- so this message has no occasion here.
+# UNSENT 0x5C19 -- NotifyClubBattleGetClubSkill: 部活奥義 are MADE (奥義合成,
+#   p07_05), and neither 練習 reward sentence (p07_03 / p07_04) lists one
+#   among what 「手に入ることがあります」.
 MSG_SV_NOTIFY_BATTLE_GET_KEYWORD = 0x5C17
 MSG_SV_NOTIFY_BATTLE_GET_ITEM = 0x5C18
 MSG_SV_NOTIFY_BATTLE_GET_CLUB_SKILL = 0x5C19

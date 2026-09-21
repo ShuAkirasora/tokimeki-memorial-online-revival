@@ -109,6 +109,15 @@ from __future__ import annotations
 # ⇒ built, not shipped. Nothing a player does on this build can send any of the
 # eight, so there is nothing here to answer.
 # UNANSWERED 0x55xx -- クラス委員長選挙: no entry on this build opens its window.
+#
+# The replies go the same way, and for the same reason: every one of them is an
+# answer to a request that cannot be sent, or -- 0x550A/0x550B/0x550C, the
+# candidate list -- a notification whose only readers are the three 選挙
+# sub-menus, and those three draw nothing and send nothing back when this end
+# answers 0x6302 with them. Measured on the real client, all three; see
+# script.DEFAULT_SUB_MENU.
+# UNSENT 0x55xx -- クラス委員長選挙: the whole family is one window this build
+#   cannot open, so no reply in it has an occasion.
 
 
 #: `class_post.bin`, 9 rows. ⚠️⚠️ The keys are NOT 0..8: the table has 0-7 and
