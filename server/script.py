@@ -490,6 +490,45 @@ MSG_SV_OK_SCRIPT_COMMAND_INPUT = 0x7217
 MSG_SV_NG_SCRIPT_COMMAND_INPUT = 0x7218
 MSG_CL_NOTIFY_SCRIPT_COMMAND_INPUT_DEFAULT = 0x7224
 
+# ⭐⭐⭐ The 結果画面, and the third box in this family: a Begin the client
+# stops on, a message from this end that fills the box, and an answer that
+# comes back when the player is done with it. Round 446 put a name on both
+# halves without guessing at either, because the client carries the name:
+# 0x7225's handler (0x785c4e) starts by asking whether this connection is in
+# a ドラマイベント at all, and what it prints when it is not is
+# 「スクリプトエラー：ドラマイベント以外での結果表示通知受信」 (0xbda210).
+# ⇒ 0x7225 IS the 結果表示通知, and it belongs to a ドラマイベント and to
+# nothing else.
+#
+# ⭐⭐ What the handler does with the body, field by field, is the rest of the
+# reading: `point` is stored whole onto the event object (+0xa8), each
+# keyword's id is appended to a list (+0xd8), each item is added to a
+# container (+0xc8), and only then does the scene change. Nothing is computed
+# from them here -- the screen draws what this end sends.
+#
+# ⭐⭐⭐ And 0x7226 is the player closing that screen. The client builds it in
+# exactly two places and they agree: the window's own completion callback
+# (0x602750, which sends it only when the window closed with a confirmation),
+# and the refusal path above, which sends it immediately so that a server
+# which sent the notification at the wrong moment is not left waiting.
+# ⇒ the answer always comes back, whichever of the two happened.
+MSG_SV_NOTIFY_SCRIPT_COMMAND_EVENT_RESULT = 0x7225
+MSG_CL_NOTIFY_SCRIPT_COMMAND_EVENT_RESULT_END = 0x7226
+
+#: How many of each the client's own object has room for, both derived from
+#: its layout rather than chosen: the keyword array runs from +0x06 to its
+#: count at +0x96 and the item array from +0x98 to its count at +0x158, six
+#: bytes an entry, and the whole object is 0x15c bytes (its size function,
+#: 0x953fc0, returns exactly that). ⚠️ The read loop does not check the count
+#: against either array, the same way the variable list does not -- so the
+#: clamp has to be on this side.
+EVENT_RESULT_MAX_KEYWORDS = 24
+EVENT_RESULT_MAX_ITEMS = 32
+
+#: `point` is one byte on the wire. A 評価ポイント is a 16-bit register on this
+#: end, and the same ceiling is already on the ドラマイベント list's `maxPoint`.
+EVENT_RESULT_POINT_CEILING = 0xFF
+
 # ⭐ What lets the client go again. A 0x721c Begin is a full stop, and answering
 # what the command asked for is not enough to end it: after 0x7214 came back the
 # client sat on the box doing nothing but heartbeats until this went out with
@@ -1514,6 +1553,46 @@ def select_params(select: int, timer_count: int) -> bytes:
 def command_end_params(wire_ip: int, op: int) -> bytes:
     """A MsgSvNotifyScriptCommandEnd body: the Begin's own {ip, op}, echoed."""
     return struct.pack(">IH", wire_ip, op)
+
+
+def event_result_params(point: int,
+                        keywords: Sequence[tuple[int, int, int]] = (),
+                        items: Sequence[tuple[int, int, int]] = ()) -> bytes:
+    """A MsgSvNotifyScriptCommandEventResult body: what one play was worth.
+
+    Shape, read out of the client's own deserialiser (0x8ea330) slot by slot,
+    where the slot number is the type::
+
+        u8  point
+        u16 keywordCount
+        keywordCount x { u16 keywordId, u16 useCount, u16 clubSource }
+        u16 itemCount
+        itemCount x { u16 categoryId, u16 id, u8 count }
+
+    ⭐ The names are the message's own: it prints that exact tree of them in
+    the debug line it makes of its body (0x8e7e50), down to `endResult=` around
+    the whole of it.
+
+    ⚠️ The item entry is five bytes on the wire and six in memory -- `count` is
+    read through the byte slot while the two ids are read through the u16 one.
+    ⛔️ Do not pad it to six.
+
+    ⚠️⚠️ Both lists go out empty in this build and that is a measurement, not a
+    simplification: the instruction that ends a ドラマイベント carries the two
+    counts in one nibble each, and both nibbles are zero at all 296 of the
+    corpus's endings. A scenario that hands something over does it while it
+    plays, through its own instructions, and this screen only reports.
+    """
+    kept_keywords = list(keywords)[:EVENT_RESULT_MAX_KEYWORDS]
+    kept_items = list(items)[:EVENT_RESULT_MAX_ITEMS]
+    out = struct.pack(">BH", min(max(point, 0), EVENT_RESULT_POINT_CEILING),
+                      len(kept_keywords))
+    for keyword_id, use_count, club_source in kept_keywords:
+        out += struct.pack(">HHH", keyword_id, use_count, club_source)
+    out += struct.pack(">H", len(kept_items))
+    for category_id, item_id, count in kept_items:
+        out += struct.pack(">HHB", category_id, item_id, count)
+    return out
 
 
 def input_params(timer_count: int) -> bytes:

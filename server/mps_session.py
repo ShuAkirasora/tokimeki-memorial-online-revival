@@ -6566,6 +6566,21 @@ class MpsServer:
             print(f"[{self.tag}] script select default={where}"
                   + (" -> E%d" % shadow.actor if taken else " (no box waiting)"))
             return None
+        if msg_type == script.MSG_CL_NOTIFY_SCRIPT_COMMAND_EVENT_RESULT_END:
+            # ⭐⭐⭐ The player is done looking at the 結果画面, and this is the
+            # closing half of the bracket 0x7225 opened -- the same shape the
+            # choice box has, where the answer is not the end and only 0x721D
+            # is. See `_show_drama_result`.
+            #
+            # ⚠️ It arrives for both of the client's reasons to send it: the
+            # window closing, and the window never opening because this end
+            # sent 0x7225 outside a ドラマイベント. Releasing is right either
+            # way -- the client is stopped on the Begin in both.
+            if session.script is None or session.script.begun is None:
+                print(f"[{self.tag}] 結果画面を閉じたが Begin を覚えていない")
+                return None
+            print(f"[{self.tag}] ⭐ 結果画面を閉じた ⇒ 解除する")
+            return self._player_release([session], session, seen)
         # Variables, errors, and the rest: logged, not answered. What the client
         # asks for unprompted is exactly what this run is here to find.
         return None
@@ -6886,7 +6901,49 @@ class MpsServer:
             print(f"[{self.tag}]   評価文: "
                   + result["text"].replace("\n", " / "))
         self._book_drama_result(session, result)
-        return self._player_release([session], session, seen)
+        return self._show_drama_result(session, seen, result)
+
+    def _show_drama_result(
+        self, session: "_Session", seen: int, result: dict
+    ) -> bytes:
+        """Put the 結果 on the screen (0x7225), or release without it.
+
+        ⭐⭐⭐ This is what makes the ending a screen rather than a log line.
+        The client's own name for the message is 結果表示通知 and it refuses
+        one outside a ドラマイベント, which is exactly where this end is
+        standing when it sends it; the number it carries is the 評価ポイント
+        the ending named, the same number `dramarecord` just booked.
+
+        ⭐ The release moves with it. 0x7225 does not end the command -- the
+        Begin is still open, the way it is while a choice box is up -- so the
+        0x721D goes out when the player closes the screen and the client says
+        so with 0x7226. ⚠️⚠️ That is the whole reason this is not "send both
+        and be safe": a release on sight is what round 233 did by hand, and it
+        runs the scenario on to its `OP_END` with the result still on screen.
+
+        ⚠️ **A score this end could not read means no screen at all**, and
+        releasing is then the only honest thing left: `point` is one byte with
+        no empty value, so the alternative would be drawing a number nobody
+        computed. Which endings those are is `Follower.event_result`'s
+        business; here it is one branch and a line in the log.
+        """
+        score = result["value"]
+        if score is None:
+            print(f"[{self.tag}]   結果画面は出さない（点が読めなかった）"
+                  f"、解除だけする")
+            return self._player_release([session], session, seen)
+        if result["keywords"] or result["items"]:
+            # The counts are in the instruction; *which* keyword and which item
+            # are not, anywhere. Zero at all 296 endings of the corpus, so this
+            # is a line about a scenario nobody has exported rather than about
+            # a hole in the message.
+            print(f"[{self.tag}]   ⚠️ 台本は キーワード{result['keywords']}／"
+                  f"アイテム{result['items']} を配ると言っているが、"
+                  f"どれを配るかは書いていない ⇒ 数だけ落として送る")
+        return self._answer(
+            session, seen,
+            script.MSG_SV_NOTIFY_SCRIPT_COMMAND_EVENT_RESULT,
+            script.event_result_params(score))
 
     def _book_drama_result(self, session: "_Session", result: dict) -> None:
         """Put one finished ending into this character's record of the event.
