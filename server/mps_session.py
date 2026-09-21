@@ -99,6 +99,7 @@ import facing
 import friends
 import gmcall
 import gmchat
+import gmnotice
 import gousei
 import groups
 import gs3vm
@@ -1770,6 +1771,12 @@ class _Session:
         # echoes a ticket to watch the wire has done the first only, and
         # refusing a player because of it would be this server's own doing.
         self.logged_in = False
+        # Set by a 強制ログアウト and read by the packet loop, which closes this
+        # connection once the notice has been written. ⚠️ It cannot close the
+        # socket where it is set: 0x6809 rides out with whatever reply is being
+        # built, and a close there would take the very sentence that explains
+        # the disconnect with it. See gmnotice.py and _gm_notice_console.
+        self.forced_logout = False
         # When 登校 happened, by the monotonic clock; 0.0 = not at school.
         # 累計登校時間 on the 経歴 card is the sum of the spans this opens, so
         # every path that ends one has to close it -- 下校 and the disconnect
@@ -7420,6 +7427,12 @@ class MpsServer:
                         writer.write(push)
                         await writer.drain()
                         print(f"[{self.tag}] -> {len(push)}B (timer): {push.hex()}")
+                    # A 強制ログアウト can arrive through runtime/console.txt,
+                    # which is drained from here as well as from the packet
+                    # branch below -- so the door out has to be on both paths.
+                    if session.forced_logout:
+                        print(f"[{self.tag}] 強制ログアウト: closing {peer}")
+                        break
                     continue
                 if not chunk:
                     print(f"[{self.tag}] EOF peer={peer}")
@@ -7445,12 +7458,20 @@ class MpsServer:
                     reply = (reply or b"") + self._info_changed(
                         watched, session)
                     reply = (reply or b"") + self._drains(session)
-                    if not reply:
-                        continue
-                    write_packet_log(self.packet_dir, self.tag, "out", reply)
-                    writer.write(reply)
-                    await writer.drain()
-                    print(f"[{self.tag}] -> {len(reply)}B: {reply.hex()}")
+                    if reply:
+                        write_packet_log(self.packet_dir, self.tag, "out", reply)
+                        writer.write(reply)
+                        await writer.drain()
+                        print(f"[{self.tag}] -> {len(reply)}B: {reply.hex()}")
+                    # ⚠️ After the write, never before it: the 0x6809 that says
+                    # why this connection is about to end is inside that reply.
+                    # The rest of the packets in this chunk go unanswered, which
+                    # is what a connection that has just been ended owes them.
+                    if session.forced_logout:
+                        break
+                if session.forced_logout:
+                    print(f"[{self.tag}] 強制ログアウト: closing {peer}")
+                    break
         finally:
             # 0x580D reason 2 is 「切断による」, so a dropped connection taking
             # its owner out of the 看板 is the protocol's own rule and not
@@ -14552,12 +14573,27 @@ class MpsServer:
         ⚠️ A player in a GM chat cannot type any of these: the chat bar
         re-routes to 0x6804 while it is up. Drive it from the other
         connection, or from runtime/console.txt.
+
+        ⭐ And the GM's two one-way notices, which answer nothing and wait for
+        nobody. See gmnotice.py for both boxes and for why the second one ends
+        with a closed socket.
+
+            /gm msg <文>              ＧＭメッセージ (0x680A) to every screen
+                                      on this port
+            /gm msg to <charaId> <文> …to one of them
+            /gm logout [charaId]      強制ログアウト (0x6809): say so, then
+                                      close that connection. No argument is
+                                      oneself, which is what a one-account
+                                      test wants.
         """
         book = self.accounts.gmcalls
         what = args[0].lower() if args else ""
 
         if what in ("chat", "say", "cancel", "end"):
             return self._gm_chat_console(session, sequence, what, args[1:])
+
+        if what in ("msg", "logout"):
+            return self._gm_notice_console(session, sequence, what, args[1:])
 
         if not what:
             if not book.calls:
@@ -14710,6 +14746,114 @@ class MpsServer:
             return sent
         return self._say(session, sequence,
                          f"/gm {what} -> 0x{player:x} [{desk.summary()}]")
+
+    def _gm_notice_console(
+        self, session: "_Session", sequence: int, what: str, args: "list[str]"
+    ) -> bytes:
+        """``/gm msg|logout``: the GM's two one-way notices. See gmnotice.py.
+
+        Split out of _gm_console for the same reason the chat half is: neither
+        of these asks anybody anything. A ＧＭメッセージ is a box and a
+        強制ログアウト is a box followed by a closed socket, and nothing comes
+        back from either.
+
+            /gm msg <文>              every screen on this port
+            /gm msg to <charaId> <文> one of them
+            /gm logout [charaId]      that connection, or one's own
+
+        ⚠️ The addressed form of /gm msg is this end's convenience and not a
+        recovered feature: the console's own 0x670F carries a line and no
+        target at all, so 「everybody」 is the shape the original had. It is
+        offered because a two-client test wants to watch one screen and not
+        both.
+
+        ⚠️⚠️ NEITHER OF THESE HAS PUT ANYTHING ON A PLAYER'S SCREEN. Both were
+        measured at a retail client and both got as far as the client building
+        the dialog and no further; gmnotice.py has the measurement and the one
+        field that differs from a box that does appear. What an operator can
+        rely on is the second half of /gm logout -- the connection ends.
+
+        ⚠️⚠️ A 強制ログアウト is refused for a charaId nobody is holding, which
+        is the nearest this end can get to 0x670E reason 3 (「指定したキャラ
+        クターが校内マップ上にいません」). ⭐ And it goes to every connection
+        that charaId is 登校'd on, not just this port's: a player who kept the
+        game connection while playing on the school one has two, and a logout
+        that left one of them up would not be one.
+        """
+        if what == "msg":
+            target: int | None = None
+            if args and args[0] == "to":
+                if len(args) < 3:
+                    return self._say(session, sequence, "/gm msg to <charaId> <文>")
+                try:
+                    target = int(args[1], 0)
+                except ValueError:
+                    return self._say(session, sequence, "/gm msg to <charaId> <文>")
+                args = args[2:]
+            if not args:
+                return self._say(session, sequence,
+                                 "/gm msg <文> | /gm msg to <charaId> <文>")
+            line = " ".join(args)
+            body = gmnotice.message_params(line)
+            if target is not None:
+                other = self._session_of(target)
+                if other is None:
+                    return self._say(session, sequence,
+                                     f"/gm msg: 0x{target:x} はログインしていない")
+                wants = [other]
+            else:
+                wants = self._sysmsg_targets(session)
+            reply = self._sysmsg_send(
+                body, wants, session, sequence,
+                msg_type=gmnotice.MSG_SV_NOTIFY_GM_MESSAGE)
+            print(f"[{self.tag}] ＧＭメッセージ -> {len(wants)}: {line!r}")
+            return reply + self._say(session, sequence,
+                                     f"/gm msg {len(wants)}人に送った")
+
+        try:
+            who = int(args[0], 0) if args else session.chara_id
+        except ValueError:
+            return self._say(session, sequence, "/gm logout [charaId]")
+        # Every connection that charaId has, on every port this process is
+        # serving -- the same walk _shutdown_broadcast does, and for the same
+        # reason: one player is several sockets and this ends the player.
+        going = [
+            other
+            for server in MpsServer.running
+            for other in server.live
+            if other.chara_id == who
+            and other.writer is not None
+            and not other.writer.is_closing()
+        ]
+        if not going:
+            return self._say(session, sequence,
+                             f"/gm logout: 0x{who:x} はログインしていない")
+        body = gmnotice.logout_params()
+        reply = b""
+        for other in going:
+            other.forced_logout = True
+            if other is session:
+                # Ours rides out with this reply and the packet loop closes the
+                # socket behind it; see _Session.forced_logout.
+                reply += self._answer(
+                    session, sequence,
+                    gmnotice.MSG_SV_NOTIFY_GM_LOGOUT, body)
+            else:
+                # The push is written now and the close goes behind it: a
+                # transport flushes what it is holding before it goes away, so
+                # the box is on the wire ahead of the FIN.
+                self._push(other, self._answer(
+                    other, 0, gmnotice.MSG_SV_NOTIFY_GM_LOGOUT, body))
+                if other.writer is not None:
+                    other.writer.close()
+        print(f"[{self.tag}] 強制ログアウト: 0x{who:x} on {len(going)} connection(s)")
+        if reply:
+            # ⚠️ Nothing is said back when an operator logs themselves out: the
+            # console line would be built after the 0x6809 and written to a
+            # connection that is being closed for having received it.
+            return reply
+        return self._say(session, sequence,
+                         f"/gm logout -> 0x{who:x} ({len(going)}本切った)")
 
     def _group_console(
         self, session: "_Session", sequence: int, args: "list[str]"
@@ -15068,7 +15212,9 @@ class MpsServer:
             wants = [other]
         else:
             wants = self._sysmsg_targets(session)
-        reply = self._sysmsg_send(body, wants, session, sequence)
+        reply = self._sysmsg_send(
+            body, wants, session, sequence,
+            msg_type=sysmsg.MSG_SV_NOTIFY_SYSTEM_MESSAGE)
         print(f"[{self.tag}] システムメッセージ -> {len(wants)}, "
               f"importance={importance}: {line!r}")
         return reply + self._say(
@@ -15100,8 +15246,16 @@ class MpsServer:
 
     def _sysmsg_send(self, body: bytes, wants: "list[_Session]",
                      session: "_Session | None" = None,
-                     sequence: int = 0) -> bytes:
-        """Put one 0xA001 on every screen in *wants*; ours rides the reply.
+                     sequence: int = 0, *, msg_type: int) -> bytes:
+        """Put one notice on every screen in *wants*; ours rides the reply.
+
+        *msg_type* is here because ＧＭメッセージ (0x680A) is the same errand
+        with a different box on the other end -- one push per screen, and the
+        caller's own copy handed back rather than written. See gmnotice.py.
+        ⚠️ It has no default on purpose: the id a send carries is readable
+        from the call site and nowhere else, and a caller that left it out
+        would make its message invisible to anyone -- or anything -- reading
+        this file for the ids this end puts on the wire.
 
         ⚠️⚠️ A push is written the moment it is made, while the console line
         that asked for it is built first and written last. Pushing to the
@@ -15113,12 +15267,9 @@ class MpsServer:
         reply = b""
         for other in wants:
             if session is not None and other is session:
-                reply += self._answer(
-                    session, sequence,
-                    sysmsg.MSG_SV_NOTIFY_SYSTEM_MESSAGE, body)
+                reply += self._answer(session, sequence, msg_type, body)
             else:
-                self._push(other, self._answer(
-                    other, 0, sysmsg.MSG_SV_NOTIFY_SYSTEM_MESSAGE, body))
+                self._push(other, self._answer(other, 0, msg_type, body))
         return reply
 
     def _shutdown_broadcast(self, line: str, session: "_Session",
@@ -15139,7 +15290,9 @@ class MpsServer:
             mine = session if server is self else None
             wants = server._sysmsg_targets(mine)
             told += len(wants)
-            reply += server._sysmsg_send(body, wants, mine, sequence)
+            reply += server._sysmsg_send(
+                body, wants, mine, sequence,
+                msg_type=sysmsg.MSG_SV_NOTIFY_SYSTEM_MESSAGE)
         return reply, told
 
     def _shutdown_console(
