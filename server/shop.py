@@ -107,6 +107,10 @@ MSG_CL_REQUEST_SHOP_TRADE = 0x4F07
 MSG_SV_OK_SHOP_TRADE = 0x4F08
 MSG_SV_NG_SHOP_TRADE = 0x4F09
 MSG_SV_NOTIFY_SHOP_UPDATE = 0x4F0A
+# UNSENT 0x4F0A -- ShopUpdate carries one row that CHANGED, and nothing in this
+# build restocks, ages or reprices: the five rows read the same before and after
+# every trade. update_reply() builds it for a shop that does change; see the
+# note in trade_replies for why sending an unchanged row would be an invention.
 
 REQUESTS = (MSG_CL_REQUEST_SHOP_START,
             MSG_CL_REQUEST_SHOP_END,
