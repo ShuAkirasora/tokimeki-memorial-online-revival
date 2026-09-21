@@ -6016,6 +6016,28 @@ class MpsServer:
             other, 0, script.MSG_SV_REQUEST_SCRIPT_CONTINUE, b""))
         return b""
 
+    def _script_error(self, session: "_Session", seen: int,
+                      reason: int) -> bytes:
+        """Tell the client why this end just gave up on its script (0x7222).
+
+        ⭐⭐⭐ Every call site is a place that used to `return None` after
+        printing a line only this server's log could read. The seven sentences
+        are the ORIGINAL's, out of `error_message.bin` under this message id,
+        and the code is picked by matching a sentence to a giving-up that was
+        already written here -- see `script.ERROR_SCRIPT_*`. ⛔️ No site was
+        invented for a reason that had none: 1, 2, 3 and 6 stay unsent because
+        nothing on this end computes the thing they are about.
+
+        ⚠️⚠️ This does not move the play. The client's handler (0x784d37) logs
+        the sentence and sets two bytes; it never touches the interpreter's
+        wait flag, so a stop stays a stop and 0x721D remains the only release.
+        ⇒ ⛔️ Never send it INSTEAD of an answer the client is waiting for.
+        """
+        print(f"[{self.tag}] -> ScriptError reason={reason} "
+              f"({script.SCRIPT_ERROR_NAMES.get(reason, '?')})")
+        return self._answer(session, seen, script.MSG_SV_NOTIFY_SCRIPT_ERROR,
+                            script.error_params(reason))
+
     def _script_incoming(
         self, session: "_Session", seen: int, msg_type: int, params: bytes
     ) -> bytes | None:
@@ -6055,7 +6077,25 @@ class MpsServer:
                     session, seen, script.MSG_SV_ERROR_SCRIPT_RETIRE,
                     struct.pack(">B", script.ERROR_RETIRE_NOT_NOW),
                 )
-            return None
+            if msg_type == script.MSG_CL_NOTIFY_SCRIPT_COMMAND_EVENT_RESULT_END:
+                # ⭐⭐⭐ NOT an error, and this is the one place the whole log
+                # archive says so. A 0x7226 with nothing running is a straggler
+                # the client sends BY DESIGN: its 0x7225 handler answers one
+                # that arrived outside a ドラマイベント with an immediate 0x7226
+                # (round 446), and round 447 watched a real client send a second
+                # one after the 結果画面 closed, arriving after OP_END had
+                # already cleared the script. ⇒ answering it with 「実行状態不
+                # 整合」 would put an error line in the client's log at the end
+                # of every play. ⚠️ Of 134 no-script arrivals in the archive,
+                # 69 are 0x720C, 64 are 0x7205 and this is the remaining one.
+                return None
+            # ⭐ Everything else in the family: 「実行状態不整合」. The two doors
+            # above are taken because their own tables hold a sentence for
+            # exactly this; the rest have nowhere to say it but here.
+            # ⚠️ Never observed once -- see the count above -- so this is the
+            # floor under a state that cannot be reasoned about, not a path
+            # anybody walks.
+            return self._script_error(session, seen, script.ERROR_SCRIPT_STATE)
         if msg_type == script.MSG_CL_REQUEST_SCRIPT_PAUSE:
             # ［Pause］, or the right-click ring's 「ポーズ」 (manual p08_03).
             on = script.parse_pause(params)
@@ -6148,7 +6188,8 @@ class MpsServer:
             session.script.acks += 1
             if len(params) < 6:
                 print(f"[{self.tag}] script report: short body {params.hex()}")
-                return None
+                return self._script_error(session, seen,
+                                          script.ERROR_SCRIPT_PARAMS)
             wire_ip, op = struct.unpack_from(">IH", params, 0)
             found = session.script.script
             local = found.local_ip(wire_ip)
@@ -6481,7 +6522,8 @@ class MpsServer:
             # wants. Only INPUT_SELECT is understood so far.
             if len(params) < 6:
                 print(f"[{self.tag}] script begin: short body {params.hex()}")
-                return None
+                return self._script_error(session, seen,
+                                          script.ERROR_SCRIPT_PARAMS)
             wire_ip, op = struct.unpack_from(">IH", params, 0)
             found = session.script.script
             local = found.local_ip(wire_ip)
@@ -6495,7 +6537,19 @@ class MpsServer:
             if op != script.OP_INPUT_SELECT:
                 print(f"[{self.tag}] script begin ip={local} op=0x{op:04x} "
                       f"— 応答未実装、待たせたまま")
-                return None
+                # ⭐⭐⭐ 0x7222's reason 5 is this line in the original's own
+                # words: 「イベントの実行に失敗しました。（未実装のコマンド）」.
+                # ⚠️⚠️ It does not unstick the client -- nothing in its handler
+                # touches the interpreter's wait flag, so the play stays
+                # stopped exactly as it was (0x721D is still the only release,
+                # and sending one here would be claiming the command was served
+                # when it was not). ⛔️ And do not claim more for it than has
+                # been measured: round 448 saw a real client receive and parse
+                # this message, not render its sentence -- the note on
+                # `script.MSG_SV_NOTIFY_SCRIPT_ERROR` has what was and was not
+                # seen.
+                return self._script_error(session, seen,
+                                          script.ERROR_SCRIPT_UNIMPLEMENTED)
             return self._script_select(session, seen, local)
         if msg_type == script.MSG_CL_RESULT_SCRIPT_COMMAND_SELECT:
             # ⭐ Which line the player clicked. The number is only half the
@@ -6503,7 +6557,8 @@ class MpsServer:
             # follows, which is what `chose` arms.
             if len(params) < 2:
                 print(f"[{self.tag}] script select: short body {params.hex()}")
-                return None
+                return self._script_error(session, seen,
+                                          script.ERROR_SCRIPT_PARAMS)
             (result,) = struct.unpack_from(">H", params, 0)
             session.script.chose(result)
             # ⭐ Kept past the OP_BR chain that consumes it: `chose` arms a
@@ -6522,7 +6577,12 @@ class MpsServer:
             # 0x721d was tried by hand.
             if session.script.begun is None:
                 print(f"[{self.tag}] 選択が届いたが Begin を覚えていない")
-                return None
+                # An answer to a box this end has no record of opening: the
+                # state the message assumes is not the state there is.
+                # ⚠️ Zero occurrences in the whole log archive, unlike its
+                # neighbour at the 結果画面 (see there).
+                return self._script_error(session, seen,
+                                          script.ERROR_SCRIPT_STATE)
             box = session.script.script.local_ip(session.script.begun[0])
             session.script.answered[box] = session.script.answered.get(box, 0) + 1
             out = self._player_release([session], session, seen)
@@ -6578,6 +6638,11 @@ class MpsServer:
             # way -- the client is stopped on the Begin in both.
             if session.script is None or session.script.begun is None:
                 print(f"[{self.tag}] 結果画面を閉じたが Begin を覚えていない")
+                # ⛔️ Deliberately NOT a 0x7222: the client sends a second
+                # 0x7226 of its own accord when the 結果画面 closes (round 447
+                # watched one land after OP_END), so 「実行状態不整合」 here
+                # would fire at the end of an ordinary play. The same carve-out
+                # is argued at the no-script door above.
                 return None
             print(f"[{self.tag}] ⭐ 結果画面を閉じた ⇒ 解除する")
             return self._player_release([session], session, seen)
@@ -7097,7 +7162,12 @@ class MpsServer:
         # what the command asked for does not end it.
         if session.script.begun is None:
             print(f"[{self.tag}] 入力が届いたが Begin を覚えていない")
-            return reply
+            # Same shape as the choice box's: text came back for a box this end
+            # has no record of opening. The 0x7217 above still goes -- the
+            # string was judged either way -- and this only says why no closing
+            # bracket follows it.
+            return reply + self._script_error(session, seen,
+                                              script.ERROR_SCRIPT_STATE)
         begun_ip, begun_op = session.script.begun
         session.script.begun = None
         session.script.disarm_input()

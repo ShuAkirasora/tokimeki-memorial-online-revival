@@ -529,6 +529,96 @@ EVENT_RESULT_MAX_ITEMS = 32
 #: end, and the same ceiling is already on the ドラマイベント list's `maxPoint`.
 EVENT_RESULT_POINT_CEILING = 0xFF
 
+# ⭐⭐⭐ The script subsystem's own error channel, and the only message in the
+# 0x72xx family that is about this end failing rather than about the play.
+# Its body is one byte (deserialiser 0x8D84A0, the same u8 reader 0x4902 and
+# 0x720E go through) and `reason` indexes a table of seven sentences that
+# `error_message.bin` carries under this very message id:
+#
+#     0  イベントの実行に失敗しました。（パラメータ不正）
+#     1  イベントの実行に失敗しました。（クライアント先行）
+#     2  イベントの実行に失敗しました。（プレイヤー非参加）
+#     3  キャラクタデータの取得に失敗しました。
+#     4  イベントの実行に失敗しました。（実行状態不整合）
+#     5  イベントの実行に失敗しました。（未実装のコマンド）
+#     6  イベントの実行に失敗しました。（役柄情報不正）
+#
+# ⇒ the original server sent all seven, and the seven are its own taxonomy of
+# what can go wrong on this side of a script -- which is why the codes are
+# picked below by matching the sentence to a place where this end ALREADY
+# gives up, rather than by inventing occasions for them.
+#
+# ⭐⭐ What the client does with it is not a dialogue box. Its handler
+# (0x784d37) locks the weak reference to the running event, asks it one
+# question (vslot +0xfc), and if the answer is no, turns (msgId, reason) into
+# the sentence above through the client's own (msgId, reason) lookup (0x81702a) and
+# hands it to vslot +0xf8 -- the client's own script-error log channel, the
+# one round 446 watched swallow 「スクリプトエラー：ドラマイベント以外での結果
+# 表示通知受信」 without a pixel changing. Then it sets two bytes on the
+# listener (+0x54, +0x55).
+# ⇒ ⚠️ Sending this does NOT release a client that is stopped: nothing here
+# touches 0x9f002c, so a stop stays a stop and only 0x721D ends it.
+#
+# ⭐⭐⭐ Round 448 pushed both a reason=4 and a reason=5 at a real client and
+# read its own log. WHAT WAS MEASURED, and no more:
+#
+#     _INF #Script#[Msg] ▼Recv, MsgSvNotifyScriptError(0x7200), reason=5,
+#            (.\client\procedure\ScriptMessageProcedure.cpp:)
+#
+# ⇒ the body IS one `reason` byte (the client names the field and reads the
+# value), the message belongs to #Script#, and arriving with no live event
+# changes nothing on the screen and does not crash -- which is what the two
+# null-safe facades (0x73bbc6, 0x73bbda return at once on a dead weak
+# reference) predict.
+# ⛔️ What is NOT measured: the sentence itself never appeared in that log,
+# in either push. Both pushes were made with no event object alive on the
+# client (the second one went to a client sitting on an unanswered 0x7200),
+# so this is consistent with the null-safe reading and says nothing either
+# way about what a client INSIDE an event does with it. ⚠️ Do not write
+# 「the player's log will say why」 into a report until that has been seen.
+MSG_SV_NOTIFY_SCRIPT_ERROR = 0x7222
+
+#: 「パラメータ不正」 -- the body that arrived is not the shape the message is.
+ERROR_SCRIPT_PARAMS = 0
+#: 「クライアント先行」 -- the client is reporting from further along than this
+#: end has got to. ⛔️ No site here: the 144786 log lines that say 「<not an
+#: instruction start>」 are NOT this (they are the ordinary shape of a stub
+#: script, round 37), and nothing else on this end compares the two positions.
+ERROR_SCRIPT_CLIENT_AHEAD = 1
+#: 「プレイヤー非参加」 -- the sender is not in the play this is about.
+ERROR_SCRIPT_NOT_A_PLAYER = 2
+#: 「キャラクタデータの取得に失敗しました」 -- this end could not load the
+#: character the script needs.
+ERROR_SCRIPT_CHARA_DATA = 3
+#: 「実行状態不整合」 -- the message is well-formed and the sender is who it
+#: says, but the state it assumes on this end is not the state there is.
+ERROR_SCRIPT_STATE = 4
+#: 「未実装のコマンド」 -- the client is stopped on a command this end does not
+#: know how to serve. ⭐ The phrase is this server's own 「応答未実装」 log line
+#: word for word, and it is the one reason whose site was already written.
+ERROR_SCRIPT_UNIMPLEMENTED = 5
+#: 「役柄情報不正」 -- the 役柄 the message rides on does not check out.
+ERROR_SCRIPT_ACTOR_INFO = 6
+
+
+#: For the log only -- the sentence the client will write for each code, cut to
+#: the part that distinguishes it.
+SCRIPT_ERROR_NAMES = {
+    ERROR_SCRIPT_PARAMS: "パラメータ不正",
+    ERROR_SCRIPT_CLIENT_AHEAD: "クライアント先行",
+    ERROR_SCRIPT_NOT_A_PLAYER: "プレイヤー非参加",
+    ERROR_SCRIPT_CHARA_DATA: "キャラクタデータの取得に失敗",
+    ERROR_SCRIPT_STATE: "実行状態不整合",
+    ERROR_SCRIPT_UNIMPLEMENTED: "未実装のコマンド",
+    ERROR_SCRIPT_ACTOR_INFO: "役柄情報不正",
+}
+
+
+def error_params(reason: int) -> bytes:
+    """0x7222's whole body: the reason code, one byte."""
+    return struct.pack(">B", reason)
+
+
 # ⭐ What lets the client go again. A 0x721c Begin is a full stop, and answering
 # what the command asked for is not enough to end it: after 0x7214 came back the
 # client sat on the box doing nothing but heartbeats until this went out with
