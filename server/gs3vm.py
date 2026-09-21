@@ -1587,6 +1587,14 @@ class Follower(Machine):
         self.missing: Counter = Counter()      # cell name -> times asked for
         self.selects: list[tuple[int, int, int, int]] = []
         self.reported = 0
+        #: ⭐⭐⭐ The ip of a choice box this follower has just stepped over
+        #: *unanswered*, while the client is still expected to say which line
+        #: its highlight was resting on. `timed_out` sets it, `select_default`
+        #: consumes it, and nothing else may: a 0x7223 that arrives at any
+        #: other moment is a message about a box this end did not close, and
+        #: writing a register off it would be guessing. None the rest of the
+        #: time, which is almost always.
+        self.default_pending: int | None = None
         # ⭐ Which season the four-armed switch should see, or None to let the
         # script's own constant stand. ⚠️ None is not "the original": it is what
         # a server that only evaluates the bytecode would do, and the original
@@ -2260,27 +2268,73 @@ class Follower(Machine):
         return None
 
     def timed_out(self) -> str | None:
-        """The box expired unanswered: step over it, writing nothing.
+        """The box expired unanswered: step over it, and wait to be told what
+        the highlight was resting on.
 
         ⭐ The counterpart of `chose` and the twin of `passed_box`: 「制限時間終
         了。\n先に進みます。」 (`msg_text` 574) is the game's own description of
         what happens, and 「先に進みます」 is a step with no answer in it.
 
-        ⚠️⚠️ **The register keeps whatever it held**, and that is the one thing
-        about a timeout this end cannot measure: nobody clicked, so there is no
-        answer to write, and what the *client's* own copy of the register ends
-        up holding is not visible from here. For a choice box that is the same
-        position `passed_box` already leaves this end in, and the branch chain
-        just after reads a stale `E<n>`. ⛔️ Inventing a click to fill it would
-        be worse: it would put a number the player never chose into a register
-        the play then acts on.
+        ⭐⭐⭐ **A choice box still gets its register written, and the number
+        comes off the wire rather than out of a default invented here.** The
+        client answers a forced close by sending
+        `0x7223 MsgClNotifyScriptCommandSelectDefault` unasked, carrying the
+        line its highlight was on, and it sends it before it resumes the
+        interpreter -- so it arrives ahead of the branch chain that reads
+        `E<n>`. `select_default` is where that lands; all this does is record
+        that the next one belongs to this box.
+
+        ⚠️ The step happens here all the same, and the register write is a
+        separate later event, because the two arrive in that order: the box is
+        closed by this end and reported on by the other. A 0x7223 that never
+        comes leaves exactly the stale `E<n>` this method used to leave
+        unconditionally -- the old behaviour is the floor, not a regression.
+
+        ⚠️⚠️ A free-text box gets no such message (its twin 0x7224 has never
+        been seen on a close) and keeps whatever it held.
         """
         if self.lost:
             return self.lost
-        op = self.script.code[self.pos][1]
+        ip, op, _ = self.script.code[self.pos]
         if op != OP_INPUT_SELECT and op not in INPUT_STRING_OPS:
             return self._lose("a box timed out and this end is not on one")
+        self.default_pending = ip if op == OP_INPUT_SELECT else None
         self.pos += 1
+        return None
+
+    def select_default(self, option: int) -> str | None:
+        """The client says where the highlight was when a box was forced shut.
+
+        ⭐⭐⭐ **The number is the script's own index, not the screen's.** The
+        client draws a box's lines in an order of its own and wraps past three
+        of them into a second column, so screen position and script index come
+        apart; round 445 timed out four boxes with the highlight parked on a
+        known line and read the reply each time:
+
+        | box     | highlighted line   | screen (col,row) | script index | 0x7223 |
+        |---------|--------------------|------------------|--------------|--------|
+        | 245     | 『うん』            | (0,0)            | 0            | 0      |
+        | 4552    | 『泳げないフリをする』| (0,2)            | 0            | 0      |
+        | 7832    | 『情熱的だね』       | (0,0)            | 1            | 1      |
+        | 16781   | 『１』              | (0,1)            | 5            | 5      |
+
+        Rows two and four are the ones that decide it: (0,2) reporting 0 rules
+        out the screen row, and (0,1) reporting 5 rules out both that and any
+        reading where the answer is a constant.
+
+        ⚠️⚠️ **It is a timeout message, not a highlight-moved message.** In the
+        same session a box answered with a real click produced no 0x7223 at
+        all, and over a hundred rounds of this server's logs -- full of real
+        clicks -- hold not one. ⇒ the guard below is the whole point: without a
+        box this end has just closed, there is nothing this number could be
+        about.
+        """
+        if self.lost:
+            return self.lost
+        if self.default_pending is None:
+            return None
+        self.default_pending = None
+        self.registers[(CAT_SELECT, self.actor)] = option
         return None
 
     def passed_box(self) -> str | None:
@@ -2297,6 +2351,7 @@ class Follower(Machine):
             return self.lost
         if self.script.code[self.pos][1] != OP_INPUT_SELECT:
             return self._lose("asked to step over a box this end is not on")
+        self.default_pending = None      # same reason as in `chose`
         self.pos += 1
         return None
 
@@ -2313,6 +2368,10 @@ class Follower(Machine):
             return self.lost
         if self.script.code[self.pos][1] != OP_INPUT_SELECT:
             return self._lose("a choice came back but this end is not on a box")
+        # A box got as far as a real answer, so any 0x7223 still outstanding
+        # belongs to an older one that never sent it: drop it rather than let
+        # it land on this register later. See `select_default`.
+        self.default_pending = None
         self.registers[(CAT_SELECT, self.actor)] = option
         self.pos += 1
         return None

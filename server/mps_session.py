@@ -5853,10 +5853,13 @@ class MpsServer:
         it. A 0x720B on its own would take the box off the screen and leave the
         script standing exactly where it was.
 
-        ⚠️ The shadow steps over the box writing nothing (`Follower.timed_out`)
-        -- there is no answer to write -- so the ladder just after it reads a
-        stale `E<n>`. ⛔️ That is a known cost and the alternative is worse: see
-        `timed_out` for why a made-up click is not the way out of it.
+        ⭐ The shadow steps over the box here (`Follower.timed_out`) and the
+        register it leaves empty is filled a moment later, by the client: a
+        forced close makes it send 0x7223 with the line its highlight was on,
+        ahead of resuming its own interpreter, so the branch chain that reads
+        `E<n>` still sees the right number. ⛔️ Nothing is made up on this side
+        -- see `Follower.select_default` for the four measurements that say
+        what that number means.
         """
         begun_ip, begun_op = begun
         local = session.script.script.local_ip(begun_ip)
@@ -6541,11 +6544,27 @@ class MpsServer:
             print(f"[{self.tag}] script input default={typed!r}")
             return None
         if msg_type == script.MSG_CL_NOTIFY_SCRIPT_COMMAND_SELECT_DEFAULT:
-            # Arrives unasked, presumably as the highlight moves. Logged only:
-            # answering something the client did not stop for is how rounds
-            # 30-32 filled the log with replies to nobody.
+            # ⭐⭐⭐ Arrives unasked, and only after a choice box was forced
+            # shut by 0x720B: it carries the script index of the line the
+            # highlight was resting on, which is the one thing about a timeout
+            # this end could not otherwise know. Round 445 measured both
+            # halves of that -- four timeouts with the highlight parked on a
+            # known line, and a real click that produced no 0x7223 at all --
+            # and `Follower.select_default` holds the table.
+            #
+            # ⚠️ Still nothing goes back on the wire. The client did not stop
+            # for this; it is telling this end something. Answering a message
+            # nobody stopped for is how rounds 30-32 filled the log with
+            # replies to nobody.
             where = struct.unpack_from(">H", params, 0)[0] if len(params) >= 2 else -1
-            print(f"[{self.tag}] script select default={where}")
+            shadow = session.script.shadow if session.script else None
+            taken = shadow is not None and shadow.default_pending is not None
+            if taken:
+                why = shadow.select_default(where)
+                if why:
+                    print(f"[{self.tag}] vm follower stopped here: {why}")
+            print(f"[{self.tag}] script select default={where}"
+                  + (" -> E%d" % shadow.actor if taken else " (no box waiting)"))
             return None
         # Variables, errors, and the rest: logged, not answered. What the client
         # asks for unprompted is exactly what this run is here to find.
