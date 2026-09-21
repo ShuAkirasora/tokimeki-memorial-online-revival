@@ -101,7 +101,9 @@ console those actions would have come from is unreachable on this build.
 """
 from __future__ import annotations
 
+import json
 import struct
+from pathlib import Path
 
 MSG_SV_REQUEST_GM_CHAT_RESPONSE = 0x6800
 MSG_CL_OK_GM_CHAT_RESPONSE = 0x6801
@@ -131,13 +133,74 @@ HANDLED = frozenset({
 #: when it is 15, so the GM's lines are drawn as the GM's and not as a
 #: player's -- which is why this id is used for those as well.
 #: ⚠️ MEASURED: sending an operator's own charaId gets 0x6802 reason 5 and no
-#: box at all, every time. The row within the category is not checked; row 0 is
-#: the first of the client's own, so that is what goes out.
+#: box at all, every time. The row within the category is not checked, so any
+#: of the fourteen is accepted and the choice is the operator's.
 GM_CATEGORY = 15
-GM_CHARA_ID = GM_CATEGORY << 16
 
 #: tmn::MAX_CHARA_FAMILYNAME + 1, the width both fixed name fields are read at.
 NAME_LEN = 11
+
+#: ⭐⭐⭐ THAT ROSTER OF FOURTEEN, recovered. `game_master_pc` is one of the
+#: twenty-two tables the client ships and never loads -- its table manager has
+#: no slot for it -- which is the mark of a table the original SERVER read:
+#: `store_item`, `ng_name`, `sp_guest_info` and the GS3 script tables sit in
+#: the same group and every one of them turned out to be this end's. Its
+#: fourteen rows are ときめき太郎, ときめき花子 and ＧＭ睦月 through ＧＭ師走,
+#: the twelve old month names, and each row carries exactly two fields this
+#: end can use: familyName and firstName, both NAME_LEN wide. The rest of the
+#: record is 0xFF, the same "unset" an accessory slot gets.
+#: ⭐ The id and the name are two columns of the one table: a GM appears under
+#: (GM_CATEGORY << 16) | row, so picking a row picks both.
+#: ⚠️ The client cannot look any of this up -- it never loads the file -- so
+#: the name has to travel in 0x6800 and 0x6805. What was invented before this
+#: was recovered is the NAME: those two messages used to carry the operator's
+#: own character's name, which is nobody in the game's roster.
+ROSTER_PATH = Path(__file__).resolve().parent.parent / "reference" / "gm_pcs.json"
+
+
+def _load_roster() -> "list[tuple[bytes, bytes]]":
+    """``[(familyName, firstName)]`` by row, cp932 and NUL-padded to NAME_LEN.
+
+    Encoded once, here, because that is the shape both messages put on the
+    wire; a caller that re-encodes is a caller that can get the width wrong.
+    An empty roster is not a crash: the console refuses rather than sending a
+    box with no name in it, the same way it refuses a charaId nobody holds.
+    """
+    try:
+        data = json.loads(ROSTER_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"[gmchat] no GM roster ({exc}); /gm chat has nobody to speak as")
+        return []
+    out = []
+    for gm in sorted(data.get("gms", []), key=lambda g: g["row"]):
+        out.append((gm["familyName"].encode("cp932")[:NAME_LEN],
+                    gm["firstName"].encode("cp932")[:NAME_LEN]))
+    return out
+
+
+ROSTER = _load_roster()
+
+
+def id_of(row: int = 0) -> int:
+    """The id the client resolves to GM row *row*.
+
+    ⚠️ Named to match name_of and not `chara_id`: request_params takes a
+    parameter by that name, and a module function it shadows is a trap.
+    """
+    return (GM_CATEGORY << 16) | (row & 0xFFFF)
+
+
+def name_of(row: int) -> "tuple[bytes, bytes] | None":
+    """``(familyName, firstName)`` for one row, or None if there is no such GM."""
+    if 0 <= row < len(ROSTER):
+        return ROSTER[row]
+    return None
+
+
+#: Row 0 of the roster, which is where an operator starts: it is ときめき太郎,
+#: the first of the client's own fourteen.
+GM_CHARA_ID = id_of(0)
+
 #: The text buffer in 0x6804's reader and 0x6805's alike; one byte of it is the
 #: terminator the count includes.
 TEXT_MAX = 94
@@ -171,10 +234,11 @@ def request_params(family: bytes, first: bytes,
                    chara_id: int = GM_CHARA_ID) -> bytes:
     """0x6800's body: the applicant's charaId and their two fixed names.
 
-    ⚠️⚠️ The id defaults to GM_CHARA_ID and callers should leave it there: an
-    id outside category 15 is refused by the client before anything is drawn.
-    The NAME is free -- the client reads it off this message rather than out of
-    its own roster -- so it is the operator's to choose.
+    ⚠️⚠️ The id has to stay inside category 15: anything else is refused by
+    the client before a pixel is drawn. ⭐ The NAME travels here because the
+    client has no way to look it up -- it never loads the roster file -- so
+    what goes out is the row's own two fields, and the operator chooses which
+    of the fourteen rows to be.
 
     ``family`` and ``first`` are the create block's fields, already NUL-padded
     to NAME_LEN, which is the shape the client's fixed reader wants -- so they

@@ -1,0 +1,76 @@
+{
+ "category": 15,
+ "gms": [
+  {
+   "row": 0,
+   "familyName": "ときめき",
+   "firstName": "太郎"
+  },
+  {
+   "row": 1,
+   "familyName": "ときめき",
+   "firstName": "花子"
+  },
+  {
+   "row": 2,
+   "familyName": "ＧＭ",
+   "firstName": "睦月"
+  },
+  {
+   "row": 3,
+   "familyName": "ＧＭ",
+   "firstName": "如月"
+  },
+  {
+   "row": 4,
+   "familyName": "ＧＭ",
+   "firstName": "弥生"
+  },
+  {
+   "row": 5,
+   "familyName": "ＧＭ",
+   "firstName": "卯月"
+  },
+  {
+   "row": 6,
+   "familyName": "ＧＭ",
+   "firstName": "皐月"
+  },
+  {
+   "row": 7,
+   "familyName": "ＧＭ",
+   "firstName": "水無月"
+  },
+  {
+   "row": 8,
+   "familyName": "ＧＭ",
+   "firstName": "文月"
+  },
+  {
+   "row": 9,
+   "familyName": "ＧＭ",
+   "firstName": "葉月"
+  },
+  {
+   "row": 10,
+   "familyName": "ＧＭ",
+   "firstName": "長月"
+  },
+  {
+   "row": 11,
+   "familyName": "ＧＭ",
+   "firstName": "神無月"
+  },
+  {
+   "row": 12,
+   "familyName": "ＧＭ",
+   "firstName": "霜月"
+  },
+  {
+   "row": 13,
+   "familyName": "ＧＭ",
+   "firstName": "師走"
+  }
+ ],
+ "note": "The fourteen GM identities the retail client's own category-15 roster holds: family and given name, one per row. The id a GM appears under is (15 << 16) | row, so these two columns and that id come from the same table. Nothing else in the record is carried: the rest is 0xFF, the same 'unset' every accessory slot uses."
+}

@@ -1777,6 +1777,11 @@ class _Session:
         # built, and a close there would take the very sentence that explains
         # the disconnect with it. See gmnotice.py and _gm_notice_console.
         self.forced_logout = False
+        # Which of gmchat.ROSTER's fourteen this connection speaks as when it
+        # drives a ＧＭチャット. Row 0 (ときめき太郎) until /gm as says another:
+        # the client checks the category and not the row, so the choice is the
+        # operator's and the names are the game's. See gmchat.py.
+        self.gm_row = 0
         # When 登校 happened, by the monotonic clock; 0.0 = not at school.
         # 累計登校時間 on the 経歴 card is the sum of the spans this opens, so
         # every path that ends one has to close it -- 下校 and the disconnect
@@ -14566,6 +14571,8 @@ class MpsServer:
                                       one argument is a charaId, which is what
                                       the two-client case wants, because a
                                       guest's chat bar has no IME.
+            /gm as [<行>]             which of the fourteen to speak as;
+                                      no argument lists them
             /gm say <文>              speak, once they have said はい
             /gm cancel                withdraw the box
             /gm end                   終了 -- closes their chat window
@@ -14594,6 +14601,9 @@ class MpsServer:
 
         if what in ("msg", "logout"):
             return self._gm_notice_console(session, sequence, what, args[1:])
+
+        if what == "as":
+            return self._gm_as_console(session, sequence, args[1:])
 
         if not what:
             if not book.calls:
@@ -14678,13 +14688,20 @@ class MpsServer:
                 return self._say(session, sequence,
                                  f"/gm chat: 0x{target:x} は応対中 "
                                  f"[{desk.summary()}]")
-            # ⚠️⚠️ The name is the operator's own character's, the id is NOT:
-            # the client throws away any 0x6800 whose applicant is an ordinary
-            # charaId, so what goes out is gmchat.GM_CHARA_ID. See gmchat.py.
-            names = self._chars(session).full_name(me)
-            family, first = names if names else (b"", b"")
+            # ⭐ BOTH COLUMNS COME FROM THE GAME'S OWN ROSTER: the id is
+            # (15 << 16) | row and the name is that row's, out of
+            # game_master_pc -- a table the client ships and never loads, so
+            # the name has to travel. Until this was read, the name here was
+            # the operator's own character's, which is nobody. See gmchat.py.
+            names = gmchat.name_of(session.gm_row)
+            if names is None:
+                return self._say(session, sequence,
+                                 f"/gm chat: ＧＭ #{session.gm_row} はいない "
+                                 f"（roster {len(gmchat.ROSTER)} 人)")
+            family, first = names
             desk.invite(target, me)
-            body = gmchat.request_params(family, first)
+            body = gmchat.request_params(
+                family, first, gmchat.id_of(session.gm_row))
             sent = deliver(other, gmchat.MSG_SV_REQUEST_GM_CHAT_RESPONSE, body)
             print(f"[{self.tag}] ＧＭチャット: 0x{me:x} asked 0x{target:x} "
                   f"[{desk.summary()}]")
@@ -14712,14 +14729,17 @@ class MpsServer:
                                  f"/gm say: 0x{player:x} はまだ返事していない")
             if not args:
                 return self._say(session, sequence, "/gm say <文>")
-            names = self._chars(session).full_name(me)
-            family, first = names if names else (b"", b"")
+            names = gmchat.name_of(session.gm_row)
+            if names is None:
+                return self._say(session, sequence,
+                                 f"/gm say: ＧＭ #{session.gm_row} はいない")
+            family, first = names
             line = " ".join(args)
-            # Same id as the 申し込み, and for a second reason: 0x6805's
+            # Same row as the 申し込み, and for a second reason: 0x6805's
             # handler draws a line from the GM category in a channel of its
             # own, so this is what makes the GM's lines look like the GM's.
             body = gmchat.notify_params(
-                gmchat.GM_CHARA_ID, family, first, line)
+                gmchat.id_of(session.gm_row), family, first, line)
             sent = deliver(other, gmchat.MSG_SV_NOTIFY_GM_CHAT, body)
             print(f"[{self.tag}] ＧＭチャット 0x{me:x} -> 0x{player:x}: {line!r}")
             # ⭐ The operator gets their own copy too, so that one screen shows
@@ -14746,6 +14766,42 @@ class MpsServer:
             return sent
         return self._say(session, sequence,
                          f"/gm {what} -> 0x{player:x} [{desk.summary()}]")
+
+    def _gm_as_console(
+        self, session: "_Session", sequence: int, args: "list[str]"
+    ) -> bytes:
+        """``/gm as [<行>]``: which of the fourteen ＧＭ this connection is.
+
+        The client checks the applicant's category and never the row, so which
+        GM an operator speaks as is a choice and not a rule -- and every name
+        it can be is the game's own (gmchat.ROSTER, out of game_master_pc).
+        With no argument it lists them, which is also how an operator finds a
+        row number without leaving the chat bar.
+
+        ⚠️ It is per connection, not per account: two operators on two
+        connections can be two different GMs at once, which is what the
+        original's own console would have been.
+        """
+        if not args:
+            who = ", ".join(
+                f"{row}:{family.decode('cp932')}{first.decode('cp932')}"
+                for row, (family, first) in enumerate(gmchat.ROSTER))
+            return self._say(session, sequence,
+                             f"/gm as {session.gm_row} [{who or '(roster なし)'}]")
+        try:
+            row = int(args[0], 0)
+        except ValueError:
+            return self._say(session, sequence, "/gm as <行>")
+        if gmchat.name_of(row) is None:
+            return self._say(session, sequence,
+                             f"/gm as: ＧＭ #{row} はいない "
+                             f"（0..{len(gmchat.ROSTER) - 1}）")
+        session.gm_row = row
+        family, first = gmchat.name_of(row)
+        return self._say(
+            session, sequence,
+            f"/gm as {row} = {family.decode('cp932')} {first.decode('cp932')} "
+            f"(charaId 0x{gmchat.id_of(row):x})")
 
     def _gm_notice_console(
         self, session: "_Session", sequence: int, what: str, args: "list[str]"
