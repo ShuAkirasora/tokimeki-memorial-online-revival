@@ -2342,18 +2342,17 @@ def is_tutorial(script_id: "int | None") -> bool:
 #     PC[0x3103]              能力 3                    romance.PC_ABILITY_BASE
 #     PC[0x3590]              試験レベル - 1             PC_TEST_LEVEL_FROM_ZERO
 #     PLAYER[0x2001]          the tutorial's question   PLAYER_TUTORIAL_ASK
+#     PC[0x3010] / [0x3011]   the player's 姓 and 名     PC_FAMILY_NAME, below
+#     PC[0x3012]              the player's ニックネーム   PC_NICK_NAME, below
 #
-# ⛔️ The other ten are deliberately left unanswered, and the reasons differ:
+# ⛔️ The other seven are deliberately left unanswered, and the reasons differ:
 #
-#   * `PC[0x3010]`, `PC[0x3011]`, `PC[0x3012]` and `SCHOOL[0x1001]` are STRINGS.
-#     All five `<キャラ>_e011` -- the confession scenarios -- copy the same five
-#     values into a per-candidate record nothing in the corpus ever reads back:
-#     `SCHOOL[0x1001]`, `PC[0x301C]`, then those three strings, into
-#     `PLAYER[0x2110+i]` .. `PLAYER[0x2150+i]`. One member of that tuple is
-#     known (the 組), which reads the rest as 「school, class, and the player's
-#     names」 -- an ending's heading. ⚠️ That is a reading, not a name off
-#     anything, and which string is which name has no second witness. The shadow
-#     VM holds integers, so taking these would need a string channel first.
+#   * `SCHOOL[0x1001]` is the school's NAME, and this end does not have it. A
+#     school is an account property and this server picks it by id; the string
+#     that goes with an id is the client's own (its school-name getter answers
+#     "" for id 0). Seven reads in the corpus hand it straight to a 台詞 through
+#     SYNC_VARIABLE, so answering it means naming ten schools -- which is a
+#     table to recover, not a cell to wire up, and it is not recovered.
 #   * `PC[0x3201]` and `PC[0x3203]` are two axes of `personalityParam`. No
 #     message in the protocol carries them and no scenario in either corpus
 #     writes them, so this end has no source; supplying 0 would be exactly the
@@ -2372,6 +2371,55 @@ def is_tutorial(script_id: "int | None") -> bool:
 #: in 2.147 四), and this end feeds the same value to the shadow VM that it puts
 #: on the wire as `inClass`.
 PC_IN_CLASS = 0x301C
+
+# ── The player's own name, which 台詞 are written around ─────────────────
+#
+# ⭐⭐⭐ **What these cells are for is 同姓回避**, and the corpus says so on its
+# own: 69 scenarios read `PC[0x3010]` or `PC[0x3011]`, 124 reads in all, and
+# every one of them is the same four instructions --
+#
+#     S31 = PC[0x3010]        ; the player's own surname
+#     S30 = <a pool literal>  ; some NPC's surname
+#     F99 = S31 == S30        ; and then OP_BR on F99
+#
+# -- with the taken road putting a DIFFERENT spelling of that NPC's name in the
+# register the line interpolates. `yyi_o012` is the whole mechanism in four
+# instructions: the friend who gave the advice is 一ノ瀬, unless the player is
+# a 一ノ瀬 too, in which case the line says 一ノ宮 instead.
+#
+# ⭐⭐ **Which cell is which name is read off the literals, not off the order.**
+# The 19 distinct strings `PC[0x3010]` is compared against are all surnames
+# (五十嵐 ×28, 九条 ×20, 七瀬 ×20, 二木, 三島, 八巻, 一ノ瀬, 雪丘, 風坂, 永沢,
+# 神岡, 大西, 小西, 鵜沼, 梶山); `PC[0x3011]` is compared against 拓馬, a given
+# name, and in `un152` is concatenated with の父 to make 「<someone>'s father」.
+# ⚠️ `PC[0x3012]` has no such witness -- its five reads are all inside the
+# `<キャラ>_e011` record block, where nothing compares it -- so it rests on being
+# the third of a trio whose first two are pinned, beside a create block whose
+# own name trio is (familyName, firstName, nickName) in that order and holds no
+# fourth name to compete for the slot.
+#
+# ⚠️⚠️ **A string cell, and that is not the obstacle it was written down as.**
+# The shadow VM has held strings since the free-text box arrived: a typed line
+# goes into a register as itself and `gs3vm.Follower._as_text` reads the other
+# side of a comparison back out of the string pool when it meets one, and
+# `sync_values` already passes a raw string through to the SSTRING category on
+# the wire. Nothing needed building -- nobody had put a string in a cell.
+#
+# ⭐ What changes by supplying them: 124 branches that were answered with the
+# standing "no" are now answered out of the save's own name. For nearly every
+# player the road is the one the shrug happened to take; for a player whose
+# surname really is 五十嵐 it is the other one, which is the entire point of
+# the mechanism.
+
+#: The player's 姓, as text. Compared for equality against a scenario's own
+#: string-pool literals, so it is the characters and not the fixed-width bytes
+#: `full_name` hands the wire (`characters.name_trio`).
+PC_FAMILY_NAME = 0x3010
+#: The player's 名, same shape.
+PC_FIRST_NAME = 0x3011
+#: The player's ニックネーム. ⚠️ The one of the three with no comparison
+#: anywhere in the corpus to pin it -- see the note above.
+PC_NICK_NAME = 0x3012
 
 #: ⚠️⚠️ **Named for what the tutorial does with it, not for what it is.** The
 #: semantics of this cell are NOT restored, and round 336 is where that stopped

@@ -672,6 +672,24 @@ def describe(info: bytes) -> str:
     )
 
 
+def name_trio(info: bytes) -> tuple[str, str, str]:
+    """``(familyName, firstName, nickName)`` as text, NUL-trimmed.
+
+    The three strings a scenario reads out of `PC[0x3010]`, `PC[0x3011]` and
+    `PC[0x3012]` -- see `script.PC_FAMILY_NAME`. `full_name` hands the wire the
+    fixed-width bytes it wants; this hands the script engine the characters,
+    because what a comparison over there is against is a string pool literal.
+    """
+    fields = parse_create_info(info)
+
+    def text(key: str) -> str:
+        raw = fields[key]
+        assert isinstance(raw, bytes)
+        return raw.split(b"\x00")[0].decode("cp932", "replace")
+
+    return text("familyName"), text("firstName"), text("nickName")
+
+
 def display_name(info: bytes) -> str:
     """「姓 名」, the way a chat line should credit whoever typed it.
 
@@ -1899,6 +1917,11 @@ class CharacterStore:
             return None
         fields = parse_create_info(info)
         return bytes(fields["familyName"]), bytes(fields["firstName"])  # type: ignore[arg-type]
+
+    def name_trio(self, chara_id: int) -> "tuple[str, str, str] | None":
+        """This character's 姓 / 名 / ニックネーム as text, or None if not ours."""
+        info = self.find(chara_id)
+        return None if info is None else name_trio(info)
 
     def summary(self) -> str:
         return ", ".join(

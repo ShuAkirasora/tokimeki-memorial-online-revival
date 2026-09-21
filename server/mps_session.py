@@ -3311,6 +3311,19 @@ class MpsServer:
         # the walk goes to the wrong floor -- which is exactly what happened
         # while nobody supplied it at all.
         cells[("PC", script.PC_IN_CLASS)] = IN_CLASS
+        # ⭐⭐⭐ 同姓回避: the player's own 姓 / 名 / ニックネーム, out of the same
+        # create block the character list is drawn from. 69 scenarios compare
+        # the first of these against an NPC's surname and spell that NPC
+        # differently when they collide -- see `script.PC_FAMILY_NAME` for the
+        # reading and for why the third one is the weakest of the three.
+        # ⚠️ Text, not the wire's fixed-width bytes: the other side of every one
+        # of those comparisons is a string-pool literal.
+        names = self._chars(session).name_trio(session.chara_id)
+        if names is not None:
+            family, first, nick = names
+            cells[("PC", script.PC_FAMILY_NAME)] = family
+            cells[("PC", script.PC_FIRST_NAME)] = first
+            cells[("PC", script.PC_NICK_NAME)] = nick
         # ⭐ The tutorial's own gate, and the only scripts in the corpus that
         # read it are the two 初登校 ones -- so supplying it always is the same
         # as supplying it to 初登校 only, with nothing to keep in step.
