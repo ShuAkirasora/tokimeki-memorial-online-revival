@@ -48,6 +48,19 @@ client's reader's, the window and its button are the client's own, and the text
 is whoever typed it -- the same division as a chat line, where this server
 carries what somebody said and invents no sentences of its own.
 """
+# UNSENT 0xA002 -- EchoGameMessage, the second face of the same handler object
+# and the same GameSystemMessageProcedure that draws the box above. Its body
+# was read out of the client as well (u16 messageTypeNo, then a counted string
+# into a 0x8000 buffer), and its occasion never was: nothing in the client asks
+# for one and no sentence anywhere says what an echo is for. ⭐ What settles it
+# is not the missing occasion but the client's own dispatch table: the
+# sequencer that owns this family declares three messages and carries exactly
+# one registration, and the one is 0xA001. A message with no registered
+# handler is parsed and dropped -- that was measured on 0x0001, whose log line
+# for it reads 受信ハンドラが設定されていません -- so an echo pushed at this
+# build would change nothing on any screen. ⚠️ Its sibling 0xA004
+# ResultServerVersion is the third of those three and is unsent for its own
+# reason, a few files away.
 from __future__ import annotations
 
 import struct

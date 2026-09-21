@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 from pathlib import Path
 import sys
@@ -36,6 +37,7 @@ import chat
 import clubbattle
 import knobs
 import mps_session
+import shutdown
 from auth_http_server import AuthHttpServer
 from common import PACKET_LOG_ENV, ServiceConfig, packet_log_enabled, parse_ipv4
 from konami_id import TokenDesk
@@ -393,9 +395,26 @@ async def main(
 
     print("[system] all services started")
 
+    # Two ways out of here. A listener falling over is the old one, and it
+    # still comes out of this function as its own exception. The other is an
+    # operator who told the players first: /shutdown armed a countdown, the
+    # countdown reached zero, and shutdown.wait() is how that reaches the one
+    # place in this process that can close the door. See shutdown.py.
+    serving = asyncio.gather(*(srv.serve_forever() for srv in servers))
+    stopping = asyncio.ensure_future(shutdown.wait())
     try:
-        await asyncio.gather(*(srv.serve_forever() for srv in servers))
+        done, _ = await asyncio.wait(
+            {serving, stopping}, return_when=asyncio.FIRST_COMPLETED)
+        if serving in done:
+            serving.result()          # re-raise whatever ended it
+        else:
+            print("[system] stopping: the countdown reached zero")
     finally:
+        stopping.cancel()
+        if not serving.done():
+            serving.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await serving
         for srv in servers:
             srv.close()
             await srv.wait_closed()

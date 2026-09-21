@@ -123,6 +123,7 @@ import romance
 import cibispawns
 import script
 import shop
+import shutdown
 import stress
 import sysmsg
 import trade
@@ -2140,6 +2141,17 @@ class MpsServer:
     the log is enough to work out each layout before implementing it.
     """
 
+    #: Every MpsServer that has been built in this process. There is exactly
+    #: one thing that needs it -- the shutdown notice, which is addressed to
+    #: everybody rather than to the port it was typed on. ⚠️ It is not a second
+    #: `live`: each server keeps its own connections and packs their packets
+    #: itself, because the header and the sequence numbering are per port.
+    #: ⚠️ Nothing takes a server out again, because nothing closes one short of
+    #: the process ending. A test that builds throwaway servers leaves them
+    #: here, which costs a pointer each and reaches no one: a server with no
+    #: connections is skipped by everything that walks this.
+    running: "list[MpsServer]" = []
+
     def __init__(
         self,
         root: Path,
@@ -2208,6 +2220,7 @@ class MpsServer:
         # needed. Per port on purpose: a room lives on the board of the port its
         # messages arrive at, and the sessions in it are on that same port.
         self.live: "list[_Session]" = []
+        MpsServer.running.append(self)
         # ＧＭチャット in progress, by charaId. On the board and not on a
         # session because it is a pair: the operator drives it from one
         # connection and the box appears on another. Not persisted -- see
@@ -14958,38 +14971,150 @@ class MpsServer:
                                  f"/sys: 0x{target:x} はログインしていない")
             wants = [other]
         else:
-            # ⭐ The test is 登校, not 0x0200. A box needs a character on a
-            # screen, and chara_id is what says there is one -- logged_in is
-            # the game port's own flag and the school connection never sets
-            # it, so reading that would quietly leave half of every player
-            # out. It is also the gate _drain_console already uses.
-            wants = [
-                other for other in self.live
-                if other.chara_id
-                and other.writer is not None
-                and not other.writer.is_closing()
-            ]
-            if session.chara_id and session not in wants:
-                wants.append(session)
+            wants = self._sysmsg_targets(session)
+        reply = self._sysmsg_send(body, wants, session, sequence)
+        print(f"[{self.tag}] システムメッセージ -> {len(wants)}, "
+              f"importance={importance}: {line!r}")
+        return reply + self._say(
+            session, sequence,
+            f"/sys {len(wants)}人に送った (importance={importance})")
+
+    def _sysmsg_targets(self, session: "_Session | None" = None) -> "list[_Session]":
+        """Everyone on this port with a screen to put a box on.
+
+        ⭐ The test is 登校, not 0x0200. A box needs a character on a screen,
+        and chara_id is what says there is one -- logged_in is the game port's
+        own flag and the school connection never sets it, so reading that
+        would quietly leave half of every player out. It is also the gate
+        _drain_console already uses.
+
+        *session* is the connection being answered, if it is on this port: it
+        is added even when the walk above missed it, because the operator's
+        own screen is a screen like any other.
+        """
+        wants = [
+            other for other in self.live
+            if other.chara_id
+            and other.writer is not None
+            and not other.writer.is_closing()
+        ]
+        if session is not None and session.chara_id and session not in wants:
+            wants.append(session)
+        return wants
+
+    def _sysmsg_send(self, body: bytes, wants: "list[_Session]",
+                     session: "_Session | None" = None,
+                     sequence: int = 0) -> bytes:
+        """Put one 0xA001 on every screen in *wants*; ours rides the reply.
+
+        ⚠️⚠️ A push is written the moment it is made, while the console line
+        that asked for it is built first and written last. Pushing to the
+        connection we are answering would put the two sequence numbers on the
+        wire backwards, and the client drops a connection whose sequence goes
+        back -- so that one connection's copy is returned to the caller to go
+        out behind the answer instead of being written here.
+        """
         reply = b""
         for other in wants:
-            # ⚠️⚠️ A push is written the moment it is made, while the console
-            # line that asked for it is built first and written last. Pushing
-            # to the connection we are answering would put the two sequence
-            # numbers on the wire backwards, and the client drops a connection
-            # whose sequence goes back. Ours rides out with the reply instead.
-            if other is session:
+            if session is not None and other is session:
                 reply += self._answer(
                     session, sequence,
                     sysmsg.MSG_SV_NOTIFY_SYSTEM_MESSAGE, body)
             else:
                 self._push(other, self._answer(
                     other, 0, sysmsg.MSG_SV_NOTIFY_SYSTEM_MESSAGE, body))
-        print(f"[{self.tag}] システムメッセージ -> {len(wants)}, "
-              f"importance={importance}: {line!r}")
+        return reply
+
+    def _shutdown_broadcast(self, line: str, session: "_Session",
+                            sequence: int) -> "tuple[bytes, int]":
+        """Say one line on every screen this process is holding, not just ours.
+
+        ⚠️ /sys speaks for the port it was typed on, because a box is a screen
+        and a screen belongs to a connection. A shutdown is the other thing:
+        it happens to the whole process at once, so the notice has to reach
+        the ports the operator is not standing on. Each server still does its
+        own sending -- see MpsServer.running for why it cannot be one loop
+        over one list.
+        """
+        body = sysmsg.notify_params(line)
+        reply = b""
+        told = 0
+        for server in MpsServer.running:
+            mine = session if server is self else None
+            wants = server._sysmsg_targets(mine)
+            told += len(wants)
+            reply += server._sysmsg_send(body, wants, mine, sequence)
+        return reply, told
+
+    def _shutdown_console(
+        self, session: "_Session", sequence: int, args: "list[str]"
+    ) -> bytes:
+        """``/shutdown ...``: tell every player, then stop on time.
+
+            /shutdown <秒> <文>        say 文 now and stop in 秒 seconds
+            /shutdown cancel [<文>]    call it off, and say so if 文 is given
+            /shutdown                  what is armed, if anything
+
+        See shutdown.py for what is recovered here and what is this end's own
+        decision -- the short version is that the box is the client's and the
+        clock is the operator's, so neither the delay nor the words have a
+        default to fall back on and a command that omits them is refused.
+
+        ⚠️ The floor is one second, and it is a property of this end rather
+        than a rule about anything: the answer to the console line and the
+        boxes for everybody else are handed to the packet loop when this
+        returns, so a countdown that fires first would close the socket on the
+        very sentence that was supposed to explain it. Anyone who wants the
+        lights out this instant already has the way the README documents --
+        stop the process.
+        """
+        now = shutdown.armed()
+        usage = "/shutdown <秒> <文> | /shutdown cancel [<文>] | /shutdown"
+        if not args:
+            if now is None:
+                return self._say(session, sequence, f"停止の予定なし  {usage}")
+            return self._say(
+                session, sequence,
+                f"停止まで {now.remaining:.0f} 秒: {now.line}")
+
+        if args[0] == "cancel":
+            was = shutdown.cancel()
+            reply, told = (b"", 0)
+            if args[1:]:
+                reply, told = self._shutdown_broadcast(
+                    " ".join(args[1:]), session, sequence)
+            if was is None:
+                return reply + self._say(
+                    session, sequence, "停止の予定はなかった")
+            print(f"[{self.tag}] shutdown cancelled ({was.remaining:.0f}s left)")
+            return reply + self._say(
+                session, sequence, f"停止を取り消した ({told}人に伝えた)")
+
+        try:
+            seconds = float(args[0])
+        except ValueError:
+            return self._say(session, sequence, usage)
+        if seconds < 1 or len(args) < 2:
+            return self._say(session, sequence, usage)
+
+        line = " ".join(args[1:])
+        # ⚠️⚠️ The same order twice is one order. runtime/console.txt is read
+        # by every connection that has a character on it -- see
+        # _drain_console -- so one appended line arrives in here once per
+        # connection, seconds apart. Announcing again would put a second box
+        # on every screen, and, worse, would push the deadline out by however
+        # long the two readings were apart: the players would have been
+        # promised a moment that then quietly moved. An operator who means a
+        # new time says a new sentence, or cancels first.
+        if now is not None and now.line == line:
+            return self._say(
+                session, sequence,
+                f"予告済み（停止まで {now.remaining:.0f} 秒）")
+        reply, told = self._shutdown_broadcast(line, session, sequence)
+        shutdown.arm(seconds, line)
+        print(f"[{self.tag}] shutdown in {seconds:.0f}s, {told} told: {line!r}")
         return reply + self._say(
-            session, sequence,
-            f"/sys {len(wants)}人に送った (importance={importance})")
+            session, sequence, f"{seconds:.0f} 秒後に停止 ({told}人に伝えた)")
 
     def _apply_chat(self, session: "_Session", sequence: int, said: str,
                     from_chat: bool = True) -> bytes:
@@ -15028,6 +15153,8 @@ class MpsServer:
             return self._couple_console(session, sequence, said.split()[1:])
         if said.split()[:1] == ["/sys"]:
             return self._sysmsg_console(session, sequence, said.split()[1:])
+        if said.split()[:1] == ["/shutdown"]:
+            return self._shutdown_console(session, sequence, said.split()[1:])
         reply = b""
         info = self._chars(session).find(session.chara_id)
         love = self._chars(session).romance(session.chara_id)
