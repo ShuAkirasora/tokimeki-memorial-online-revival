@@ -40,9 +40,30 @@ What the manual lays out, for when the wire work starts:
     for 30 days.
   * 公開設定 decides whether it shows up in the 理事長秘書's group list.
 
-None of the cooldowns are modelled here. They are calendar rules with no message
-of their own, and the school clock this server runs (curriculum.clock) is not
-the one those 30 days would be counted against.
+⭐⭐⭐ Round 462 modelled the last line of that list -- the 30 days p05_05 §3
+puts under 引継 and under 解散, in a sentence each (both quoted at
+CREATE_WAIT_DAYS), and the only cooldown this family has. It had been written
+down here as unmodellable, and the sentence that said so was made of two halves
+that had both stopped being true:
+
+  * 「no message of their own」 — true of the *state* and still true: round 146
+    went looking and nothing on the wire carries a cooldown, which is why the
+    client puts its own warning up before it sends 0x6203, and that is all
+    the warning there is.
+    But the refusal is not the state: 0xFF07 reason 14 is
+    「現在、仲良しグル－プの作成が禁止されています。」 and there is no second
+    candidate for it in the whole 32-row table (12 is the exam, 16/17 are
+    membership). ⚠️ Hanging the row on this rule is this end's judgement,
+    marked at CREATE_WAIT_DAYS.
+  * 「the school clock is not the one those 30 days would be counted against」 —
+    which was never a difficulty, only an undecided question, and club.py had
+    already decided it for the identical shape: 退部後１０日間 counts on
+    ``date.today()`` (club.REJOIN_DAYS, ClubRecord.part). ⭐ The same calendar
+    is used here, so the two waits in this server are counted the same way.
+
+⭐ And what let it be written at all is round 459: 0x6200 作成 is answered now,
+so this end finally has the doorway the rule refuses at. A cooldown in front of
+a message nobody answers is a rule with nowhere to stand.
 
 ⭐⭐ Round 144 closed the window: ［更 新］ (0x620A) and ［除 名］ (0x6226) are
 answered, so every control the 仲良しグループ情報 window draws now does
@@ -75,6 +96,7 @@ from __future__ import annotations
 
 import json
 import struct
+from datetime import date
 from pathlib import Path
 
 import refusals
@@ -329,6 +351,47 @@ MAX_GROUP_NAME = 20
 #: enforced.
 MAX_MEMBERS = 15
 
+#: The 30 days p05_05 §3 gives twice, once under each door, and this build's own
+#: manual gives them -- unlike CLUBLIKE_TEST_LEVEL, nothing here is borrowed
+#: from the later manual:
+#:
+#:   引継  「リーダーを引き継ぐと、引き継ぎ後、３０日間は「仲良しグループ」を
+#:         作成することができなくなります。」
+#:   解散  「解散すると、解散後３０日間は「仲良しグループ」を作成することが
+#:         できなくなります。」
+#:
+#: ⚠️⚠️ What is a judgement is the *row*, not the rule: 0xFF07 reason 14 reads
+#: 「現在、仲良しグル－プの作成が禁止されています。」 and names no reason for
+#: the ban, so pointing it at this wait is a reading. ⭐ It is the only reading
+#: available: all 32 rows were gone through and the other rows that can refuse a
+#: 作成 say something else -- 12 is リーダー資格, 16 and 17 are membership -- and
+#: a rule enforced with no sentence at all would be worse than one enforced with
+#: a sentence that does not name it.
+#:
+#: ⭐ The day the event happens counts: a stamp written today makes
+#: ``days_since_step_down`` 0, and the refusal runs while it is under 30, so the
+#: wait covers the 引継 day and the twenty-nine after it. Same arithmetic as
+#: club.REJOIN_DAYS, and the same calendar -- ``date.today()``, not
+#: curriculum.clock. ⚠️ p05_05 does not say 含めて the way p05_12 does for
+#: カップル's five days; this end reads the two the same way rather than making
+#: the unsaid one a day longer.
+#:
+#: ⭐⭐ Who is stamped: whoever stopped being a leader. Both doors the manual
+#: names live in GroupBook (disband, hand_over) rather than in their handlers, so
+#: a third way of leaving that gets written later carries the wait by default.
+#: ⚠️ The console passes ``stamp=False`` -- see disband -- and
+#: `/group wait clear` is how a test drops one the wire has written.
+#:
+#: ⚠️⚠️ Deleting the character drops the wait with everything else `forget`
+#: drops, and that is this end's choice rather than a measurement. The stamp is
+#: keyed by charaId and a deleted charaId never comes back, so there is nothing
+#: left for it to refuse; an account-level stamp would outlive the character, and
+#: nothing seen says which one the original kept. ⚠️ The nearest sentence in the
+#: manual is about the *other* person's deletion and a different system
+#: (p05_12: 「相手のキャラクターが削除された場合も解散となりますが、この場合は
+#: 上記ペナルティは課せられません」), ⛔️ so it is not a witness for this one.
+CREATE_WAIT_DAYS = 30
+
 # ---------------------------------------------------------------------------
 # The refusals. ⚠️⚠️ NOTHING HERE IS MADE UP ANY MORE (round 323). Every 0x62xx
 # refusal in this family is looked up in 0xFF07 and every Notify*Cancel in
@@ -356,6 +419,10 @@ NG_KICK_SELF = refusals.NG_KICK_SELF
 #: every single way グループ作成 can fail, which is what made this handler
 #: writable without inventing a reason byte (round 459).
 NG_NOT_LEADER_RANK = refusals.NG_NOT_LEADER_RANK    # リーダーになる資格をまだ…
+#: 「現在、仲良しグル－プの作成が禁止されています。」 -- the fifth way 0x6200 can
+#: fail, and the one row in this family that had no rule behind it until round
+#: 462. ⚠️ Exact sentence, read rule: see CREATE_WAIT_DAYS.
+NG_CREATION_FORBIDDEN = refusals.NG_CREATION_FORBIDDEN
 NG_NAME_MISSING = refusals.NG_NAME_MISSING          # グループ名が指定されていません
 NG_NAME_TOO_LONG = refusals.NG_NAME_TOO_LONG        # 最大２０バイトまでです
 NG_NAME_TAKEN = refusals.NG_NAME_TAKEN              # 既に使用されています
@@ -608,6 +675,10 @@ class GroupBook:
         self.groups: dict[int, Group] = {}
         self.qualified: set[int] = set()
         self.exam: dict[int, ExamRecord] = {}
+        #: charaId -> the ISO date they stopped being a leader. See
+        #: CREATE_WAIT_DAYS; shaped after ClubRecord.left, which holds the
+        #: identical 退部後１０日間 wait the same way.
+        self.stepped_down: dict[int, str] = {}
         self._load()
 
     # -- persistence ------------------------------------------------------
@@ -640,6 +711,11 @@ class GroupBook:
                     int(str(key), 16), ExamRecord()).answered = int(value)
             except (TypeError, ValueError):
                 print(f"[groups] ignoring unreadable exam progress {key!r}")
+        for key, value in (raw.get("stepped_down") or {}).items():
+            try:
+                self.stepped_down[int(str(key), 16)] = str(value)
+            except ValueError:
+                print(f"[groups] ignoring unreadable stepped_down id {key!r}")
         for key, body in (raw.get("groups") or {}).items():
             try:
                 group_id = int(str(key), 16)
@@ -678,6 +754,10 @@ class GroupBook:
                         f"0x{one:08x}": record.to_json()
                         for one, record in sorted(self.exam.items())
                         if record
+                    },
+                    "stepped_down": {
+                        f"0x{one:08x}": stamp
+                        for one, stamp in sorted(self.stepped_down.items())
                     },
                     "groups": {
                         f"0x{group_id:08x}": group.to_json()
@@ -783,6 +863,64 @@ class GroupBook:
             self.exam[chara_id] = record
         else:
             self.exam.pop(chara_id, None)
+        self._save()
+        return True
+
+    # -- the ３０日間 wait ---------------------------------------------------
+
+    def days_since_step_down(self, chara_id: int,
+                             today: "date | None" = None) -> "int | None":
+        """Days since this character last stopped being a leader, or None.
+
+        ⚠️ Shaped on ClubRecord.days_since_leaving down to the unreadable-stamp
+        branch, and for its reason: a date this end cannot parse should not lock
+        作成 shut for good, because nothing in the game could ever clear it.
+        """
+        stamp = self.stepped_down.get(chara_id)
+        if not stamp:
+            return None
+        try:
+            then = date.fromisoformat(stamp)
+        except ValueError:
+            print(f"[groups] cannot read step-down date {stamp!r} for "
+                  f"charaId={chara_id}, ignoring it")
+            return None
+        return ((today or date.today()) - then).days
+
+    def create_wait(self, chara_id: int, today: "date | None" = None) -> int:
+        """Days still to wait before this character may found a group; 0 = free.
+
+        ⚠️ The number is for the log and the console only. 0x6202 carries a
+        reason byte and nothing else -- unlike 入部's 0x5904, which has a field
+        for the remaining days -- so what the player is told is the sentence,
+        not the count.
+        """
+        since = self.days_since_step_down(chara_id, today)
+        if since is None or since >= CREATE_WAIT_DAYS:
+            return 0
+        return CREATE_WAIT_DAYS - since
+
+    def step_down(self, chara_id: int, today: "date | None" = None) -> None:
+        """Stamp today on somebody who has just stopped being a leader.
+
+        ⚠️ Does not save; every caller is inside a mutation that does.
+        """
+        self.stepped_down[chara_id] = (today or date.today()).isoformat()
+
+    def clear_step_down(self, chara_id: int) -> bool:
+        """Drop the wait. The console's back door -- see CREATE_WAIT_DAYS.
+
+        ⚠️ Nothing in the game calls this: the wait is a calendar window rather
+        than a permit that gets spent, so founding a group again does not clear
+        it and neither does joining somebody else's. ⭐ It exists for the tests
+        that go through the wire on purpose -- one 解散 through 0x6203 and the
+        character it was run on cannot found another for a month, which the next
+        run of the same test would meet as a refusal it did not ask for. ⚠️ The
+        console's own 解散 does not write a stamp at all; see disband.
+        """
+        if chara_id not in self.stepped_down:
+            return False
+        del self.stepped_down[chara_id]
         self._save()
         return True
 
@@ -918,18 +1056,22 @@ class GroupBook:
         self._save()
         return True
 
-    def hand_over(self, group_id: int, new_leader: int) -> bool:
+    def hand_over(self, group_id: int, new_leader: int,
+                  stamp: bool = True) -> bool:
         """引継, 0x620D..0x6213: the leader gives the group to another member.
 
         ⚠️ The new leader has to be in the group already. Handing it to somebody
         outside would be a join and a promotion in one message, and the wire has
         0x6218 for the first half of that.
 
-        ⚠️ Nothing here touches the qualified set. リーダー資格 is a pass at an
-        NPC exam and the manual lists it as what lets you *create* a group, not
-        as what lets you receive one; whether the client refuses to offer the
-        handover to somebody without it is not known, and inventing the refusal
-        here would look exactly like a handshake that does not work.
+        ⭐⭐ Nothing here touches the qualified set, and p05_05 §3 says both
+        halves of that outright: 「引き継ぐ場合はリーダー資格は必要ありませんが、
+        リーダーを引き継いでもリーダー資格を得たことにはなりませんので、「仲良しグループ」
+        を作成できるようになるわけではありません」 — the receiver needs no リーダー資格
+        to take it, and taking it does not award them one either.
+        ⚠️ Round 462 read that sentence; until then this paragraph said the rule
+        was unknown and refused to invent it. The refusal was right and the
+        reason has been replaced by a quote.
 
         ⚠️⚠️ The roster is left in the order it was in. Nothing on the wire says
         the leader is first -- 0x6208 sends leaderId as its own field after the
@@ -940,11 +1082,17 @@ class GroupBook:
             return False
         if group.leader == new_leader:
             return False
+        # ⭐ The ３０日間 wait lands on the one giving it away, not the one
+        # taking it: p05_05 says the receiver does not even need リーダー資格
+        # (「引き継ぐ場合はリーダー資格は必要ありませんが…」), which is the same
+        # sentence this function's ⭐⭐ above reads the other half of.
+        if stamp:
+            self.step_down(group.leader)
         group.leader = new_leader
         self._save()
         return True
 
-    def leave(self, chara_id: int) -> bool:
+    def leave(self, chara_id: int, stamp: bool = True) -> bool:
         """脱退, the console's version: a leader leaving takes the group along.
 
         ⚠️ The wire has its own door for this now (0x6223) and it refuses a
@@ -961,23 +1109,48 @@ class GroupBook:
         if group is None:
             return False
         if group.leader == chara_id:
-            return self.disband(group.id)
+            return self.disband(group.id, stamp=stamp)
         group.members.remove(chara_id)
         self._save()
         return True
 
-    def disband(self, group_id: int) -> bool:
-        if group_id not in self.groups:
+    def disband(self, group_id: int, stamp: bool = True) -> bool:
+        """解散. ⭐ Stamps the leader with the ３０日間 wait on the way out.
+
+        ⚠️ The stamp is here rather than in _group_destroy so that a way of
+        folding a group up that gets added later carries it by default. ⚠️ Only
+        the leader is stamped: the members of a disbanded group did not stop
+        being leaders and the manual asks nothing of them.
+
+        ⚠️⚠️ ``stamp=False`` is the console's, and it is not a convenience --
+        it is the same split `/group create` keeps. A test that folds its own
+        scaffolding up is not a player who left a group, and round 462 measured
+        what happens without it: several tests share one character and tear their
+        groups down through the console, so the wait leaked forward and a later
+        test's perfectly good 0x6200 was refused with reason 14 thirty days deep.
+        ⭐ The wire paths take the default.
+        """
+        group = self.groups.get(group_id)
+        if group is None:
             return False
+        if stamp:
+            self.step_down(group.leader)
         del self.groups[group_id]
         self._save()
         return True
 
     def forget(self, chara_id: int) -> None:
         """Take a deleted character out of the group and both exam records."""
-        touched = chara_id in self.qualified or chara_id in self.exam
+        touched = (chara_id in self.qualified or chara_id in self.exam
+                   or chara_id in self.stepped_down)
         self.qualified.discard(chara_id)
         self.exam.pop(chara_id, None)
+        # ⚠️⚠️ The ３０日間 wait goes with them, and the reasoning is at
+        # CREATE_WAIT_DAYS: it is keyed by charaId, so there is nobody left for
+        # it to refuse. ⚠️ The delete below does NOT go through disband() either
+        # -- a deleted leader must not stamp a charaId that is being erased in
+        # the same breath.
+        self.stepped_down.pop(chara_id, None)
         group = self.of(chara_id)
         if group is not None:
             if group.leader == chara_id:
@@ -989,11 +1162,14 @@ class GroupBook:
             self._save()
 
     def summary(self) -> str:
-        if not self.groups and not self.qualified and not self.exam:
+        if (not self.groups and not self.qualified and not self.exam
+                and not self.stepped_down):
             return "(no groups)"
+        waiting = sum(1 for one in self.stepped_down if self.create_wait(one))
         return (
             f"{len(self.groups)} group(s), "
             f"{len(self.qualified)} qualified leader(s)"
+            + (f", {waiting} waiting {CREATE_WAIT_DAYS}日" if waiting else "")
         )
 
 

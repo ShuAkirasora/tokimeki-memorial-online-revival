@@ -14952,6 +14952,11 @@ class MpsServer:
         it can found a group for somebody with no リーダー資格 and under any name.
         That is what makes it useful for putting a test on either side of a rule
         in one line, and it is why it is not simply routed through the handler.
+        ⚠️⚠️ The other half of that split, since round 462: `leave`, `disband`
+        and `hand` do not write the ３０日間 wait either (`stamp=False`), so a
+        test can fold its scaffolding up without locking the character it was
+        built on out of 作成 for a month. `/group wait clear` drops one the wire
+        has written.
 
         ⭐ Most of this takes effect on a client that is already logged in only
         after a 登校. All four fields ride in MsgSvResultCharaInfo, which the
@@ -14970,6 +14975,7 @@ class MpsServer:
             /group leave               脱退 -- the leader leaving disbands it
             /group disband             解散
             /group hand <charaId>      引継 -- hand the group to a member (hex ok)
+            /group wait [clear]        the ３０日間 wait after 引継/解散
 
         ⚠️ `hand` is the store half of 0x620D..0x6213 with the handshake taken
         out. It exists so a test can put an account on either side of the leader
@@ -14986,7 +14992,13 @@ class MpsServer:
             qual = "yes" if me in book.qualified else "no"
             # ⭐ The tour record too: it is the only window onto リーダー試験
             # progress, and a station writing nothing is the failure to look for.
-            return (f"/group {where}, qualified={qual}, "
+            # ⭐ The ３０日間 wait too, for the same reason: it is invisible from
+            # the client (nothing on the wire carries it) and it can only be
+            # noticed as a 作成 that refuses for no visible cause.
+            wait = book.create_wait(me)
+            waited = (f", 作成禁止 {wait}日 "
+                      f"(from {book.stepped_down.get(me)})" if wait else "")
+            return (f"/group {where}, qualified={qual}{waited}, "
                     f"試験 [{book.exam_of(me)}] [{book.summary()}]")
 
         if not what:
@@ -14996,6 +15008,21 @@ class MpsServer:
             book.qualify(me, on)
             return self._say(session, sequence, f"/group qual {'on' if on else 'off'} "
                                                 f"(re-login to see it)")
+        if what == "wait":
+            # ⭐ The back door groups.clear_step_down explains: a test that
+            # folds its own group up leaves the same stamp a player would, and
+            # the next run of that test would meet it thirty days deep.
+            if args[1:2] == ["clear"]:
+                had = book.stepped_down.get(me)
+                book.clear_step_down(me)
+                return self._say(session, sequence,
+                                 f"/group wait clear (was {had})" if had
+                                 else "/group wait: nothing to clear")
+            wait = book.create_wait(me)
+            return self._say(session, sequence,
+                             f"/group wait {wait}日 "
+                             f"(from {book.stepped_down.get(me)})" if wait
+                             else "/group wait: 作成 is free")
         if what == "exam":
             # ⭐ The tour record, by hand. The tour is fifteen stations long
             # and the verdict reads one cell of it -- PC_LEADER_EXAM_SCORE, and
@@ -15057,7 +15084,8 @@ class MpsServer:
                 other = int(args[1], 0)
             except (IndexError, ValueError):
                 return self._say(session, sequence, "/group hand <charaId>")
-            ok = book.hand_over(mine.id, other)
+            # ⚠️ No ３０日間 stamp from the console -- GroupBook.disband says why.
+            ok = book.hand_over(mine.id, other, stamp=False)
             return self._say(session, sequence, f"/group hand {other:#x}: "
                                                 f"{'ok' if ok else 'refused'} "
                                                 f"(re-login to see it)")
@@ -15066,10 +15094,12 @@ class MpsServer:
                 return self._say(session, sequence, "/group: not in one")
             was = mine.label()
             members = list(mine.members)
+            # ⚠️ Neither of these stamps the ３０日間 wait; GroupBook.disband
+            # says why, and `/group wait` is how to see or drop one.
             if what == "leave":
-                book.leave(me)
+                book.leave(me, stamp=False)
             else:
-                book.disband(mine.id)
+                book.disband(mine.id, stamp=False)
             # ⚠️ 脱退 by a member moves one character; 解散 -- and 脱退 by the
             # leader, which GroupBook.leave folds into 解散 -- moves everybody
             # who was in it, so redraw the lot rather than just this session.
@@ -16497,6 +16527,7 @@ class MpsServer:
 
             12  リーダー資格 not awarded yet
             17  already in a group (or a 同好会)
+            14  the ３０日間 wait after 引継/解散 is still running (round 462)
             19  the name box was empty
             20  over MAX_GROUP_NAME bytes
             21  somebody already has that name
@@ -16571,6 +16602,20 @@ class MpsServer:
         if mine is not None:
             return refuse(groups.NG_ALREADY_IN_A_GROUP,
                           f"already in {mine.label()}")
+        # ⭐⭐⭐ Round 462: the ３０日間 wait after 引継 or 解散, p05_05 §3's
+        # last rule in this family and 0xFF07 reason 14's only candidate. See
+        # groups.CREATE_WAIT_DAYS -- the rule is the manual's, the row is a
+        # reading.
+        # ⚠️ After the membership check on purpose: somebody who handed the
+        # group over is still in it, so both rows fit them, and 17 「既に…所属して
+        # います」 is the more specific truth. The one who disbanded is in no
+        # group at all, so 14 is the only row left for them -- which is what
+        # makes the order visible rather than arbitrary.
+        wait = book.create_wait(me)
+        if wait:
+            return refuse(groups.NG_CREATION_FORBIDDEN,
+                          f"stepped down on {book.stepped_down.get(me)}, "
+                          f"{wait} of {groups.CREATE_WAIT_DAYS} day(s) left")
         if not trimmed:
             return refuse(groups.NG_NAME_MISSING, "the name box was empty")
         # ⭐ Logged raw for the reason _group_update logs its catchcopy length:
@@ -16754,6 +16799,16 @@ class MpsServer:
         still 「the group you are in is gone」 -- true for every member except
         the one who typed it, and they have the Ok instead.
 
+        ⭐⭐ Round 462: going through here costs the leader the ３０日間 wait on
+        作成 (p05_05 §3). The stamp is written by GroupBook.disband rather than
+        here, so any later way of folding a group up carries it by default -- but
+        ⚠️ the console passes `stamp=False`, so this handler is the only door
+        that writes one; groups.CREATE_WAIT_DAYS has the rest.
+        ⚠️ Nothing is said about it on the wire, because nothing
+        on the wire can say it -- the client puts its own 「解散すると、３０日間
+        は新規に仲良しグループを作れません」 up before it sends this (round 146),
+        which is the only warning the player gets.
+
         ⚠️ Leader only. A member's client should be drawing 脱退 in this row
         rather than 解散, so a 0x6203 from one is a disagreement between the two
         ends and gets 0x6205 -- the same call _group_update and _group_kick
@@ -16884,6 +16939,12 @@ class MpsServer:
         leader's grows to 情報/解散/引継. A bodyless notify can mean opposite
         things at its two ends when both of them were parties to the handshake,
         because each already knows which side it was on.
+
+        ⭐⭐ Round 462: the side that gave the group away picks up the ３０日間
+        wait on 作成 -- written by GroupBook.hand_over, which the console calls
+        with `stamp=False`, so this handshake is the only door that writes one.
+        ⚠️ The receiver picks up nothing: p05_05 §3 is explicit that taking a
+        group over neither needs リーダー資格 nor grants it.
 
         ⚠️ Which is also why it must not go to the rest of the roster: a third
         member was not part of the handshake and has no side to flip. What they
