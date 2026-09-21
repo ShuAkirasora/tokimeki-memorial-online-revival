@@ -124,6 +124,7 @@ import cibispawns
 import script
 import shop
 import stress
+import sysmsg
 import trade
 import trainingroom
 import twoshot
@@ -14904,6 +14905,92 @@ class MpsServer:
                                             f"{'両側' if both else '片側のみ'} "
                                             f"(相手の再入場で反映)")
 
+    def _sysmsg_console(
+        self, session: "_Session", sequence: int, args: "list[str]"
+    ) -> bytes:
+        """``/sys ...``: put a システムメッセージ on somebody's screen.
+
+        0xA001 is the server's own voice and nothing in the game asks for it,
+        so a hand has to press it. See sysmsg.py for the shape and for what
+        the box does once it is up.
+
+            /sys <文>                   everyone logged in on this port
+            /sys to <charaId> <文>      one player
+            /sys lvl <n> <文>           everyone, with importance byte n
+
+        ⚠️ The importance byte is offered because four values were measured
+        and none of them changed the window; the way to find out what it is
+        for is to keep sending them, not to settle on one here.
+
+        ⚠️ "Everyone" is everyone on this MpsServer. The school connection is
+        a second one with a live list of its own, and a player who is between
+        the two is on neither for the moment -- the box is a screen, and a
+        screen that is loading has nowhere to put it.
+        """
+        importance = sysmsg.DEFAULT_IMPORTANCE
+        target: int | None = None
+        if args and args[0] == "to":
+            if len(args) < 3:
+                return self._say(session, sequence, "/sys to <charaId> <文>")
+            try:
+                target = int(args[1], 0)
+            except ValueError:
+                return self._say(session, sequence, "/sys to <charaId> <文>")
+            args = args[2:]
+        elif args and args[0] == "lvl":
+            if len(args) < 3:
+                return self._say(session, sequence, "/sys lvl <n> <文>")
+            try:
+                importance = int(args[1], 0)
+            except ValueError:
+                return self._say(session, sequence, "/sys lvl <n> <文>")
+            args = args[2:]
+        if not args:
+            return self._say(session, sequence,
+                             "/sys <文> | /sys to <charaId> <文> | /sys lvl <n> <文>")
+        line = " ".join(args)
+        body = sysmsg.notify_params(line, importance)
+
+        if target is not None:
+            other = self._session_of(target)
+            if other is None:
+                return self._say(session, sequence,
+                                 f"/sys: 0x{target:x} はログインしていない")
+            wants = [other]
+        else:
+            # ⭐ The test is 登校, not 0x0200. A box needs a character on a
+            # screen, and chara_id is what says there is one -- logged_in is
+            # the game port's own flag and the school connection never sets
+            # it, so reading that would quietly leave half of every player
+            # out. It is also the gate _drain_console already uses.
+            wants = [
+                other for other in self.live
+                if other.chara_id
+                and other.writer is not None
+                and not other.writer.is_closing()
+            ]
+            if session.chara_id and session not in wants:
+                wants.append(session)
+        reply = b""
+        for other in wants:
+            # ⚠️⚠️ A push is written the moment it is made, while the console
+            # line that asked for it is built first and written last. Pushing
+            # to the connection we are answering would put the two sequence
+            # numbers on the wire backwards, and the client drops a connection
+            # whose sequence goes back. Ours rides out with the reply instead.
+            if other is session:
+                reply += self._answer(
+                    session, sequence,
+                    sysmsg.MSG_SV_NOTIFY_SYSTEM_MESSAGE, body)
+            else:
+                self._push(other, self._answer(
+                    other, 0, sysmsg.MSG_SV_NOTIFY_SYSTEM_MESSAGE, body))
+        print(f"[{self.tag}] システムメッセージ -> {len(wants)}, "
+              f"importance={importance}: {line!r}")
+        return reply + self._say(
+            session, sequence,
+            f"/sys {len(wants)}人に送った (importance={importance})")
+
     def _apply_chat(self, session: "_Session", sequence: int, said: str,
                     from_chat: bool = True) -> bytes:
         """Run one console line and pack whatever it asked for.
@@ -14939,6 +15026,8 @@ class MpsServer:
             return self._gm_console(session, sequence, said.split()[1:])
         if said.split()[:1] == ["/couple"]:
             return self._couple_console(session, sequence, said.split()[1:])
+        if said.split()[:1] == ["/sys"]:
+            return self._sysmsg_console(session, sequence, said.split()[1:])
         reply = b""
         info = self._chars(session).find(session.chara_id)
         love = self._chars(session).romance(session.chara_id)
