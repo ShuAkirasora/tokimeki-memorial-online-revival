@@ -21,10 +21,19 @@ WHAT IS RESTORED
 ``reference/npc_spawns.json`` holds 44 rows of (charaId, mapId, cell), and both
 halves of each row are read out of the game's own data rather than chosen here:
 
-* **which map** each of the 31 teachers belongs to is a field in the teacher
-  roster itself, and it agrees with the placement scripts row for row;
+* **which map** each of them belongs to is a field in the roster they come from:
+  both rosters carry one, and both agree with the placement scripts row for row;
 * **which cell** each of the 44 stands on is the coordinate their own placement
-  script sets, one per person.
+  script sets, one per person -- and the staff roster carries the cell as well,
+  so its thirteen placed rows are a full (map, x, y) that matches their scripts
+  exactly, with no exception.
+
+That second source is what decides who is standing where. Thirteen scripts share
+twelve people: one person has two of them, in two different rooms, because the
+staff roster holds two records for him -- the same name twice, differing in the
+room they name and in one byte of appearance. Matching on the whole coordinate
+rather than on a name is what tells those two records apart, and it is why the
+second room now gets the second record instead of a copy of the first.
 
 Those 44 placement scripts are also the only ones in the game that never make
 anybody visible -- they set a position and stop. That is why pushing them down
@@ -86,9 +95,9 @@ def _load() -> dict[int, list[Spawn]]:
     return out
 
 
-#: mapId -> who stands on it. ⚠️ One charaId may appear on two maps (the 教頭
-#: has a placement script for each of the two rooms he is found in); they are
-#: different maps, so no client is ever told about both at once.
+#: mapId -> who stands on it. ⚠️ The 44 rows are 44 distinct charaIds: the
+#: one person who stands in two rooms has a roster record for each of them, so
+#: each room names its own id rather than the same id twice.
 BY_MAP = _load()
 
 

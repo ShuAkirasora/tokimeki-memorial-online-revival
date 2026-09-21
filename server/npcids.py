@@ -78,19 +78,19 @@ The dispatch returns nothing for those, and its caller (0x006A6582) handles the
 empty answer rather than faulting on it, so this too is a quiet outcome.
 
 ⭐ The thirteen rows of category 2 are a check on this reading rather than a
-detail of it. npcspawns staffs the campus from the game's placement scripts,
-with no knowledge of this dispatch, and the category-2 people it puts out are
-rows 0 through 11 -- twelve rows, every one of them inside the thirteen, no
-exceptions either way.
+detail of it. npcspawns staffs the campus from the game's own data, with no
+knowledge of this dispatch, and the category-2 people it puts out are rows 0
+through 11 and row 17 -- exactly the thirteen this dispatch names, no exception
+either way.
 
-⭐⭐ The one row left over says something. It is ``2:17 教頭先生立ち``, and its
-two name fields are byte for byte the ones in ``2:11 教頭先生``: the same man in
-a second record, and the reason the dispatch reaches for row 17 out of order
-right after rows 8-11. So the client holds a menu for somebody this end has
-never put anywhere -- and the 教頭 is already the one person npcspawns places
-twice, once in each of the two rooms he is found in, both times as 2:11.
-⚠️ That is a lead and not a conclusion: nothing read so far says which of the
-two rooms, if either, wanted the standing record.
+⭐⭐ That last row is what makes the check worth having. It is
+``2:17 教頭先生立ち``, and its two name fields are byte for byte the ones in
+``2:11 教頭先生``: the same man in a second record, and the reason the dispatch
+reaches for row 17 out of order right after rows 8-11. ⭐⭐⭐ Which of his two
+rooms wanted the standing record is in the roster itself -- each placed row of
+this table carries the map and cell it belongs on, and the two records name two
+different rooms -- so the campus puts each of them where its own record says,
+and the dispatch has nobody left over.
 
 WHAT THIS IS FOR
 ----------------
