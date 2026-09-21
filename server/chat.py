@@ -55,6 +55,7 @@ import item
 import knobs
 import lesson
 import mapgraph
+import npcids
 import options
 import posts
 import quiz
@@ -863,8 +864,15 @@ def respond(
             return Reply(["/cid <cat>:<id> ...  例: /cid 3:0 3:27 2:0"])
         ids = [(pair[0] << 16) | pair[1] for pair in pairs if pair is not None]
         probes = id_probes(map_id, pos, ids)
+        # What each id will look like once it lands, said before it is sent.
+        # The two dispatches npcids reads are the client's own, so this is not
+        # a prediction: an id outside the four drawn rosters gets the default
+        # chibi and an id outside the menu dispatch offers nothing on a
+        # right-click, and knowing which of those is which is the whole reason
+        # to dictate an id rather than mint one. It still sends every id.
         return Reply(
-            [f"charaId {len(ids)}体: " + " ".join(label for label, *_ in probes)],
+            [f"charaId {len(ids)}体"]
+            + [f"  {label}  {npcids.describe(cid)}" for label, _, _, cid in probes],
             id_probes=probes,
         )
 
