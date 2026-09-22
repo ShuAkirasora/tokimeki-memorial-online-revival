@@ -2334,7 +2334,7 @@ def is_tutorial(script_id: "int | None") -> bool:
 # ⭐⭐ WHICH CELLS THIS END HAS TO PRODUCE OUT OF NOTHING: the ones the corpus
 # READS and never WRITES. 461 cells are touched by the 683 client scenarios and
 # 18 of them are read-only, which makes that list a lower bound on the state the
-# original server kept. Eight are answered here today:
+# original server kept. Twelve are answered here today:
 #
 #     SYSTEM[0] / [1] / [2]   year, month, day          romance.talk_cells
 #     PC[0x3013]              the player's sex          romance.PC_PLAYER_SEX
@@ -2344,15 +2344,10 @@ def is_tutorial(script_id: "int | None") -> bool:
 #     PLAYER[0x2001]          the tutorial's question   PLAYER_TUTORIAL_ASK
 #     PC[0x3010] / [0x3011]   the player's 姓 and 名     PC_FAMILY_NAME, below
 #     PC[0x3012]              the player's ニックネーム   PC_NICK_NAME, below
+#     SCHOOL[0x1001]          the school's name         SCHOOL_NAME, below
 #
-# ⛔️ The other seven are deliberately left unanswered, and the reasons differ:
+# ⛔️ The other six are deliberately left unanswered, and the reasons differ:
 #
-#   * `SCHOOL[0x1001]` is the school's NAME, and this end does not have it. A
-#     school is an account property and this server picks it by id; the string
-#     that goes with an id is the client's own (its school-name getter answers
-#     "" for id 0). Seven reads in the corpus hand it straight to a 台詞 through
-#     SYNC_VARIABLE, so answering it means naming ten schools -- which is a
-#     table to recover, not a cell to wire up, and it is not recovered.
 #   * `PC[0x3201]` and `PC[0x3203]` are two axes of `personalityParam`. No
 #     message in the protocol carries them and no scenario in either corpus
 #     writes them, so this end has no source; supplying 0 would be exactly the
@@ -2420,6 +2415,71 @@ PC_FIRST_NAME = 0x3011
 #: The player's ニックネーム. ⚠️ The one of the three with no comparison
 #: anywhere in the corpus to pin it -- see the note above.
 PC_NICK_NAME = 0x3012
+
+# ── The school's own name ─────────────────────────────────────────────────
+#
+# ⭐⭐⭐ `SCHOOL[0x1001]` is the name of the school, and 15 reads in the corpus
+# want it. TEN of them hand it straight to a 台詞 through SYNC_VARIABLE --
+# `skr_e005` interpolates it into the banner over the 文化祭 arch, 「このアーチ
+# には、「$s31文化祭」って文字が入るんだ。」 -- and the other FIVE are the
+# `<キャラ>_e011` record block, where a 告白 writes down WHICH SCHOOL it
+# happened at (`PLAYER[0x2110+i]`, beside the 組 and the three names).
+#
+# ⭐⭐ WHERE THE NAMES ARE, and it is not a guess at a layout: `school.bin`
+# holds ten records keyed 1..10, and the client's own school-name getter
+# (`FUN_007fd684`) answers the empty string for id 0, looks the record up by
+# key for anything else, and builds a std::string from `record + 2` -- so the
+# name is a cp932 C string at record +0x02, which is where the table header's
+# own key width puts it. That is what `reference/schools.json` carries: the id
+# and the name, and nothing else the table holds.
+#
+# ⭐ A second witness for nine of the ten, outside the client entirely: the
+# school names players wrote on KONAMI's own community pages while the game was
+# running.
+#
+# ⚠️ WHICH of the ten this server is, is a choice and not a reading:
+# `mps_session.SCHOOL_ID`, the same one `0x6603 MsgSvOkExamReady` has been
+# naming all along. The original knew a school from the account it came with;
+# this protocol never carries the client's pick back (MsgClRequestSchoolSelect
+# serialises empty), so there is nothing to recover and one school it is.
+
+SCHOOLS_PATH = (
+    Path(__file__).resolve().parent.parent / "reference" / "schools.json"
+)
+
+
+def _load_school_names() -> dict[int, str]:
+    """``{schoolId: name}``, or empty when the table is not shipped.
+
+    Silent when absent, like `_load_branches`: with no table this cell goes
+    back to being unanswered, which leaves the ten lines that print it printing
+    nothing where the school's name belongs -- exactly what every build before
+    this one did. ⚠️ No branch anywhere compares it, so nothing is decided
+    differently either way; what is lost is the words on screen.
+    """
+    try:
+        raw = json.loads(SCHOOLS_PATH.read_text(encoding="utf-8"))["schools"]
+    except (OSError, ValueError, KeyError):
+        return {}
+    return {int(row["id"]): row["name"] for row in raw}
+
+
+SCHOOL_NAMES = _load_school_names()
+
+
+def school_name(school_id: int) -> "str | None":
+    """The name that goes with a schoolId, or None -- including for id 0.
+
+    ⚠️ Id 0 is the empty-slot sentinel rather than a school, and the client
+    answers "" for it; None here keeps that out of a 台詞 instead of printing
+    an empty banner.
+    """
+    return SCHOOL_NAMES.get(school_id) or None
+
+
+#: The school's name, as text -- see the note above. Never written by any
+#: scenario: this end produces it or nobody does.
+SCHOOL_NAME = 0x1001
 
 #: ⚠️⚠️ **Named for what the tutorial does with it, not for what it is.** The
 #: semantics of this cell are NOT restored, and round 336 is where that stopped

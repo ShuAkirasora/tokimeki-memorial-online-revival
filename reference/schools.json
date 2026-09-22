@@ -1,0 +1,45 @@
+{
+ "schools": [
+  {
+   "id": 1,
+   "name": "かがやき高校"
+  },
+  {
+   "id": 2,
+   "name": "さくらの高校"
+  },
+  {
+   "id": 3,
+   "name": "いずみの高校"
+  },
+  {
+   "id": 4,
+   "name": "さざなみ高校"
+  },
+  {
+   "id": 5,
+   "name": "すみれの高校"
+  },
+  {
+   "id": 6,
+   "name": "あさぎり高校"
+  },
+  {
+   "id": 7,
+   "name": "ゆうなぎ高校"
+  },
+  {
+   "id": 8,
+   "name": "さつきの高校"
+  },
+  {
+   "id": 9,
+   "name": "すずかぜ高校"
+  },
+  {
+   "id": 10,
+   "name": "こはるの高校"
+  }
+ ],
+ "note": "The names of the ten schools, keyed by the schoolId this protocol uses everywhere (1..10; id 0 is the empty-slot sentinel and has no name). Scenarios read the name through the SCHOOL[0x1001] data cell and hand it straight to a line of dialogue, and this build's client cannot answer a data cell at all, so the server has to. Names only -- nothing else the table carries is read here."
+}

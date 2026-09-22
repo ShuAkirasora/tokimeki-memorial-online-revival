@@ -298,7 +298,21 @@ REASON_GAME_LOGIN_UPDATE = 2
 CLIENT_VERSION = b"00.01.13.00"
 VERSION_FIELD_LEN = 13
 
-# Which school 0x6603 MsgSvOkExamReady says the exam is at.
+#: ⚠️ INVENTED — which of the ten schools this server is, and so the school
+#: every account here is at (1 = かがやき高校).
+#:
+#: A choice, not a measurement, and the only reason it is a choice is that the
+#: pick never comes back: `MsgClRequestSchoolSelect`'s dump string names a
+#: schoolId field, but the client serialises the message empty (observed:
+#: datalen 2, message id only), and an account that already has characters
+#: skips the select screen entirely. The original read the school off the
+#: account it kept; this end has one school and this is which.
+#:
+#: ⭐ Two things say it out loud, and they must not disagree: `0x6603
+#: MsgSvOkExamReady` names it on the wire, and `script.SCHOOL_NAME` turns it
+#: into the name scenarios print in a 台詞 (「$s31文化祭」). Turning this knob
+#: moves the whole server to another of the ten rather than splitting it.
+#: ⚠️ Constrained to 1…10 by `school.bin`: there is no school 0.
 #
 # ⚠️⚠️ **Not zero, and this cost a client.** 0x0201 has answered zero since the
 # day it was first answered and nothing ever minded, so the exam's schoolId was
@@ -309,12 +323,7 @@ VERSION_FIELD_LEN = 13
 # a strlen at 0x00402E12 — `std::string::assign(const char*)` — walking a
 # pointer whose value was **2**, which is what a missed record hands back.
 #
-# ⚠️ The client is never asked which school it is in and never volunteers it:
-# `MsgClRequestSchoolSelect`'s dump string names a schoolId field, but the
-# client serialises the message empty (observed: datalen 2, message id only),
-# and an account that already has characters skips the select screen entirely.
-# So this is a choice, constrained to 1…10 by the table.
-EXAM_SCHOOL_ID = 1
+SCHOOL_ID = 1
 
 # Queries whose answer is nothing but ``u16 count`` and that many fixed-size
 # entries, so an empty list is two zero bytes. Which ones those are is not a
@@ -3324,6 +3333,17 @@ class MpsServer:
             cells[("PC", script.PC_FAMILY_NAME)] = family
             cells[("PC", script.PC_FIRST_NAME)] = first
             cells[("PC", script.PC_NICK_NAME)] = nick
+        # ⭐⭐⭐ The school's own name, which 15 reads want and ten of them
+        # interpolate straight into a 台詞 -- `skr_e005` writes it on the banner
+        # over the 文化祭 arch. Same shape as the three names above: text, out of
+        # a table the client cannot read for itself here (`0x8080 SCHOOL_DATA_REFER`
+        # is one of the stubs), keyed by the one school this server is.
+        # ⚠️ The id is `SCHOOL_ID` and not a literal for the same reason
+        # `PC_IN_CLASS` is not one: 0x6603 already tells the client which school
+        # it is at, and two ends naming it differently is the failure that closes.
+        school = script.school_name(SCHOOL_ID)
+        if school is not None:
+            cells[("SCHOOL", script.SCHOOL_NAME)] = school
         # ⭐ The tutorial's own gate, and the only scripts in the corpus that
         # read it are the two 初登校 ones -- so supplying it always is the same
         # as supplying it to 初登校 only, with nothing to keep in step.
@@ -19095,7 +19115,7 @@ class MpsServer:
             session,
             seen,
             exam.MSG_SV_OK_EXAM_READY,
-            exam.ready_params(EXAM_SCHOOL_ID, subject, course),
+            exam.ready_params(SCHOOL_ID, subject, course),
         )
 
     def _exam_start(self, session: "_Session", seen: int) -> bytes:

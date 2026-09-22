@@ -154,7 +154,7 @@ is drawn 「レベル１」, the 解答用紙 has twenty rows of 1-2-3-4 and a �
 header, 0x6A04 is a periodic autosave that starts before anything is filled in,
 0xFF is a blank row, 4択 answers come back as the file-order value and ○× as 1
 for ○. Also, the hard way, that `schoolId` must be a real one — see
-mps_session.EXAM_SCHOOL_ID.
+mps_session.SCHOOL_ID.
 
 ⭐⭐ And, settled at the keyboard in round 326, what the 組 box sends: it is a
 one-letter box the client converts itself (A→0 … Z→25, lowercase folded), and a
