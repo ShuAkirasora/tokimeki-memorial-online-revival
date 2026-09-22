@@ -239,6 +239,9 @@ OP_JP, OP_BR, OP_BA = 0x9080, 0x9081, 0x9082
 # 季節 switch is recognised by its shape and this is one of the three opcodes
 # that shape is made of. See `Script.season_register`.
 OP_EQ = 0x9009
+# ⭐ Named for the same reason as OP_EQ above, one shape later: the three
+# arithmetic opcodes 今日 is built out of. See `Script.day_stamps`.
+OP_ADD, OP_SUB, OP_MUL = 0x9002, 0x9003, 0x9004
 OP_RTN, OP_END, OP_JS = 0x9083, 0x9084, 0x9085
 OP_BA_END = 0x90C0
 OP_EVENT_CALL = 0x9180
@@ -879,6 +882,44 @@ def _decided_road(script: "Script", index: int,
     return seen
 
 
+# ⭐⭐⭐ 今日, as the scenarios themselves build it: the year, the month and the
+# day out of SYSTEM[0], SYSTEM[1] and SYSTEM[2], packed into one number by
+# (year - 2000) * 16 * 32 + month * 32 + day. ⛔️ Not a layout anyone named --
+# these are the instructions, and `romance.pack_talk_day` computes the same
+# number on this end because this stretch says to.
+_TODAY_SHAPE = (
+    (0x8000, 0), (OP_STR, 2000), (OP_SUB, None), (OP_STR, 16), (OP_MUL, None),
+    (OP_STR, 32), (OP_MUL, None), (0x8000, 1), (OP_STR, 32), (OP_MUL, None),
+    (OP_ADD, None), (0x8000, 2), (OP_ADD, None),
+)
+
+
+def _today_key(script: "Script", i: int) -> tuple:
+    """One instruction of `_TODAY_SHAPE`, normalised to opcode + immediate.
+
+    ⚠️ Registers are left out on purpose: the compiler hands these temporaries
+    out from the top down, so which ones a given scenario used says nothing
+    about whether this is the same stretch of arithmetic.
+    """
+    _, op, args = script.code[i]
+    if DATA_READ.get(op) == "SYSTEM":
+        return (0x8000, int.from_bytes(args[2:4], "little"))
+    if op == OP_STR:
+        field = int.from_bytes(args[0:2], "little")
+        return (op, int.from_bytes(args[2:6], "little")
+                if (field >> 10) & 7 == CAT_IMMEDIATE else None)
+    return (op, None)
+
+
+def _stamps_today(script: "Script", i: int) -> bool:
+    """Do the instructions just before `i` build 今日, exactly `_TODAY_SHAPE`?"""
+    start = i - len(_TODAY_SHAPE)
+    if start < 0:
+        return False
+    return all(_today_key(script, start + n) == want
+               for n, want in enumerate(_TODAY_SHAPE))
+
+
 class Script:
     """One exported script: its instructions and its label table."""
 
@@ -926,6 +967,10 @@ class Script:
         # out of. Computed here because it is a property of the instruction
         # stream and nothing else, and asked for at most once per script.
         self.season_register = self._season_register()
+        # ⭐ Round 469: computed on first ask rather than here, unlike the line
+        # above -- every scenario has the season question asked of it once, and
+        # only the ones a client actually plays are asked this one.
+        self._day_stamps: "frozenset[tuple[str, int]] | None" = None
         # ⭐ How big this scenario's register file is, per category, out of its
         # own DECL_VARIABLE prologue. Read here rather than off `Machine`'s
         # registers because presence there cannot tell a declared register from
@@ -998,6 +1043,38 @@ class Script:
                 if all(_scenery_road(self, branch) for _, _, branch in run):
                     return register
         return None
+
+    @property
+    def day_stamps(self) -> "frozenset[tuple[str, int]]":
+        """The cells this scenario date-stamps: 「the day this last played」.
+
+        ⭐⭐⭐ Round 469. Recognised by shape, ⛔️ not by an address range and
+        not by a table of script names -- a cell is one of these when the
+        thirteen instructions in front of the access are exactly `_TODAY_SHAPE`,
+        which is the scenario saying what the number means. Every 日常会話
+        opens by comparing one of these against 今日 and ends by writing 今日
+        into it, so 「同じ日常会話は一日一回」 is the scenario's own code and
+        needs nothing from this end but the cell's value back.
+
+        ⭐⭐ Two things measured over all 778 exports, both zero-exception, and
+        they are why the shape is trusted as a reading: **622** reads sit
+        behind this arithmetic and **every one** of them is followed by OP_EQ
+        (never <, never >), and the **275** cells it answers are touched from
+        **nowhere else in either script set** -- so nothing uses one of these
+        as anything but a packed day. The smoke test keeps both.
+
+        ⚠️ Read-only-looking but not a read: a scenario that only writes one of
+        these (the fifteen `<キャラ>_c20N` do) is still stamping a day, and a
+        caller that takes the writes back wants it.
+        """
+        if self._day_stamps is None:
+            found = set()
+            for i, (_, op, args) in enumerate(self.code):
+                family = DATA_READ.get(op) or DATA_WRITE.get(op)
+                if family in ("PCEV", "PCEV32") and _stamps_today(self, i):
+                    found.add((family, int.from_bytes(args[2:4], "little")))
+            self._day_stamps = frozenset(found)
+        return self._day_stamps
 
     def writes_any(self, cells: "frozenset[tuple[str, int]]") -> bool:
         """Does this scenario write any of these cells anywhere in its code?

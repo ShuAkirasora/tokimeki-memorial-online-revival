@@ -51,6 +51,12 @@ from datetime import date
 from pathlib import Path
 from typing import NamedTuple
 
+# ⚠️ One-way, and it stays that way: `gs3vm` imports nothing from here. This
+# module asks it one question -- which cells a scenario date-stamps -- and asks
+# it of an export that may not exist, so everything below it still works on a
+# copy of this server that has no scripts at all.
+import gs3vm
+
 SEX_MALE, SEX_FEMALE = 0, 1  # chara_sex.bin: 0 男 / 1 女 / 2 不詳
 
 
@@ -432,6 +438,60 @@ TALK_DAY_MARK_CELLS = frozenset(
 TALK_DAY_CELLS = TALK_DAY_MARK_CELLS | frozenset(
     ("PC", PC_INTIMACY_BASE + i) for i in range(len(CANDIDATES)))
 
+
+def scene_day_cells(script) -> "frozenset[tuple[str, int]]":
+    """The day-stamp cells of `script` that are this record's to keep.
+
+    ⭐⭐⭐ Round 469: 「同じ日常会話は一日一回」. A scenario opens by comparing
+    its own cell against 今日 and walks straight out when they match -- a
+    different, one-line scene and OP_END, no choices and no 親密さ -- and ends
+    by writing 今日 into it. Until this end kept that cell the gate could never
+    be answered, so the same conversation replayed for ever.
+
+    ⭐ Which cells those are is `gs3vm.Script.day_stamps`, read off the
+    bytecode by shape. ⛔️ Nothing here names an address: 275 of them exist
+    across 325 scenarios and a table of them would be one more thing to trust.
+
+    ⚠️ `TALK_DAY_MARK_CELLS` comes back out, and not because it would be wrong
+    to keep them -- `PCEV[0x6040+i]` is a day stamp by exactly this shape. It
+    is because `data_cells` already answers those five out of ``lastTalk`` and
+    `absorb_talk_day` already takes them back, and one cell answered from two
+    saved fields is the bug this avoids rather than the feature it looks like.
+
+    Empty for a scenario this end has no export of, which is every copy of this
+    server but the one that made them -- and then the gate is ⊤ as before.
+    """
+    if script is None:
+        return frozenset()
+    return script.day_stamps - TALK_DAY_MARK_CELLS
+
+
+#: Every day-stamp cell one candidate's scenarios use, worked out once. ⭐ The
+#: partition is measured, not assumed: across the exports each of these cells is
+#: stamped by scenarios of exactly one candidate, so 「forget her scenes」 is a
+#: question with an answer. ⚠️ Cached because the answer is a property of the
+#: export directory, which does not change while a server runs.
+_SCENE_DAY_BY_NAME: "dict[str, frozenset[tuple[str, int]]] | None" = None
+
+
+def scene_day_cells_of(name: str) -> "frozenset[tuple[str, int]]":
+    """The day-stamp cells of `name`'s own scenarios. Empty without exports."""
+    global _SCENE_DAY_BY_NAME
+    if _SCENE_DAY_BY_NAME is None:
+        found: dict[str, set] = {who: set() for who in CANDIDATES}
+        by_stem = {stem: who for who, stem in SCRIPT_STEMS.items()}
+        for path in sorted(gs3vm.SCRIPT_DIR.glob("*.gs3.json")):
+            who = by_stem.get(path.name[:3])
+            if who is None:
+                continue
+            loaded = gs3vm.load(path.name[: -len(".gs3.json")])
+            if loaded is not None:
+                found[who] |= scene_day_cells(loaded)
+        _SCENE_DAY_BY_NAME = {who: frozenset(cells)
+                              for who, cells in found.items()}
+    return _SCENE_DAY_BY_NAME.get(name, frozenset())
+
+
 # ⚠️ Which of the two groups the locker scripts check is `PC[0x3013]`, and the
 # split is 天宮/春日/弥生 against 桜井/犬飼 -- exactly the female candidates
 # against the male ones. So this end sends the player's own sex, and an
@@ -494,6 +554,30 @@ def _saved_record(saved) -> dict:
     return {str(base): saved[str(base)]
             for base in PLAYER_RECORD_BASES
             if isinstance(saved, dict) and str(base) in saved}
+
+
+def _saved_scene_day(saved) -> dict:
+    """``{cell address: "YYYY-MM-DD"}`` as it comes back out of a save.
+
+    ⚠️ Keys are the PCEV address as a decimal string in the file (JSON has no
+    integer keys) and an int in here, which is how the cells are keyed
+    everywhere else. A key that is not a number, or a value that is not a day
+    this end can read back, is dropped rather than carried: what goes back into
+    a scenario's answer must be a day something wrote, and `_saved_day` is the
+    same tolerance ``lastTalk`` gets.
+    """
+    if not isinstance(saved, dict):
+        return {}
+    kept: dict[int, str] = {}
+    for key, value in saved.items():
+        try:
+            address = int(key)
+        except (TypeError, ValueError):
+            continue
+        day = _saved_day(str(value))
+        if day is not None:
+            kept[address] = day.isoformat()
+    return kept
 
 
 def talk_day_writes(writes: dict) -> dict:
@@ -836,6 +920,17 @@ class Romance:
         # PC[0x3a04]: whose letter event is running. -1 is what the new-game
         # reset writes, and it is what 「手紙を読まない」 puts back.
         self.letter_event = int((saved or {}).get("letterEvent", NO_LETTER_EVENT))
+        # ⭐⭐⭐ Round 469: the day each scenario last played, by the cell the
+        # scenario stamps it into (`scene_day_cells`) and as a date the same
+        # way ``lastTalk`` is one. ⚠️ Kept here rather than per candidate on
+        # purpose: these cells belong to a *scene*, not to a person -- four of
+        # 天宮's share one cell, and the fifteen `<キャラ>_c20N` stamp cells
+        # nothing in the corpus ever reads. Sparse, like ``record``: a cell
+        # absent here is a scene nobody has played, which `pack_talk_day`
+        # renders as 0, and 0 is not any day. Absent from saves before round
+        # 469, which is exactly a save where nothing has been played yet.
+        self.scene_day: dict[int, str] = _saved_scene_day(
+            (saved or {}).get("sceneDay"))
 
     # ── reading ────────────────────────────────────────────────────────────
     def on_stage(self) -> list[str]:
@@ -1052,7 +1147,9 @@ class Romance:
         return True
 
     def to_json(self) -> dict:
-        return {**self.state, "letterEvent": self.letter_event}
+        return {**self.state, "letterEvent": self.letter_event,
+                "sceneDay": {str(address): day
+                             for address, day in sorted(self.scene_day.items())}}
 
     # ── the scripts' view of all this ─────────────────────────────────────
     def data_cells(self) -> dict:
@@ -1095,6 +1192,53 @@ class Romance:
         # this method can be trusted (see the docstring above).
         cells.update(self.record_cells())
         return cells
+
+    def scene_cells(self, cells: "frozenset[tuple[str, int]]") -> dict:
+        """The day stamps of one scenario, as `gs3vm` wants them keyed.
+
+        ⭐⭐⭐ Round 469. `cells` is what `scene_day_cells` read off that one
+        scenario's bytecode, so nothing here decides which addresses exist --
+        the scenario names them and this only says what is in them.
+
+        ⚠️⚠️ Every one of them is answered, ⛔️ not just the ones the save has
+        seen -- and that is the opposite of `record_cells` next door on
+        purpose. 「this scene has never played」 is a state the packing
+        represents (0, which is no day at all: `pack_talk_day(None)`), not a
+        hole, and leaving the cell out would make the gate undecidable on the
+        very first playing -- which is the whole of what was wrong before.
+        """
+        return {cell: pack_talk_day(_saved_day(self.scene_day.get(cell[1], "")))
+                for cell in cells}
+
+    def absorb_scene_day(self, writes: dict,
+                         cells: "frozenset[tuple[str, int]]") -> bool:
+        """Take a scenario's 「played today」 stamps back. True if one moved.
+
+        ⭐⭐⭐ Round 469, and the sibling of `absorb_talk_day`: the number in
+        the write is one the scenario's own arithmetic produced, so this only
+        unpacks it and puts it where the next playing will read it.
+
+        ⚠️ Fenced by `cells` -- the stamps of the scenario that ran, and not
+        every PCEV a run wrote -- for `absorb_record`'s reason: several
+        absorbers walk one `Result` and each must take only what is its own.
+
+        ⚠️ A value this end cannot read back as a day is dropped rather than
+        stored. The scenarios write 今日 and nothing else, so one that does not
+        unpack is a run this end has not understood, and a save is the last
+        place to put something like that.
+        """
+        changed = False
+        for cell in sorted(cells):
+            if cell not in writes:
+                continue
+            value = writes[cell]
+            day = unpack_talk_day(value) if isinstance(value, int) else None
+            if day is None:
+                continue
+            text = day.isoformat()
+            changed |= self.scene_day.get(cell[1]) != text
+            self.scene_day[cell[1]] = text
+        return changed
 
     def record_cells(self) -> dict:
         """Just the `PLAYER` half of `data_cells`, keyed the same way.
@@ -1317,12 +1461,21 @@ class Romance:
         third arm.
         """
         row = self.state[name]
+        # ⭐ Round 469 adds her scenes' own stamps, and for round 468's reason
+        # rather than a new one: a new game has played none of them, and with
+        # her stamps left at today every one of her 日常会話 answers 「already
+        # played」 and walks out at its first branch. ⛔️ Hers only -- the
+        # partition is what `scene_day_cells_of` is for.
+        mine = {cell[1] for cell in scene_day_cells_of(name)}
+        stale = mine & set(self.scene_day)
         if (row["talk"] == TALK_SLOT_DEFAULTS
-                and not row["lastTalk"] and not row["todayBest"]):
+                and not row["lastTalk"] and not row["todayBest"] and not stale):
             return False
         row["talk"] = dict(TALK_SLOT_DEFAULTS)
         row["lastTalk"] = ""
         row["todayBest"] = 0
+        for address in stale:
+            del self.scene_day[address]
         return True
 
     def waiting_letter(self) -> str | None:

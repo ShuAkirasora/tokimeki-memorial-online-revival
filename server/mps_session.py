@@ -3361,6 +3361,17 @@ class MpsServer:
         # clock, the same one the 会話 chooser has always been given
         # (`romance.date_cells`), now given to every scenario that asks.
         cells.update(romance.date_cells())
+        # ⭐⭐⭐ Round 469: 「同じ日常会話は一日一回」. The cell this scenario
+        # stamps the day into, out of the scenario's own bytecode -- so what is
+        # supplied here is exactly what it asks about and nothing wider. With
+        # it answered the gate at its first branch decides, and a conversation
+        # already had today plays its short arm instead of repeating whole.
+        # ⚠️ Answered even when the save has never seen the scene: 「never
+        # played」 is 0, which is no day, and a missing cell would leave the
+        # gate exactly as undecidable as it was.
+        stamps = romance.scene_day_cells(gs3vm.by_script_id(script_id))
+        if love is not None:
+            cells.update(love.scene_cells(stamps))
         # ⭐ The tutorial's own gate, and the only scripts in the corpus that
         # read it are the two 初登校 ones -- so supplying it always is the same
         # as supplying it to 初登校 only, with nothing to keep in step.
@@ -3393,7 +3404,11 @@ class MpsServer:
         # to take those writes back, and this is the one place in the server
         # that has made it -- an offline walker, or any future caller that has
         # not, keeps the gate exactly as round 195 left it.
-        runner.shadow.kept_cells = romance.TALK_DAY_CELLS
+        # ⭐⭐⭐ Round 469 adds this scenario's own day stamps on the same
+        # undertaking: supplied just above, taken back in `_script_scene_day`.
+        # ⚠️ Only the cells of the scenario that is about to run, so the
+        # promise is exactly as wide as the thing keeping it.
+        runner.shadow.kept_cells = romance.TALK_DAY_CELLS | stamps
         register = runner.shadow.script.season_register
         if register is not None:
             # ⭐ Said out loud whenever the script has the switch at all, so
@@ -3978,6 +3993,48 @@ class MpsServer:
         print(f"[{self.tag}] 告白記録 "
               + " ".join(f"{address:#06x}={value!r}"
                          for address, value in sorted(touched.items()))
+              + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
+
+    def _script_scene_day(self, session: "_Session", result) -> None:
+        """Let a scenario stamp 「this one played today」 into the save.
+
+        ⭐⭐⭐ Round 469, and the fourth sibling of `_script_debut`,
+        `_script_letter_event` and `_script_record`. What it keeps is one
+        number per scene -- the day that scene last played -- and the rule it
+        restores is the manual's 「同じ日常会話は一日一回」: with the stamp
+        answered, a scenario replayed the same day takes its first branch, says
+        one line and ends, instead of running whole for a second helping.
+
+        ⚠️ Fenced by `Script.day_stamps` -- the cells *this* scenario stamps,
+        read off its bytecode -- and not by script id or by an address range.
+        The shape is the fence, and `romance.scene_day_cells` argues it.
+
+        ⚠️ Silence means the scenario stamps no day, which is 453 of the 778
+        exports. 「記帳」 means the save moved; 「既に同じ値」 means it played
+        again on a day it had already been played on, which is a real outcome
+        here rather than a miss -- it is what the short arm leaves behind.
+        """
+        runner = session.script
+        shadow = runner.shadow if runner is not None else None
+        if shadow is None or shadow.lost:
+            return
+        stamps = romance.scene_day_cells(shadow.script)
+        if not stamps:
+            return
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return
+        wrote = {cell: result.writes[cell] for cell in sorted(stamps)
+                 if cell in result.writes}
+        if not wrote:
+            return
+        changed = love.absorb_scene_day(result.writes, stamps)
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] 会話の日付: 書き戻せませんでした")
+            return
+        print(f"[{self.tag}] 会話の日付 "
+              + " ".join(f"{family}[{address:#06x}]={value}"
+                         for (family, address), value in wrote.items())
               + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
 
     def _script_talk_credit(self, session: "_Session", result) -> bool:
@@ -6527,6 +6584,11 @@ class MpsServer:
                     self._script_debut(session, shadow.result)
                     self._script_letter_event(session, shadow.result)
                     self._script_record(session, shadow.result)
+                    # ⭐⭐⭐ Round 469: 「this scene played today」, before its
+                    # 468 neighbour for no reason but reading order -- the two
+                    # keep different cells out of the same run and neither can
+                    # take the other's.
+                    self._script_scene_day(session, shadow.result)
                     # ⭐⭐⭐ Round 468: the 日常会話 daily rule, run by the
                     # scenario that owns it. ⚠️ Before `session.script` is
                     # dropped below -- it reads the shadow's own scenario to
