@@ -495,6 +495,21 @@ ARITHMETIC = {
 #: `Machine._as_text`.
 STRING_COMPARISONS = (0x9009, 0x900A)
 
+#: ⭐⭐⭐ The third one that means something over text: `+` joins two strings.
+#: Six sites in the corpus, and each of them builds a name a 台詞 then says --
+#: `un152` ip=98 「<the player's 名>の父」, `un065` ip=220 「<the other member's
+#: 姓>・声色」, `un010` ip=455/466 「<姓>　<名>」 (the full name, said instead of
+#: the surname alone when the two members of the party share one), `un009`
+#: ip=370 「高山」+「先生」 and `hsn_c001` ip=1775.
+#:
+#: ⚠️⚠️ Which side is text is NOT told by the operands the way it is for the
+#: two comparisons: `un009` ip=370 adds two pool references and neither is a
+#: `str`. The **destination** is what says so -- S30 is one of the client's own
+#: fixed-width text buffers (`STRING_CATEGORIES`) -- and that is the test the
+#: arithmetic case applies. ⛔️ Adding two references as numbers would index
+#: into nothing; there is no second reading here to weigh.
+STRING_CONCATENATION = 0x9002
+
 # OP_NOT is the one that reads a single operand out of the same block.
 OP_NOT = 0x900F
 
@@ -1136,8 +1151,13 @@ class Machine:
         they are right. ⛔️ The competing reading is one call away and was NOT
         taken -- `ngwords.fold` folds kana and case for the banned-word table,
         on evidence from that table itself, and there is no such evidence here.
+
+        ⭐ `+` reads its sides the same way and is **not** invented with them:
+        joining two strings has one meaning, the destination is a text buffer,
+        and the result is self-witnessing (`un009` ip=370 comes out 「高山先生」).
+        See `STRING_CONCATENATION`.
         """
-        if op not in STRING_COMPARISONS:
+        if op not in STRING_COMPARISONS and op != STRING_CONCATENATION:
             return TOP
         if isinstance(value, str):
             return value
@@ -1218,7 +1238,14 @@ class Machine:
             result, left, right = _arith_registers(args)
             a, b = self._get(left), self._get(right)
             unknown = _merge_unknown(a, b)
-            if unknown is None and (isinstance(a, str) or isinstance(b, str)):
+            # ⭐ Text, either because a side already is some (a typed line, or a
+            # name out of a save) or because the destination is one of the
+            # client's string buffers and the instruction is the join --
+            # `STRING_CONCATENATION` has why the destination has to be asked.
+            if unknown is None and (
+                    isinstance(a, str) or isinstance(b, str)
+                    or (op == STRING_CONCATENATION
+                        and result[0] in STRING_CATEGORIES)):
                 a, b = self._as_text(op, a), self._as_text(op, b)
                 unknown = _merge_unknown(a, b)
             self.registers[result] = (
