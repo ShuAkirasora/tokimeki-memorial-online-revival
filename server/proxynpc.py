@@ -141,6 +141,20 @@ def names(row: dict) -> tuple[bytes, bytes]:
     return _name(row["familyName"]), _name(row["firstName"])
 
 
+def name_trio(row: dict) -> tuple[str, str, str]:
+    """``(familyName, firstName, nickName)`` as text, for the script engine.
+
+    ⭐ The same pair `characters.name_trio` is to `characters.full_name`: the
+    wire wants fixed-width bytes (`names`, above) and `PC[0x3010]`/`[0x3011]`/
+    `[0x3012]` want characters, because what a scenario compares them against
+    is a string-pool literal -- see `script.PC_FAMILY_NAME`. A 代行ＮＰＣ is
+    asked the same questions a player is: 「do the two of you share a surname」
+    is read off the cells of both 役柄 (2.382), and the slot nobody is sitting
+    at answers out of this table.
+    """
+    return str(row["familyName"]), str(row["firstName"]), str(row["nickName"])
+
+
 def stand_in(sex: int, taken: "set[tuple[int, int]]") -> "tuple[int, dict] | None":
     """A 代行ＮＰＣ of this 役柄's sex that this party has not cast yet.
 

@@ -5894,6 +5894,21 @@ class MpsServer:
         ⚠️ A member whose connection has gone gets no 0x7200 and no entry: the
         alternative is naming a `pcInfo` slot the client would then draw an
         empty balloon for.
+
+        ⭐⭐⭐ Round 477: **a 代行ＮＰＣ is in the array too, and has to be.**
+        `$m0n`/`$n0n` are read out of `pcInfo[]` and out of nothing else
+        (`script.ready_params`), and all 22 ドラマイベント are two-role plays
+        that write the *other* 役柄's name -- 1459 places across the 22, 99 of
+        them in `un127` alone. A surrogate has no session, so until now it fell
+        out of the cast with the disconnected members and every one of those
+        lines drew the empty name the tutorial drew in round 190. The record to
+        put there is not invented: `proxynpc.create_info` is the same block
+        0x6501 already answers for that charaId with, which is what that
+        module means by 「a surrogate is a character everywhere a party member
+        is one」.
+        ⚠️ Which is why the cast and the members are two lists here rather than
+        one zipped pair: a slot in `pcInfo[]` is a *役柄*, and only the ones a
+        person is sitting at get a 0x7200, a `Runner` and a shadow.
         """
         found = self._drama_script(party)
         if found is None or found.script_id is None:
@@ -5901,8 +5916,13 @@ class MpsServer:
                   f"exported for it, the room stays up")
             return b""
         cast: list[tuple[int, bytes]] = []
-        sessions: list["_Session"] = []
+        members: list[tuple[int, "_Session"]] = []
         for actor in sorted(party.actors, key=lambda a: a.actor_id):
+            if actor.is_surrogate:
+                row = proxynpc.find(*actor.npc)
+                if row is not None:
+                    cast.append((actor.actor_id, proxynpc.create_info(row)))
+                continue
             other = self._session_of(actor.chara_id)
             if other is None:
                 continue
@@ -5910,10 +5930,10 @@ class MpsServer:
             if info is None:
                 continue
             cast.append((actor.actor_id, info))
-            sessions.append(other)
+            members.append((actor.actor_id, other))
         params = script.ready_params(found.script_id, [], cast)
         print(f"[{self.tag}] drama light: {found.file} id={found.script_id} "
-              f"cast={[a for a, _ in cast]} to {len(sessions)} member(s)")
+              f"cast={[a for a, _ in cast]} to {len(members)} member(s)")
         out = b""
         # ⭐⭐⭐ **One register file, several cursors.** Every member walks the
         # same scenario over the same `B`/`F`/`S` registers, and that is read
@@ -5947,7 +5967,7 @@ class MpsServer:
         # names which 役柄 it is asking and the answer belongs in that player's
         # own `E<n>` -- see `gs3vm.OP_INPUT_SELECT` and `gs3vm.Follower.chose`.
         party_registers: dict = {}
-        for (actor_id, _), other in zip(cast, sessions):
+        for actor_id, other in members:
             other.script = script.Runner(found, 0, [])
             other.talking_choice = None
             # ⭐ 0x7200 is what takes the パーティメンバー screen down (round
@@ -5982,7 +6002,7 @@ class MpsServer:
         # answer. ⛔️ Not a snapshot -- the machines are shared, so a cell one
         # member writes is what the next reader of it sees.
         shadows = {actor_id: other.script.shadow
-                   for (actor_id, _), other in zip(cast, sessions)
+                   for actor_id, other in members
                    if other.script is not None and other.script.shadow is not None}
         # ⭐⭐⭐ Round 476: the slots nobody is sitting at. A 代行ＮＰＣ has no
         # session and so no machine, and until now a read of its
@@ -5998,13 +6018,32 @@ class MpsServer:
         for actor in sorted(party.actors, key=lambda a: a.actor_id):
             if not actor.is_surrogate or actor.actor_id in shadows:
                 continue
+            cells: dict = {("PC", script.PC_IS_SURROGATE): 1}
+            # ⭐⭐⭐ Round 477: and its 姓 / 名 / ニックネーム, out of the same
+            # roster row the cast slot above was drawn from. 同姓回避 asks
+            # about *both* 役柄 -- 8 reads over three scenarios name the other
+            # one's surname (2.382) -- and in a party of one player and one
+            # 代行ＮＰＣ every one of them was ⊤ for want of these two
+            # strings: 「neither of us is called 雪丘」 could not be decided,
+            # and `un065` ip=220 built 「◯◯・声色」 out of nothing.
+            # ⚠️ Text rather than the wire's fixed-width bytes, for the same
+            # reason `_shadow_start` feeds the player's own names as text: the
+            # other side of every one of those comparisons is a string-pool
+            # literal (`script.PC_FAMILY_NAME`).
+            row = proxynpc.find(*actor.npc)
+            if row is not None:
+                family, first, nick = proxynpc.name_trio(row)
+                cells[("PC", script.PC_FAMILY_NAME)] = family
+                cells[("PC", script.PC_FIRST_NAME)] = first
+                cells[("PC", script.PC_NICK_NAME)] = nick
             stand_in = gs3vm.follow(
-                found.script_id, {("PC", script.PC_IS_SURROGATE): 1},
-                party_registers, actor.actor_id)
+                found.script_id, cells, party_registers, actor.actor_id)
             if stand_in is not None:
                 shadows[actor.actor_id] = stand_in
                 print(f"[{self.tag}] vm: 役柄 {actor.actor_id} is a "
-                      f"代行ＮＰＣ -- PC/{actor.actor_id}[0x7000] <- 1")
+                      f"代行ＮＰＣ -- PC/{actor.actor_id}[0x7000] <- 1"
+                      + (f", name <- {family} {first}" if row is not None
+                         else ""))
         for shadow in shadows.values():
             shadow.peers = shadows
         return out
