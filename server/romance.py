@@ -492,6 +492,51 @@ def scene_day_cells_of(name: str) -> "frozenset[tuple[str, int]]":
     return _SCENE_DAY_BY_NAME.get(name, frozenset())
 
 
+def scene_tally_cells(script) -> "frozenset[tuple[str, int]]":
+    """The cells `script` counts its own playings in.
+
+    ⭐⭐⭐ Round 470: 「how many times these four have played」. `ink_c091`
+    through `c094` share one cell and branch on it twice -- 0 sends the play
+    to one scene, 6 or more to another, and anything between to the everyday
+    one -- then each arm adds one to it on the way out. Until this end kept
+    that cell both gates read ⊤, so the first scene and the late scene could
+    never play at all and every conversation was the middle one.
+
+    ⭐ Which cell that is comes off the bytecode (`gs3vm.Script.tallies`), the
+    way the day stamps do. ⛔️ Nothing here names an address.
+
+    Empty for a scenario this end has no export of, and then the gates are ⊤
+    as before.
+    """
+    if script is None:
+        return frozenset()
+    return script.tallies
+
+
+#: The tally cells of one candidate's scenarios, worked out once, for
+#: `scene_day_cells_of`'s reason and measured the same way: across the exports
+#: the one cell there is belongs to 犬飼's four and to nothing else.
+_SCENE_TALLY_BY_NAME: "dict[str, frozenset[tuple[str, int]]] | None" = None
+
+
+def scene_tally_cells_of(name: str) -> "frozenset[tuple[str, int]]":
+    """The tally cells of `name`'s own scenarios. Empty without exports."""
+    global _SCENE_TALLY_BY_NAME
+    if _SCENE_TALLY_BY_NAME is None:
+        found: dict[str, set] = {who: set() for who in CANDIDATES}
+        by_stem = {stem: who for who, stem in SCRIPT_STEMS.items()}
+        for path in sorted(gs3vm.SCRIPT_DIR.glob("*.gs3.json")):
+            who = by_stem.get(path.name[:3])
+            if who is None:
+                continue
+            loaded = gs3vm.load(path.name[: -len(".gs3.json")])
+            if loaded is not None:
+                found[who] |= scene_tally_cells(loaded)
+        _SCENE_TALLY_BY_NAME = {who: frozenset(cells)
+                                for who, cells in found.items()}
+    return _SCENE_TALLY_BY_NAME.get(name, frozenset())
+
+
 # ⚠️ Which of the two groups the locker scripts check is `PC[0x3013]`, and the
 # split is 天宮/春日/弥生 against 桜井/犬飼 -- exactly the female candidates
 # against the male ones. So this end sends the player's own sex, and an
@@ -554,6 +599,27 @@ def _saved_record(saved) -> dict:
     return {str(base): saved[str(base)]
             for base in PLAYER_RECORD_BASES
             if isinstance(saved, dict) and str(base) in saved}
+
+
+def _saved_scene_tally(saved) -> dict:
+    """``{cell address: count}`` as it comes back out of a save.
+
+    ⚠️ `_saved_scene_day`'s keying exactly -- decimal-string addresses in the
+    file, ints in here -- and its tolerance: a key that is not a number or a
+    count that is not a non-negative integer is dropped. A scenario only ever
+    adds one to these, so anything else is a save this end did not write.
+    """
+    if not isinstance(saved, dict):
+        return {}
+    kept: dict[int, int] = {}
+    for key, value in saved.items():
+        try:
+            address, count = int(key), int(value)
+        except (TypeError, ValueError):
+            continue
+        if count >= 0:
+            kept[address] = count
+    return kept
 
 
 def _saved_scene_day(saved) -> dict:
@@ -931,6 +997,16 @@ class Romance:
         # 469, which is exactly a save where nothing has been played yet.
         self.scene_day: dict[int, str] = _saved_scene_day(
             (saved or {}).get("sceneDay"))
+        # ⭐⭐⭐ Round 470: how many times each scene has played, by the cell
+        # the scenario counts into (`scene_tally_cells`). Kept beside
+        # ``sceneDay`` and for its reasons: these belong to a scene rather
+        # than to a person, and the store is sparse. ⚠️ But an absent cell
+        # reads 0 here rather than 「no answer」, because 0 is what a count of
+        # a thing that has not happened is -- and the scenarios say so
+        # themselves by branching on `== 0`. Absent from saves before round
+        # 470, which is exactly a save where none of them has played.
+        self.scene_tally: dict[int, int] = _saved_scene_tally(
+            (saved or {}).get("sceneTally"))
 
     # ── reading ────────────────────────────────────────────────────────────
     def on_stage(self) -> list[str]:
@@ -1149,7 +1225,9 @@ class Romance:
     def to_json(self) -> dict:
         return {**self.state, "letterEvent": self.letter_event,
                 "sceneDay": {str(address): day
-                             for address, day in sorted(self.scene_day.items())}}
+                             for address, day in sorted(self.scene_day.items())},
+                "sceneTally": {str(address): count for address, count
+                               in sorted(self.scene_tally.items())}}
 
     # ── the scripts' view of all this ─────────────────────────────────────
     def data_cells(self) -> dict:
@@ -1238,6 +1316,45 @@ class Romance:
             text = day.isoformat()
             changed |= self.scene_day.get(cell[1]) != text
             self.scene_day[cell[1]] = text
+        return changed
+
+    def tally_cells(self, cells: "frozenset[tuple[str, int]]") -> dict:
+        """The play counts of one scenario, as `gs3vm` wants them keyed.
+
+        ⭐⭐⭐ Round 470, and `scene_cells`' twin: `cells` is what
+        `scene_tally_cells` read off that scenario's own bytecode, so nothing
+        here decides which addresses exist.
+
+        ⚠️⚠️ Every one of them is answered, ⛔️ not just the ones the save has
+        seen, and the reason is stronger here than next door: the scenario's
+        first gate is `== 0`, so 「never played」 is a number it asks for by
+        name. A missing cell leaves that gate ⊤ and the opening scene
+        unreachable, which is exactly what this round is fixing.
+        """
+        return {cell: self.scene_tally.get(cell[1], 0) for cell in cells}
+
+    def absorb_tally(self, writes: dict,
+                     cells: "frozenset[tuple[str, int]]") -> bool:
+        """Take a scenario's 「played once more」 back. True if one moved.
+
+        ⭐⭐⭐ Round 470. The number in the write is the one the scenario's own
+        `+ 1` produced from what this end supplied, so this stores it as it
+        stands rather than counting anything itself.
+
+        ⚠️ Fenced by `cells` for `absorb_scene_day`'s reason, and a value that
+        is not a non-negative integer is dropped rather than stored -- these
+        scenarios add one to a count and nothing else, so anything else is a
+        run this end has not understood.
+        """
+        changed = False
+        for cell in sorted(cells):
+            if cell not in writes:
+                continue
+            value = writes[cell]
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                continue
+            changed |= self.scene_tally.get(cell[1]) != value
+            self.scene_tally[cell[1]] = value
         return changed
 
     def record_cells(self) -> dict:
@@ -1468,14 +1585,22 @@ class Romance:
         # partition is what `scene_day_cells_of` is for.
         mine = {cell[1] for cell in scene_day_cells_of(name)}
         stale = mine & set(self.scene_day)
-        if (row["talk"] == TALK_SLOT_DEFAULTS
-                and not row["lastTalk"] and not row["todayBest"] and not stale):
+        # ⭐ Round 470 adds her scenes' play counts on the same sentence: a new
+        # game has played none of them, and a count left where it was makes the
+        # opening scene unreachable for good -- it is the one arm that can only
+        # play at 0.
+        counted = {cell[1] for cell in scene_tally_cells_of(name)}
+        stale_tally = counted & set(self.scene_tally)
+        if (row["talk"] == TALK_SLOT_DEFAULTS and not row["lastTalk"]
+                and not row["todayBest"] and not stale and not stale_tally):
             return False
         row["talk"] = dict(TALK_SLOT_DEFAULTS)
         row["lastTalk"] = ""
         row["todayBest"] = 0
         for address in stale:
             del self.scene_day[address]
+        for address in stale_tally:
+            del self.scene_tally[address]
         return True
 
     def waiting_letter(self) -> str | None:

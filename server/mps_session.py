@@ -3372,6 +3372,15 @@ class MpsServer:
         stamps = romance.scene_day_cells(gs3vm.by_script_id(script_id))
         if love is not None:
             cells.update(love.scene_cells(stamps))
+        # ⭐⭐⭐ Round 470: and the cell the same scenario counts its own
+        # playings in, read off its bytecode the same way. 犬飼's four branch
+        # on it at 0 and at 6, so with it unanswered both arms were unreachable
+        # and every one of those conversations was the middle one.
+        # ⚠️ Answered even on a save that has never played it: 「never」 is 0,
+        # and 0 is the number the first gate asks for by name.
+        tallies = romance.scene_tally_cells(gs3vm.by_script_id(script_id))
+        if love is not None:
+            cells.update(love.tally_cells(tallies))
         # ⭐ The tutorial's own gate, and the only scripts in the corpus that
         # read it are the two 初登校 ones -- so supplying it always is the same
         # as supplying it to 初登校 only, with nothing to keep in step.
@@ -3408,7 +3417,9 @@ class MpsServer:
         # undertaking: supplied just above, taken back in `_script_scene_day`.
         # ⚠️ Only the cells of the scenario that is about to run, so the
         # promise is exactly as wide as the thing keeping it.
-        runner.shadow.kept_cells = romance.TALK_DAY_CELLS | stamps
+        # ⭐ Round 470 puts this scenario's tally cell under the same
+        # undertaking, taken back in `_script_tally`.
+        runner.shadow.kept_cells = romance.TALK_DAY_CELLS | stamps | tallies
         register = runner.shadow.script.season_register
         if register is not None:
             # ⭐ Said out loud whenever the script has the switch at all, so
@@ -4033,6 +4044,47 @@ class MpsServer:
             print(f"[{self.tag}] 会話の日付: 書き戻せませんでした")
             return
         print(f"[{self.tag}] 会話の日付 "
+              + " ".join(f"{family}[{address:#06x}]={value}"
+                         for (family, address), value in wrote.items())
+              + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
+
+    def _script_tally(self, session: "_Session", result) -> None:
+        """Let a scenario count its own playing into the save.
+
+        ⭐⭐⭐ Round 470, and the fifth sibling of `_script_debut`,
+        `_script_letter_event`, `_script_record` and `_script_scene_day`. What
+        it keeps is one number per scene -- how many times that scene has
+        played -- and the rule it restores is 犬飼's own three-way opening:
+        the first time through plays one scene, the sixth and later plays
+        another, and the ones between play the everyday one.
+
+        ⚠️ Fenced by `Script.tallies` -- the cell *this* scenario counts into,
+        read off its bytecode -- for `_script_scene_day`'s reason exactly.
+
+        ⚠️ Silence means the scenario counts nothing, which is every export but
+        four. 「記帳」 means the save moved; 「既に同じ値」 would mean the
+        scenario wrote back what was already there, which no arm of these four
+        does -- they all add one -- so it would be worth looking at.
+        """
+        runner = session.script
+        shadow = runner.shadow if runner is not None else None
+        if shadow is None or shadow.lost:
+            return
+        tallies = romance.scene_tally_cells(shadow.script)
+        if not tallies:
+            return
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return
+        wrote = {cell: result.writes[cell] for cell in sorted(tallies)
+                 if cell in result.writes}
+        if not wrote:
+            return
+        changed = love.absorb_tally(result.writes, tallies)
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] 会話の回数: 書き戻せませんでした")
+            return
+        print(f"[{self.tag}] 会話の回数 "
               + " ".join(f"{family}[{address:#06x}]={value}"
                          for (family, address), value in wrote.items())
               + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
@@ -6589,6 +6641,9 @@ class MpsServer:
                     # keep different cells out of the same run and neither can
                     # take the other's.
                     self._script_scene_day(session, shadow.result)
+                    # ⭐⭐⭐ Round 470: 「this scene played once more」, the
+                    # same arrangement -- a different cell of the same run.
+                    self._script_tally(session, shadow.result)
                     # ⭐⭐⭐ Round 468: the 日常会話 daily rule, run by the
                     # scenario that owns it. ⚠️ Before `session.script` is
                     # dropped below -- it reads the shadow's own scenario to

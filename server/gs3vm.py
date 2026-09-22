@@ -920,6 +920,31 @@ def _stamps_today(script: "Script", i: int) -> bool:
                for n, want in enumerate(_TODAY_SHAPE))
 
 
+def _counts_up(script: "Script", i: int, read_op: int, cell: int) -> bool:
+    """Is the read at `i` the start of 「this cell, plus one, back again」?
+
+    ⭐ Round 470. Four adjacent instructions and nothing else: the read, an
+    immediate 1, an add, and the matching write of the same cell. ⚠️ Registers
+    are left out for `_today_key`'s reason -- which temporaries the compiler
+    handed out says nothing about what the stretch means -- and the add's own
+    operands are not checked either, because the write that follows names the
+    cell the sum lands in, which is the claim being made.
+    """
+    _, op_str, str_args = script.code[i + 1]
+    if op_str != OP_STR:
+        return False
+    field = int.from_bytes(str_args[0:2], "little")
+    if (field >> 10) & 7 != CAT_IMMEDIATE:
+        return False
+    if int.from_bytes(str_args[2:6], "little") != 1:
+        return False
+    if script.code[i + 2][1] != OP_ADD:
+        return False
+    _, op_write, write_args = script.code[i + 3]
+    return (op_write == read_op + 1
+            and int.from_bytes(write_args[2:4], "little") == cell)
+
+
 class Script:
     """One exported script: its instructions and its label table."""
 
@@ -971,6 +996,8 @@ class Script:
         # above -- every scenario has the season question asked of it once, and
         # only the ones a client actually plays are asked this one.
         self._day_stamps: "frozenset[tuple[str, int]] | None" = None
+        # ⭐ Round 470, and cached for `_day_stamps`' reason exactly.
+        self._tallies: "frozenset[tuple[str, int]] | None" = None
         # ⭐ How big this scenario's register file is, per category, out of its
         # own DECL_VARIABLE prologue. Read here rather than off `Machine`'s
         # registers because presence there cannot tell a declared register from
@@ -1075,6 +1102,40 @@ class Script:
                     found.add((family, int.from_bytes(args[2:4], "little")))
             self._day_stamps = frozenset(found)
         return self._day_stamps
+
+    @property
+    def tallies(self) -> "frozenset[tuple[str, int]]":
+        """The cells this scenario counts up by one: 「how often this played」.
+
+        ⭐⭐⭐ Round 470, and recognised by shape the way `day_stamps` is: a
+        cell is one of these when a read of it is followed immediately by
+        `OP_STR 1`, `OP_ADD` and a write of **the same cell** -- four adjacent
+        instructions that say, with no table and no address range, 「add one to
+        this」.
+
+        ⭐⭐ Over both script sets the shape answers exactly one cell,
+        `PCEV[0x6104]`, incremented from eleven places in `ink_c091`..`c094`,
+        and everything else that cell is touched by is a gate: three reads
+        compared against 0 and four against 6, no other constant and no other
+        comparison. ⇒ 「a count of how many times these four have played」 is
+        what the bytecode says it is, not a name put on it here. The smoke test
+        keeps all of that, so a corpus that broke it would say so.
+
+        ⚠️ A counter is not a day stamp and the two do not overlap: these four
+        scenarios stamp days as well, into other cells, and both families are
+        answered and taken back separately.
+        """
+        if self._tallies is None:
+            found = set()
+            for i, (_, op, args) in enumerate(self.code):
+                family = DATA_READ.get(op)
+                if family not in ("PCEV", "PCEV32") or i + 3 >= len(self.code):
+                    continue
+                cell = int.from_bytes(args[2:4], "little")
+                if _counts_up(self, i, op, cell):
+                    found.add((family, cell))
+            self._tallies = frozenset(found)
+        return self._tallies
 
     def writes_any(self, cells: "frozenset[tuple[str, int]]") -> bool:
         """Does this scenario write any of these cells anywhere in its code?
