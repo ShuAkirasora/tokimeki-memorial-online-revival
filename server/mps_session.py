@@ -6496,6 +6496,9 @@ class MpsServer:
         downstream needs a second notion of an empty seat -- `_scenario_members`
         looks members up by session and a stand-in has none, which is what
         makes the barrier this player was holding release below.
+
+        ⭐⭐⭐ Round 480: *who* stands in is the script's own answer now. See
+        the comment on the pick below and `proxynpc.stand_in`.
         """
         event = next(
             (e for e in script.drama_events()
@@ -6508,7 +6511,25 @@ class MpsServer:
             None,
         )
         taken = {a.npc for a in party.actors if a.npc is not None}
-        picked = (proxynpc.stand_in(int(slot["sex"]), taken)
+        # ⭐⭐⭐ Round 480: *which* stand-in is the script's call, not ours.
+        # The 役柄 declaration a scenario opens with carries 代行ID beside
+        # 性別 (2.394 四), and the exporter now hands it over as
+        # `roles[].surrogate`. `drama_event.bin` names the seat and its sex;
+        # the .ssb names the understudy for that seat. ⚠️ Read through
+        # `_drama_script` rather than off the party, because a 離脱 can arrive
+        # before this end ever loaded the export -- and a missing export is
+        # `None`, which `stand_in` takes as 「no preference」 and answers the
+        # way it did before this round.
+        found = self._drama_script(party)
+        role = next(
+            (r for r in (found.roles if found is not None else [])
+             if int(r.get("actorId", -1)) == actor.actor_id),
+            None,
+        )
+        surrogate = None if role is None else role.get("surrogate")
+        picked = (proxynpc.stand_in(
+                      int(slot["sex"]), taken,
+                      None if surrogate is None else int(surrogate))
                   if slot is not None else None)
         if picked is None:
             # ⚠️ Unreachable with the shipped roster -- four 役柄 against five
@@ -6527,8 +6548,10 @@ class MpsServer:
             actor.npc = (proxynpc.CATEGORY, npc_id)
             # Same reading as 0xE01D's: a stand-in does not keep a room waiting.
             actor.ready = 1
+            why = ("台本どおり" if surrogate is not None and npc_id == surrogate
+                   else "空いている順")
             print(f"[{self.tag}] script retire: actor={actor.actor_id} -> "
-                  f"代行ＮＰＣ {proxynpc.CATEGORY}:{npc_id}")
+                  f"代行ＮＰＣ {proxynpc.CATEGORY}:{npc_id} ({why})")
         body = script.retire_notify_params(actor.actor_id, npc_id)
         # The leaver is no longer in `party.actors` under their own charaId, so
         # there is nobody to skip: everybody still in the room is somebody else.

@@ -155,7 +155,9 @@ def name_trio(row: dict) -> tuple[str, str, str]:
     return str(row["familyName"]), str(row["firstName"]), str(row["nickName"])
 
 
-def stand_in(sex: int, taken: "set[tuple[int, int]]") -> "tuple[int, dict] | None":
+def stand_in(
+    sex: int, taken: "set[tuple[int, int]]", preferred: "int | None" = None,
+) -> "tuple[int, dict] | None":
     """A 代行ＮＰＣ of this 役柄's sex that this party has not cast yet.
 
     ⭐ THE TWO CONSTRAINTS ARE THE CLIENT'S, not this end's. 0xE01D's own list
@@ -165,18 +167,36 @@ def stand_in(sex: int, taken: "set[tuple[int, int]]") -> "tuple[int, dict] | Non
     stand-in the server picks for a 離脱 is going into the same cast as one the
     leader picks by hand, so it answers to the same two rules.
 
-    ⚠️ INVENTED — *which* of the free ones. Nothing anywhere says, and the
-    party has at most four 役柄 against five stand-ins per sex, so there is
-    always more than one right answer and no way to be caught taking the wrong
-    one. Lowest id first, which is the order the client's own list draws them
-    in (`proxy_npc.bin` order) and therefore the one a player has seen.
-    ⛔️ Not a knob: it is a choice among equals, not a number to tune.
+    ⭐⭐⭐ `preferred` IS THE SCRIPT'S OWN ANSWER, and it is the whole of the
+    ordinary case. Every 役柄 a script declares carries 代行ID beside its 性別
+    in the `PC_INFO` record the scenario opens with (2.394 四) -- 「which
+    stand-in fills this part when nobody is sitting at it」, which the client
+    looks up in the same category 6 this module is. It arrives here out of
+    `Script.roles`. ⭐ Measured over the whole table: all 44 役柄 of the 22
+    ドラマイベント declare one, all 44 agree with their own 性別 bit, and no
+    two 役柄 of one drama name the same stand-in -- so on a shipped drama the
+    preference is always available and always satisfies both rules above.
+
+    ⚠️ INVENTED — only the tie-break, and only when the script's own choice is
+    already cast. That can happen: the leader may have put exactly this
+    stand-in in the *other* 役柄 by hand through 0xE01D, and then the script
+    has said something the party has already contradicted. Lowest id first,
+    which is the order the client's own list draws them in (`proxy_npc.bin`
+    order) and therefore the one a player has seen. ⛔️ Not a knob: it is a
+    choice among equals, not a number to tune.
+
+    ⚠️ `preferred` is screened by the same two rules rather than trusted, so a
+    drama an operator added with a nonsense 代行ID degrades into the ordering
+    instead of casting a boy in a girl's part.
     """
-    rows = ((int(key.split(":")[1]), row) for key, row in _rows().items())
-    for ident, row in sorted(rows, key=lambda pair: pair[0]):
-        if int(row["sex"]) != int(sex):
-            continue
-        if (CATEGORY, ident) in taken:
-            continue
-        return ident, row
-    return None
+    rows = sorted(
+        ((int(key.split(":")[1]), row) for key, row in _rows().items()),
+        key=lambda pair: pair[0],
+    )
+    free = [(ident, row) for ident, row in rows
+            if int(row["sex"]) == int(sex) and (CATEGORY, ident) not in taken]
+    if preferred is not None:
+        for ident, row in free:
+            if ident == int(preferred):
+                return ident, row
+    return free[0] if free else None
