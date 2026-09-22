@@ -595,6 +595,54 @@ def scene_flag_cells_of(name: str) -> "frozenset[tuple[str, int]]":
     return _SCENE_FLAG_BY_NAME.get(name, frozenset())
 
 
+def scene_text_cells(script) -> "frozenset[tuple[str, int]]":
+    """The cells `script` keeps a piece of text in.
+
+    ⭐⭐⭐ Round 473. `amm_c092` is a 日常会話 whose three 選択肢 are three
+    words -- ケーキ / カフェに行くの / 牛丼屋さん -- and each arm writes **its
+    own word** into a cell on the way out. Come back the same day and the arm
+    the 日付スタンプ sends you down opens by reading that cell and saying the
+    word back to you. Until this end kept it the cell read ⊤ and the line went
+    out with a hole where the word should be.
+
+    ⭐ Which cell that is comes off the bytecode (`gs3vm.Script.texts`), the
+    way the day stamps, the tally and the flags do, and by an even shorter
+    rule: the operand of a data instruction names the register it moves the
+    cell through, and this is the one `PCEV` cell the corpus only ever moves
+    through a string register. ⛔️ Nothing here names an address.
+
+    Empty for a scenario this end has no export of, and then the line keeps
+    its hole, as before.
+    """
+    if script is None:
+        return frozenset()
+    return script.texts
+
+
+#: The text cells of one candidate's scenarios, worked out once, for
+#: `scene_day_cells_of`'s reason and measured the same way: the one cell there
+#: is belongs to 天宮's `amm_c092` and to nothing else.
+_SCENE_TEXT_BY_NAME: "dict[str, frozenset[tuple[str, int]]] | None" = None
+
+
+def scene_text_cells_of(name: str) -> "frozenset[tuple[str, int]]":
+    """The text cells of `name`'s own scenarios. Empty without exports."""
+    global _SCENE_TEXT_BY_NAME
+    if _SCENE_TEXT_BY_NAME is None:
+        found: dict[str, set] = {who: set() for who in CANDIDATES}
+        by_stem = {stem: who for who, stem in SCRIPT_STEMS.items()}
+        for path in sorted(gs3vm.SCRIPT_DIR.glob("*.gs3.json")):
+            who = by_stem.get(path.name[:3])
+            if who is None:
+                continue
+            loaded = gs3vm.load(path.name[: -len(".gs3.json")])
+            if loaded is not None:
+                found[who] |= scene_text_cells(loaded)
+        _SCENE_TEXT_BY_NAME = {who: frozenset(cells)
+                               for who, cells in found.items()}
+    return _SCENE_TEXT_BY_NAME.get(name, frozenset())
+
+
 # ⚠️ Which of the two groups the locker scripts check is `PC[0x3013]`, and the
 # split is 天宮/春日/弥生 against 桜井/犬飼 -- exactly the female candidates
 # against the male ones. So this end sends the player's own sex, and an
@@ -698,6 +746,31 @@ def _saved_scene_flag(saved) -> dict:
             continue
         if 0 <= flag <= gs3vm.FLAG_MAX:
             kept[address] = flag
+    return kept
+
+
+def _saved_scene_text(saved) -> dict:
+    """``{cell address: the reference a scenario wrote}`` out of a save.
+
+    ⚠️ `_saved_scene_tally`'s keying, and its tolerance widened by exactly what
+    `gs3vm.Machine` can have put in one of these registers: a pool reference,
+    which is a non-negative int, or a line the player typed, which `Follower`
+    puts in as `str` and `sync_values` hands on as it stands. ⛔️ Neither is
+    resolved here -- a reference means something only against the pool of the
+    scenario that wrote it, and that scenario is the one that reads it back.
+    """
+    if not isinstance(saved, dict):
+        return {}
+    kept: dict[int, object] = {}
+    for key, value in saved.items():
+        try:
+            address = int(key)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, str):
+            kept[address] = value
+        elif isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            kept[address] = value
     return kept
 
 
@@ -1096,6 +1169,17 @@ class Romance:
         # set.
         self.scene_flag: dict[int, int] = _saved_scene_flag(
             (saved or {}).get("sceneFlag"))
+        # ⭐⭐⭐ Round 473: the word each scenario wrote down, by the cell it
+        # wrote it into (`scene_text_cells`). Beside its three neighbours and
+        # for their reasons -- a scene's, not a person's, and sparse -- with
+        # one difference that matters: ⛔️ an absent cell is **not** read as 0.
+        # The only read of one is a `SYNC_VARIABLE`, not a gate, so there is no
+        # value a scene that has never played 「asks for by name」; a cell
+        # nothing has written is left unanswered and the 台詞 keeps the hole a
+        # zero-filled original would leave it. Absent from saves before round
+        # 473, which is exactly a save where nothing has been written.
+        self.scene_text: dict[int, object] = _saved_scene_text(
+            (saved or {}).get("sceneText"))
 
     # ── reading ────────────────────────────────────────────────────────────
     def on_stage(self) -> list[str]:
@@ -1318,7 +1402,9 @@ class Romance:
                 "sceneTally": {str(address): count for address, count
                                in sorted(self.scene_tally.items())},
                 "sceneFlag": {str(address): flag for address, flag
-                              in sorted(self.scene_flag.items())}}
+                              in sorted(self.scene_flag.items())},
+                "sceneText": {str(address): value for address, value
+                              in sorted(self.scene_text.items())}}
 
     # ── the scripts' view of all this ─────────────────────────────────────
     def data_cells(self) -> dict:
@@ -1478,6 +1564,44 @@ class Romance:
                 continue
             changed |= self.scene_flag.get(cell[1]) != value
             self.scene_flag[cell[1]] = value
+        return changed
+
+    def text_cells(self, cells: "frozenset[tuple[str, int]]") -> dict:
+        """The text cells of one scenario, as `gs3vm` wants them keyed.
+
+        ⭐⭐⭐ Round 473, and `flag_cells`' twin except on the one point that
+        divides them: ⛔️ **only cells the save actually holds are answered.**
+        Its three neighbours answer every cell of their family because the
+        scenarios gate on `== 0` and 0 is a value they name; nothing gates on
+        this one -- the single read hands it to `SYNC_VARIABLE` -- so there is
+        no 「not yet」 value to supply and a made-up one would be `PC[0x3201]`
+        over again. An unanswered cell reads ⊤, `sync_values` sends the entry
+        empty, and the 台詞 says what a zero-filled original's would.
+        """
+        return {cell: self.scene_text[cell[1]] for cell in cells
+                if cell[1] in self.scene_text}
+
+    def absorb_text(self, writes: dict,
+                    cells: "frozenset[tuple[str, int]]") -> bool:
+        """Take the word a scenario wrote down back. True if one moved.
+
+        ⚠️ Fenced by `cells` for `absorb_flag`'s reason, and what passes is
+        `_saved_scene_text`'s tolerance exactly: a pool reference or a typed
+        line. ⛔️ Nothing here asks what the reference says -- the scenario
+        that wrote it is the one that reads it back, and its own pool is where
+        it means anything.
+        """
+        changed = False
+        for cell in sorted(cells):
+            if cell not in writes:
+                continue
+            value = writes[cell]
+            if isinstance(value, bool) or not isinstance(value, (int, str)):
+                continue
+            if isinstance(value, int) and value < 0:
+                continue
+            changed |= self.scene_text.get(cell[1]) != value
+            self.scene_text[cell[1]] = value
         return changed
 
     def record_cells(self) -> dict:
@@ -1719,9 +1843,16 @@ class Romance:
         # flag left set makes that scene unreachable for good.
         flagged = {cell[1] for cell in scene_flag_cells_of(name)}
         stale_flag = flagged & set(self.scene_flag)
+        # ⭐ Round 473 adds her scenes' text cells on the same sentence, and
+        # ⚠️ on its own it changes nothing observable: the arm that reads one
+        # is behind the day stamp being cleared two lines up. It is here
+        # because a row that has forgotten her must not still be holding the
+        # word the player picked in a life she is no longer in.
+        worded = {cell[1] for cell in scene_text_cells_of(name)}
+        stale_text = worded & set(self.scene_text)
         if (row["talk"] == TALK_SLOT_DEFAULTS and not row["lastTalk"]
                 and not row["todayBest"] and not stale and not stale_tally
-                and not stale_flag):
+                and not stale_flag and not stale_text):
             return False
         row["talk"] = dict(TALK_SLOT_DEFAULTS)
         row["lastTalk"] = ""
@@ -1732,6 +1863,8 @@ class Romance:
             del self.scene_tally[address]
         for address in stale_flag:
             del self.scene_flag[address]
+        for address in stale_text:
+            del self.scene_text[address]
         return True
 
     def waiting_letter(self) -> str | None:

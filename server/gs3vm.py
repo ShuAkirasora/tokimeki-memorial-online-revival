@@ -1040,6 +1040,8 @@ class Script:
         self._tallies: "frozenset[tuple[str, int]] | None" = None
         # ⭐ Round 471, and the same.
         self._flags: "frozenset[tuple[str, int]] | None" = None
+        # ⭐ Round 473, and the same.
+        self._texts: "frozenset[tuple[str, int]] | None" = None
         # ⭐ How big this scenario's register file is, per category, out of its
         # own DECL_VARIABLE prologue. Read here rather than off `Machine`'s
         # registers because presence there cannot tell a declared register from
@@ -1239,6 +1241,61 @@ class Script:
                 cell for cell, asked in reads.items()
                 if all(asked) and all(writes.get(cell, ())))
         return self._flags
+
+    @property
+    def texts(self) -> "frozenset[tuple[str, int]]":
+        """The cells this scenario keeps a piece of **text** in.
+
+        ⭐⭐⭐ Round 473, and the shape is one line long: a cell is one of
+        these when every access this scenario makes to it -- read and write
+        alike -- names a register of `STRING_CATEGORIES`. The operand says
+        which register a data instruction moves the cell through, so 「this
+        cell holds text」 is written in the bytecode and is not a reading put
+        on it here.
+
+        ⭐⭐ Over both script sets that one line answers exactly **one** cell,
+        `PCEV[0xc020]` in `amm_c092`, and the axes that carry the neighbouring
+        families carry nothing here: require a read as well (the anchor
+        `flags` needs), or require every write to be an `OP_STR` immediate,
+        and the answer is the same one cell. ⇒ ⛔️ neither condition is
+        imposed, because neither is doing any work -- and the corpus has no
+        third use of that cell to except.
+
+        ⚠️ The reason it is the last of the string cells rather than the first:
+        every other cell the corpus ever moves through a string register is
+        already answered somewhere -- `PC[0x3010/11/12]` (2.380), `SCHOOL`
+        `[0x1001]` (2.381), the four text bases of the 告白 register block
+        (2.383) and the `PCKEY` slots (2.150). Of the 5488 `PCEV` accesses in
+        the corpus exactly **4** name a string register, and all four are this
+        cell: three writes and one read.
+
+        ⭐⭐⭐ What `amm_c092` does with it is `PCEV[0x6084]`'s mechanism with a
+        word in place of a number. Its three 選択肢 (`ケーキ` / `カフェに行くの`
+        / `牛丼屋さん`, 加値 15 / 12 / 10) each write **their own word's pool
+        reference** into the cell on the way out; the arm the 日付スタンプ sends
+        a second visit down the same day opens by reading it back and handing
+        it straight to `SYNC_VARIABLE` -- 天宮 says back the thing the player
+        picked. ⛔️ The read is **not** a gate, which is what makes an
+        unanswered cell show up as a hole in a 台詞 rather than as a branch
+        that never runs.
+
+        ⛔️ This end has no need of the pool to keep it: what is stored is the
+        reference the scenario computed, and `sync_values` resolves it against
+        the same scenario's own `strings` when it goes back out.
+        """
+        if self._texts is None:
+            seen: "dict[tuple[str, int], list[bool]]" = {}
+            for _, op, args in self.code:
+                family = DATA_READ.get(op) or DATA_WRITE.get(op)
+                if family not in ("PCEV", "PCEV32"):
+                    continue
+                cell = (family, int.from_bytes(args[2:4], "little"))
+                register = _refer_register(args)
+                seen.setdefault(cell, []).append(
+                    register is not None and register[0] in STRING_CATEGORIES)
+            self._texts = frozenset(
+                cell for cell, through in seen.items() if all(through))
+        return self._texts
 
     def writes_any(self, cells: "frozenset[tuple[str, int]]") -> bool:
         """Does this scenario write any of these cells anywhere in its code?

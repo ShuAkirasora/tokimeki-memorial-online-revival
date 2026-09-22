@@ -3389,6 +3389,16 @@ class MpsServer:
         flags = romance.scene_flag_cells(gs3vm.by_script_id(script_id))
         if love is not None:
             cells.update(love.flag_cells(flags))
+        # ⭐⭐⭐ Round 473: and the cell the same scenario wrote a **word**
+        # into, off its bytecode the same way. 天宮's `amm_c092` asks which of
+        # three things you fancy and writes the one you say; come back the same
+        # day and she says it back to you. ⛔️ Unlike its three neighbours this
+        # one is answered **only when the save holds it**: the read is a
+        # `SYNC_VARIABLE` rather than a gate, so there is no 「never」 value to
+        # supply -- see `romance.Romance.text_cells`.
+        texts = romance.scene_text_cells(gs3vm.by_script_id(script_id))
+        if love is not None:
+            cells.update(love.text_cells(texts))
         # ⭐ The tutorial's own gate, and the only scripts in the corpus that
         # read it are the two 初登校 ones -- so supplying it always is the same
         # as supplying it to 初登校 only, with nothing to keep in step.
@@ -3429,8 +3439,12 @@ class MpsServer:
         # undertaking, taken back in `_script_tally`.
         # ⭐ Round 471 does the same for its yes/no cells, taken back in
         # `_script_flag`.
+        # ⭐ Round 473 does the same for its text cell, taken back in
+        # `_script_text`. ⚠️ The undertaking is the same one and does not
+        # depend on the cell having been answered on the way in: what it
+        # promises is that a write is kept, not that a read was supplied.
         runner.shadow.kept_cells = (romance.TALK_DAY_CELLS | stamps | tallies
-                                    | flags)
+                                    | flags | texts)
         register = runner.shadow.script.season_register
         if register is not None:
             # ⭐ Said out loud whenever the script has the switch at all, so
@@ -4143,6 +4157,49 @@ class MpsServer:
             return
         print(f"[{self.tag}] 会話の段階値 "
               + " ".join(f"{family}[{address:#06x}]={value}"
+                         for (family, address), value in wrote.items())
+              + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
+
+    def _script_text(self, session: "_Session", result) -> None:
+        """Let a scenario write a **word** down into the save.
+
+        ⭐⭐⭐ Round 473, and the seventh sibling of `_script_debut`,
+        `_script_letter_event`, `_script_record`, `_script_scene_day`,
+        `_script_tally` and `_script_flag`. What it keeps is the thing the
+        player said: 天宮's `amm_c092` offers ケーキ / カフェに行くの /
+        牛丼屋さん, each arm writes its own word's pool reference on the way
+        out, and the arm a second visit the same day takes reads it back and
+        hands it to the 台詞. Until this end kept it that line went out with a
+        hole in it.
+
+        ⚠️ Fenced by `Script.texts` -- the cells *this* scenario moves through
+        a string register -- for `_script_scene_day`'s reason exactly.
+
+        ⛔️ Nothing here reads the reference. It means something against the
+        pool of the scenario that wrote it, and that is the scenario that reads
+        it back; `gs3vm.Follower.sync_values` is where it turns into a word
+        again.
+        """
+        runner = session.script
+        shadow = runner.shadow if runner is not None else None
+        if shadow is None or shadow.lost:
+            return
+        texts = romance.scene_text_cells(shadow.script)
+        if not texts:
+            return
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return
+        wrote = {cell: result.writes[cell] for cell in sorted(texts)
+                 if cell in result.writes}
+        if not wrote:
+            return
+        changed = love.absorb_text(result.writes, texts)
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] 会話の言葉: 書き戻せませんでした")
+            return
+        print(f"[{self.tag}] 会話の言葉 "
+              + " ".join(f"{family}[{address:#06x}]={value!r}"
                          for (family, address), value in wrote.items())
               + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
 
@@ -6704,6 +6761,9 @@ class MpsServer:
                     # ⭐⭐⭐ Round 471: 「this has happened now」, the same
                     # arrangement again -- a third cell of the same run.
                     self._script_flag(session, shadow.result)
+                    # ⭐⭐⭐ Round 473: 「this is the word they said」, the same
+                    # arrangement once more -- a fourth cell of the same run.
+                    self._script_text(session, shadow.result)
                     # ⭐⭐⭐ Round 468: the 日常会話 daily rule, run by the
                     # scenario that owns it. ⚠️ Before `session.script` is
                     # dropped below -- it reads the shadow's own scenario to
