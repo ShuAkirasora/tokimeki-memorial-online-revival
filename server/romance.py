@@ -151,6 +151,98 @@ GAIN_WORST = 10   # the worst answer
 # あまり親密さは上がりません」, implemented rather than approximated.
 INTIMACY_STEP = 72  # the ladder the original server's gates climb
 
+# ⭐⭐⭐ Round 468: the two cells that routine keeps its day on are supplied by
+# this end, so the routine runs **where it was written** instead of being
+# transcribed into `talk` below. What makes that safe is that there is one
+# routine and not 304: a scan of every 日常会話 script normalises the stretch
+# from the first `SYSTEM[0]` read to the closing `OP_RTN` to a single shape --
+# 304 of 304, same opcodes, same immediates, same order -- and the index in all
+# three cells is always the candidate whose script it is, never another's.
+# ⚠️ Re-run that scan rather than trusting this sentence; it is a scan and not
+# a reading, which is the only reason one script may be read for all of them.
+PCEV_TALK_DAY_BASE = 0x6040   # the day her last 日常会話 landed, packed
+PCEV_TALK_BEST_BASE = 0x6060  # the largest single grant made to her that day
+
+# The packing is the scripts' own arithmetic, read off the bytecode:
+# `(SYSTEM[0] - 2000) * 16 * 32 + SYSTEM[1] * 32 + SYSTEM[2]`.
+# ⚠️⚠️ It is NOT the other date packing in the corpus. `<name>_s102` builds a
+# `month * 100 + day` and compares that against a CTX cell of its own, and the
+# two must never be mixed up. Both are fed from the same three SYSTEM cells,
+# which is why this end supplies year, month and day raw and packs nothing:
+# each script does its own packing, and this constant exists only so that a
+# save's day can be handed back in the form the cell holds it in.
+TALK_DAY_YEAR_BASE = 2000
+TALK_DAY_MONTH_STEP = 32
+TALK_DAY_YEAR_STEP = 16 * TALK_DAY_MONTH_STEP
+
+
+#: Year, month and day, one cell each. ⭐ Raw rather than packed, because the
+#: two packings in the corpus disagree and each script builds its own out of
+#: these three (see the comment above `TALK_DAY_YEAR_BASE`).
+SYSTEM_YEAR = 0
+SYSTEM_MONTH = 1
+SYSTEM_DAY = 2
+
+
+def date_cells(today: "date | None" = None) -> dict:
+    """The three `SYSTEM` cells that carry the date, for any script that asks.
+
+    ⭐⭐⭐ Round 468: supplied to every scenario, not just to the 会話 chooser
+    that used to be the only caller. Nothing else in the corpus reads them --
+    325 scenarios do and every one of them is a `<name>_cNNN` 日常会話 -- so
+    「every scenario」 and 「the 会話 family」 name the same set here, and the
+    narrower fence would only have been a fence against a script that does not
+    exist.
+
+    ⚠️ The clock is this end's real one. The game had a clock of its own
+    (校内マップ has seasons) and this end does not model one, so borrowing the
+    real date is what keeps 「毎日少しずつ」 meaning something rather than
+    nothing. ⛔️ One clock, not two: everything that decides 「is it a new
+    day」 -- the daily rule, the 会話 slots, this -- reads it through here.
+    """
+    today = today or date.today()
+    return {("SYSTEM", SYSTEM_YEAR): today.year,
+            ("SYSTEM", SYSTEM_MONTH): today.month,
+            ("SYSTEM", SYSTEM_DAY): today.day}
+
+
+def pack_talk_day(day: "date | None") -> int:
+    """`PCEV[0x6040+i]` for a calendar day; 0 for 「she has never been talked to」.
+
+    ⭐ The 0 is not a number picked to mean something, which is the test every
+    cell this end supplies has to pass. The cell is only ever compared for
+    equality against a packed real date; a real date has a month of at least 1
+    and a day of at least 1, so it packs to at least 33. Every value below that
+    is equally 「not today」, none of them is reachable by the packing, and
+    nothing can tell them apart -- so the choice among them has no observable
+    consequence, and 0 is the one an event variable nobody has written holds.
+    """
+    if day is None:
+        return 0
+    return ((day.year - TALK_DAY_YEAR_BASE) * TALK_DAY_YEAR_STEP
+            + day.month * TALK_DAY_MONTH_STEP + day.day)
+
+
+def unpack_talk_day(packed: int) -> "date | None":
+    """The calendar day a `PCEV[0x6040+i]` value stands for, or None.
+
+    ⚠️ The inverse exists because the day makes the round trip: this end hands
+    the cell down packed, the script writes a packed day back, and the save
+    keeps an ISO date. The packing is injective over real dates -- day < 32 and
+    month * 32 + day < 512, so the three fields never carry into each other --
+    but it is not onto: a value the scripts could not have produced (0 above,
+    or a month of 13) comes back as None rather than as a date this end made up.
+    """
+    if packed < TALK_DAY_YEAR_STEP:
+        return None
+    year = packed // TALK_DAY_YEAR_STEP + TALK_DAY_YEAR_BASE
+    rest = packed % TALK_DAY_YEAR_STEP
+    try:
+        return date(year, rest // TALK_DAY_MONTH_STEP, rest % TALK_DAY_MONTH_STEP)
+    except ValueError:
+        return None
+
+
 # ── Which conversation is worth what ────────────────────────────────────────
 # The three constants above are the whole value range, but they are not a rule:
 # each 日常会話 script carries its own number, and this end knows which script
@@ -319,6 +411,27 @@ NO_LETTER_EVENT = -1       # what sys_s000 -- the new-game reset -- writes there
 #     so taking it would gain nothing and risk double counting.
 PCEV_PROGRESS_BASE = 0x6020
 
+#: ⭐⭐⭐ The fifteen cells the 日常会話 daily rule is written over: 親密さ and
+#: the two the routine keeps its day on, one of each per candidate. This end
+#: supplies all fifteen (`data_cells`) and takes all fifteen back
+#: (`absorb_talk_day`), which is the undertaking `gs3vm.Machine.kept_cells`
+#: asks for before it will let a road that writes one of them be answered.
+#: ⛔️ Not a list of 「cells this end is sure about」: 進行度 sits right next to
+#: these and is deliberately **not** here, because this end computes that one
+#: itself (see the comment above `PCEV_PROGRESS_BASE`) and a script's write of
+#: it is refused rather than kept.
+#: ⭐⭐ The ten that MARK a run as this routine's, kept apart from the fifteen
+#: on purpose. 親密さ is written from two places in the corpus -- this routine
+#: and the メインイベント grants -- while these ten are written from one, so
+#: 「does this scenario carry the routine」 has to be asked of these and not of
+#: the wider set. ⛔️ Ask it of the fifteen and every メインイベント answers yes.
+TALK_DAY_MARK_CELLS = frozenset(
+    [("PCEV", PCEV_TALK_DAY_BASE + i) for i in range(len(CANDIDATES))]
+    + [("PCEV", PCEV_TALK_BEST_BASE + i) for i in range(len(CANDIDATES))])
+
+TALK_DAY_CELLS = TALK_DAY_MARK_CELLS | frozenset(
+    ("PC", PC_INTIMACY_BASE + i) for i in range(len(CANDIDATES)))
+
 # ⚠️ Which of the two groups the locker scripts check is `PC[0x3013]`, and the
 # split is 天宮/春日/弥生 against 桜井/犬飼 -- exactly the female candidates
 # against the male ones. So this end sends the player's own sex, and an
@@ -381,6 +494,47 @@ def _saved_record(saved) -> dict:
     return {str(base): saved[str(base)]
             for base in PLAYER_RECORD_BASES
             if isinstance(saved, dict) and str(base) in saved}
+
+
+def talk_day_writes(writes: dict) -> dict:
+    """``{candidate index: {"day"/"best"/"intimacy": value}}`` from a run.
+
+    Empty unless one of the two PCEV families was written -- see
+    `Romance.absorb_talk_day` for why that, and not the 親密さ cell, is the
+    fence. ⚠️ Non-integer values are dropped: these three are quantities, and
+    the only writes that reach here at all are ones the run could compute.
+    """
+    # ⚠️ Triples rather than a dict keyed by base, so that no line here reads
+    # like a cell key: the audit that asks 「which cells does this end answer」
+    # scrapes this source for a family name paired with a slot, and a pair
+    # whose second half is a *label* would be one more thing for it to fail on.
+    bases = ((PCEV_TALK_DAY_BASE, "PCEV", "day"),
+             (PCEV_TALK_BEST_BASE, "PCEV", "best"),
+             (PC_INTIMACY_BASE, "PC", "intimacy"))
+    found: dict = {}
+    for (family, address), value in writes.items():
+        if isinstance(address, tuple) or not isinstance(value, int):
+            continue
+        for base, want, what in bases:
+            index = address - base
+            if family == want and 0 <= index < len(CANDIDATES):
+                found.setdefault(index, {})[what] = value
+    return {index: wrote for index, wrote in found.items()
+            if "day" in wrote or "best" in wrote}
+
+
+def _saved_day(text: str) -> "date | None":
+    """The `lastTalk` a save holds, as a day; None when there is not one.
+
+    ⚠️ Tolerant on purpose, in the one direction that matters: the empty
+    string is what a character who has never been talked to carries, and
+    `talk`'s `today` argument is a caller's string, so anything that is not a
+    date reads as 「no day」 rather than raising in the middle of a script run.
+    """
+    try:
+        return date.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
 
 
 # The CTX side. `c000[0xd900]` is a candidate's 進行度 as the scripts count it,
@@ -778,6 +932,17 @@ class Romance:
              gain: int = GAIN_PLAIN) -> bool:
         """One 日常会話 worth of 親密さ. True if the number moved.
 
+        ⭐⭐⭐ Round 468 made this the **fallback**, and left it standing on
+        purpose. The rule below is a transcription of the routine every
+        日常会話 script ends with, and since round 468 the script runs that
+        routine itself over cells this end supplies (`data_cells`,
+        `absorb_talk_day`) -- so where there is an export, the game's own code
+        is what credits and this is not called. It is still what a server with
+        no exports does, and it is still what `/rom <名前> talk` pokes.
+        ⛔️ Two readings of one rule is exactly what this project does not
+        keep, so this is not a second opinion: the smoke test walks all 304
+        scripts against it and a disagreement is a failure, not a choice.
+
         ``gain`` is what the script that just played is worth, which the caller
         gets from talk_gain(): a flat number for the 232 conversations that have
         only one, and since round 173 the value of the answer the player clicked
@@ -913,6 +1078,17 @@ class Romance:
             cells[("CTX", (CTX_PROGRESS, TALK_CATEGORY_BASE + i))] = (
                 row["progress"] + PROGRESS_OFFSET
             )
+            # ⭐⭐⭐ Round 468: the 日常会話 daily rule's own two cells. Both are
+            # numbers the save already holds -- `lastTalk` re-packed and
+            # `todayBest` as it stands -- and supplying them is what lets the
+            # script's own routine decide, instead of `talk` re-deciding it in
+            # Python. ⚠️ Supplied unconditionally, unlike the register block
+            # above: 「she has never been talked to」 is a state `pack_talk_day`
+            # represents rather than a hole, and leaving the cell out would
+            # make the routine undecidable on the very first conversation.
+            cells[("PCEV", PCEV_TALK_DAY_BASE + i)] = pack_talk_day(
+                _saved_day(row["lastTalk"]))
+            cells[("PCEV", PCEV_TALK_BEST_BASE + i)] = row["todayBest"]
         # ⭐⭐ Round 467: the 告白 register block, and only the cells some
         # scenario has actually written. ⚠️ Sparse deliberately -- a cell
         # nobody has written reads ⊤, which is the whole reason the rest of
@@ -960,11 +1136,8 @@ class Romance:
         told every レベル is 0 -- a fallback and a log line, not a gate
         quietly failed.
         """
-        today = today or date.today()
         cells = self.locker_cells(menu_item)
-        cells[("SYSTEM", 0)] = today.year
-        cells[("SYSTEM", 1)] = today.month
-        cells[("SYSTEM", 2)] = today.day
+        cells.update(date_cells(today))
         for name, row in self.state.items():
             i = candidate_index(name)
             talk = row["talk"]
@@ -1047,6 +1220,52 @@ class Romance:
             return True
         return False
 
+    def absorb_talk_day(self, writes: dict) -> bool:
+        """Take a 日常会話's own 親密さ arithmetic back. True if it moved.
+
+        ⭐⭐⭐ Round 468, and it is what retires the transcription in `talk`:
+        the three cells the daily rule is written over -- `PC[0x3920+i]`,
+        `PCEV[0x6040+i]`, `PCEV[0x6060+i]` -- come back out of the run that
+        computed them, so the rule is the scripts' and not a paraphrase of it.
+
+        ⚠️⚠️ **Fenced by the two PCEV families, not by script id**, and that is
+        the whole of the safety here. `PC[0x3920+i]` is written from two places
+        in the corpus: this routine, and the メインイベント grants that
+        `absorb_talk` books through 進行度 instead. The two PCEV families are
+        written from **one** -- the 304 copies of this routine and nothing else
+        in either script set -- so a run that wrote one of them is a 日常会話
+        that reached its tail, and only then is the 親密さ write next to it
+        this routine's. ⛔️ Take `PC[0x3920+i]` on its own and a メインイベント
+        would be credited twice, once here and once as a rung.
+
+        ⚠️ Three arms and only two of them write: 「a better answer today」
+        moves 親密さ and the ceiling but not the day, and 「no better than
+        today's best」 writes nothing at all, so no writes is the rule
+        happening rather than a miss -- the same sentence `talk` returns False
+        for.
+
+        ⚠️ An index that does not agree across the cells is dropped rather than
+        reconciled: the scan says all three carry the candidate the script
+        belongs to, so a run where they disagree is one this end has not read.
+        """
+        names = list(CANDIDATES)
+        touched = talk_day_writes(writes)
+        changed = False
+        for index, wrote in sorted(touched.items()):
+            row = self.state[names[index]]
+            if "day" in wrote:
+                day = unpack_talk_day(wrote["day"])
+                text = day.isoformat() if day is not None else ""
+                changed |= row["lastTalk"] != text
+                row["lastTalk"] = text
+            if "best" in wrote:
+                changed |= row["todayBest"] != wrote["best"]
+                row["todayBest"] = wrote["best"]
+            if "intimacy" in wrote:
+                changed |= row["intimacy"] != wrote["intimacy"]
+                row["intimacy"] = wrote["intimacy"]
+        return changed
+
     def absorb_talk(self, writes: dict) -> bool:
         """Take the CTX writes of `_s102` / `_s104` / `_s101` back. True if changed.
 
@@ -1088,11 +1307,22 @@ class Romance:
         For steering a test: with the last-talk date at 0 the next right-click
         is 「a new day, first time ever」, which is the one that offers her
         メイン if 親密さ is there.
+
+        ⭐ Round 468 puts the 日常会話 daily rule's own two cells back as well,
+        and it is the same sentence rather than a second feature: a new game
+        has never been talked to, so 「her 会話 slots」 includes 「no day, no
+        ceiling」. ⛔️ Without this there is no way to steer a test of that
+        rule at all -- it is the scenario that writes those two now, and a
+        save stuck at today's ceiling makes every further conversation the
+        third arm.
         """
         row = self.state[name]
-        if row["talk"] == TALK_SLOT_DEFAULTS:
+        if (row["talk"] == TALK_SLOT_DEFAULTS
+                and not row["lastTalk"] and not row["todayBest"]):
             return False
         row["talk"] = dict(TALK_SLOT_DEFAULTS)
+        row["lastTalk"] = ""
+        row["todayBest"] = 0
         return True
 
     def waiting_letter(self) -> str | None:

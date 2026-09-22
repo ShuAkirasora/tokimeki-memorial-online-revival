@@ -2044,6 +2044,13 @@ class _Session:
         # crediting, and this is the number the credit needs; _script_start
         # clears it so a click cannot carry into the next script.
         self.talking_choice: int | None = None
+        # ⭐⭐⭐ Round 468: the scenario that just ended ran the 日常会話 daily
+        # rule itself and this end took the result (`_script_talk_credit`), so
+        # `_romance_credit` must not credit it a second time. Here rather than
+        # on the Runner for `talking_choice`'s reason -- the Runner is dropped
+        # before the credit runs -- and cleared by the credit, so it cannot
+        # carry into a later conversation that had no shadow.
+        self.talk_credited: bool = False
         # Chat lines that must wait for the map to come back. A NotifyScriptEnd
         # is followed by the client tearing the event screen down and reloading
         # the lobby, and anything said in that window is simply gone — the packet
@@ -3344,6 +3351,16 @@ class MpsServer:
         school = script.school_name(SCHOOL_ID)
         if school is not None:
             cells[("SCHOOL", script.SCHOOL_NAME)] = school
+        # ⭐⭐⭐ Round 468: the date. It was the largest hole left in this dict
+        # -- three cells, read by every 日常会話 in the game -- and it was left
+        # open because the shape of the packing was a guess. It is not a guess
+        # any more: the stretch that builds it normalises to one shape across
+        # all 304 of them (`romance.PCEV_TALK_DAY_BASE`), and what the scripts
+        # want here is year, month and day raw, each script packing its own.
+        # ⚠️ Not out of the 恋愛 record, like the four above it: this is the
+        # clock, the same one the 会話 chooser has always been given
+        # (`romance.date_cells`), now given to every scenario that asks.
+        cells.update(romance.date_cells())
         # ⭐ The tutorial's own gate, and the only scripts in the corpus that
         # read it are the two 初登校 ones -- so supplying it always is the same
         # as supplying it to 初登校 only, with nothing to keep in step.
@@ -3369,6 +3386,14 @@ class MpsServer:
         # that has to have the number rather than a coin over it.
         runner.shadow.roll = self._script_roll
         runner.shadow.season = _season()
+        # ⭐⭐⭐ Round 468: the fifteen 日常会話 daily-rule cells are ones this
+        # end supplies above and writes back in `_script_talk_credit`, so a
+        # road that writes one of them may be answered rather than defaulted.
+        # ⚠️⚠️ Set **here** and nowhere else on purpose: it is the undertaking
+        # to take those writes back, and this is the one place in the server
+        # that has made it -- an offline walker, or any future caller that has
+        # not, keeps the gate exactly as round 195 left it.
+        runner.shadow.kept_cells = romance.TALK_DAY_CELLS
         register = runner.shadow.script.season_register
         if register is not None:
             # ⭐ Said out loud whenever the script has the switch at all, so
@@ -3955,6 +3980,69 @@ class MpsServer:
                          for address, value in sorted(touched.items()))
               + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
 
+    def _script_talk_credit(self, session: "_Session", result) -> bool:
+        """Let a 日常会話 credit its own 親密さ. True if this ran the rule.
+
+        ⭐⭐⭐ Round 468, and it is the piece that turns the daily rule from a
+        paraphrase back into the game's own code. Every one of the 304 日常会話
+        scripts ends with the same routine -- keep the best single grant of the
+        day -- and until now this end walked past it and re-decided it in
+        Python (`romance.Romance.talk`). With the date and the two ceiling
+        cells supplied, the shadow computes the routine's own answer, this
+        takes it, and `_romance_credit` steps aside.
+
+        ⚠️⚠️ The return value is the whole interface, and 「no writes」 must
+        not become 「fall back」. The routine has three arms and one of them --
+        「today's best was already at least this good」 -- writes nothing at
+        all. That arm IS the manual's 「一日に何度も…あまり上がりません」
+        happening; crediting on top of it would undo the very rule this
+        restores. So the fence is not what the run wrote, it is whether the
+        scenario is one that carries the routine (`Script.writes_any` over
+        `romance.TALK_DAY_MARK_CELLS`, a static property of the bytecode --
+        ⛔️ the ten and not the fifteen, or every メインイベント answers yes)
+        and whether the shadow still knew where it was.
+
+        ⚠️ False leaves the fallback in place, and it means one of three
+        things: no export, so no shadow; a shadow that lost its place; or a
+        scenario that has no such routine to run -- a メインイベント, whose
+        grant is a different rule booked through 進行度 (`absorb_talk`).
+
+        ⚠️⚠️ Unfenced by how the scenario started, unlike `_romance_credit`,
+        and that is the point rather than an oversight. The transcription has
+        to be told which candidate it is crediting, so a conversation started
+        by hand with no `capture_npc_event` key credits nobody; the scenario
+        names its own cell and needs telling nothing. Its siblings in the shadow
+        block all take their writes the same way for the same reason.
+
+        ⚠️ The log line is its siblings': 「記帳」 means the save moved,
+        「既に同じ値」 means the routine ran and changed nothing -- for this
+        one a real outcome and not a miss -- and silence means it was not the
+        kind of scenario that has the routine at all.
+        """
+        runner = session.script
+        shadow = runner.shadow if runner is not None else None
+        if shadow is None or shadow.lost:
+            return False
+        if not shadow.script.writes_any(romance.TALK_DAY_MARK_CELLS):
+            return False
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return False
+        names = list(romance.CANDIDATES)
+        wrote = romance.talk_day_writes(result.writes)
+        changed = love.absorb_talk_day(result.writes)
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] 親密さ: 書き戻せませんでした")
+            return True
+        told = " ".join(
+            names[index] + "".join(f" {what}={value}"
+                                   for what, value in sorted(cells.items()))
+            for index, cells in sorted(wrote.items()))
+        print(f"[{self.tag}] 親密さ "
+              + (told or "書き込みなし（今日はもう十分話した）")
+              + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
+        return True
+
     def _leader_exam_progress(self, session: "_Session", result) -> None:
         """Let the リーダー試験's own cell writes drive the tour record.
 
@@ -4032,6 +4120,12 @@ class MpsServer:
         best of the day with her — the scripts' own daily rule, not a miss. It
         credits nothing and says nothing, which is correct; do not "fix" it.
 
+        ⭐⭐⭐ Round 468: for a 日常会話 this is now the **fallback**. The
+        scenario's own tail runs the daily rule over the cells this end
+        supplies it and `_script_talk_credit` takes the answer, so where there
+        is an export nothing below the `elif credited` arm runs at all. The
+        メインイベント half is untouched -- that grant is a different rule.
+
         Which candidate comes from the capture_npc_event category we handed back
         when the talk started — not from who is standing nearby, which the server
         does not know, and not from the chibi's npcId, which is 1:0 for all of
@@ -4040,6 +4134,9 @@ class MpsServer:
         talking_about, session.talking_about = session.talking_about, None
         choice, session.talking_choice = session.talking_choice, None
         menu_item, session.talk_menu_item = session.talk_menu_item, script.MENU_ITEM_TALK
+        # ⭐ Read and cleared with the other three, for their reason: a flag
+        # left standing would silence the fallback on the next conversation.
+        credited, session.talk_credited = session.talk_credited, False
         # ⭐ The 会話中 icon comes down with the script, wherever the script
         # ended. This method is where it happens for the reason its own
         # docstring gives: it is the one call every NotifyScriptEnd path makes,
@@ -4078,6 +4175,19 @@ class MpsServer:
                 if not changed:
                     print(f"[{self.tag}] romance {name} {note}: 記帳なし "
                           f"(e100 が -1 ではない) {love.line(name)}")
+        elif credited:
+            # ⭐⭐⭐ Round 468: the conversation's own tail already ran the
+            # daily rule over the cells this end supplied it, and
+            # `_script_talk_credit` has taken the answer. Nothing to do here,
+            # and 「nothing」 includes not logging a second verdict: that
+            # method printed the one that happened.
+            # ⛔️ Everything below this line is the fallback now -- the
+            # transcription, for a conversation whose scenario is not exported
+            # and therefore had no shadow to run its own rule. It is kept
+            # because such a server is a supported one, not because the two
+            # readings are held side by side; where both can run, the
+            # scenario's wins.
+            return b""
         else:
             # What this particular conversation is worth, out of the table
             # rather than out of a constant: 22 of them grant nothing, the ones
@@ -6417,9 +6527,17 @@ class MpsServer:
                     self._script_debut(session, shadow.result)
                     self._script_letter_event(session, shadow.result)
                     self._script_record(session, shadow.result)
+                    # ⭐⭐⭐ Round 468: the 日常会話 daily rule, run by the
+                    # scenario that owns it. ⚠️ Before `session.script` is
+                    # dropped below -- it reads the shadow's own scenario to
+                    # decide whether this is one of the 304 that carry the
+                    # routine -- and before `_romance_credit`, which stands
+                    # aside on the flag this sets.
+                    session.talk_credited = self._script_talk_credit(
+                        session, shadow.result)
                     self._leader_exam_progress(session, shadow.result)
-                # ⚠️ Outside the block above, unlike its four neighbours:
-                # those four read what the shadow computed, and this one reads
+                # ⚠️ Outside the block above, unlike its neighbours there:
+                # those read what the shadow computed, and this one reads
                 # the ip the client just named. A debut still has to be placed
                 # when there is no shadow at all -- no export, or a follower
                 # that lost its place -- and it can be, because the ending is
@@ -6635,7 +6753,15 @@ class MpsServer:
                     # roads since round 195 and the exam has its own scope. ⛔️
                     # So this is not yet doing any work, and it is kept for what
                     # it prevents rather than for what it has been seen to do.
-                    why = (f"表現のみ (vm cond={verdict})" if shadow.decided_road()
+                    # ⭐ Round 468: the 一日分の親密さ roads are admitted by a
+                    # different permission from the 表現のみ ones next to them
+                    # -- they do move a number, and what lets them through is
+                    # that this end keeps it (`gs3vm.Machine.kept_cells`). Two
+                    # permissions, two words, so the log counts per family.
+                    why = (f"一日分の親密さ (vm cond={verdict})"
+                           if shadow.kept_road()
+                           else f"表現のみ (vm cond={verdict})"
+                           if shadow.decided_road()
                            else f"ドラマの帳簿 (vm cond={verdict})"
                            if shadow.in_party
                            else f"リーダー試験 (vm cond={verdict})"

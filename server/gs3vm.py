@@ -674,7 +674,8 @@ def _scenery_road(script: "Script", index: int) -> bool:
 #: is a 役柄 test whose result only the client holds).
 #: ⚠️ 台詞 used to be a fourth reason and is not one any more -- see the
 #: docstring, and the road-gate study for what that cost and bought.
-def _undecidable(op: int) -> bool:
+def _undecidable(op: int, cell: "tuple[str, int] | None" = None,
+                 kept: "frozenset[tuple[str, int]]" = frozenset()) -> bool:
     """Does this instruction put the branch that reaches it out of reach here?
 
     ⚠️⚠️ `OP_TALK_ON_EVENT` was in this set until round 193, on the reading
@@ -729,8 +730,40 @@ def _undecidable(op: int) -> bool:
 
     ⭐ The road-gate study prints all of it: variant E is the set before
     this change, F the whole family dropped, G this one. ⚠️ Re-run, do not quote.
+
+    ⭐⭐⭐ Round 468 opens the write half a second time, and this one is by
+    **cell** rather than by opcode: `kept` is the set of `(family, slot)` a
+    caller both supplies and takes back, and a write to one of those does not
+    put the road out of reach. ⛔️ The caller names them, not this module --
+    `kept` is empty by default, so every offline walker and every caller that
+    has not said otherwise sees exactly the gate round 195 left.
+
+    ⚠️⚠️ Why a cell may be let through when its opcode may not, and it is not
+    「this end is confident about this number」:
+
+      * The objection to `DATA_WRITE` is QUANTITY -- 「a wrong answer moves a
+        number and no idempotence catches it」. A cell in `kept` is one this
+        end **hands down as a cell and reads back as a cell**, so the arm the
+        road takes is decided over the very value the save holds, and the run
+        writes that value back. There is no second copy to disagree with.
+      * ⭐ The alternative is not 「leave the number alone」. Refusing sends
+        fall-through, every run, forever -- the same sentence 台詞 and
+        キーワード are let through on -- and for a rule written as
+        if/elif/else that means one arm of it never runs. A fixed arm is a
+        wrong answer too; it is just a quiet one.
+      * ⛔️ It does **not** say the road is harmless. It says the road's
+        effect is one the caller has undertaken to own.
+
+    ⭐⭐⭐ And the thing to keep straight about which half is the invention:
+    the client cannot answer an `OP_BR` at all -- its arithmetic and its data
+    families are stubs, which is why it asks over the wire at every single one
+    -- so the original server answered **all** of them. `STANDING_NO` is this
+    end's scaffolding, not a behaviour anybody observed. ⇒ letting a branch
+    through is not a liberty taken with the game; refusing one is.
     """
     if op == OP_KEYWORD_UPDATE:
+        return False
+    if op in DATA_WRITE and cell is not None and cell in kept:
         return False
     return op in DATA_WRITE or op in (OP_EVENT_CALL, OP_INPUT_SELECT, OP_BA)
 
@@ -768,7 +801,22 @@ def _reachable(script: "Script", start: int) -> set:
     return seen
 
 
-def _decided_road(script: "Script", index: int):
+def _write_cell_of(script: "Script", i: int) -> "tuple[str, int] | None":
+    """`(family, slot)` for a data-family write, or None for anything else.
+
+    ⚠️ The 役柄 bit is deliberately not part of the answer. A road gate asks
+    「which cell does this road move」, and a write to another member's copy of
+    it is the same cell -- `_write_cell` is what decides whose, and it already
+    keeps a write it could not place out of `Result.writes`.
+    """
+    op, args = script.code[i][1], script.code[i][2]
+    if op not in DATA_WRITE or _refer_register(args) is None:
+        return None
+    return DATA_WRITE[op], int.from_bytes(args[2:4], "little")
+
+
+def _decided_road(script: "Script", index: int,
+                  kept: "frozenset[tuple[str, int]]" = frozenset()):
     """What taking the `OP_BR` at `index` decides, or None if this end may not.
 
     ⭐⭐⭐ The gate `_scenery_road` used to be, done properly. Same principle --
@@ -825,7 +873,7 @@ def _decided_road(script: "Script", index: int):
         if i in merge:
             continue  # the two arms have rejoined; past here is not this branch
         seen.add(i)
-        if _undecidable(script.code[i][1]):
+        if _undecidable(script.code[i][1], _write_cell_of(script, i), kept):
             return None
         pending.extend(_successors(script, i))
     return seen
@@ -950,6 +998,17 @@ class Script:
                 if all(_scenery_road(self, branch) for _, _, branch in run):
                     return register
         return None
+
+    def writes_any(self, cells: "frozenset[tuple[str, int]]") -> bool:
+        """Does this scenario write any of these cells anywhere in its code?
+
+        ⭐ A static question about the bytecode, not about a run, and that is
+        what it is for: a caller that takes a family of writes back needs to
+        tell 「this scenario never touches them」 from 「it touched them and
+        the answer was to write nothing」, and only the first of those is a
+        reason to fall back on something else.
+        """
+        return any(_write_cell_of(self, i) in cells for i in range(len(self.code)))
 
     def local_ip(self, wire: int) -> int:
         """The client's cursor (file bytes) in this module's unit (u16 words)."""
@@ -1095,6 +1154,16 @@ class Machine:
     #: script for one player is 役柄 0, which is what a scenario with one
     #: member has. Only a party's members are told otherwise (`Follower`).
     actor = 0
+
+    #: ⭐⭐⭐ The `(family, slot)` cells this machine's caller both supplies and
+    #: writes back, and therefore the data writes that do not put a road out of
+    #: reach (`_undecidable`). ⚠️⚠️ Empty here and a class attribute for
+    #: `roll`'s reason, and the emptiness is the safe half: a caller that has
+    #: not undertaken to own a cell must not have roads admitted on its behalf.
+    #: ⛔️ Naming a cell here without also taking its write back out of
+    #: `Result.writes` is the one way to get this wrong -- the road would then
+    #: be chosen over a value the save never learns about.
+    kept_cells: "frozenset[tuple[str, int]]" = frozenset()
 
     #: ⭐⭐ The other members' machines, by 役柄 -- how a read of somebody
     #: else's copy of a cell is answered (`_refer_actor`). None means this run
@@ -2152,7 +2221,18 @@ class Follower(Machine):
         """
         if self.lost:
             return False
-        return _decided_road(self.script, self.pos) is not None
+        return _decided_road(self.script, self.pos, self.kept_cells) is not None
+
+    def kept_road(self) -> bool:
+        """Is this branch answerable **only** because of `kept_cells`?
+
+        ⭐ For the log, and it earns its place there: it is the difference
+        between 「the road decides nothing anyone can see」 and 「the road
+        moves a number this caller has undertaken to keep」, and those are two
+        different permissions that would otherwise print the same word.
+        """
+        return (self.decided_road()
+                and _decided_road(self.script, self.pos) is None)
 
     def select(self) -> tuple[int, int, int]:
         """The mask for the choice box the client is stopped on, right now.
