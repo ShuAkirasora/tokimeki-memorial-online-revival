@@ -538,14 +538,23 @@ def scene_tally_cells_of(name: str) -> "frozenset[tuple[str, int]]":
 
 
 def scene_flag_cells(script) -> "frozenset[tuple[str, int]]":
-    """The yes/no cells `script` asks about and sets.
+    """The numbered-state cells `script` asks about and sets.
 
     ⭐⭐⭐ Round 471: 「has this happened yet」. 弥生's seven 日常会話 share one
     cell, open by asking whether it is still 0, and every arm sets it to 1 on
     the way out -- so the run that finds 0 is the first meeting and no other
-    run can be. 36 cells across the corpus work like this, and until this end
+    run can be. 38 cells across the corpus work like this, and until this end
     kept them every one of those gates read ⊤ and the 「first time」 scene was
     unreachable, the way round 470's opening scene was.
+
+    ⭐⭐ Round 472 widened the family from 「a yes/no」 to 「a small numbered
+    state」 and two more cells came in, both 犬飼's: three of his 日常会話 share
+    `PCEV[0x6084]`, whose three 選択肢 write 1, 2 and 3 on the way out, and
+    `ink_c511` does the same with `PCEV[0x60a4]` and 0, 1, 2. Both are read
+    back only by the 「we have already talked today」 arm, which plays a line
+    about the answer you gave -- so the cell is 「which one did you pick」 and
+    it needs nothing from this end but its value back. See `gs3vm.FLAG_MAX`
+    for why the bound is where it is.
 
     ⭐ Which cells those are is `gs3vm.Script.flags`, read off the bytecode by
     shape, the way the day stamps and the tally are. ⛔️ Nothing here names an
@@ -561,7 +570,7 @@ def scene_flag_cells(script) -> "frozenset[tuple[str, int]]":
 
 #: The flag cells of one candidate's scenarios, worked out once, for
 #: `scene_day_cells_of`'s reason and measured the same way: across the exports
-#: every one of the 36 is touched by scenarios of a single prefix, so 「forget
+#: every one of the 38 is touched by scenarios of a single prefix, so 「forget
 #: her scenes」 has an answer here too. ⚠️ Eight of them belong to `hsn`/`hsy`,
 #: which are nobody's -- they stay put through a reset, like everything else
 #: outside the five.
@@ -672,12 +681,12 @@ def _saved_scene_tally(saved) -> dict:
 
 
 def _saved_scene_flag(saved) -> dict:
-    """``{cell address: 0 or 1}`` as it comes back out of a save.
+    """``{cell address: 0..gs3vm.FLAG_MAX}`` as it comes back out of a save.
 
     ⚠️ `_saved_scene_tally`'s keying and its tolerance, one notch tighter:
-    these scenarios write a plain 0 or 1 into these cells and nothing else
-    (`gs3vm.Script.flags` is that shape), so any other number is a save this
-    end did not write.
+    these scenarios write a plain small number into these cells and nothing
+    else (`gs3vm.Script.flags` is that shape), so anything out of range is a
+    save this end did not write.
     """
     if not isinstance(saved, dict):
         return {}
@@ -687,7 +696,7 @@ def _saved_scene_flag(saved) -> dict:
             address, flag = int(key), int(value)
         except (TypeError, ValueError):
             continue
-        if flag in (0, 1):
+        if 0 <= flag <= gs3vm.FLAG_MAX:
             kept[address] = flag
     return kept
 
@@ -1440,7 +1449,7 @@ class Romance:
         return changed
 
     def flag_cells(self, cells: "frozenset[tuple[str, int]]") -> dict:
-        """The yes/no cells of one scenario, as `gs3vm` wants them keyed.
+        """The numbered-state cells of one scenario, as `gs3vm` wants them keyed.
 
         ⭐⭐⭐ Round 471, and `tally_cells`' twin down to the reason every one
         of them is answered rather than only the ones the save has seen: the
@@ -1452,19 +1461,20 @@ class Romance:
 
     def absorb_flag(self, writes: dict,
                     cells: "frozenset[tuple[str, int]]") -> bool:
-        """Take a scenario's 「it has happened now」 back. True if one moved.
+        """Take a scenario's 「it is this now」 back. True if one moved.
 
-        ⚠️ Fenced by `cells` for `absorb_scene_day`'s reason, and a value that
-        is not 0 or 1 is dropped rather than stored -- these scenarios set
-        these cells to one of those two and nothing else, which is the shape
-        that recognised them in the first place.
+        ⚠️ Fenced by `cells` for `absorb_scene_day`'s reason, and a value out
+        of 0..`gs3vm.FLAG_MAX` is dropped rather than stored -- these scenarios
+        set these cells to one of a handful of small numbers and nothing else,
+        which is the shape that recognised them in the first place.
         """
         changed = False
         for cell in sorted(cells):
             if cell not in writes:
                 continue
             value = writes[cell]
-            if isinstance(value, bool) or value not in (0, 1):
+            if (isinstance(value, bool) or not isinstance(value, int)
+                    or not 0 <= value <= gs3vm.FLAG_MAX):
                 continue
             changed |= self.scene_flag.get(cell[1]) != value
             self.scene_flag[cell[1]] = value

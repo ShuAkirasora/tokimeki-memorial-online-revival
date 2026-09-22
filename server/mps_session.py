@@ -4101,15 +4101,21 @@ class MpsServer:
               + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
 
     def _script_flag(self, session: "_Session", result) -> None:
-        """Let a scenario mark 「this has happened now」 into the save.
+        """Let a scenario mark 「it is this now」 into the save.
 
         ⭐⭐⭐ Round 471, and the sixth sibling of `_script_debut`,
         `_script_letter_event`, `_script_record`, `_script_scene_day` and
-        `_script_tally`. What it keeps is one yes/no per scene, and the rule it
-        restores is the one every 初めて scene is behind: 弥生's seven 日常会話
-        share a cell, ask whether it is still 0 and set it on the way out, so
-        the first of the seven to play is the first meeting and no later one
-        can be.
+        `_script_tally`. What it keeps is one small numbered state per scene,
+        and the rule it restores is the one every 初めて scene is behind:
+        弥生's seven 日常会話 share a cell, ask whether it is still 0 and set
+        it on the way out, so the first of the seven to play is the first
+        meeting and no later one can be.
+
+        ⭐⭐ Round 472 widened the family and two of 犬飼's cells came in that
+        hold more than a yes/no: which of three 選択肢 the player took, read
+        back by the 「we have already talked today」 arm so that it answers the
+        one they took. Nothing here changes for that -- the value is stored and
+        handed back the way a 0 or a 1 is (`gs3vm.FLAG_MAX`).
 
         ⚠️ Fenced by `Script.flags` -- the cells *this* scenario asks about,
         read off its bytecode -- for `_script_scene_day`'s reason exactly.
@@ -4133,9 +4139,9 @@ class MpsServer:
             return
         changed = love.absorb_flag(result.writes, flags)
         if changed and not self._chars(session).set_romance(session.chara_id, love):
-            print(f"[{self.tag}] 会話のフラグ: 書き戻せませんでした")
+            print(f"[{self.tag}] 会話の段階値: 書き戻せませんでした")
             return
-        print(f"[{self.tag}] 会話のフラグ "
+        print(f"[{self.tag}] 会話の段階値 "
               + " ".join(f"{family}[{address:#06x}]={value}"
                          for (family, address), value in wrote.items())
               + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))

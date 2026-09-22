@@ -948,27 +948,41 @@ def _counts_up(script: "Script", i: int, read_op: int, cell: int) -> bool:
             and int.from_bytes(write_args[2:4], "little") == cell)
 
 
-def _asks_flag(script: "Script", i: int) -> bool:
-    """Is the read at `i` an equality test against a plain 0 or 1?
+#: ⭐⭐⭐ The largest value a cell of the `flags` family is ever handed, and the
+#: whole of what widened that family from 「a yes/no」 to 「a small numbered
+#: state」 in round 472. ⚠️⚠️ It is **not** a number picked to fit: raise the
+#: bound over the exports and the family sits at 38 cells from 3 all the way to
+#: 8 with no third use of any of them anywhere in the corpus, and only at **9**
+#: does 進行度 walk in (`PCEV[0x6024]` is ordered `== 2`..`== 8` by `ink_c069`)
+#: and the exceptions appear -- so the corpus, not this constant, draws the
+#: line, and 3 is the low end of a plateau five wide.
+FLAG_MAX = 3
 
-    ⭐ Round 471. Three adjacent instructions: the read, an immediate 0 or 1,
-    and `OP_EQ`. ⚠️ Registers are left out for `_counts_up`'s reason, and the
-    comparison has to be the equality one -- a cell someone orders is a cell
-    with more than two values in it, whatever the constant happens to be.
+
+def _asks_flag(script: "Script", i: int) -> bool:
+    """Is the read at `i` an equality test against a plain 0..`FLAG_MAX`?
+
+    ⭐ Round 471, widened in 472. Three adjacent instructions: the read, a
+    small immediate, and `OP_EQ`. ⚠️ Registers are left out for `_counts_up`'s
+    reason, and the comparison has to be the equality one -- a cell someone
+    orders is a cell that means more than 「which one」, whatever the constant
+    happens to be.
     """
     if i + 2 >= len(script.code):
         return False
     _, op_str, str_args = script.code[i + 1]
-    return (op_str == OP_STR and _immediate(str_args) in (0, 1)
+    value = _immediate(str_args)
+    return (op_str == OP_STR and value is not None and 0 <= value <= FLAG_MAX
             and script.code[i + 2][1] == OP_EQ)
 
 
 def _sets_flag(script: "Script", i: int) -> bool:
-    """Is the write at `i` handed a plain 0 or 1?"""
+    """Is the write at `i` handed a plain 0..`FLAG_MAX`?"""
     if i < 1:
         return False
     _, op_str, str_args = script.code[i - 1]
-    return op_str == OP_STR and _immediate(str_args) in (0, 1)
+    value = _immediate(str_args)
+    return op_str == OP_STR and value is not None and 0 <= value <= FLAG_MAX
 
 
 class Script:
@@ -1167,32 +1181,44 @@ class Script:
 
     @property
     def flags(self) -> "frozenset[tuple[str, int]]":
-        """The cells this scenario uses as a yes/no: 「has this happened yet」.
+        """The cells this scenario keeps a small numbered state in.
 
-        ⭐⭐⭐ Round 471, recognised by shape the way `day_stamps` and
-        `tallies` are, but the shape is a property of **every** access this
-        scenario makes to the cell rather than of one stretch of instructions:
-        a cell is one of these when this scenario reads it at least once,
-        **every** read of it is `OP_EQ` against a plain 0 or 1, and **every**
-        write of it hands it a plain 0 or 1. ⇒ the scenario is saying the cell
-        holds one of two values and it only ever asks which.
+        ⭐⭐⭐ Round 471, widened in 472, recognised by shape the way
+        `day_stamps` and `tallies` are, but the shape is a property of
+        **every** access this scenario makes to the cell rather than of one
+        stretch of instructions: a cell is one of these when this scenario
+        reads it at least once, **every** read of it is `OP_EQ` against a plain
+        0..`FLAG_MAX`, and **every** write of it hands it a plain 0..`FLAG_MAX`.
+        ⇒ the scenario is saying the cell holds one of a handful of values and
+        it only ever asks which one.
 
-        ⭐⭐ Over both script sets the shape answers **36** cells, and the
-        reading is confirmed by the corpus rather than assumed: take the 36 and
+        ⭐⭐ Over both script sets the shape answers **38** cells, and the
+        reading is confirmed by the corpus rather than assumed: take the 38 and
         look at every access to them anywhere in the 778 exports, and there is
-        **no exception** -- not one read by `<`, `>` or any constant but 0 and
-        1, not one write of anything else. ⛔️ Nothing here names an address,
-        and 進行度 is next door with a near-identical write (`amm_e001` sets it
-        to 1) yet is never matched, because the scenarios that read it order it.
+        **no exception** -- not one read by `<`, `>`, not one read or write of
+        a constant out of range. ⛔️ Nothing here names an address, and 進行度
+        is next door with a near-identical write (`amm_e001` sets it to 1) yet
+        is never matched, because the scenarios that read it order it.
+
+        ⭐⭐⭐ **36 of the 38 hold a yes/no** -- 「has this happened yet」, which
+        is what round 471 read the family as. The other two hold 「which of
+        these did you pick」: `PCEV[0x6084]`, shared by `ink_c069`/`c079`/`c089`,
+        is written 1, 2 or 3 by the three arms of their 選択肢 and read back by
+        the 「we have already talked today」 arm, which answers the choice you
+        made; `PCEV[0x60a4]` is `ink_c511`'s own, written 0, 1 or 2 the same
+        way. ⇒ the two are the same mechanism as the yes/no with more than two
+        arms, not a second family: same anchor, same storage, same reset.
 
         ⚠️⚠️ **The read is the anchor on purpose.** Widen this to accept a
-        scenario that only writes the cell and the 36 become 38: `PCEV[0x6020]`
+        scenario that only writes the cell and the 38 become 40: `PCEV[0x6020]`
         and `PCEV[0x6023]` walk in through `amm_e001`/`skr_e001`, where 進行度
-        is set to 1 and read nowhere. The cost of the narrow rule is measured
-        and small -- **19** write-only sites across 16 of the 36 cells go
-        unrecognised, one of them `yyi_e002`'s write of `PCEV[0x03b2]` -- and a
-        flag that stays 0 for longer than the original is the safe way to be
-        wrong: it plays 「the first time」 once more, it does not skip it.
+        is set to 1 and read nowhere. ⇒ the two axes are independent: raising
+        `FLAG_MAX` never lets 進行度 in below 9, and dropping the read anchor
+        lets it in at any bound. The cost of the narrow rule is measured and
+        small -- **19** write-only sites across 16 cells go unrecognised, one
+        of them `yyi_e002`'s write of `PCEV[0x03b2]` -- and a cell that stays 0
+        for longer than the original is the safe way to be wrong: it plays
+        「the first time」 once more, it does not skip it.
 
         ⚠️ A flag is neither a day stamp nor a tally and none of the three
         overlap: measured over the exports, the intersections are empty.
