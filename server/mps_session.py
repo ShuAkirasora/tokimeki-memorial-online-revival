@@ -5934,6 +5934,14 @@ class MpsServer:
         params = script.ready_params(found.script_id, [], cast)
         print(f"[{self.tag}] drama light: {found.file} id={found.script_id} "
               f"cast={[a for a, _ in cast]} to {len(members)} member(s)")
+        # ⭐ The scenario file declares its own seats -- one PC_INFO each, with
+        # the sex the part is written for -- while this end seats people out of
+        # `drama_event.bin`. Two independent sources for one number, so say it
+        # when they disagree rather than finding out on a screen. ⚠️ A report,
+        # not a rule: nothing here refuses a seat over it.
+        if found.roles and len(cast) > len(found.roles):
+            print(f"[{self.tag}] ⚠️ {found.file} declares {len(found.roles)} "
+                  f"role(s) and this party seated {len(cast)}")
         out = b""
         # ⭐⭐⭐ **One register file, several cursors.** Every member walks the
         # same scenario over the same `B`/`F`/`S` registers, and that is read

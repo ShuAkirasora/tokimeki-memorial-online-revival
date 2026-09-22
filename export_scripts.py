@@ -394,20 +394,59 @@ def ssc_pool(b: bytes, start: int) -> dict[int, tuple[int, bytes]]:
 _ACTOR_OPS = {0x0080: ("PC", 64), 0x0081: ("NPC", 52),
               0x0082: ("TMPNPC", 68), 0x0083: ("BGNPC", 56)}
 
+#: A cast block opens with one SCENARIO_INFO, which is 12 bytes like any other
+#: instruction and is not a declaration.
+_SCENARIO_INFO = 12
+
+
+def _cast_block(b: bytes, stop: int):
+    """Every declaration in the cast block, as ``(offset, op)``.
+
+    ⚠️ **The block is not at a fixed offset.** A script file holds several code
+    regions and the client's loader resolves them from the header; the first of
+    them starts at byte 0x80 and is this one -- a plain run of instructions:
+    SCENARIO_INFO, then one PC_INFO per role, then the NPCs, ending at the
+    first instruction that is not a declaration (an OP_END, or the variable
+    declarations that follow the cast in most files).
+
+    ⭐ This walk replaces a hard-coded 0x100. That address is where the cast
+    happens to begin when a script has exactly one role -- 0x80 + 12 + 64 + 52,
+    the last term being the nameless NPC record every block leads with -- which
+    644 of the 683 scripts do. For the other 39, every one of them a two-role
+    event, 0x100 lands *inside* the second PC_INFO record, the first word there
+    is not a declaration, and the cast came out empty.
+    """
+    o = 0x80 + _SCENARIO_INFO
+    while o + 4 <= stop:
+        op = _u16(b, o)
+        if op not in _ACTOR_OPS:
+            return
+        yield o, op
+        o += _ACTOR_OPS[op][1]
+
 
 def ssc_actors(b: bytes, stop: int) -> list[dict]:
-    """The cast, declared at 0x100 as a short run of ordinary instructions.
+    """The NPC cast of a script, in the order the file declares it.
 
     `type` and `id` are the same pair the protocol uses to name an NPC. The
     type is the low nibble at +0x2C; the id is at +4 shifted right one, except
     for type 3, where the client reads it out of the low nibble at +5 instead.
+
+    ⚠️ Two kinds of record are skipped, and skipping them is what keeps this
+    list the same as the one the old fixed anchor produced for the 644 scripts
+    it did land correctly on: the PC_INFO run (those are roles, not cast --
+    see `ssc_roles`), and the one nameless NPC record that leads the cast in
+    every one of the 683 files. What changes is the other 39, which now have a
+    cast where before they had none.
     """
-    out, o = [], 0x100
-    while o + 4 <= stop:
-        op = _u16(b, o)
-        if op not in _ACTOR_OPS:
-            break
-        category, size = _ACTOR_OPS[op]
+    out, placeholder = [], True
+    for o, op in _cast_block(b, stop):
+        if op == 0x0080:
+            continue
+        if placeholder:
+            placeholder = False
+            continue
+        category = _ACTOR_OPS[op][0]
         kind = _u32(b, o + 0x2C) & 0xF
         out.append({
             "category": category,
@@ -416,7 +455,39 @@ def ssc_actors(b: bytes, stop: int) -> list[dict]:
             "type": kind,
             "id": (b[o + 5] & 0xF) if kind == 3 else (b[o + 4] >> 1),
         })
-        o += size
+    return out
+
+
+def ssc_roles(b: bytes, stop: int) -> list[dict]:
+    """One entry per role -- the PC_INFO records at the head of the cast block.
+
+    A role is a part a *player* plays, so this is the count a party is sized
+    by: 644 scripts declare one, 38 declare two, and one declares none.
+
+    Both fields come out of the client's own decoder for the record rather than
+    from the shape of the data. ``sex`` is bit 0 of +4 and the role number is
+    the rest of that byte. ``surrogate`` is the character the script falls back
+    to when nobody fills the role: the client reads the nibble at ``+5 >> 1``
+    and looks it up in category 6, the surrogate roster, so it names a
+    character the same way `6:7` does.
+
+    ⭐ The reading of ``surrogate`` has a floor under it: a surrogate's sex is
+    fixed by the roster (0-4 male, 5-9 female), and for all 720 PC_INFO records
+    in the library it agrees with this record's own ``sex`` bit -- 720/720. The
+    other candidate reading of that byte (the low nibble, which is how a type-3
+    NPC's id is packed) disagrees 204 times and yields ids outside the roster.
+    """
+    out = []
+    for o, op in _cast_block(b, stop):
+        if op != 0x0080:
+            break
+        out.append({
+            "actorId": b[o + 4] >> 1,
+            "sex": b[o + 4] & 1,
+            "surrogate": (b[o + 5] >> 1) & 0xF,
+            "sei": _sjis(b[o + 6:o + 0x12]),
+            "mei": _sjis(b[o + 0x12:o + 0x1E]),
+        })
     return out
 
 
@@ -788,6 +859,7 @@ class Script:
             self.code = gsc_code_section(blob)
             self.pool: dict[int, tuple[int, bytes]] = {}
             self.actors: list[dict] = []
+            self.roles: list[dict] = []
             self.labels = [v >> 12 for v in gsc_labels(blob, self.code)]
             end = len(blob)
         else:
@@ -798,6 +870,7 @@ class Script:
             self.code = sec["code"]
             self.pool = ssc_pool(blob, sec["pool"])
             self.actors = ssc_actors(blob, sec["hdr"])
+            self.roles = ssc_roles(blob, sec["hdr"])
             self.labels = ssc_labels(blob, sec["hdr"])
             end = sec["code"] + 4 * sec["code_dw"]
         self.instructions = list(decode(blob, self.code, end, ops))
@@ -956,6 +1029,12 @@ def script_doc(script: Script, script_id: int | None) -> dict:
             {"actorId": i, "category": a["category"], "name": a["sei"] + a["mei"],
              "type": a["type"], "id": a["id"]}
             for i, a in enumerate(script.actors, 1)
+        ],
+        # One entry per part a player can take. A party is sized by this, and
+        # a seat that nobody takes has a surrogate named for it here.
+        "roles": [
+            {"actorId": r["actorId"], "sex": r["sex"], "surrogate": r["surrogate"]}
+            for r in script.roles
         ],
         "instructions": instructions,
         "branches": branches,

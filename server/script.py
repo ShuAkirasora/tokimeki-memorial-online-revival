@@ -1385,6 +1385,12 @@ class Script:
         self.file: str = data["file"]
         self.script_id: int | None = data.get("scriptId")
         self.actors: list[dict] = data.get("actors", [])
+        # ⭐ One entry per part a *player* takes, with the sex the script fixes
+        # for it and the surrogate it falls back to. It is the script's own say
+        # on how many seats a party has, which every other source for that
+        # number (`drama_event.bin`, the room the client has for names) has to
+        # agree with. ⚠️ Empty for an export made before round 479.
+        self.roles: list[dict] = data.get("roles", [])
         # What the shipped table knows about this id, if anything. It is the
         # only source a stub has, and the fallback for an export that predates
         # `branches` — an export that has them is a superset, since the table is
@@ -1509,7 +1515,8 @@ def stub(script_id: int) -> Script:
     known = script_id in BRANCHES
     return Script({"file": f"<{'branch table' if known else 'stub'} {script_id}>",
                    "scriptId": script_id,
-                   "codeBase": 0, "actors": [], "instructions": []})
+                   "codeBase": 0, "actors": [], "roles": [],
+                   "instructions": []})
 
 
 def pc_info_entry(actor_id: int, info: bytes) -> bytes:
@@ -1536,6 +1543,18 @@ def pc_info_entry(actor_id: int, info: bytes) -> bytes:
 
 
 PC_INFO_MAX = 4
+
+#: ⚠️ The same ceiling for the other array, and this one had been running
+#: over it. The reader gives npcInfo four entries' worth (0x148 - 0x138 over a
+#: four-byte stride) and tests the count against nothing, and the count field
+#: is the word *immediately after* the array -- so a fifth entry lands on the
+#: count itself. The loop re-reads that count every pass, which is why sending
+#: more than four has never crashed a client: entry five overwrites the bound
+#: with its own actorId and the loop stops there, silently, having consumed
+#: five entries out of a body that carried more. Twelve exported scripts feed
+#: this more than four, `amm_e001` -- the tutorial every new character plays --
+#: most of all with sixteen.
+NPC_INFO_MAX = 4
 
 # ⭐⭐ Which 役柄 slot the player who started the script goes into, or None to
 # send no pcInfo[] at all (which is what every solo script got until round 191).
@@ -1574,11 +1593,12 @@ def ready_params(script_id: int, npc_infos: list[tuple[int, int]],
     that needs it.
     """
     cast = list(pc_infos)[:PC_INFO_MAX]
+    npcs = list(npc_infos)[:NPC_INFO_MAX]
     body = struct.pack(">HH", script_id, len(cast))
     for actor_id, info in cast:
         body += pc_info_entry(actor_id, info)
-    body += struct.pack(">H", len(npc_infos))
-    for actor_id, npc_id in npc_infos:
+    body += struct.pack(">H", len(npcs))
+    for actor_id, npc_id in npcs:
         body += struct.pack(">HH", actor_id, npc_id)
     return body
 
