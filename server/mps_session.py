@@ -3900,6 +3900,61 @@ class MpsServer:
               f"({MAP_NAMES.get(session.map_id, '?')}) {session.pos} facing "
               f"{facing.NAMES.get(session.direction, '?')}")
 
+    def _script_record(self, session: "_Session", result) -> None:
+        """Let a scenario's `PLAYER[0x21xx/0x22xx]` writes reach the save.
+
+        ⭐⭐⭐ Round 467, and it is the third sibling of `_script_debut` and
+        `_script_letter_event` -- but the first one that keeps a cell *as* a
+        cell rather than turning it into a named field. The register block
+        `<キャラ>_e011` writes on 「はい」 is six cells wide and this end has
+        never written one of them: `romance.PLAYER_RECORD_BASES` has what they
+        are and why the whole space is kept rather than the six.
+
+        ⭐⭐ What the chain is for, and it is why this is not bookkeeping for
+        its own sake: `yyi_o012` reads `PLAYER[0x2132]`, the 姓 written down at
+        弥生's 告白, and spells 一ノ瀬 as 一ノ宮 when the player collides with
+        her. One scenario writes it and a different scenario reads it, so
+        neither a register file nor a single run can carry it -- only a save.
+
+        ⚠️ Unfenced by script id, unlike `_leader_exam_progress`, and the
+        corpus is what allows it: PLAYER writes exist in exactly the five
+        `_e011` and the 45 `_e0NN`, all of them this same per-candidate block,
+        and the smoke test walks every exported scenario to keep it that way.
+        There is no scenario to reach by surprise.
+
+        ⚠️ `absorb_record`, not `absorb`, and that is not tidiness: three
+        absorbers run over one `Result` here and each re-reads the save, so a
+        shared one lets whichever sibling ran first take these writes and
+        leaves this line for ever saying 「already the same value」. Argued there.
+
+        ⚠️⚠️ An unknown value never lands here. `gs3vm._write_cell` keeps those
+        in `unknown_writes`, out of `writes`, precisely so that 「the scenario
+        wrote something and this end could not say what」 cannot become a
+        number -- or, here, a name -- in a save.
+
+        ⚠️ The log line reads like its two siblings': 「記帳」 means this ran
+        and took the writes, 「既に同じ値」 means the record already said so,
+        and silence means the scenario wrote none of these cells.
+        """
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return
+        touched = {address: value
+                   for (family, address), value in result.writes.items()
+                   if family == "PLAYER" and not isinstance(address, tuple)
+                   and any(0 <= address - base < len(romance.CANDIDATES)
+                           for base in romance.PLAYER_RECORD_BASES)}
+        if not touched:
+            return
+        changed = love.absorb_record(result.writes)
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] 告白記録: 書き戻せませんでした")
+            return
+        print(f"[{self.tag}] 告白記録 "
+              + " ".join(f"{address:#06x}={value!r}"
+                         for address, value in sorted(touched.items()))
+              + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
+
     def _leader_exam_progress(self, session: "_Session", result) -> None:
         """Let the リーダー試験's own cell writes drive the tour record.
 
@@ -6361,6 +6416,7 @@ class MpsServer:
                     self._script_keywords(session, shadow.result)
                     self._script_debut(session, shadow.result)
                     self._script_letter_event(session, shadow.result)
+                    self._script_record(session, shadow.result)
                     self._leader_exam_progress(session, shadow.result)
                 # ⚠️ Outside the block above, unlike its four neighbours:
                 # those four read what the shadow computed, and this one reads

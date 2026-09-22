@@ -328,6 +328,61 @@ PCEV_PROGRESS_BASE = 0x6020
 # these five that any table supports.
 PC_PLAYER_SEX = 0x3013
 
+# ── The 告白 register block: PLAYER[0x2100+i] … PLAYER[0x2210+i] ───────────
+#
+# ⭐⭐⭐ RESTORED (round 467). Nine bases, five cells each -- one per candidate,
+# at the same index every other per-candidate cell here uses -- and those 45
+# cells are the whole of the corpus's PLAYER writes, which the smoke test
+# re-counts over every exported scenario rather than trusting this comment.
+# Six of the nine are one straight-line block in `<キャラ>_e011`, her 告白,
+# on the arm the player answers 「はい」 on:
+#
+#   PLAYER[0x2100+i] = 1                 it happened
+#   PLAYER[0x2110+i] = SCHOOL[0x1001]    at which school       (text)
+#   PLAYER[0x2120+i] = PC[0x301c]        in which 組
+#   PLAYER[0x2130+i] = PC[0x3010]        under which 姓        (text)
+#   PLAYER[0x2140+i] = PC[0x3011]        ... 名                (text)
+#   PLAYER[0x2150+i] = PC[0x3012]        ... ニックネーム       (text)
+#
+# The other three are flags her メインイベント raise: each `<キャラ>_e0NN`
+# writes `PLAYER[0x2160+i] = 1` as it opens, and two of them further in.
+#
+# ⭐⭐⭐ **The block has a reader, and it is a different scenario.** `yyi_o012`
+# reads `PLAYER[0x2132]` -- the 姓 written down at 弥生's 告白 -- compares it
+# with 「一ノ瀬」 and spells that NPC 「一ノ宮」 when they collide. That is the
+# 同姓回避 ladder of 2.380 三 again, except the surname comes out of the record
+# rather than out of the save's current name: one scenario writes, another
+# reads, and nothing shorter than a save can carry it between them.
+#
+# ⭐⭐ Why the whole space rather than the six that have a reading: this end
+# does not interpret any of it. The value kept is the value the scenario
+# computed, the address is the scenario's own, and it is handed back as that
+# same cell next time. Saying what `0x2200+i` *means* would be a reading;
+# keeping what was written there is not one.
+#
+# ⚠️ Only cells a scenario actually wrote are supplied back. A candidate with
+# no 告白 behind her leaves `0x2130+i` unsupplied ⇒ ⊤ ⇒ the ladder falls
+# through to the plain spelling -- which is what a zero-filled original would
+# also do, and the honest answer either way. ⛔️ 「nobody answers it」 is not
+# 「it should be answered」: a 0 invented here would be PC[0x3201] over again.
+PLAYER_RECORD_BASES = (0x2100, 0x2110, 0x2120, 0x2130, 0x2140, 0x2150,
+                       0x2160, 0x2200, 0x2210)
+
+
+def _saved_record(saved) -> dict:
+    """One candidate's register block as it comes back out of a save.
+
+    ⚠️ Filtered against `PLAYER_RECORD_BASES` rather than taken as read: what
+    goes back into `data_cells` becomes a scenario's answer, so a key a save
+    picked up some other way must not turn into a cell. Keys are the base
+    address as a decimal string; values are whatever the scenario wrote, which
+    for four of the nine bases is text.
+    """
+    return {str(base): saved[str(base)]
+            for base in PLAYER_RECORD_BASES
+            if isinstance(saved, dict) and str(base) in saved}
+
+
 # The CTX side. `c000[0xd900]` is a candidate's 進行度 as the scripts count it,
 # which is this end's `progress` plus two (see `intimacy_needed`), and its
 # subject is her 日常会話 category. `c000[0x8103]` is the menu_item that started
@@ -616,6 +671,13 @@ class Romance:
                          **{key: int(value) for key, value in
                             dict(row.get("talk", {})).items()
                             if key in TALK_SLOT_DEFAULTS}},
+                # ⭐ Round 467: what her `_e011` and `_e0NN` wrote into the
+                # PLAYER register block, keyed by the base address as a decimal
+                # string (JSON has no integer keys). ⚠️ Sparse on purpose --
+                # see PLAYER_RECORD_BASES; an absent base is a cell nothing has
+                # written yet and is not supplied at all. Absent from saves
+                # before round 467, and an empty record is what a new game has.
+                "record": _saved_record(row.get("record")),
             }
         # PC[0x3a04]: whose letter event is running. -1 is what the new-game
         # reset writes, and it is what 「手紙を読まない」 puts back.
@@ -651,6 +713,9 @@ class Romance:
             f"@{talk['lastYear']}-{talk['lastMonthDay']:04d}"
             + ("·d8" if talk["mainSeen"] else "")
             + (" ED済" if row["ending"] else "")
+            # ⭐ How many of the nine PLAYER bases her scenarios have filled in;
+            # 6 is a 告白 gone through, the rest are メインイベント flags.
+            + (f" 記録{len(row['record'])}" if row["record"] else "")
         )
 
     def endings(self) -> list[int]:
@@ -848,6 +913,27 @@ class Romance:
             cells[("CTX", (CTX_PROGRESS, TALK_CATEGORY_BASE + i))] = (
                 row["progress"] + PROGRESS_OFFSET
             )
+        # ⭐⭐ Round 467: the 告白 register block, and only the cells some
+        # scenario has actually written. ⚠️ Sparse deliberately -- a cell
+        # nobody has written reads ⊤, which is the whole reason the rest of
+        # this method can be trusted (see the docstring above).
+        cells.update(self.record_cells())
+        return cells
+
+    def record_cells(self) -> dict:
+        """Just the `PLAYER` half of `data_cells`, keyed the same way.
+
+        ⭐ Its own method so that a caller can hand the block to a scenario
+        without the rest of `data_cells` -- and so that 「what does this record
+        answer」 has one place to be read from.
+        """
+        cells: dict = {}
+        for name, row in self.state.items():
+            i = candidate_index(name)
+            for base in PLAYER_RECORD_BASES:
+                value = row["record"].get(str(base))
+                if value is not None:
+                    cells[("PLAYER", base + i)] = value
         return cells
 
     def locker_cells(self, menu_item: int) -> dict:
@@ -895,7 +981,8 @@ class Romance:
 
         ⚠️ `PC` only, and only the two ranges below. What is deliberately left
         out -- above all `PCEV[0x6020+i]` -- is argued where those constants
-        are defined, not here.
+        are defined, not here, and the `PLAYER` register block has a method of
+        its own for a reason `absorb_record` states.
         """
         names = list(CANDIDATES)
         changed = False
@@ -921,6 +1008,44 @@ class Romance:
                 changed |= self.letter_event != value
                 self.letter_event = value
         return changed
+
+    def absorb_record(self, writes: dict) -> bool:
+        """Take a run's `PLAYER[base+i]` writes into the register block.
+
+        ⚠️⚠️ A method of its own rather than a third arm of `absorb`, and the
+        reason is the caller and not the cells: `mps_session` runs three
+        absorbers over one `Result` and each has to be able to say whether
+        **its** record moved. While this lived in `absorb`, whichever sibling
+        ran first swept the PLAYER writes up with its own and wrote the save,
+        so the one whose block it actually was could only ever report 「already
+        the same value」. ⭐ One absorber, one family, one verdict.
+
+        ⚠️ Values go in exactly as the scenario computed them, text included,
+        and an address outside `PLAYER_RECORD_BASES` is dropped rather than
+        stored: the corpus writes those 45 cells and no others, so anything
+        else is a scenario this end has never read, and guessing a home for it
+        would be worse than losing it in a log line.
+        """
+        names = list(CANDIDATES)
+        changed = False
+        for (family, address), value in writes.items():
+            if family == "PLAYER" and not isinstance(address, tuple):
+                changed |= self._absorb_record_cell(names, address, value)
+        return changed
+
+    def _absorb_record_cell(self, names: list, address: int, value) -> bool:
+        """One `PLAYER[base+i]` write into candidate i's block. True if moved."""
+        for base in PLAYER_RECORD_BASES:
+            index = address - base
+            if not 0 <= index < len(names):
+                continue
+            record = self.state[names[index]]["record"]
+            key = str(base)
+            if record.get(key) == value:
+                return False
+            record[key] = value
+            return True
+        return False
 
     def absorb_talk(self, writes: dict) -> bool:
         """Take the CTX writes of `_s102` / `_s104` / `_s101` back. True if changed.
