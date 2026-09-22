@@ -2334,7 +2334,7 @@ def is_tutorial(script_id: "int | None") -> bool:
 # ⭐⭐ WHICH CELLS THIS END HAS TO PRODUCE OUT OF NOTHING: the ones the corpus
 # READS and never WRITES. 461 cells are touched by the 683 client scenarios and
 # 18 of them are read-only, which makes that list a lower bound on the state the
-# original server kept. Twelve are answered here today:
+# original server kept. Thirteen are answered here today:
 #
 #     SYSTEM[0] / [1] / [2]   year, month, day          romance.talk_cells
 #     PC[0x3013]              the player's sex          romance.PC_PLAYER_SEX
@@ -2345,8 +2345,9 @@ def is_tutorial(script_id: "int | None") -> bool:
 #     PC[0x3010] / [0x3011]   the player's 姓 and 名     PC_FAMILY_NAME, below
 #     PC[0x3012]              the player's ニックネーム   PC_NICK_NAME, below
 #     SCHOOL[0x1001]          the school's name         SCHOOL_NAME, below
+#     PC[0x7000]              役柄 n is a 代行ＮＰＣ     PC_IS_SURROGATE, below
 #
-# ⛔️ The other six are deliberately left unanswered, and the reasons differ:
+# ⛔️ The other five are deliberately left unanswered, and the reasons differ:
 #
 #   * `PC[0x3201]` and `PC[0x3203]` are two axes of `personalityParam`. No
 #     message in the protocol carries them and no scenario in either corpus
@@ -2356,8 +2357,7 @@ def is_tutorial(script_id: "int | None") -> bool:
 #     talk line. The save's only adjacent pair of numeric profile fields is the
 #     birthday, but the block is not laid out in the wire record's field order,
 #     so 「the next two after sex」 is a guess and not a decode.
-#   * `PC[0x3704]` has one read in the whole corpus and no reading yet;
-#     `PC[0x7000]` is only ever compared against 0 inside multiplayer events.
+#   * `PC[0x3704]` has one read in the whole corpus and no reading yet.
 #
 #: 自分のクラス, 0 = Ａ組 .. 25 = Ｚ組. Pinned by value range in 2.143 四 (26
 #: constants in the tutorial's dispatch tree, 26 classrooms in `map.bin`) and
@@ -2480,6 +2480,66 @@ def school_name(school_id: int) -> "str | None":
 #: The school's name, as text -- see the note above. Never written by any
 #: scenario: this end produces it or nobody does.
 SCHOOL_NAME = 0x1001
+
+# ── 代行ＮＰＣ: which 役柄 nobody is sitting at ──────────────────
+#
+# ⭐⭐⭐ `PC[0x7000]` is read 176 times by the client scenarios and written
+# zero times, which makes it one this end produces or nobody does, and the
+# twelve scenarios that read it are twelve multiplayer events. Round 476 reads
+# it as 「is this 役柄 a 代行ＮＰＣ」: **0** for a member a player is sitting
+# at, **1** for a slot the matching screen filled with a surrogate.
+#
+# ⭐⭐ **It is one per member, and that is read and not assumed.** The 役柄 is
+# bit 0 of the operand (`gs3vm._refer_actor`): 93 of the reads name 役柄 0 and
+# 83 name 役柄 1, and nine of the twelve scenarios read both members' copies.
+# Each read sits either inside the `OP_BA` bracket of the 役柄 it names, or on
+# the shared path, where it names the member the next box belongs to.
+# ⚠️⚠️ That split is the thing round 176 wrote down as unexplained -- 「the
+# same cell, two spellings, 83 and 93 of them」 -- and round 369 had already
+# answered it without anybody coming back here.
+#
+# ⭐⭐⭐ **THE READING COMES OFF WHAT THE NON-ZERO ARM DOES**, and three
+# scenarios say the same thing three ways:
+#
+#   * `un127` ip=16492 and ip=17674: two stretches built alike, one per member,
+#     each gating an `INPUT_STRING` on that member's own copy being 0. The
+#     non-zero arm never opens the box -- it puts one of three canned lines in
+#     the register the 台詞 interpolates, picked by a counter.
+#   * `un007` ip=6721 onwards: the mask of a choice box, in the shape
+#     `P[k] = (cell == 0) OR ((cell != 0) AND <one local test>)`. Every item
+#     lit for a member at 0; exactly one item lit for a member at non-zero.
+#   * `un122` ip=20820, and this one pins the VALUE as well: the mystery's
+#     ending is 「the player typed the right answer **OR** `PC/0[0x7000] == 1`」.
+#     It is the only comparison in all 176 reads that names a number other than
+#     0, so the non-zero value is **1** and not merely non-zero.
+#
+# ⭐⭐⭐ **AND THE GAME'S OWN MANUAL SAYS IT**, which is the witness from
+# outside the bytecode. The パーティ page of the online manual explains that an
+# empty role is stood in for by an NPC, five of each sex, that the scenario
+# runs the same way whichever one is picked, and -- the sentence this cell is
+# --「ＮＰＣは、単純な選択しかできません」: an NPC can only make simple
+# choices. A surrogate cannot type a line, so the scenario keeps a line for it;
+# cannot weigh three options, so the scenario leaves it one; cannot answer a
+# riddle, so the scenario counts the riddle answered.
+#
+# ⚠️ **Why supplying 0 here is not the zero `PC[0x3201]` is refused above.**
+# That one is a number this end does not hold and 0 would stand in for it. This
+# one is not a number about the player at all: it is a fact about the slot, and
+# the roster this end keeps already states it for every slot in the party
+# (`drama.Actor.npc`). A session is a person, so a member's own copy is 0
+# because of what it is, not because 0 was the handy value.
+#
+# ⭐ **What changes by supplying it**: every one of those 176 gates used to be
+# answered with a shrug, so in a party with a surrogate the scenario could
+# neither open the box for the player nor play the line for the NPC -- both
+# arms of each gate were unreachable. A surrogate has no session and so no
+# machine of its own; `mps_session._drama_light` gives it one that is never
+# stepped, holding this cell, so that the members who do walk the scenario can
+# read what is true about the slot beside them.
+
+#: 役柄 n is a 代行ＮＰＣ: 0 for a member a player is sitting at, 1 for a
+#: surrogate. See the note above for the reading and for why the value is 1.
+PC_IS_SURROGATE = 0x7000
 
 #: ⚠️⚠️ **Named for what the tutorial does with it, not for what it is.** The
 #: semantics of this cell are NOT restored, and round 336 is where that stopped

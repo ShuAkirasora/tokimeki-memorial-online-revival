@@ -3412,6 +3412,16 @@ class MpsServer:
                   f"({'knob' if TUTORIAL_ASK else 'characters on the account'})"
                   f"; the opening way out of the tour is "
                   f"{'offered' if ask >= 2 else 'not offered'}")
+        # ⭐⭐⭐ Round 476: 代行ＮＰＣ. A session is a person, so this
+        # player's own copy of the cell is 0 -- 「nobody is sitting here」 is
+        # exactly the thing it is not. The surrogates' copies are 1 and are put
+        # in the party's peer list by `_drama_light`, which is where the roster
+        # that knows which slots are surrogates lives. See
+        # `script.PC_IS_SURROGATE` for the reading and for why the value is 1.
+        # ⚠️ Supplied for a solo scenario too, and that costs nothing: the
+        # twelve scenarios that read it are twelve multiplayer events, and a
+        # player alone is still not a surrogate.
+        cells[("PC", script.PC_IS_SURROGATE)] = 0
         cells.update(self._leader_exam_cells(session))
         runner.shadow = gs3vm.follow(script_id, cells, registers, actor)
         if runner.shadow is None:
@@ -5974,6 +5984,27 @@ class MpsServer:
         shadows = {actor_id: other.script.shadow
                    for (actor_id, _), other in zip(cast, sessions)
                    if other.script is not None and other.script.shadow is not None}
+        # ⭐⭐⭐ Round 476: the slots nobody is sitting at. A 代行ＮＰＣ has no
+        # session and so no machine, and until now a read of its
+        # `PC[0x7000]` came back unknown -- which left the scenario unable to
+        # play the surrogate's half at all: the arm that keeps a line for it,
+        # the arm that narrows its choice box to one item and the arm that
+        # counts its riddle answered were each as unreachable as the arm that
+        # asks a player who is not there.
+        # ⚠️ Cells only. This machine is never stepped: it is not a member
+        # walking the scenario, nothing persists it, and it is in the list
+        # purely so that the members who do walk can read what is true about
+        # the slot beside them (`gs3vm.Machine._peer_cells`).
+        for actor in sorted(party.actors, key=lambda a: a.actor_id):
+            if not actor.is_surrogate or actor.actor_id in shadows:
+                continue
+            stand_in = gs3vm.follow(
+                found.script_id, {("PC", script.PC_IS_SURROGATE): 1},
+                party_registers, actor.actor_id)
+            if stand_in is not None:
+                shadows[actor.actor_id] = stand_in
+                print(f"[{self.tag}] vm: 役柄 {actor.actor_id} is a "
+                      f"代行ＮＰＣ -- PC/{actor.actor_id}[0x7000] <- 1")
         for shadow in shadows.values():
             shadow.peers = shadows
         return out
