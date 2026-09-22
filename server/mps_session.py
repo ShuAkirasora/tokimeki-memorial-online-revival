@@ -3381,6 +3381,14 @@ class MpsServer:
         tallies = romance.scene_tally_cells(gs3vm.by_script_id(script_id))
         if love is not None:
             cells.update(love.tally_cells(tallies))
+        # ⭐⭐⭐ Round 471: and the yes/no cells the same scenario asks about,
+        # off its bytecode the same way. 弥生's seven 日常会話 share one and
+        # open on 「still 0?」, so with it unanswered the first meeting could
+        # never play. ⚠️ Answered even on a save that has never set it:
+        # 「not yet」 is 0, and 0 is the value the gate names.
+        flags = romance.scene_flag_cells(gs3vm.by_script_id(script_id))
+        if love is not None:
+            cells.update(love.flag_cells(flags))
         # ⭐ The tutorial's own gate, and the only scripts in the corpus that
         # read it are the two 初登校 ones -- so supplying it always is the same
         # as supplying it to 初登校 only, with nothing to keep in step.
@@ -3419,7 +3427,10 @@ class MpsServer:
         # promise is exactly as wide as the thing keeping it.
         # ⭐ Round 470 puts this scenario's tally cell under the same
         # undertaking, taken back in `_script_tally`.
-        runner.shadow.kept_cells = romance.TALK_DAY_CELLS | stamps | tallies
+        # ⭐ Round 471 does the same for its yes/no cells, taken back in
+        # `_script_flag`.
+        runner.shadow.kept_cells = (romance.TALK_DAY_CELLS | stamps | tallies
+                                    | flags)
         register = runner.shadow.script.season_register
         if register is not None:
             # ⭐ Said out loud whenever the script has the switch at all, so
@@ -4085,6 +4096,46 @@ class MpsServer:
             print(f"[{self.tag}] 会話の回数: 書き戻せませんでした")
             return
         print(f"[{self.tag}] 会話の回数 "
+              + " ".join(f"{family}[{address:#06x}]={value}"
+                         for (family, address), value in wrote.items())
+              + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
+
+    def _script_flag(self, session: "_Session", result) -> None:
+        """Let a scenario mark 「this has happened now」 into the save.
+
+        ⭐⭐⭐ Round 471, and the sixth sibling of `_script_debut`,
+        `_script_letter_event`, `_script_record`, `_script_scene_day` and
+        `_script_tally`. What it keeps is one yes/no per scene, and the rule it
+        restores is the one every 初めて scene is behind: 弥生's seven 日常会話
+        share a cell, ask whether it is still 0 and set it on the way out, so
+        the first of the seven to play is the first meeting and no later one
+        can be.
+
+        ⚠️ Fenced by `Script.flags` -- the cells *this* scenario asks about,
+        read off its bytecode -- for `_script_scene_day`'s reason exactly.
+
+        ⚠️ 「既に同じ値」 is an ordinary outcome here and not a miss: six of
+        弥生's seven set a flag that the first one already set.
+        """
+        runner = session.script
+        shadow = runner.shadow if runner is not None else None
+        if shadow is None or shadow.lost:
+            return
+        flags = romance.scene_flag_cells(shadow.script)
+        if not flags:
+            return
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return
+        wrote = {cell: result.writes[cell] for cell in sorted(flags)
+                 if cell in result.writes}
+        if not wrote:
+            return
+        changed = love.absorb_flag(result.writes, flags)
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] 会話のフラグ: 書き戻せませんでした")
+            return
+        print(f"[{self.tag}] 会話のフラグ "
               + " ".join(f"{family}[{address:#06x}]={value}"
                          for (family, address), value in wrote.items())
               + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
@@ -6644,6 +6695,9 @@ class MpsServer:
                     # ⭐⭐⭐ Round 470: 「this scene played once more」, the
                     # same arrangement -- a different cell of the same run.
                     self._script_tally(session, shadow.result)
+                    # ⭐⭐⭐ Round 471: 「this has happened now」, the same
+                    # arrangement again -- a third cell of the same run.
+                    self._script_flag(session, shadow.result)
                     # ⭐⭐⭐ Round 468: the 日常会話 daily rule, run by the
                     # scenario that owns it. ⚠️ Before `session.script` is
                     # dropped below -- it reads the shadow's own scenario to

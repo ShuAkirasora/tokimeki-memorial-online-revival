@@ -920,6 +920,14 @@ def _stamps_today(script: "Script", i: int) -> bool:
                for n, want in enumerate(_TODAY_SHAPE))
 
 
+def _immediate(args: bytes) -> "int | None":
+    """The constant an `OP_STR` stores, or None when it stores a register."""
+    field = int.from_bytes(args[0:2], "little")
+    if (field >> 10) & 7 != CAT_IMMEDIATE:
+        return None
+    return int.from_bytes(args[2:6], "little")
+
+
 def _counts_up(script: "Script", i: int, read_op: int, cell: int) -> bool:
     """Is the read at `i` the start of 「this cell, plus one, back again」?
 
@@ -931,18 +939,36 @@ def _counts_up(script: "Script", i: int, read_op: int, cell: int) -> bool:
     cell the sum lands in, which is the claim being made.
     """
     _, op_str, str_args = script.code[i + 1]
-    if op_str != OP_STR:
-        return False
-    field = int.from_bytes(str_args[0:2], "little")
-    if (field >> 10) & 7 != CAT_IMMEDIATE:
-        return False
-    if int.from_bytes(str_args[2:6], "little") != 1:
+    if op_str != OP_STR or _immediate(str_args) != 1:
         return False
     if script.code[i + 2][1] != OP_ADD:
         return False
     _, op_write, write_args = script.code[i + 3]
     return (op_write == read_op + 1
             and int.from_bytes(write_args[2:4], "little") == cell)
+
+
+def _asks_flag(script: "Script", i: int) -> bool:
+    """Is the read at `i` an equality test against a plain 0 or 1?
+
+    ⭐ Round 471. Three adjacent instructions: the read, an immediate 0 or 1,
+    and `OP_EQ`. ⚠️ Registers are left out for `_counts_up`'s reason, and the
+    comparison has to be the equality one -- a cell someone orders is a cell
+    with more than two values in it, whatever the constant happens to be.
+    """
+    if i + 2 >= len(script.code):
+        return False
+    _, op_str, str_args = script.code[i + 1]
+    return (op_str == OP_STR and _immediate(str_args) in (0, 1)
+            and script.code[i + 2][1] == OP_EQ)
+
+
+def _sets_flag(script: "Script", i: int) -> bool:
+    """Is the write at `i` handed a plain 0 or 1?"""
+    if i < 1:
+        return False
+    _, op_str, str_args = script.code[i - 1]
+    return op_str == OP_STR and _immediate(str_args) in (0, 1)
 
 
 class Script:
@@ -998,6 +1024,8 @@ class Script:
         self._day_stamps: "frozenset[tuple[str, int]] | None" = None
         # ⭐ Round 470, and cached for `_day_stamps`' reason exactly.
         self._tallies: "frozenset[tuple[str, int]] | None" = None
+        # ⭐ Round 471, and the same.
+        self._flags: "frozenset[tuple[str, int]] | None" = None
         # ⭐ How big this scenario's register file is, per category, out of its
         # own DECL_VARIABLE prologue. Read here rather than off `Machine`'s
         # registers because presence there cannot tell a declared register from
@@ -1136,6 +1164,55 @@ class Script:
                     found.add((family, cell))
             self._tallies = frozenset(found)
         return self._tallies
+
+    @property
+    def flags(self) -> "frozenset[tuple[str, int]]":
+        """The cells this scenario uses as a yes/no: 「has this happened yet」.
+
+        ⭐⭐⭐ Round 471, recognised by shape the way `day_stamps` and
+        `tallies` are, but the shape is a property of **every** access this
+        scenario makes to the cell rather than of one stretch of instructions:
+        a cell is one of these when this scenario reads it at least once,
+        **every** read of it is `OP_EQ` against a plain 0 or 1, and **every**
+        write of it hands it a plain 0 or 1. ⇒ the scenario is saying the cell
+        holds one of two values and it only ever asks which.
+
+        ⭐⭐ Over both script sets the shape answers **36** cells, and the
+        reading is confirmed by the corpus rather than assumed: take the 36 and
+        look at every access to them anywhere in the 778 exports, and there is
+        **no exception** -- not one read by `<`, `>` or any constant but 0 and
+        1, not one write of anything else. ⛔️ Nothing here names an address,
+        and 進行度 is next door with a near-identical write (`amm_e001` sets it
+        to 1) yet is never matched, because the scenarios that read it order it.
+
+        ⚠️⚠️ **The read is the anchor on purpose.** Widen this to accept a
+        scenario that only writes the cell and the 36 become 38: `PCEV[0x6020]`
+        and `PCEV[0x6023]` walk in through `amm_e001`/`skr_e001`, where 進行度
+        is set to 1 and read nowhere. The cost of the narrow rule is measured
+        and small -- **19** write-only sites across 16 of the 36 cells go
+        unrecognised, one of them `yyi_e002`'s write of `PCEV[0x03b2]` -- and a
+        flag that stays 0 for longer than the original is the safe way to be
+        wrong: it plays 「the first time」 once more, it does not skip it.
+
+        ⚠️ A flag is neither a day stamp nor a tally and none of the three
+        overlap: measured over the exports, the intersections are empty.
+        """
+        if self._flags is None:
+            reads: "dict[tuple[str, int], list[bool]]" = {}
+            writes: "dict[tuple[str, int], list[bool]]" = {}
+            for i, (_, op, args) in enumerate(self.code):
+                read_family = DATA_READ.get(op)
+                write_family = DATA_WRITE.get(op)
+                if read_family in ("PCEV", "PCEV32"):
+                    cell = (read_family, int.from_bytes(args[2:4], "little"))
+                    reads.setdefault(cell, []).append(_asks_flag(self, i))
+                elif write_family in ("PCEV", "PCEV32"):
+                    cell = (write_family, int.from_bytes(args[2:4], "little"))
+                    writes.setdefault(cell, []).append(_sets_flag(self, i))
+            self._flags = frozenset(
+                cell for cell, asked in reads.items()
+                if all(asked) and all(writes.get(cell, ())))
+        return self._flags
 
     def writes_any(self, cells: "frozenset[tuple[str, int]]") -> bool:
         """Does this scenario write any of these cells anywhere in its code?
