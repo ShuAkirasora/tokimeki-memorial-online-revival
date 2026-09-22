@@ -38,13 +38,19 @@ Shapes, from the client's own deserialisers:
   rounds 30-32 spent themselves on and it does nothing useful; it is kept only
   for the manual ``/sc`` driver.
 
-⭐ **``npcInfo[]`` may be empty.** Measured, and it used to be the open half of
-this paragraph: the same NPC conversation was played twice, once with the cast
-announced from an export and once with nothing announced at all, and the client
-answered ``OkScriptReady`` and ran to ``OP_END`` both times. The ``.ssb``
-declares its own actors and that is enough for it. ``ctrl`` is still a guess,
-and stays a ``/sc`` argument rather than a constant, because a wrong guess
-costs a whole client run.
+⭐⭐⭐ **``npcInfo[]`` is the list of 役柄 a 代行ＮＰＣ plays** -- ``actorId``
+the slot, ``npcId`` the stand-in's id in category 6 (``proxy_npc.bin``, the
+ten of them) -- and not the scenario's NPC cast, which the ``.ssb`` declares
+in its own header. Read off the one place the client reads the array back
+(round 481): the script screen's constructor (0x70D652) walks ``pcInfo[]``
+and registers each entry as a cast slot, then walks ``npcInfo[]`` and for
+each pair builds the same 75-byte block itself out of category 6, through
+the helper (0x7FD533) the ``PC_INFO`` record's own default 代行ID goes
+through, and registers it the same way. An entry whose ``actorId`` is not
+below the scenario's own 役柄 count is dropped, which is why the NPC casts
+this end used to send here were never seen. ``ctrl`` is still a guess, and
+stays a ``/sc`` argument rather than a constant, because a wrong guess costs
+a whole client run.
 
 Two sources, and the difference between them is the whole shape of this module
 --------------------------------------------------------------------------
@@ -362,13 +368,19 @@ def pause_notify_params(actor_id: int, on: int) -> bytes:
 #: 0x7206's `reason`, and the whole of what this end can honestly say about it.
 #:
 #: ⚠️⚠️ THE CLIENT NEVER READS IT. Its handler (0x78550E) takes `actorId` out
-#: of the body, compares it with its own 役柄 (`+0x30`), and branches on that
-#: and nothing else: somebody else's retire draws 「%1%さんが\nパーティーから抜
-#: けました。」 (`msg_text` 573) and its own takes it out of the play. `npcId`
-#: and `reason` are never loaded. ⇒ a second value here would be a number with
-#: no way to be right and no way to be caught being wrong -- a field with one
-#: observable value cannot be measured, however long it is stared at -- so both
-#: ways out of a 役柄 -- 「イベント中断」 and the five minutes -- send 0.
+#: of the body, compares it with its own 役柄 (`+0x30`), and branches on that:
+#: somebody else's retire draws 「%1%さんが\nパーティーから抜けました。」
+#: (`msg_text` 573) and its own takes it out of the play. `reason` is never
+#: loaded. ⇒ a second value here would be a number with no way to be right and
+#: no way to be caught being wrong -- a field with one observable value cannot
+#: be measured, however long it is stared at -- so both ways out of a 役柄 --
+#: 「イベント中断」 and the five minutes -- send 0.
+#: ⚠️ Round 481 took `npcId` off that list: the somebody-else branch hands the
+#: `{actorId, npcId}` pair whole to the party object (0x6583E1 appends it to
+#: a list), and when the play resumes the script screen (0x71AD32) walks that
+#: list and looks each `npcId` up in category 6 for the slot's name and looks
+#: -- the same lookup 0x7200's `npcInfo[]` gets. So the stand-in's identity
+#: is read, out of this message and out of nothing else.
 RETIRE_REASON = 0
 
 
@@ -1551,9 +1563,11 @@ PC_INFO_MAX = 4
 #: count itself. The loop re-reads that count every pass, which is why sending
 #: more than four has never crashed a client: entry five overwrites the bound
 #: with its own actorId and the loop stops there, silently, having consumed
-#: five entries out of a body that carried more. Twelve exported scripts feed
-#: this more than four, `amm_e001` -- the tutorial every new character plays --
-#: most of all with sixteen.
+#: five entries out of a body that carried more. Until round 481 twelve
+#: exported scripts' NPC casts were fed through here, `amm_e001` -- the
+#: tutorial every new character plays -- with sixteen; nothing does now (the
+#: array names stand-ins, and a scenario has at most four 役柄), and the cap
+#: stays as the reader's own.
 NPC_INFO_MAX = 4
 
 # ⭐⭐ Which 役柄 slot the player who started the script goes into, or None to
@@ -1591,6 +1605,15 @@ def ready_params(script_id: int, npc_infos: list[tuple[int, int]],
     place -- the cast of one of those is the *players*, which is why all 22 of
     them name no actors in their own headers -- but it is not the only case
     that needs it.
+
+    ⭐⭐⭐ ``npc_infos`` is the other half of the same cast: ``(actorId,
+    npcId)`` for every 役柄 a 代行ＮＰＣ plays, ``npcId`` in category 6. The
+    client builds that slot's block itself out of `proxy_npc.bin` and
+    registers it exactly as it registers a ``pcInfo[]`` entry (see the module
+    docstring for where), so a stand-in goes out here and *not* in ``cast``:
+    sending its block in ``pcInfo[]`` works on screen, but it is the client's
+    own table handed back to it, and the 0x7206 retire notice -- which carries
+    the same pair and no block -- says which door is the real one.
     """
     cast = list(pc_infos)[:PC_INFO_MAX]
     npcs = list(npc_infos)[:NPC_INFO_MAX]

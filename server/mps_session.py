@@ -4694,7 +4694,12 @@ class MpsServer:
                       f"script — starting a stub (cast empty)")
                 found = script.stub(script_id)
             print(f"[{self.tag}] ⭐ title event {script_id:#06x} -> {found.file}")
-            infos = [(actor["actorId"], actor["id"]) for actor in found.actors]
+            # ⛔️ Not the scenario's NPC cast. `npcInfo[]` names the 役柄 a
+            # 代行ＮＰＣ plays (`script.ready_params`); a title event has one
+            # 役柄 and a person in it, and its NPCs are declared by the file.
+            # Until round 481 the header's cast went out here; the client
+            # dropped every entry (actorId 1.. against one 役柄), by luck.
+            infos: list[tuple[int, int]] = []
             return (
                 self._answer(session, seen, script.MSG_SV_OK_TITLE_EVENT_START, b"")
                 + self._script_start(session, seen, found, 0, infos)
@@ -4766,7 +4771,11 @@ class MpsServer:
             # The cast comes out of the script's own header rather than from
             # this end: each .ssb names its actors, which is why 223 placement
             # scripts can all say NPC#1 and still be 223 different people.
-            infos = [(actor["actorId"], actor["id"]) for actor in found.actors]
+            # ⛔️ And `npcInfo[]` is not where that header would go anyway:
+            # it names the 役柄 a 代行ＮＰＣ plays (`script.ready_params`),
+            # which an NPC conversation has none of. Until round 481 the
+            # header's cast went out here and the client dropped every entry.
+            infos: list[tuple[int, int]] = []
             # ⭐ The key 0x6304 actually handed back, and only while it was a
             # capture_npc_event one (`talk_key`; None for the ring's
             # リーダー試験 and for a common/general key, whose categories
@@ -5895,20 +5904,32 @@ class MpsServer:
         alternative is naming a `pcInfo` slot the client would then draw an
         empty balloon for.
 
-        ⭐⭐⭐ Round 477: **a 代行ＮＰＣ is in the array too, and has to be.**
-        `$m0n`/`$n0n` are read out of `pcInfo[]` and out of nothing else
-        (`script.ready_params`), and all 22 ドラマイベント are two-role plays
+        ⭐⭐⭐ Round 477 found that **a 代行ＮＰＣ has to be in the cast too**:
+        `$m0n`/`$n0n` are drawn from the cast the client registers at 0x7200
+        and from nothing else, and all 22 ドラマイベント are two-role plays
         that write the *other* 役柄's name -- 1459 places across the 22, 99 of
-        them in `un127` alone. A surrogate has no session, so until now it fell
-        out of the cast with the disconnected members and every one of those
-        lines drew the empty name the tutorial drew in round 190. The record to
-        put there is not invented: `proxynpc.create_info` is the same block
-        0x6501 already answers for that charaId with, which is what that
-        module means by 「a surrogate is a character everywhere a party member
-        is one」.
+        them in `un127` alone. A surrogate has no session, so until then it
+        fell out of the cast with the disconnected members and every one of
+        those lines drew the empty name the tutorial drew in round 190.
+
+        ⭐⭐⭐ Round 481 read *how* the client wants to be told, and it is the
+        second array, not the first. 0x7200's reader keeps both arrays in one
+        record, and the only code that reads that record back is the script
+        screen's constructor (0x70D652): it walks `pcInfo[]` and registers each
+        entry as a cast slot, then walks `npcInfo[]` and, for each
+        `{actorId, npcId}`, **builds the same 75-byte block itself** out of
+        category 6 -- `proxy_npc.bin`, the ten stand-ins -- through the same
+        helper (0x7FD533) the scenario's own `PC_INFO` record uses for its
+        default 代行ID, and registers it through the same call. So
+        `npcInfo[]` is 「役柄 `actorId` is played by 代行ＮＰＣ `npcId`」,
+        and the character block behind it is the client's to look up, which
+        is why the 0x7206 retire notice carries exactly the same pair and no
+        block. ⇒ a surrogate goes out here as an `npcInfo[]` entry and not as
+        a `pcInfo[]` one; what round 477 sent was the client's own table
+        handed back to it through the other door.
         ⚠️ Which is why the cast and the members are two lists here rather than
-        one zipped pair: a slot in `pcInfo[]` is a *役柄*, and only the ones a
-        person is sitting at get a 0x7200, a `Runner` and a shadow.
+        one zipped pair: a slot is a *役柄*, and only the ones a person is
+        sitting at get a 0x7200, a `Runner` and a shadow.
         """
         found = self._drama_script(party)
         if found is None or found.script_id is None:
@@ -5916,12 +5937,15 @@ class MpsServer:
                   f"exported for it, the room stays up")
             return b""
         cast: list[tuple[int, bytes]] = []
+        stand_ins: list[tuple[int, int]] = []
         members: list[tuple[int, "_Session"]] = []
         for actor in sorted(party.actors, key=lambda a: a.actor_id):
             if actor.is_surrogate:
-                row = proxynpc.find(*actor.npc)
-                if row is not None:
-                    cast.append((actor.actor_id, proxynpc.create_info(row)))
+                # ⭐ The pair 0xE01D cast into the slot, back out as the pair
+                # the client looks up; `npcId` alone because category 6 is
+                # the only table a stand-in comes from (`retire_notify_params`).
+                if proxynpc.find(*actor.npc) is not None:
+                    stand_ins.append((actor.actor_id, actor.npc[1]))
                 continue
             other = self._session_of(actor.chara_id)
             if other is None:
@@ -5931,17 +5955,18 @@ class MpsServer:
                 continue
             cast.append((actor.actor_id, info))
             members.append((actor.actor_id, other))
-        params = script.ready_params(found.script_id, [], cast)
+        params = script.ready_params(found.script_id, stand_ins, cast)
         print(f"[{self.tag}] drama light: {found.file} id={found.script_id} "
-              f"cast={[a for a, _ in cast]} to {len(members)} member(s)")
+              f"cast={[a for a, _ in cast]} stand-ins={stand_ins} "
+              f"to {len(members)} member(s)")
         # ⭐ The scenario file declares its own seats -- one PC_INFO each, with
         # the sex the part is written for -- while this end seats people out of
         # `drama_event.bin`. Two independent sources for one number, so say it
         # when they disagree rather than finding out on a screen. ⚠️ A report,
         # not a rule: nothing here refuses a seat over it.
-        if found.roles and len(cast) > len(found.roles):
+        if found.roles and len(cast) + len(stand_ins) > len(found.roles):
             print(f"[{self.tag}] ⚠️ {found.file} declares {len(found.roles)} "
-                  f"role(s) and this party seated {len(cast)}")
+                  f"role(s) and this party seated {len(cast) + len(stand_ins)}")
         out = b""
         # ⭐⭐⭐ **One register file, several cursors.** Every member walks the
         # same scenario over the same `B`/`F`/`S` registers, and that is read
@@ -5992,7 +6017,7 @@ class MpsServer:
             # ends up with one walk per member rather than one per play.
             print(f"[{self.tag}] script start {found.file} "
                   f"id={found.script_id} actor={actor_id} "
-                  f"party={party.party_id} ctrl=0 npcInfo=[] "
+                  f"party={party.party_id} ctrl=0 npcInfo={stand_ins} "
                   f"pcInfo={[a for a, _ in cast]} ({len(found)} instructions)")
             self._shadow_start(other, found.script_id, party_registers, actor_id)
             if other is presser:

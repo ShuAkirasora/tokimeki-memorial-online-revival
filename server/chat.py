@@ -662,11 +662,12 @@ def id_probes(
 class ScriptAction(NamedTuple):
     """A request to the session's script runner; see script.py for the protocol.
 
-    ``ctrl`` and ``npc_infos`` are arguments rather than constants because
-    neither is understood yet and each wrong guess otherwise costs a full client
-    run — this way one login can try several. Defaults are the cheapest
-    hypothesis: ctrl 0, and no cast override at all on the grounds that the
-    ``.ssb`` already declares its own.
+    ``ctrl`` is an argument rather than a constant because it is not understood
+    yet and each wrong guess otherwise costs a full client run — this way one
+    login can try several; default 0, the cheapest hypothesis. ``npc_infos``
+    is understood (round 481): ``(役柄, 代行ＮＰＣ id)`` pairs, the slots a
+    stand-in plays, which a manual start has none of -- see
+    ``script.ready_params``.
     """
 
     kind: str                                    # "start" | "next" | "end"
@@ -2428,7 +2429,8 @@ def respond(
         return Reply([" ".join(names[:10])])
 
     if word == "sc":
-        # `/sc amm_s001 1 1:0` -> script, ctrl=1, npcInfo=[(actorId 1, npcId 0)].
+        # `/sc amm_s001 1 1:0` -> script, ctrl=1, npcInfo=[(actorId 1, npcId 0)]
+        # -- i.e. 「役柄 1 is played by 代行ＮＰＣ 6:0」 (`script.ready_params`).
         # Nothing is validated beyond "these are numbers": the point of the
         # command is to find out what the client accepts, and a server-side
         # check would only be able to enforce this end's guesses.
