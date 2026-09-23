@@ -573,12 +573,48 @@ def scene_flag_cells(script) -> "frozenset[tuple[str, int]]":
     shape, the way the day stamps and the tally are. ⛔️ Nothing here names an
     address.
 
+    ⭐⭐⭐ Round 493 adds the cells this scenario **sets** as a flag and some
+    **other** scenario asks about: 春日's `ksg_e002` writes `PCEV[0x0021] = 1`
+    on the arm where the two of you make a pinky promise, and it is
+    `ksg_e005` that asks, three times, whether it is 1 -- 「じゃ、また指切り
+    しよう！」 against 「ね、指切りしようよ！」. `flags` alone could not see
+    that write, because its anchor is a read **in the same scenario**, so the
+    write was dropped and the reader saw 0 for ever. Nineteen write sites
+    across the corpus are this shape and every one of them is a scenario
+    setting a cell for a later one (`asked_flags`). ⛔️ The anchor is not
+    dropped, it is widened to the corpus: a write counts only on a cell some
+    scenario asks `== k`, which is why 進行度 still does not come in.
+
     Empty for a scenario this end has no export of, and then the gates are ⊤
     as before.
     """
     if script is None:
         return frozenset()
-    return script.flags
+    return script.flags | (script.flag_writes & asked_flags())
+
+
+#: Every cell any scenario asks about as a flag, worked out once.
+_ASKED_FLAGS: "frozenset[tuple[str, int]] | None" = None
+
+
+def asked_flags() -> "frozenset[tuple[str, int]]":
+    """The union of `gs3vm.Script.flags` over every export on disk.
+
+    ⭐ Round 493: the anchor `scene_flag_cells` checks another scenario's
+    write against. ⚠️ Measured, not assumed, that 進行度 is not in it: every
+    scenario that reads `PCEV[0x6020+i]` orders it, so none of them has it
+    in its `flags` (the smoke test re-counts this). Empty without exports,
+    and then the widening adds nothing.
+    """
+    global _ASKED_FLAGS
+    if _ASKED_FLAGS is None:
+        found: set = set()
+        for path in sorted(gs3vm.SCRIPT_DIR.glob("*.gs3.json")):
+            loaded = gs3vm.load(path.name[: -len(".gs3.json")])
+            if loaded is not None:
+                found |= loaded.flags
+        _ASKED_FLAGS = frozenset(found)
+    return _ASKED_FLAGS
 
 
 #: The flag cells of one candidate's scenarios, worked out once, for

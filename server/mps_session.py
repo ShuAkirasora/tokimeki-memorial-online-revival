@@ -4175,8 +4175,9 @@ class MpsServer:
         one they took. Nothing here changes for that -- the value is stored and
         handed back the way a 0 or a 1 is (`gs3vm.FLAG_MAX`).
 
-        ⚠️ Fenced by `Script.flags` -- the cells *this* scenario asks about,
-        read off its bytecode -- for `_script_scene_day`'s reason exactly.
+        ⚠️ Fenced by `romance.scene_flag_cells` -- the cells *this* scenario
+        asks about, read off its bytecode, and (round 493) the ones it sets
+        for a later scenario to ask about -- for `_script_scene_day`'s reason.
 
         ⚠️ 「既に同じ値」 is an ordinary outcome here and not a miss: six of
         弥生's seven set a flag that the first one already set.

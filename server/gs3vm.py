@@ -1068,6 +1068,8 @@ class Script:
         self._tallies: "frozenset[tuple[str, int]] | None" = None
         # ⭐ Round 471, and the same.
         self._flags: "frozenset[tuple[str, int]] | None" = None
+        # ⭐ Round 493, filled by the same pass as `_flags`.
+        self._flag_writes: "frozenset[tuple[str, int]] | None" = None
         # ⭐ Round 473, and the same.
         self._texts: "frozenset[tuple[str, int]] | None" = None
         # ⭐ How big this scenario's register file is, per category, out of its
@@ -1244,31 +1246,61 @@ class Script:
         and `PCEV[0x6023]` walk in through `amm_e001`/`skr_e001`, where 進行度
         is set to 1 and read nowhere. ⇒ the two axes are independent: raising
         `FLAG_MAX` never lets 進行度 in below 9, and dropping the read anchor
-        lets it in at any bound. The cost of the narrow rule is measured and
-        small -- **19** write-only sites across 16 cells go unrecognised, one
-        of them `yyi_e002`'s write of `PCEV[0x03b2]` -- and a cell that stays 0
-        for longer than the original is the safe way to be wrong: it plays
-        「the first time」 once more, it does not skip it.
+        lets it in at any bound. The narrow rule leaves **19** write-only
+        sites unrecognised, one of them `yyi_e002`'s write of `PCEV[0x03b2]`.
+        ⚠️ Round 471 called that the safe way to be wrong -- 「it plays the
+        first time once more」 -- and round 493 found it is not that: all 19
+        are a scenario setting a cell **for a later one** (`ksg_e002` makes a
+        pinky promise that `ksg_e005` remembers), so the later scene never saw
+        it. They are collected by `flag_writes` against the corpus's reads
+        (`romance.scene_flag_cells`), which keeps the anchor this paragraph is
+        about rather than dropping it.
 
         ⚠️ A flag is neither a day stamp nor a tally and none of the three
         overlap: measured over the exports, the intersections are empty.
         """
         if self._flags is None:
-            reads: "dict[tuple[str, int], list[bool]]" = {}
-            writes: "dict[tuple[str, int], list[bool]]" = {}
-            for i, (_, op, args) in enumerate(self.code):
-                read_family = DATA_READ.get(op)
-                write_family = DATA_WRITE.get(op)
-                if read_family in ("PCEV", "PCEV32"):
-                    cell = (read_family, int.from_bytes(args[2:4], "little"))
-                    reads.setdefault(cell, []).append(_asks_flag(self, i))
-                elif write_family in ("PCEV", "PCEV32"):
-                    cell = (write_family, int.from_bytes(args[2:4], "little"))
-                    writes.setdefault(cell, []).append(_sets_flag(self, i))
-            self._flags = frozenset(
-                cell for cell, asked in reads.items()
-                if all(asked) and all(writes.get(cell, ())))
+            self._flag_shapes()
         return self._flags
+
+    @property
+    def flag_writes(self) -> "frozenset[tuple[str, int]]":
+        """The cells this scenario **sets** the way a flag is set.
+
+        ⭐⭐⭐ Round 493, and the writing half of `flags` without its anchor:
+        a cell is one of these when this scenario writes it at least once,
+        **every** write hands it a plain 0..`FLAG_MAX`, and every read of it
+        here -- if there is one -- is a flag question. ⛔️ **Not a family on its
+        own and never used alone**: the anchor `flags` refuses to drop is
+        still needed, and `romance.scene_flag_cells` supplies it from the
+        corpus -- a cell in here counts only when **some** scenario asks about
+        it as a flag. That is what keeps 進行度 out (`amm_e001` sets it to 1
+        exactly like this, and no scenario asks it `== k`; every reader orders
+        it), where dropping the anchor let it straight in.
+        """
+        if self._flag_writes is None:
+            self._flag_shapes()
+        return self._flag_writes
+
+    def _flag_shapes(self) -> None:
+        """One pass over the code for both `flags` and `flag_writes`."""
+        reads: "dict[tuple[str, int], list[bool]]" = {}
+        writes: "dict[tuple[str, int], list[bool]]" = {}
+        for i, (_, op, args) in enumerate(self.code):
+            read_family = DATA_READ.get(op)
+            write_family = DATA_WRITE.get(op)
+            if read_family in ("PCEV", "PCEV32"):
+                cell = (read_family, int.from_bytes(args[2:4], "little"))
+                reads.setdefault(cell, []).append(_asks_flag(self, i))
+            elif write_family in ("PCEV", "PCEV32"):
+                cell = (write_family, int.from_bytes(args[2:4], "little"))
+                writes.setdefault(cell, []).append(_sets_flag(self, i))
+        self._flags = frozenset(
+            cell for cell, asked in reads.items()
+            if all(asked) and all(writes.get(cell, ())))
+        self._flag_writes = frozenset(
+            cell for cell, sets in writes.items()
+            if all(sets) and all(reads.get(cell, ())))
 
     @property
     def texts(self) -> "frozenset[tuple[str, int]]":
