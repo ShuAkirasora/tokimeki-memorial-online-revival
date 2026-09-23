@@ -3482,6 +3482,13 @@ class MpsServer:
         # promises is that a write is kept, not that a read was supplied.
         runner.shadow.kept_cells = (romance.TALK_DAY_CELLS | stamps | tallies
                                     | flags | texts)
+        # ⭐⭐⭐ Round 492: and the 進行度 cells on the opposite undertaking --
+        # supplied above (`data_cells`), a script's write of them dropped
+        # (`_s104` books the rung). The roads this admits are the five 告白
+        # of `<stem>_e011`: read the letter, and the confession plays. Refused,
+        # the client was sent fall-through and skipped a thousand instructions
+        # of it, every run (seen on a real client this round).
+        runner.shadow.refused_cells = romance.PROGRESS_CELLS
         register = runner.shadow.script.season_register
         if register is not None:
             # ⭐ Said out loud whenever the script has the switch at all, so
@@ -7241,8 +7248,12 @@ class MpsServer:
                     # -- they do move a number, and what lets them through is
                     # that this end keeps it (`gs3vm.Machine.kept_cells`). Two
                     # permissions, two words, so the log counts per family.
+                    # ⭐ Round 492: and a third, for the roads whose only write
+                    # is a 進行度 this end drops (`refused_cells`).
                     why = (f"一日分の親密さ (vm cond={verdict})"
                            if shadow.kept_road()
+                           else f"進行度は _s104 のもの (vm cond={verdict})"
+                           if shadow.refused_road()
                            else f"表現のみ (vm cond={verdict})"
                            if shadow.decided_road()
                            else f"ドラマの帳簿 (vm cond={verdict})"

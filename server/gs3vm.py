@@ -1494,6 +1494,15 @@ class Machine:
     #: be chosen over a value the save never learns about.
     kept_cells: "frozenset[tuple[str, int]]" = frozenset()
 
+    #: ⭐⭐⭐ The cells this machine's caller supplies and then **drops** a
+    #: script's write of -- the other undertaking that lets a road through
+    #: (round 492). ⚠️ Not `kept_cells` under another name: a write here is
+    #: never absorbed, so the road moves nothing in the save and what the
+    #: branch decides is only which scene the client plays. ⛔️ The mistake to
+    #: avoid is the mirror of `kept_cells`'s: naming a cell here that some
+    #: absorber *does* take back would admit a road that moves a number.
+    refused_cells: "frozenset[tuple[str, int]]" = frozenset()
+
     #: ⭐⭐ The other members' machines, by 役柄 -- how a read of somebody
     #: else's copy of a cell is answered (`_refer_actor`). None means this run
     #: has nobody to ask, which is the honest state for every offline caller
@@ -2553,7 +2562,8 @@ class Follower(Machine):
         """
         if self.lost:
             return False
-        return _decided_road(self.script, self.pos, self.kept_cells) is not None
+        return _decided_road(self.script, self.pos,
+                             self.kept_cells | self.refused_cells) is not None
 
     def kept_road(self) -> bool:
         """Is this branch answerable **only** because of `kept_cells`?
@@ -2563,8 +2573,19 @@ class Follower(Machine):
         moves a number this caller has undertaken to keep」, and those are two
         different permissions that would otherwise print the same word.
         """
-        return (self.decided_road()
+        return (not self.lost
+                and _decided_road(self.script, self.pos, self.kept_cells) is not None
                 and _decided_road(self.script, self.pos) is None)
+
+    def refused_road(self) -> bool:
+        """Is this branch answerable **only** because of `refused_cells`?
+
+        ⭐ The third word for the log, for `kept_road`'s reason: 「the road
+        writes a number this caller throws away」 is a different permission
+        from both of the others.
+        """
+        return (self.decided_road()
+                and _decided_road(self.script, self.pos, self.kept_cells) is None)
 
     def select(self) -> tuple[int, int, int]:
         """The mask for the choice box the client is stopped on, right now.

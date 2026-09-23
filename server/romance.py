@@ -438,6 +438,19 @@ TALK_DAY_MARK_CELLS = frozenset(
 TALK_DAY_CELLS = TALK_DAY_MARK_CELLS | frozenset(
     ("PC", PC_INTIMACY_BASE + i) for i in range(len(CANDIDATES)))
 
+#: ⭐⭐⭐ The five 進行度 cells, as a set: this end supplies them and refuses a
+#: script's write of them (the comment above `PCEV_PROGRESS_BASE`), which is
+#: the undertaking `gs3vm.Machine.refused_cells` asks for. ⚠️ The opposite
+#: undertaking from `TALK_DAY_CELLS`'s -- those are taken back, these are
+#: dropped -- and that is why they are two sets on two attributes.
+#: ⭐ Round 492: the roads this lets through are exactly five, one per
+#: candidate, all `<stem>_e011` -- 告白 itself. Each writes nothing but her own
+#: cell, so with the write dropped what the branch decides is only whether
+#: the scene plays; refused, the client was sent fall-through and the whole
+#: 告白 was skipped on every run.
+PROGRESS_CELLS = frozenset(
+    ("PCEV", PCEV_PROGRESS_BASE + i) for i in range(len(CANDIDATES)))
+
 
 def scene_day_cells(script) -> "frozenset[tuple[str, int]]":
     """The day-stamp cells of `script` that are this record's to keep.
