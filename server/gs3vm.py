@@ -701,10 +701,11 @@ def _scenery_road(script: "Script", index: int) -> bool:
 #: One of these on the road and this end must not answer the branch. Three
 #: separate reasons, deliberately named apart: the save can see it
 #: (`DATA_WRITE`); another event can start from it (`OP_EVENT_CALL`); or this
-#: end simply does not know (`OP_INPUT_SELECT` is the player's answer, `OP_BA`
-#: is a 役柄 test whose result only the client holds).
+#: end simply does not know (`OP_BA` is a 役柄 test whose result only the
+#: client holds -- unless its two arms meet at once, see `_role_blind`).
 #: ⚠️ 台詞 used to be a fourth reason and is not one any more -- see the
 #: docstring, and the road-gate study for what that cost and bought.
+#: ⚠️ And so did the choice box, until round 494 -- see the docstring.
 def _undecidable(op: int, cell: "tuple[str, int] | None" = None,
                  kept: "frozenset[tuple[str, int]]" = frozenset()) -> bool:
     """Does this instruction put the branch that reaches it out of reach here?
@@ -791,12 +792,72 @@ def _undecidable(op: int, cell: "tuple[str, int] | None" = None,
     -- so the original server answered **all** of them. `STANDING_NO` is this
     end's scaffolding, not a behaviour anybody observed. ⇒ letting a branch
     through is not a liberty taken with the game; refusing one is.
+
+    ⭐⭐⭐ Round 494 took `OP_INPUT_SELECT` out, on the same sentence and one
+    more: **a choice box decides nothing the rest of this walk does not
+    already see.** The walk does not stop at the box -- it goes on through
+    every arm of the ladder the answer is spelt out on (`_successors` gives
+    both sides of each `OP_BR`) up to the merge point, so every write the
+    player's answer could lead to is still judged here, one by one. What the
+    box adds on its own is that a question is put, which is the 台詞 case
+    again: the player sees it, the save does not.
+
+      * ⭐ Not new behaviour on a screen: the tutorial's 校内めぐり branch
+        (`amm_e001` ip=505, answered by scope since round 335) has a choice box
+        on its road -- ip=5916, the 授業 demo quiz, behind the same pair of
+        empty `OP_BA` -- and it has been drawn, answered and followed on a
+        real client with that branch taken.
+      * ⭐ What it cost, measured over the corpus with the choice-ladder rungs
+        taken out (those are answered by the choice count before this gate is
+        ever asked): among solo scripts outside the tutorial and the
+        リーダー試験, **5** `OP_BR` -- `amm_e002` ip=359 (the third room of
+        the search for the 実行委員長: refused, the second room ended the
+        search) and `ink_c091`..`c094` (the 「6 回目以降」 arm of 犬飼's
+        daily conversation: refused, it could not play at all). Every one of
+        them has a choice box on the road and, since round 470, nothing else
+        this gate objects to.
     """
     if op == OP_KEYWORD_UPDATE:
         return False
     if op in DATA_WRITE and cell is not None and cell in kept:
         return False
-    return op in DATA_WRITE or op in (OP_EVENT_CALL, OP_INPUT_SELECT, OP_BA)
+    return op in DATA_WRITE or op in (OP_EVENT_CALL, OP_BA)
+
+
+def _settle(script: "Script", i: "int | None") -> "int | None":
+    """The first instruction from `i` on that does anything but move on."""
+    seen = set()
+    while i is not None and 0 <= i < len(script.code) and i not in seen:
+        seen.add(i)
+        op = script.code[i][1]
+        if op == OP_JP:
+            i = script.index.get(_jump_target(script.code[i][2]))
+        elif op == OP_BA_END:
+            i += 1
+        else:
+            return i
+    return None
+
+
+def _role_blind(script: "Script", i: int) -> bool:
+    """Is the `OP_BA` at `i` a bracket with nothing in it?
+
+    ⭐⭐ Then it is not a branch, whatever the 役柄: both of its arms reach
+    the same instruction before doing anything, so knowing which one the
+    client took would not change where it goes. `_undecidable`'s objection --
+    「a 役柄 test whose result only the client holds」 -- is about a result that
+    matters, and this one does not. ⛔️ **No 役柄 is assumed here**, not even
+    「a solo script is 役柄 0」: the test is on the shape alone.
+
+    ⭐ Where it occurs: the compiler writes one on each side of `CHAT_DENY`
+    in front of a choice box -- ``BA 01 {} ; CHAT_DENY ; BA 01 {} ;
+    INPUT_SELECT`` -- which is exactly the stretch round 494 found on the
+    road of every solo branch refused only for its choice box -- and on the
+    tutorial's road through its 授業 demo quiz (`amm_e001` ip=5882/5894).
+    """
+    meet = _settle(script, i + 1)
+    return meet is not None and meet == _settle(
+        script, script.index.get(_jump_target(script.code[i][2])))
 
 
 def _successors(script: "Script", i: int) -> list:
@@ -904,7 +965,8 @@ def _decided_road(script: "Script", index: int,
         if i in merge:
             continue  # the two arms have rejoined; past here is not this branch
         seen.add(i)
-        if _undecidable(script.code[i][1], _write_cell_of(script, i), kept):
+        if (_undecidable(script.code[i][1], _write_cell_of(script, i), kept)
+                and not (script.code[i][1] == OP_BA and _role_blind(script, i))):
             return None
         pending.extend(_successors(script, i))
     return seen
