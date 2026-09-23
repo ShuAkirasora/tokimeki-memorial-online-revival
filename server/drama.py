@@ -449,20 +449,39 @@ class Board:
             return None
         left = next(a for a in party.actors if a.chara_id == chara_id)
         party.actors = [a for a in party.actors if a.chara_id != chara_id]
-        # ⚠️ `players`, not `actors`: the last person walking out of a room
-        # that still has a 代行ＮＰＣ standing in it empties the room, and the
-        # NPC goes with it. An NPC on its own has nobody to play to and no way
-        # anyone could reach it again -- the party would sit on the 一覧 for
-        # ever with its 参加 button refusing everyone (`unreserved` is 0).
-        if not party.players:
-            self.parties.pop(party.party_id, None)
-        elif left.actor_id == party.leader_actor_id:
+        if (not self.drop_if_unpeopled(party)
+                and left.actor_id == party.leader_actor_id):
             # See Party.leader_actor_id: the longest-standing member left in
             # the room takes over, and 0xE00A tells everyone in the same
             # breath as the departure. ⚠️ A surrogate is skipped -- it cannot
             # press ［イベントスタート］ and cannot be told it is the leader.
             party.leader_actor_id = party.players[0].actor_id
         return party
+
+    def drop_if_unpeopled(self, party: Party) -> bool:
+        """Delete a party with no person left in it; True if it went.
+
+        `part`'s rule -- the last member leaving deletes the party -- kept in
+        one place because two roads empty a room of people. ⛔️ Not a second
+        design decision: the one it is, and its reasoning, stay on `part`.
+
+        ⚠️ `players`, not `actors`: the last person walking out of a room that
+        still has a 代行ＮＰＣ standing in it empties the room, and the NPC
+        goes with it. An NPC on its own has nobody to play to and no way anyone
+        could reach it again -- the party would sit on the 一覧 for ever with
+        its 参加 button refusing everyone (`unreserved` is 0).
+
+        ⭐ Round 486: the second road is a 離脱 from a running play, which
+        refills the 役柄 with a stand-in *in place* rather than going through
+        `part` -- so until this was shared, a one-person play whose person left
+        stayed on the 一覧 under a lock, two stand-ins deep, for good. The real
+        client showed it: 「現在のパーティ数 1」 on the row, the room itself
+        イベント中, with nobody who could ever end it.
+        """
+        if party.players:
+            return False
+        self.parties.pop(party.party_id, None)
+        return True
 
     def summary(self) -> str:
         if not self.parties:

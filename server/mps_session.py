@@ -6530,10 +6530,12 @@ class MpsServer:
 
         ⭐ The answer to 0x7205 is 0x7206 and there is no Ok in the family: the
         client's handler (0x78550e) compares the `actorId` in the body with its
-        own 役柄 and takes *itself* out of the drama when they match, so the
+        own 役柄 and, when they match, takes the 役柄 away from itself, so the
         retiring player's copy is the reply and everybody else's is the same
         bytes pushed. One message, two meanings, decided by a field -- the same
-        shape 0xE009 has.
+        shape 0xE009 has. ⚠️⚠️ 「takes the 役柄 away」 is not 「leaves the
+        stage」, and until round 486 this docstring said it was: see the 0x7204
+        below, which is what actually closes the scene.
 
         ⚠️ The 役柄 is refilled rather than emptied, because that is what the
         manual promises the people who stay: 「離脱後は、そのプレイヤーに代わっ
@@ -6608,9 +6610,37 @@ class MpsServer:
         session.script = None
         session.script_idle_at = 0.0
         session.script_idle_warned = False
+        # ⭐⭐⭐ Round 486: and the leaver is let off the stage. 0x7206 alone
+        # does not do it, and a real client showed how: after イベント中断 →
+        # はい its handler takes the 役柄 away from itself -- the LOG button
+        # goes, not one more 0x721b comes up -- but the scene stays drawn and
+        # a click still turns the page. The one message this family has that
+        # closes a running scenario is 0x7204: its handler (0x7857db) fades the
+        # music and tears the scene down without asking why, and `/raw 7204`
+        # pushed at that stuck client put it straight back on the map. The
+        # same holds for the other two roads in here -- five silent minutes
+        # and 「続けますか？」 → いいえ are both this player leaving the play.
+        # ⚠️ Nothing is credited: OP_END's bookkeeping (keywords, records, the
+        # 日常会話 rule) is for a play that was finished, and this one was not.
+        out += self._answer(session, seen, script.MSG_SV_NOTIFY_SCRIPT_END, b"")
+        # ⭐ …and the ドラマイベント中 icon over their head comes down, as it
+        # does at 0xE014 -- they are out of the party now, whichever way.
+        self._presence_icon_onlookers(session)
         # ⭐⭐ Whatever this player was being waited for, they are not coming.
         self._release_held_branches(party)
         self._script_unblock(party, session)
+        if self.dramaparties.drop_if_unpeopled(party):
+            # ⭐ Round 486: the last person out of a play with stand-ins in it.
+            # The room goes the way `drama.Board.part` sends one (see
+            # `drop_if_unpeopled`), and the people browsing the list are told
+            # with the same 0xE008 the 0xE014 road sends.
+            print(f"[{self.tag}] drama party end: #{party.party_id} has nobody "
+                  f"left in it -- deleted, now {self.dramaparties.summary()}")
+            self._drama_push_onlookers(
+                drama.MSG_SV_NOTIFY_DEL, drama.del_params(party.party_id),
+                party, skip=session.chara_id,
+            )
+            return out
         return out + self._script_ask_continue(party)
 
     def _script_unblock(self, party: "drama.Party", gone: "_Session") -> None:
