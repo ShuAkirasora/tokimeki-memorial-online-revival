@@ -690,6 +690,18 @@ def name_trio(info: bytes) -> tuple[str, str, str]:
     return text("familyName"), text("firstName"), text("nickName")
 
 
+def profile_numbers(info: bytes) -> tuple[int, int, int]:
+    """``(birthMonth, birthDay, skinColor)`` off one create block.
+
+    The three numbers a scenario reads out of `PC[0x3015]`, `PC[0x3016]` and
+    `PC[0x3704]` -- see `script.PC_BIRTH_MONTH` for the readings and their
+    witnesses. Raw, as the block holds them: the month is already 1-based.
+    """
+    fields = parse_create_info(info)
+    return (int(fields["birthMonth"]), int(fields["birthDay"]),
+            int(fields["skinColor"]))
+
+
 def display_name(info: bytes) -> str:
     """「姓 名」, the way a chat line should credit whoever typed it.
 
@@ -1922,6 +1934,11 @@ class CharacterStore:
         """This character's 姓 / 名 / ニックネーム as text, or None if not ours."""
         info = self.find(chara_id)
         return None if info is None else name_trio(info)
+
+    def profile_numbers(self, chara_id: int) -> "tuple[int, int, int] | None":
+        """This character's 誕生月 / 誕生日 / 肌色, or None if not ours."""
+        info = self.find(chara_id)
+        return None if info is None else profile_numbers(info)
 
     def summary(self) -> str:
         return ", ".join(

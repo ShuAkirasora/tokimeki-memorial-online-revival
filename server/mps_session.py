@@ -77,6 +77,7 @@ from characters import (
     marker_names,
     minimap_params,
     parse_create_info,
+    profile_numbers,
 )
 import ability
 import accounts
@@ -3340,6 +3341,20 @@ class MpsServer:
             cells[("PC", script.PC_FAMILY_NAME)] = family
             cells[("PC", script.PC_FIRST_NAME)] = first
             cells[("PC", script.PC_NICK_NAME)] = nick
+        # ⭐⭐ The birthday and the skin, off the same block: one scenario
+        # prints the first two as 「M月D日」 and another opens a line about a
+        # tan on the third. See `script.PC_BIRTH_MONTH` for both readings.
+        # ⚠️ All three reads in the corpus name 役柄 0's copy (operand bit 0
+        # clear), so in a two-role play the other member reads this one
+        # through `peers` -- which is why a 代行ＮＰＣ's stand-in gets the skin
+        # too (`_drama_light`). It does not get the birthday: its roster row
+        # carries zeros there, and 「0月0日」 would be a zero read as an answer.
+        numbers = self._chars(session).profile_numbers(session.chara_id)
+        if numbers is not None:
+            month, day, skin = numbers
+            cells[("PC", script.PC_BIRTH_MONTH)] = month
+            cells[("PC", script.PC_BIRTH_DAY)] = day
+            cells[("PC", script.PC_SKIN_COLOR)] = skin
         # ⭐⭐⭐ The school's own name, which 15 reads want and ten of them
         # interpolate straight into a 台詞 -- `skr_e005` writes it on the banner
         # over the 文化祭 arch. Same shape as the three names above: text, out of
@@ -6069,6 +6084,12 @@ class MpsServer:
                 cells[("PC", script.PC_FAMILY_NAME)] = family
                 cells[("PC", script.PC_FIRST_NAME)] = first
                 cells[("PC", script.PC_NICK_NAME)] = nick
+                # ⭐ And its 肌色: `un048` reads 役柄 0's copy from both
+                # clients, and the roster row carries the nine LOOKS values
+                # the client draws the surrogate with -- this is the fifth of
+                # them, not a number chosen here (`script.PC_SKIN_COLOR`).
+                cells[("PC", script.PC_SKIN_COLOR)] = profile_numbers(
+                    proxynpc.create_info(row))[2]
             stand_in = gs3vm.follow(
                 found.script_id, cells, party_registers, actor.actor_id)
             if stand_in is not None:

@@ -2377,7 +2377,7 @@ def is_tutorial(script_id: "int | None") -> bool:
 # ⭐⭐ WHICH CELLS THIS END HAS TO PRODUCE OUT OF NOTHING: the ones the corpus
 # READS and never WRITES. 461 cells are touched by the 683 client scenarios and
 # 18 of them are read-only, which makes that list a lower bound on the state the
-# original server kept. Thirteen are answered here today:
+# original server kept. Sixteen are answered here today:
 #
 #     SYSTEM[0] / [1] / [2]   year, month, day          romance.talk_cells
 #     PC[0x3013]              the player's sex          romance.PC_PLAYER_SEX
@@ -2387,20 +2387,21 @@ def is_tutorial(script_id: "int | None") -> bool:
 #     PLAYER[0x2001]          the tutorial's question   PLAYER_TUTORIAL_ASK
 #     PC[0x3010] / [0x3011]   the player's 姓 and 名     PC_FAMILY_NAME, below
 #     PC[0x3012]              the player's ニックネーム   PC_NICK_NAME, below
+#     PC[0x3015] / [0x3016]   誕生月 and 誕生日          PC_BIRTH_MONTH, below
+#     PC[0x3704]              肌色                       PC_SKIN_COLOR, below
 #     SCHOOL[0x1001]          the school's name         SCHOOL_NAME, below
 #     PC[0x7000]              役柄 n is a 代行ＮＰＣ     PC_IS_SURROGATE, below
 #
-# ⛔️ The other five are deliberately left unanswered, and the reasons differ:
+# ⛔️ The other two are deliberately left unanswered:
 #
 #   * `PC[0x3201]` and `PC[0x3203]` are two axes of `personalityParam`. No
 #     message in the protocol carries them and no scenario in either corpus
 #     writes them, so this end has no source; supplying 0 would be exactly the
 #     zero that reads like an answer that `data_cells` refuses to send.
-#   * `PC[0x3015]` and `PC[0x3016]` are read as a pair and handed straight to a
-#     talk line. The save's only adjacent pair of numeric profile fields is the
-#     birthday, but the block is not laid out in the wire record's field order,
-#     so 「the next two after sex」 is a guess and not a decode.
-#   * `PC[0x3704]` has one read in the whole corpus and no reading yet.
+#
+# ⭐ Three used to be on this list for want of a reading -- the birthday pair
+# and `PC[0x3704]` -- and the reading was in the 台詞 next to each read all
+# along; see `PC_BIRTH_MONTH`.
 #
 #: 自分のクラス, 0 = Ａ組 .. 25 = Ｚ組. Pinned by value range in 2.143 四 (26
 #: constants in the tutorial's dispatch tree, 26 classrooms in `map.bin`) and
@@ -2458,6 +2459,45 @@ PC_FIRST_NAME = 0x3011
 #: The player's ニックネーム. ⚠️ The one of the three with no comparison
 #: anywhere in the corpus to pin it -- see the note above.
 PC_NICK_NAME = 0x3012
+
+# ── Two more numbers off the same create block: the birthday and the skin ──
+#
+# ⭐⭐⭐ Three read-only cells that sat unanswered with 「no reading yet」, and
+# each turned out to have its reading printed in the 台詞 beside it:
+#
+#   * `PC[0x3015]` / `PC[0x3016]` are read by exactly one scenario, `un164`,
+#     into B99 and B98 -- and the next line is one role asking the other
+#     「誕生日いつだったっけ？」 and the answer being 「$v99月$v98日」. Month and
+#     day, in that order, straight into the text. The create block carries
+#     exactly one month/day pair (`birthMonth`, `birthDay`), and its month is
+#     the plain 1-based number the line wants (decimal, not BCD: an NPC row
+#     elsewhere in the client's data stores 12 as 0x0c).
+#     ⚠️ The old note refused 「the next two after sex」 because the cell
+#     block is not laid out in the wire record's order. That is still true,
+#     and position is still not the argument: the argument is the line, which
+#     prints a month and a day.
+#   * `PC[0x3704]` is read by exactly one scenario, `un048`, compared `> 3`,
+#     and the arm it opens is one line: 「そのわりには色、黒いけどな……。」,
+#     right after one of the pair says her family has a pool. Two witnesses
+#     that know nothing of each other: the line is about skin, and the fifth
+#     of the create block's nine `LOOKS` fields (index 4) is `skinColor`,
+#     whose values are 肌色１..８ as indices 0..7 in the client's own parts
+#     table. ⇒ `0x3700 + looks index`. ⛔️ Only index 4 is supplied: nothing
+#     in the corpus reads another cell of that block, and 「so 0x3702 must be
+#     the hair colour」 is the kind of extrapolation this file refuses. Which
+#     end of 0..7 is dark is the scenario's own judgement (`> 3`), not ours.
+#
+# ⚠️ `un164` is not one of the events the client's 開催 list can open, so on
+# this server the birthday line is not reachable today -- the cells are
+# supplied anyway, the same way `PC_IS_SURROGATE` is supplied to every solo
+# scenario: a cell answered from the save costs nothing where nobody reads it.
+
+#: 誕生月, 1..12, the create block's `birthMonth`.
+PC_BIRTH_MONTH = 0x3015
+#: 誕生日, 1..31, the create block's `birthDay`.
+PC_BIRTH_DAY = 0x3016
+#: 肌色, the create block's `skinColor` (LOOKS index 4), 0..7.
+PC_SKIN_COLOR = 0x3704
 
 # ── The school's own name ─────────────────────────────────────────────────
 #
