@@ -126,6 +126,7 @@ import cibispawns
 import script
 import shop
 import shutdown
+import staffscripts
 import stress
 import sysmsg
 import trade
@@ -3327,7 +3328,12 @@ class MpsServer:
         # classroom door the tutorial walks the player to. Supply it wrong and
         # the walk goes to the wrong floor -- which is exactly what happened
         # while nobody supplied it at all.
-        cells[("PC", script.PC_IN_CLASS)] = IN_CLASS
+        # ⚠️ Round 487: `session.in_class`, not the IN_CLASS constant. The two
+        # are the same number only while the class knob is 「fixed」; under
+        # 「balanced」 the wire has carried the character's own 組 since the
+        # knob existed, and this cell kept saying Ａ組 -- the very divergence the
+        # paragraph above is about. `staffscripts` reads the same attribute.
+        cells[("PC", script.PC_IN_CLASS)] = session.in_class
         # ⭐⭐⭐ 同姓回避: the player's own 姓 / 名 / ニックネーム, out of the same
         # create block the character list is drawn from. 69 scenarios compare
         # the first of these against an NPC's surname and spell that NPC
@@ -4593,13 +4599,37 @@ class MpsServer:
             # ⚠️ /nev still outranks it. The override exists to point this end
             # at a script by hand, and an item that has a right answer is
             # exactly when someone is most likely to be testing a wrong one.
+            # ⭐⭐⭐ Round 487: for a teacher or a member of staff the game has
+            # the script for this question as well -- their own `_s102`, which
+            # names the c001 / c002 / c003 by the menu item and the roster row
+            # that was clicked (see staffscripts). Its 「none」 is the same
+            # refusal a candidate's is. The room table below is what answers
+            # when the script cannot run.
+            staff = None if session.npc_event_forced else staffscripts.answer(
+                npc_id, menu_item, session.in_class)
+            if isinstance(staff, str):
+                if staff != "not staff":
+                    print(f"[{self.tag}] {staff} — 従来の答えに戻ります")
+                staff = None
+            if staff is not None and staff.event is None:
+                session.talk_key = None
+                print(f"[{self.tag}] {staff.script_name}: 0xffff → 0x6306 reason "
+                      f"{script.NPC_EVENT_NONE_REASON}")
+                return self._answer(
+                    session, seen, script.MSG_SV_NG_NPC_MAP_OBJECT_EVENT,
+                    bytes((script.NPC_EVENT_NONE_REASON,)),
+                )
             # ⭐ Which half of it, for the four staff who have two, is the room
             # the player is standing in -- see LEADER_EXAM_SECOND_HALF_MAP.
-            ring = script.event_for_menu_item(
+            ring = None if staff is not None else script.event_for_menu_item(
                 npc_id, menu_item,
                 map_id=session.map_id,
                 home_room=lesson.classroom_of(session.in_class),
             )
+            if staff is not None and session.npc_event_npc is None:
+                event = staff.event
+                print(f"[{self.tag}] menuItem {menu_item} → {staff.script_name} "
+                      f"→ {staff.table} {event[0]}:{event[1]}")
             if ring is not None and session.npc_event_npc is None:
                 event = ring["event"]
                 print(f"[{self.tag}] menuItem {menu_item} → {ring['table']} "

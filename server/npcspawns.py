@@ -81,24 +81,34 @@ def _parse(key: str) -> int:
     return (int(category) << 16) | int(row)
 
 
-def _load() -> dict[int, list[Spawn]]:
+def _load() -> tuple[dict[int, list[Spawn]], dict[int, str]]:
     try:
         raw = json.loads(SPAWNS_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         print(f"[npc] no spawn table ({exc}); campus stands empty")
-        return {}
+        return {}, {}
     out: dict[int, list[Spawn]] = {}
+    stems: dict[int, str] = {}
     for row in raw.get("spawns", []):
+        chara_id = _parse(row["chara"])
         out.setdefault(int(row["map"]), []).append(
-            Spawn(_parse(row["chara"]), (int(row["x"]), int(row["y"])))
+            Spawn(chara_id, (int(row["x"]), int(row["y"])))
         )
-    return out
+        if row.get("stem"):
+            stems[chara_id] = str(row["stem"])
+    return out, stems
 
 
 #: mapId -> who stands on it. ⚠️ The 44 rows are 44 distinct charaIds: the
 #: one person who stands in two rooms has a roster record for each of them, so
 #: each room names its own id rather than the same id twice.
-BY_MAP = _load()
+#:
+#: charaId -> the stem of that person's own placement script (``fte`` for
+#: ``fte_s003``). ⭐ It is also the stem of the original server's scripts for
+#: them, which is what `staffscripts` runs: the one person with two records has
+#: two placement scripts under one stem (``kyt_s001`` / ``kyt_s002``), and the
+#: thirteen classrooms of one 担任 are thirteen scripts under one stem.
+BY_MAP, STEMS = _load()
 
 
 def on_map(map_id: int) -> list[Spawn]:

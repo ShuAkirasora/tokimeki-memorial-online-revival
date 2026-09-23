@@ -246,6 +246,34 @@ OP_RTN, OP_END, OP_JS = 0x9083, 0x9084, 0x9085
 OP_BA_END = 0x90C0
 OP_EVENT_CALL = 0x9180
 
+# ⭐⭐⭐ How an EVENT_CALL's u16 splits into (categoryId, id) depends on the
+# table the key is going to be looked up in -- which is the table the NPC the
+# answer names belongs to (`script.event_table_for`). Two packings, and each is
+# exact on its own side of the corpus:
+#
+#   capture_npc_event, cibi_control_script   (id << 5) | categoryId
+#   common_npc_event, general_npc_event      (id << 8) | categoryId
+#
+# The first is the one this module has always used: categories run to 20 there
+# and ids past 200. The five candidates' `_s102` and `lck_s102` make 434 calls
+# and all 434 land on a capture_npc_event key read this way; every `_s101`
+# makes 92 more and all 92 land on a cibi_control_script key. The second is
+# the staff's `<stem>_s102`, fifteen scripts and 28 calls, and *every one* of
+# them lands on a row of the calling NPC's own table read this way -- `kyt` 0x010B / 0x020B = 11:1 / 11:2, its c002 and c003;
+# `tik` 0x015B = 91:1, a category five bits cannot even hold. Read the first
+# way, the same 28 hit the NPC's own table only where the id is 0 and the two
+# packings coincide. ⛔️ So `Result.events` is the capture reading, kept as it
+# was for the callers that were already right, and `event_key` is what a caller
+# answering for a common or general NPC must use instead.
+STAFF_EVENT_TABLES = frozenset({"common_npc_event", "general_npc_event"})
+
+
+def event_key(field: int, table: str) -> tuple[int, int]:
+    """An EVENT_CALL operand as the (categoryId, id) of ``table``'s key."""
+    if table in STAFF_EVENT_TABLES:
+        return field & 0xFF, field >> 8
+    return field & 0x1F, field >> 5
+
 # ⭐⭐⭐ The last thing a ドラマイベント does before OP_END: it reports its own
 # 結果. Round 234 read the 14-byte operand out of the client's decoder slot for
 # it (0x7369BA), and the four fields are named by the client's own debug format
@@ -1352,6 +1380,9 @@ class Result:
     def __init__(self) -> None:
         self.menus: list[int] = []
         self.events: list[tuple[int, int]] = []
+        # The same calls as the u16 the script carried, before any table's
+        # packing was applied to them. See `event_key`.
+        self.fields: list[int] = []
         # ⭐ The script said, in so many words, that there is no event: it
         # reached `EVENT_CALL 0xffff`. Apart from an empty `events` because
         # the two are different answers -- a run that ended some other way
@@ -1775,8 +1806,11 @@ class Machine:
                 self.result.no_event = True
             else:
                 # (id << 5) | categoryId -- five bits for the category because
-                # categories run to 20 and four bits do not hold that.
+                # categories run to 20 and four bits do not hold that. ⚠️ That
+                # is the capture_npc_event packing; the raw field is kept too,
+                # for the tables that pack it otherwise (`event_key`).
                 self.result.events.append((field & 0x1F, field >> 5))
+                self.result.fields.append(field)
             return None
 
         if op == OP_JP:

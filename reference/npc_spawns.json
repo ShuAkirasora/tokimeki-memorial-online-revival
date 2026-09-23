@@ -4,266 +4,310 @@
    "chara": "3:0",
    "map": 3,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:1",
    "map": 4,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:2",
    "map": 5,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:3",
    "map": 6,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:4",
    "map": 7,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:5",
    "map": 8,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:6",
    "map": 9,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:7",
    "map": 10,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:8",
    "map": 11,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:9",
    "map": 12,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:10",
    "map": 16,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:11",
    "map": 17,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:12",
    "map": 18,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:13",
    "map": 19,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:14",
    "map": 20,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:15",
    "map": 21,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:16",
    "map": 22,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:17",
    "map": 23,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:18",
    "map": 24,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:19",
    "map": 25,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:20",
    "map": 29,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:21",
    "map": 30,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:22",
    "map": 31,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:23",
    "map": 32,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:24",
    "map": 33,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "fte"
   },
   {
    "chara": "3:25",
    "map": 34,
    "x": 11,
-   "y": 5
+   "y": 5,
+   "stem": "mte"
   },
   {
    "chara": "3:27",
    "map": 1,
    "x": 113,
-   "y": 10
+   "y": 10,
+   "stem": "tik"
   },
   {
    "chara": "3:28",
    "map": 70,
    "x": 38,
-   "y": 2
+   "y": 2,
+   "stem": "tik"
   },
   {
    "chara": "3:29",
    "map": 49,
    "x": 3,
-   "y": 30
+   "y": 30,
+   "stem": "fte"
   },
   {
    "chara": "3:30",
    "map": 50,
    "x": 3,
-   "y": 30
+   "y": 30,
+   "stem": "fte"
   },
   {
    "chara": "3:31",
    "map": 56,
    "x": 23,
-   "y": 3
+   "y": 3,
+   "stem": "fte"
   },
   {
    "chara": "2:0",
    "map": 1,
    "x": 177,
-   "y": 4
+   "y": 4,
+   "stem": "isu"
   },
   {
    "chara": "2:1",
    "map": 70,
    "x": 74,
-   "y": 9
+   "y": 9,
+   "stem": "otm"
   },
   {
    "chara": "2:2",
    "map": 1,
    "x": 96,
-   "y": 28
+   "y": 28,
+   "stem": "kmn"
   },
   {
    "chara": "2:3",
    "map": 74,
    "x": 9,
-   "y": 4
+   "y": 4,
+   "stem": "utm"
   },
   {
    "chara": "2:4",
    "map": 56,
    "x": 2,
-   "y": 50
+   "y": 50,
+   "stem": "kns"
   },
   {
    "chara": "2:5",
    "map": 49,
    "x": 10,
-   "y": 4
+   "y": 4,
+   "stem": "ygn"
   },
   {
    "chara": "2:6",
    "map": 70,
    "x": 17,
-   "y": 9
+   "y": 9,
+   "stem": "krt"
   },
   {
    "chara": "2:7",
    "map": 50,
    "x": 10,
-   "y": 3
+   "y": 3,
+   "stem": "hrn"
   },
   {
    "chara": "2:8",
    "map": 48,
    "x": 4,
-   "y": 9
+   "y": 9,
+   "stem": "hsn"
   },
   {
    "chara": "2:9",
    "map": 45,
    "x": 4,
-   "y": 14
+   "y": 14,
+   "stem": "hsy"
   },
   {
    "chara": "2:10",
    "map": 67,
    "x": 59,
-   "y": 3
+   "y": 3,
+   "stem": "ons"
   },
   {
    "chara": "2:11",
    "map": 46,
    "x": 3,
-   "y": 16
+   "y": 16,
+   "stem": "kyt"
   },
   {
    "chara": "2:17",
    "map": 44,
    "x": 5,
-   "y": 6
+   "y": 6,
+   "stem": "kyt"
   }
  ],
- "note": "Where each teacher and staff member stands on campus: the charaId the client resolves through its own roster (category:row), the mapId, and the cell. Integers and keys only -- no names, no dialogue, no script names. See server/npcspawns.py for what the server does with it, and for the one half of the question this file does not answer (when they are there)."
+ "note": "Where each teacher and staff member stands on campus: the charaId the client resolves through its own roster (category:row), the mapId, and the cell, plus one three-letter stem. No names, no dialogue. See server/npcspawns.py for what the server does with it, and for the one half of the question this file does not answer (when they are there). \"stem\" is the three-letter prefix of that person's own placement script, which is also the prefix of the original server's scripts for them (<stem>_s102 answers a right-click; see server/staffscripts.py)."
 }

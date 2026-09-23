@@ -1264,6 +1264,14 @@ LEADER_EXAM_SECOND_HALF_ID = 2
 #
 # ⚠️ An NPC with no c003 is unaffected: `event_for_menu_item` still answers its
 # one c002 wherever it is asked.
+#
+# ⚠️⚠️ Round 487: this table and the one below are the FALLBACK now, for a
+# machine without the exported scripts. The original decided the half in each
+# NPC's own `_s102`, by the roster row that was clicked rather than by the room
+# (`staffscripts`), and the two agree wherever this table answers at all -- but
+# it answers only for the four records that own an event row. 2:17 and 3:28,
+# the records these two rooms are actually staffed with, own none, and neither
+# do 24 of the 26 担任, so none of them gets anything from it.
 LEADER_EXAM_SECOND_HALF_MAP = {
     (2, 11): 44,   # 教頭      職員室   (the first half is map 46 進路指導室)
     (3, 27): 70,   # 体育教師  体育館   (the first half is map 1 屋外)
