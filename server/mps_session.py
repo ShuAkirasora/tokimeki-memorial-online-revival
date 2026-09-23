@@ -4265,7 +4265,7 @@ class MpsServer:
         ⚠️ False leaves the fallback in place, and it means one of three
         things: no export, so no shadow; a shadow that lost its place; or a
         scenario that has no such routine to run -- a メインイベント, whose
-        grant is a different rule booked through 進行度 (`absorb_talk`).
+        grant `_script_main_event_credit` takes (round 491).
 
         ⚠️⚠️ Unfenced by how the scenario started, unlike `_romance_credit`,
         and that is the point rather than an oversight. The transcription has
@@ -4302,6 +4302,45 @@ class MpsServer:
               + (told or "書き込みなし（今日はもう十分話した）")
               + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
         return True
+
+    def _script_main_event_credit(self, session: "_Session", result) -> None:
+        """Let a メインイベント credit its own 親密さ.
+
+        ⭐⭐⭐ Round 491, `_script_talk_credit`'s other half. A main event adds
+        up the answers the player picked and writes 親密さ on its way out; the
+        shadow has computed that write since round 346 and until now it was
+        dropped, so a main event moved 進行度 and never 親密さ. `Romance.
+        absorb_main_event` says which write counts and why its fence is the
+        進行度 write rather than the script id.
+
+        ⚠️ Independent of `_romance_credit`'s 「main」 arm on purpose: that arm
+        runs `_s104`, which books the rung only when `_s102` answered the
+        メイン, and a scenario started some other way books none. The grant is
+        the scenario's and needs telling nothing, like its siblings here.
+
+        ⚠️ Silence means no 親密さ write next to a 進行度 write -- a 日常会話,
+        or one of the 14 main events that write no 親密さ at all.
+        """
+        runner = session.script
+        shadow = runner.shadow if runner is not None else None
+        if shadow is None or shadow.lost:
+            return
+        wrote = romance.main_event_writes(result.writes)
+        if not wrote:
+            return
+        love = self._chars(session).romance(session.chara_id)
+        if love is None:
+            return
+        names = list(romance.CANDIDATES)
+        before = {index: love.state[names[index]]["intimacy"] for index in wrote}
+        changed = love.absorb_main_event(result.writes)
+        if changed and not self._chars(session).set_romance(session.chara_id, love):
+            print(f"[{self.tag}] 親密さ: 書き戻せませんでした")
+            return
+        print(f"[{self.tag}] 親密さ メインイベント "
+              + " ".join(f"{names[index]} {before[index]}->{value}"
+                         for index, value in sorted(wrote.items()))
+              + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
 
     def _leader_exam_progress(self, session: "_Session", result) -> None:
         """Let the リーダー試験's own cell writes drive the tour record.
@@ -4384,7 +4423,8 @@ class MpsServer:
         scenario's own tail runs the daily rule over the cells this end
         supplies it and `_script_talk_credit` takes the answer, so where there
         is an export nothing below the `elif credited` arm runs at all. The
-        メインイベント half is untouched -- that grant is a different rule.
+        メインイベント's 親密さ is `_script_main_event_credit`'s (round 491);
+        the 「main」 arm below books only the rung.
 
         Which candidate comes from the capture_npc_event category we handed back
         when the talk started — not from who is standing nearby, which the server
@@ -6975,6 +7015,9 @@ class MpsServer:
                     # aside on the flag this sets.
                     session.talk_credited = self._script_talk_credit(
                         session, shadow.result)
+                    # ⭐⭐⭐ Round 491: the メインイベント's grant, the same
+                    # arrangement -- a different fence over the same cell.
+                    self._script_main_event_credit(session, shadow.result)
                     self._leader_exam_progress(session, shadow.result)
                 # ⚠️ Outside the block above, unlike its neighbours there:
                 # those read what the shadow computed, and this one reads

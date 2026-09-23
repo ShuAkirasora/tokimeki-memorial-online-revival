@@ -825,6 +825,24 @@ def talk_day_writes(writes: dict) -> dict:
             if "day" in wrote or "best" in wrote}
 
 
+def main_event_writes(writes: dict) -> dict:
+    """``{candidate index: 親密さ}`` a finished メインイベント computed.
+
+    Empty unless the run also wrote that candidate's `PCEV[0x6020+i]` -- see
+    `Romance.absorb_main_event` for why that is the fence. ⚠️ Non-integer
+    values are dropped, as in `talk_day_writes`.
+    """
+    progress, intimacy = set(), {}
+    for (family, address), value in writes.items():
+        if isinstance(address, tuple) or not isinstance(value, int):
+            continue
+        if family == "PCEV" and 0 <= address - PCEV_PROGRESS_BASE < len(CANDIDATES):
+            progress.add(address - PCEV_PROGRESS_BASE)
+        elif family == "PC" and 0 <= address - PC_INTIMACY_BASE < len(CANDIDATES):
+            intimacy[address - PC_INTIMACY_BASE] = value
+    return {index: value for index, value in intimacy.items() if index in progress}
+
+
 def _saved_day(text: str) -> "date | None":
     """The `lastTalk` a save holds, as a day; None when there is not one.
 
@@ -932,10 +950,11 @@ def intimacy_needed(progress: int) -> int:
     return INTIMACY_STEP * max(0, progress)
 
 
-# メインイベント scripts grant 親密さ too, 0 / 12 / 24 by answer — but which
-# answer the player picked is not something this end sees yet, so see_main_event
-# grants nothing. ⚠️ That is a gap, not a decision: it is the one number in this
-# file that is known and still unused.
+# メインイベント scripts grant 親密さ too, 0 / 12 / 24 by answer. ⭐⭐⭐ Round
+# 491: no longer a gap. The scenario adds its own answers up and writes the
+# result into `PC[0x3920+i]` on its way out; the shadow computes that write and
+# `Romance.absorb_main_event` takes it. see_main_event still grants nothing --
+# it is the by-hand step, and a step taken by hand answered no question.
 # ────────────────────────────────────────────────────────────────────────────
 
 # 「プレイヤーの能力が低い間は見られないメインイベントもあります（そこからさらに
@@ -1739,7 +1758,9 @@ class Romance:
         ⚠️⚠️ **Fenced by the two PCEV families, not by script id**, and that is
         the whole of the safety here. `PC[0x3920+i]` is written from two places
         in the corpus: this routine, and the メインイベント grants that
-        `absorb_talk` books through 進行度 instead. The two PCEV families are
+        `absorb_main_event` takes behind a fence of its own (round 491,
+        which also corrects what this line used to say: 「booked through
+        進行度」 -- nothing booked them). The two PCEV families are
         written from **one** -- the 304 copies of this routine and nothing else
         in either script set -- so a run that wrote one of them is a 日常会話
         that reached its tail, and only then is the 親密さ write next to it
@@ -1772,6 +1793,37 @@ class Romance:
             if "intimacy" in wrote:
                 changed |= row["intimacy"] != wrote["intimacy"]
                 row["intimacy"] = wrote["intimacy"]
+        return changed
+
+    def absorb_main_event(self, writes: dict) -> bool:
+        """Take a メインイベント's own 親密さ grant back. True if it moved.
+
+        ⭐⭐⭐ Round 491, the other half of `absorb_talk_day`. 43 of the 57
+        `<name>_e0NN` add the gains of the answers the player picked into a
+        register and, on the way out, write ``PC[0x3920+i] = 親密さ + that``
+        (29 divide it by three right before the write; the tails come in four
+        shapes, and they are the scenarios' business -- which is why this
+        takes the number the run computed instead of transcribing a rule). Until now the shadow
+        computed that write and nothing took it, so a main event moved 進行度
+        and never 親密さ -- and the next rung's gate reads 親密さ.
+
+        ⚠️⚠️ **Fenced by `PCEV[0x6020+i]`, not by script id**, the same
+        argument `absorb_talk_day` makes. 進行度 is written by the 57 main
+        events and by nothing else in either script set, each writing its own
+        candidate's cell, right after the 親密さ write. So a run that wrote it
+        is a main event that reached its tail, and only then is the 親密さ
+        write next to it that event's grant. ⛔️ The 進行度 write itself is
+        still refused -- `_s104` owns that count (see PCEV_PROGRESS_BASE).
+
+        ⚠️ No double credit with the 日常会話 routine: that one's fence is the
+        two PCEV families no main event writes, and the reverse holds too.
+        """
+        names = list(CANDIDATES)
+        changed = False
+        for index, value in sorted(main_event_writes(writes).items()):
+            row = self.state[names[index]]
+            changed |= row["intimacy"] != value
+            row["intimacy"] = value
         return changed
 
     def absorb_talk(self, writes: dict) -> bool:
