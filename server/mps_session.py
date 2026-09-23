@@ -816,6 +816,13 @@ MSG_SV_NG_REENTRANCE = 0x031D
 # UNSENT 0x5605 -- NpcEventEnd: an empty request, so only 「キャラクターデータの取得に失敗しました」 is live.
 # UNSENT 0x6C05 -- TitleEventEnd: an empty request, so only 「チュートリアルイベントを正常に終了できませんでした」 is live.
 # UNSENT 0x5702 -- DramaEventStart: 「ドラマイベントの開始に失敗しました」 ×3 and one 未使用; no bad-parameter arm exists.
+#
+# ⭐⭐ And the request itself cannot arrive: this build has no message object for
+# 0x5700, only for the two replies (see script.py, above MSG_CL_REQUEST_DRAMA_
+# EVENT_START). Until round 488 it was answered anyway, with a dramaEventId of 1
+# that nothing had ever read -- a made-up number for a question nobody can ask.
+# UNANSWERED 0x5700 -- DramaEventStart: this build has no message object for it, so no screen can send it.
+# UNSENT 0x5701 -- DramaEventStart: the answer to 0x5700, which this build cannot send.
 
 # ServerResponse -- 0xFD00 asks, 0xFD01 answers, 0xFD02 reports the result back.
 # Eight bytes each way, sixteen in the reply and in the report: a round-trip probe.
@@ -1360,7 +1367,6 @@ DRAMA_DOORS = {
     script.MSG_CL_REQUEST_NPC_EVENT_END,
     script.MSG_CL_REQUEST_TITLE_EVENT_START,
     script.MSG_CL_REQUEST_TITLE_EVENT_END,
-    script.MSG_CL_REQUEST_DRAMA_EVENT_START,
 }
 
 NOTIFICATIONS = {
@@ -4879,17 +4885,6 @@ class MpsServer:
                 script.npc_event_clear_params(npc_id),
             )
 
-        if msg_type == script.MSG_CL_REQUEST_DRAMA_EVENT_START:
-            # scriptId, actorId in; a u64 dramaEventId back. Nothing is known
-            # about what the id has to be, so it is 1 — distinct from zero, in
-            # case zero reads as "none", and constant so that a second request
-            # getting the same id is visible rather than hidden.
-            requested = struct.unpack_from(">HH", params, 0) if len(params) >= 4 else (0, 0)
-            print(f"[{self.tag}] drama start scriptId={requested[0]} actorId={requested[1]}")
-            return self._answer(
-                session, seen, script.MSG_SV_OK_DRAMA_EVENT_START, struct.pack(">Q", 1),
-            )
-
         if msg_type == script.MSG_CL_QUERY_CHARA_MENU_DRAMA_EVENT_LIST:
             kept = keys[: script.CHARA_MENU_DRAMA_MAX]
             # nNum goes out as an int32 (the reader takes it through the input
@@ -5302,8 +5297,9 @@ class MpsServer:
         bracket, carrying the drama's own .ssb and the party as ``pcInfo[]``.
         The client answers 0x7201, the パーティメンバー room goes away and the
         drama's first background is drawn. Nothing in the 0x57xx family is
-        involved: 0x5700 RequestDramaEventStart is a door the *client* knocks
-        on, and it does not knock on it here. See `_drama_light`.
+        involved: 0x5700 RequestDramaEventStart is a door the *client* would
+        knock on, and this build cannot -- it has no message object for it
+        (round 488, script.py). See `_drama_light`.
         """
         party = self.dramaparties.party_of(session.chara_id)
         if party is None:

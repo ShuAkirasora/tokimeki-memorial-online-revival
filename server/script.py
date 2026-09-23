@@ -2267,9 +2267,19 @@ MSG_SV_NOTIFY_CHARA_MENU_DRAMA_EVENT_LIST = 0x4302
 #          A 1 opens error_message.bin's 0x4201 and prints the sentence `reason`
 #          selects — seven of them, none a success.
 #   0x5700 RequestDramaEventStart           scriptId, actorId (both u16)
-#       -> 0x5701 dramaEventId              u64. ⭐ The only message in the game
-#          that names a scriptId *and* which role the player takes, so this is
-#          the likeliest actual ignition for a drama.
+#       -> 0x5701 dramaEventId              u64. ⛔️ NOT ANSWERED ANY MORE, and
+#          not the ignition either (round 231 found the real one, 0x7200 after
+#          0xE01B). ⭐⭐ Round 488 settled why it never arrives: this build
+#          cannot build it. Every message the client sends or receives exists in the
+#          image as a small object whose vtable carries its family's three
+#          shared wrappers and a getId (`mov ax, id; ret`). The DramaEvent
+#          family has exactly two such objects, 0x5701 and 0x5702 -- the two it
+#          receives -- and nothing else in the image returns 0x5700 as a
+#          message id; the 0x5700 serializer is there only because the family
+#          template instantiates all three. The same count, done on 0xE0xx, 0x56xx
+#          and 0x42xx, finds every request those families are known to send.
+#          ⇒ It is not a way into the sixteen un*.ssb that have a scriptId and
+#          an .arc but no row in drama_event.bin: those have no door here.
 #   0x5600 RequestNpcEventStart             npcEventId (u16)
 #       -> 0x5601 (empty) / 0x5602 reason
 #
