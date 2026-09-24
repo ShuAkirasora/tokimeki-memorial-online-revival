@@ -442,9 +442,11 @@ MARK_DOORS = False
 #
 # Which matters because 再入学 is only meant to be available to a character who
 # has been confessed to (manual/p02_06, manual/p09_02) and the button came up
-# enabled while the server was sending 0 here. Sending the sentinel instead is
-# the claim "nobody has confessed", which for this server is simply true: there
-# is no romance system, so no capture can ever have happened.
+# enabled while the server was sending 0 here. Sending the sentinel is the
+# claim "nobody has confessed" -- which was simply true of this server until
+# round 347 gave it endings, and since round 496 is answered out of the save:
+# `Romance.captured_index()` is the confessor's index until 再入学 forgets her
+# (0x031B in mps_session.py), and the sentinel is what None becomes here.
 #
 # Measured, not reasoned: three notebooks went up at once, differing only in the
 # field under test, and the user read the 再入学する button off each. 0xFFFF grey,
@@ -1460,12 +1462,15 @@ class CharacterStore:
             chara_id = int(record["charaId"])
             map_id, pos_x, pos_y = self.location(chara_id)
             held = self.posts(chara_id) or posts.Posts()
+            love = self.romance(chara_id)
+            captured = None if love is None else love.captured_index()
             parts.append(
                 list_entry(
                     chara_id,
                     bytes.fromhex(str(record["info"])),
                     (pos_x, pos_y),
                     map_id,
+                    captured_npc_id=NO_CAPTURED_NPC if captured is None else captured,
                     in_club=self.in_club(chara_id),
                     group_name=self.group_name(chara_id),
                     couple_flag=1 if self.lover(chara_id) else 0,

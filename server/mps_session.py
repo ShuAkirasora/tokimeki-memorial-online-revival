@@ -663,6 +663,17 @@ NG_SCHOOL_LOGOUT_NOT_LOGGED_IN = 0
 MSG_CL_REQUEST_REENTRANCE = 0x031B
 MSG_SV_OK_REENTRANCE = 0x031C
 MSG_SV_NG_REENTRANCE = 0x031D
+# ⭐ RESTORED (round 496). 0x031D's one byte indexes error_message.bin's own
+# rows for it (reason 0..8, the same shape 0x030E and 0x0311 use):
+#
+#     42  0x031D  4  キャラクター情報が見つかりませんでした。
+#     44  0x031D  6  再入学の手続きに必要な条件を満たしていません。
+#
+# Row 4 is a charaId no record of this account claims; row 6 is the manual's
+# 「恋愛候補生から告白を受けていない場合は実行できません」 (p02_06) said from
+# the server's side -- no capture on record, nothing to re-enroll from.
+NG_REENTRANCE_NO_CHARA_INFO = 4
+NG_REENTRANCE_NOT_ELIGIBLE = 6
 
 # 転校 -- moving a character to another school. This end answers none of it, and
 # that is a decision rather than an omission. The client is complete: five
@@ -8567,32 +8578,43 @@ class MpsServer:
                 # the address book — explicitly survives. So it is a targeted
                 # reset, not a new game.
                 #
-                # Unreachable from the UI now, and left in place anyway. The
-                # button that sends this greys itself when the character-list
-                # entry carries capturedNpcId = 0xFFFF, which is what this server
-                # always sends because it models no romance state at all
-                # (characters.NO_CAPTURED_NPC, where the three-notebook
-                # measurement behind that is written down). So nobody can ask for
-                # a re-enrollment any more.
-                #
-                # Should the request arrive regardless, Ok is still the honest
-                # answer: there is no capture on record, which is exactly the
-                # state re-enrollment is asking to be put in. A server that grows
-                # a romance system will want Ng here instead —
-                # reference/idlist/error_message.txt #44 is 「再入学の手続きに必要な
-                # 条件を満たしていません。」, though whether Ng's one byte indexes
-                # that table has not been checked.
+                # ⭐⭐⭐ Round 496: reachable, and it does what the manual says.
+                # The button greys itself off the character-list entry's
+                # capturedNpcId (characters.NO_CAPTURED_NPC has the
+                # three-notebook measurement), and since this round that field
+                # is the confessor's index out of the save
+                # (Romance.captured_index) -- so the button lights after a
+                # 告白 and this is where it lands. `Romance.reenroll` does the
+                # forgetting and states, with the manual's own sentences, what
+                # goes and what stays; this branch only chooses the answer.
+                # ⚠️ A character with no capture on record is refused, not
+                # quietly Ok'd as before: 「恋愛候補生から告白を受けていない場合は
+                # 実行できません」, and 0x031D has the sentence for it (row 6).
                 #
                 # Input_MsgSvOkReentrance's vtable[0] is 0x8CB9A0, the shared
                 # zero-param stub, so the Ok carries nothing. Ng is not empty:
                 # its reader is 0x8D84A0, which takes one byte through the
                 # stream's +0x1C slot — the same one-byte error code
-                # MsgSvErrorCharaInfo uses.
+                # MsgSvErrorCharaInfo uses (NG_REENTRANCE_* above).
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
-                if self._chars(session).find(chara_id) is None:
+                store = self._chars(session)
+                love = store.romance(chara_id) if store.find(chara_id) is not None else None
+                if love is None:
                     print(f"[{self.tag}] reentrance: no charaId={chara_id}, answering Ng")
-                    return self._answer(session, sequence, MSG_SV_NG_REENTRANCE, bytes(1))
-                print(f"[{self.tag}] reentrance for charaId={chara_id} (no romance state to clear)")
+                    return self._answer(session, sequence, MSG_SV_NG_REENTRANCE,
+                                        struct.pack(">B", NG_REENTRANCE_NO_CHARA_INFO))
+                forgotten = love.reenroll()
+                if forgotten is None:
+                    print(f"[{self.tag}] reentrance for charaId={chara_id}: "
+                          f"告白を受けていない, answering Ng")
+                    return self._answer(session, sequence, MSG_SV_NG_REENTRANCE,
+                                        struct.pack(">B", NG_REENTRANCE_NOT_ELIGIBLE))
+                if not store.set_romance(chara_id, love):
+                    print(f"[{self.tag}] reentrance for charaId={chara_id}: 書き戻せませんでした")
+                    return self._answer(session, sequence, MSG_SV_NG_REENTRANCE,
+                                        struct.pack(">B", NG_REENTRANCE_NO_CHARA_INFO))
+                print(f"[{self.tag}] reentrance for charaId={chara_id}: {forgotten} を忘れた"
+                      f" · 現在の登場: {love.on_stage()}")
                 return self._answer(session, sequence, MSG_SV_OK_REENTRANCE, b"")
             if msg_type == MSG_CL_QUERY_CHARACTER_LIST:
                 # 238 bytes per entry; see characters.py for where each field

@@ -1206,6 +1206,22 @@ class Romance:
         # PC[0x3a04]: whose letter event is running. -1 is what the new-game
         # reset writes, and it is what 「手紙を読まない」 puts back.
         self.letter_event = int((saved or {}).get("letterEvent", NO_LETTER_EVENT))
+        # ⭐⭐⭐ Round 496: who has confessed and has not been forgotten yet --
+        # the one state 再入学 exists to clear. The character list's
+        # capturedNpcId is this name's index (characters.NO_CAPTURED_NPC when
+        # None), which is what lights the 再入学する button; and while it is
+        # set the campus shows none of the five, in the manual's words
+        # (manual/p09_02, 「再入学しない」): 「その後、告白してこなかった恋愛候補生も
+        # 含め、全ての恋愛イベントを見ることはできなくなります。恋愛候補生のマップ
+        # キャラも校内マップ上に表示されません」. Set by `see_ending`, cleared
+        # only by `reenroll`. ⚠️ Kept apart from ``ending``: that one is the
+        # おまけ list's and is never cleared, this one is the campus's and is.
+        # Absent from saves before round 496 and read as None then -- nothing
+        # this end sent before that round ever lit the button, so an older save
+        # is left playing as it was rather than having its cast hidden by a
+        # migration.
+        captured = (saved or {}).get("captured")
+        self.captured: "str | None" = captured if captured in CANDIDATES else None
         # ⭐⭐⭐ Round 469: the day each scenario last played, by the cell the
         # scenario stamps it into (`scene_day_cells`) and as a date the same
         # way ``lastTalk`` is one. ⚠️ Kept here rather than per candidate on
@@ -1257,8 +1273,25 @@ class Romance:
         からは登場していません」, and p09_02 says the map characters of everyone
         the player never met are simply not drawn. So this — not the whole cast —
         is what a spawn push is allowed to contain.
+
+        ⭐ Round 496: and nobody at all after a confession, until 再入学 --
+        the same page's 「恋愛候補生のマップキャラも校内マップ上に表示されません」
+        (see ``captured``). The debut flags underneath are untouched: 「告白して
+        こなかった恋愛候補生との記憶はなくなりません」, so the moment the
+        confessor is forgotten the others are back where they were.
         """
+        if self.captured is not None:
+            return []
         return [name for name in CANDIDATES if self.state[name]["debut"]]
+
+    def captured_index(self) -> "int | None":
+        """Her index for the character list's capturedNpcId, or None.
+
+        The list entry carries a capture-NPC id and 0 is 天宮 rather than an
+        absence (characters.NO_CAPTURED_NPC is the sentinel), so the caller
+        maps None itself instead of being handed a number that means someone.
+        """
+        return None if self.captured is None else candidate_index(self.captured)
 
     def keys(self) -> list[tuple[str, int]]:
         """``(name, cibi key)`` for everyone on stage, at her own progress."""
@@ -1279,6 +1312,7 @@ class Romance:
             f"@{talk['lastYear']}-{talk['lastMonthDay']:04d}"
             + ("·d8" if talk["mainSeen"] else "")
             + (" ED済" if row["ending"] else "")
+            + (" 再入学待ち" if self.captured == name else "")
             # ⭐ How many of the nine PLAYER bases her scenarios have filled in;
             # 6 is a 告白 gone through, the rest are メインイベント flags.
             + (f" 記録{len(row['record'])}" if row["record"] else "")
@@ -1333,12 +1367,63 @@ class Romance:
         her index in it, which is what plays the credits -- and by hand from
         /rom <名前> ed for steering a test. ⚠️ Not by reading the letter: the
         manual's word is 告白, and 「読まない」 never gets there.
+
+        ⭐ Round 496: also names her as ``captured`` -- the confession the
+        campus now waits on 再入学 for. Two bookings, two lifetimes: the おまけ
+        flag is forever, the capture lasts until `reenroll`.
         """
         row = self.state[name]
-        if row["ending"]:
-            return False
+        changed = not row["ending"] or self.captured != name
         row["ending"] = 1
-        return True
+        self.captured = name
+        return changed
+
+    def reenroll(self) -> "str | None":
+        """再入学: forget the candidate who confessed. Her name, or None.
+
+        ⭐⭐⭐ Round 496. The manual gives the rule twice and both halves are
+        used here. manual/p02_06 (再入学): 「告白を受けた恋愛候補生との出会いを
+        リセットし、新たな気持ちで登校します」 and 「恋愛候補生から告白を受けた
+        場合のみ実行することができ」; manual/p09_02: 「再入学すると、告白してくれた
+        恋愛候補生の記憶はなくなり、再度出会いからやり直すことができます。告白して
+        こなかった恋愛候補生との記憶はなくなりません」.
+
+        So: only with a capture on record (None otherwise, and the caller
+        refuses); only her row goes back to a new game's -- debut, 親密さ,
+        進行度, the 会話 slots, her letter, her 告白 register block -- and
+        only her scenarios' day stamps, tallies, flags and words are forgotten
+        (the `*_cells_of` partitions were measured for exactly this question).
+        ⚠️ ``ending`` stays: it is the おまけ list's, 「過去に告白を受けたことが
+        ある恋愛候補生」, and re-enrolling does not unhappen a confession.
+        ⚠️ A letter event of hers still armed is disarmed with her; anyone
+        else's stays, like everything else outside her row.
+        """
+        name = self.captured
+        if name is None:
+            return None
+        self.state[name] = {
+            "debut": False,
+            "intimacy": 0,
+            "progress": 0,
+            "lastTalk": "",
+            "todayBest": 0,
+            "letter": 0,
+            "ending": self.state[name]["ending"],
+            "talk": dict(TALK_SLOT_DEFAULTS),
+            "record": {},
+        }
+        if self.letter_event == candidate_index(name):
+            self.letter_event = NO_LETTER_EVENT
+        for _, address in scene_day_cells_of(name):
+            self.scene_day.pop(address, None)
+        for _, address in scene_tally_cells_of(name):
+            self.scene_tally.pop(address, None)
+        for _, address in scene_flag_cells_of(name):
+            self.scene_flag.pop(address, None)
+        for _, address in scene_text_cells_of(name):
+            self.scene_text.pop(address, None)
+        self.captured = None
+        return name
 
     def talk(self, name: str, today: str | None = None,
              gain: int = GAIN_PLAIN) -> bool:
@@ -1465,6 +1550,7 @@ class Romance:
 
     def to_json(self) -> dict:
         return {**self.state, "letterEvent": self.letter_event,
+                "captured": self.captured,
                 "sceneDay": {str(address): day
                              for address, day in sorted(self.scene_day.items())},
                 "sceneTally": {str(address): count for address, count
