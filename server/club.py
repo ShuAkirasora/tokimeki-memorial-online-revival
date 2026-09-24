@@ -81,15 +81,18 @@ swallowed, which is why the two handlers only ever send 2 and 6.
 Both boxes are titled by the client: 部活入部エラー for 0x5A02 and
 部活退部エラー for 0x5A05. ⚠️ Each one closes itself after five seconds.
 
-INVENTED — one field, and it is small
--------------------------------------
-``remain``, the u16 riding along with 0x5A02. It exists only for reason 6, and
-nothing says what unit it is in; the sentence it decorates counts 日, so days
-is the reading this sends. ⚠️ NOTHING ON SCREEN CAN CONFIRM IT, and that is
-measured rather than assumed: the refusal box draws the stored sentence
-verbatim, and the 「１０」 inside it is part of that string rather than a
-placeholder. No path prints this field to the player. So it stays invented --
-and it also cannot be seen to be wrong. Every other reason sends 0.
+``remain`` -- the client never reads it
+----------------------------------------
+``remain``, the u16 riding along with 0x5A02. This used to be the one invented
+field here (what unit is it in?), and the question turned out to have no
+audience. The deserializer stores it at +6 of the message object and the
+handler never looks there: its code is straight-line, the message pointer is
+used exactly twice -- the id getter and a one-byte load of ``reason`` at +4 --
+and is handed to nothing else. The screen agrees from the other side: the
+「１０」 in the refusal box is part of the stored sentence, not a placeholder.
+So whatever goes in the field is thrown away. This server sends the days still
+to wait, which is what the name says; 0 would do exactly as well. Every other
+reason sends 0.
 
 Which clubs a character may be in
 ---------------------------------
