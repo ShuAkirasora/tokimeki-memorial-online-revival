@@ -535,14 +535,16 @@ HELP = (
 # record names a placement script (MAP_CHARA_POSITION / _DIRECTION / _DISP_ON).
 # The position is in the script, not in the message.
 #
-# ⚠️ What that same comment used to say — "npcId is not read at all" — is wrong,
-# and it cost a round to find out. Measured 2026-08-02, one key (4:112 桜井),
-# two pushes, the player standing 18 cells off for both so visibility was not the
-# variable: npcId 0:0 put nobody on the map, npcId 1:0 put 桜井 on his script's
-# square. eventId still picks *who* — the body that appeared was 4:112's and not
-# {1,0}'s — so the enqueue does take eventId; npcId is read by something earlier
-# that a zero does not get past. Which check that is has not been traced, so
-# treat 1:0 as the value known to work rather than as an understood one.
+# ⭐ npcId is not read on the way to the spawner, and any value places the chibi.
+# For a while this comment said the opposite, off one measurement (2026-08-02,
+# key 4:112 桜井): npcId 0:0 put nobody on the map, 1:0 did, so "something earlier
+# reads npcId and a zero does not get past it". That pair had no clean control --
+# the key had already been pushed earlier in the same client session, and a
+# chibi has only one body -- and the check it implied was never found.
+# Re-measured 2026-09-24 in a fresh session, every key pushed there for the first
+# time and with the player in sight of its square: 0:0 4:112 put 桜井 on the map,
+# 0:0 4:39 put 春日 on hers, and the control 1:0 4:5 put 天宮 on hers. The handler
+# says the same: past its flag check it hands on nothing but the u32 at obj+8.
 MSG_SV_NOTIFY_NPC_CONTROL = 0x6300
 
 # The whole ちびキャラ cast, as a range rather than a table. `cibi_control_script`
@@ -568,10 +570,11 @@ MSG_SV_NOTIFY_NPC_CONTROL = 0x6300
 CIBI_EVENT_CATEGORY = romance.CIBI_EVENT_CATEGORY
 CIBI_SCRIPT_COUNT = romance.CIBI_SCRIPT_COUNT
 
-# The npcId every batched push carries: not zero (see above), and the same one
-# for all 223 because two chibis sharing it were already seen standing on the
-# map together in round 37 — 4:0 and 4:112 at once — so it is not a slot that
-# they would evict each other from.
+# The npcId every batched push carries. Nothing on the client reads it (see
+# above), so this is a filler rather than a choice: 1:0 because it is the value
+# every measurement so far was taken with. The same one for all 223 because two
+# chibis sharing it were already seen standing on the map together in round
+# 37 — 4:0 and 4:112 at once — so it is not a slot they evict each other from.
 CIBI_NPC_ID = (1, 0)
 
 
@@ -2295,8 +2298,9 @@ def respond(
         # ⭐ The second argument says *which of the four event tables* the pair
         # is read out of, because that is decided by the npcId this end sends
         # back and by nothing else — see script.event_table_for. Left off, the
-        # client's own npcId is echoed, which is the factory behaviour; with
-        # every chibi spawned 1:0 that is always capture_npc_event.
+        # client's own npcId is echoed, which is the factory behaviour; a chibi
+        # reports its own capture_npc key (category 1) whatever 0x6300 carried,
+        # so that is always capture_npc_event.
         #   /nev 0:0 2:0    石打野球部入退部c001 out of common_npc_event
         #   /nev 64:1 3:0   担任（女）リーダー試験c002 out of general_npc_event
         #   /nev 16:1 echo  back to echoing
