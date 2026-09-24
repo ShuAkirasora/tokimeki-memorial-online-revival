@@ -327,6 +327,27 @@ SCRIPT_STATUS_WAITING = 5
 # whole of what the client cares about.
 SCRIPT_STATUS_PLAYING = 4
 
+# UNSENT 0x7211 -- NotifyScriptProgress {u16 actorId, u16 sceneNum, u8 depth}:
+#   the five-lane progress bar, and not sending it draws a coherent bar.
+#   The handler (0x9f0614 -> 0x9f2a07) appends (sceneNum, depth) to a
+#   per-役柄 trail (0x9f280c folds a repeated tail, so a loop does not grow
+#   it), then walks that trail against the receiver's own pair by pair
+#   (0x9f193e) and files the 役柄 into one of five buckets by the signed
+#   gap between the two trails: > 5 / 3..5 / -2..2 (level) / -5..-3 / < -5.
+#   ⭐ What makes silence safe: every drama start resets all four buckets to
+#   -1 (0x9f1b29), the receiver's own 役柄 is always -1 (0x9f193e with both
+#   sides equal), and the one reader (0x73a5a1) draws -1 in the SAME lane as
+#   「level」 (+0x74 for both). So with no 0x7211 at all the bar comes up
+#   with every face side by side in the middle lane -- 「everyone is keeping
+#   pace」, which for a party held together at every branch and every
+#   OP_PLAYER_SYNC is close to the truth anyway.
+#   ⛔️ What sending it would take is a scene numbering: sceneNum has to be
+#   equal for two 役柄 at the same point of the story and the same again on a
+#   revisit, and the client computes none of it -- it only compares. That
+#   numbering was the original server's own; nothing in the scripts or the
+#   client carries it, so any choice here would be invented, and silence is
+#   the one reading that invents nothing.
+
 #: The whole of 0x720E's table: 「一人プレイ時は強制終了されないため、ポーズする
 #: 必要はありません。」 Row 1 is 未使用.
 NG_PAUSE_SOLO = 0
