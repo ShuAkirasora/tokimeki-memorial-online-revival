@@ -8,39 +8,57 @@ a character, go to school, sit through a lesson, talk to the people on campus, a
 match or a drama event — alone, or with somebody on a second machine.
 
 <!-- HTML rather than markdown for the width="50%": a markdown table would size its columns
-     from the caption text instead. The shots are what the client draws, 800x600 or 1280x960. -->
+     from the caption text instead. All six are 800x600, which is what the client draws at,
+     and each shows something this end decided rather than something the client draws on
+     its own. -->
 <table>
 <tr>
 <td width="50%" valign="top">
 
-![Another player and the menu behind them](screenshots/interaction-menu.jpg)
+![Two players on one map, and the menu behind a right-click](screenshots/two-players.jpg)
 
 </td>
 <td width="50%" valign="top">
 
-![A conversation](screenshots/conversation.jpg)
+![The vice-principal in the staff room, with his menu open](screenshots/staff-room.jpg)
 
 </td>
 </tr>
 <tr>
-<td valign="top"><b>Somebody else on the same map.</b> Two clients, one server. Right-clicking the other player opens the six slots, and the card underneath is filled in from their save.</td>
-<td valign="top"><b>A scripted scene.</b> The client plays the cut-scene out of its own copy of the game; this end answers the branches it stops on.</td>
+<td valign="top"><b>Two clients, one server.</b> Right-clicking the other player opens the six slots, and the card underneath — class, club, group — is filled in from their save on this end.</td>
+<td valign="top"><b>Staff on campus.</b> The 44 teachers and members of staff stand where the game's own tables put them, and a right-click on one asks this end what each item does.</td>
 </tr>
 <tr>
 <td valign="top">
 
-![A lesson under way](screenshots/lesson.jpg)
+![An English lesson under way](screenshots/lesson.jpg)
 
 </td>
 <td valign="top">
 
-![A club match](screenshots/club-match.jpg)
+![A club match being resolved](screenshots/club-match.jpg)
 
 </td>
 </tr>
 <tr>
 <td valign="top"><b>A lesson.</b> The message that opened it carried three numbers and no text: the client holds the questions, this end picks one and marks the answer.</td>
-<td valign="top"><b>A club match.</b> Eight turns, sixty seconds a side to choose a card; the order they resolve in is settled here.</td>
+<td valign="top"><b>A club match.</b> The cards each side plays, the order they resolve in and the line that reports it are settled here; the client draws the result.</td>
+</tr>
+<tr>
+<td valign="top">
+
+![A drama event with a stand-in NPC in the other part](screenshots/drama-stand-in.jpg)
+
+</td>
+<td valign="top">
+
+![A system message from the server](screenshots/system-message.jpg)
+
+</td>
+</tr>
+<tr>
+<td valign="top"><b>A drama event, one player short.</b> The empty part is taken by the stand-in the script names, and this end walks her through the scene, since no client is sitting there.</td>
+<td valign="top"><b>The server's own voice.</b> A line typed at the console reaches every screen on the server, in the window the client keeps for it.</td>
 </tr>
 </table>
 
@@ -599,7 +617,7 @@ repository and none of it is redistributed here.
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |
 | `runtime/` | created on the first run: the log, the certificate, your characters, your script exports, `console.txt` if you write one, and any tables you override |
-| `screenshots/` | the four pictures above — captures of a running client, not game files |
+| `screenshots/` | the six pictures above — captures of a running client, not game files |
 | `.github/workflows/ci.yml` | on every push: compile, start, check the ports answer, stop — on Python 3.11 and 3.14 |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution redistribution has to carry |
 
