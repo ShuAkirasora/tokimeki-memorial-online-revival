@@ -340,7 +340,10 @@ SCRIPT_STATUS_PLAYING = 4
 #   「level」 (+0x74 for both). So with no 0x7211 at all the bar comes up
 #   with every face side by side in the middle lane -- 「everyone is keeping
 #   pace」, which for a party held together at every branch and every
-#   OP_PLAYER_SYNC is close to the truth anyway.
+#   OP_PLAYER_SYNC is close to the truth anyway. ⭐ Seen so on a retail
+#   client in a two-player ドラマ: the bar is the small book at the bottom
+#   right of the text box, five marks with the middle one lit and the other
+#   player's face standing over it.
 #   ⛔️ What sending it would take is a scene numbering: sceneNum has to be
 #   equal for two 役柄 at the same point of the story and the same again on a
 #   revisit, and the client computes none of it -- it only compares. That

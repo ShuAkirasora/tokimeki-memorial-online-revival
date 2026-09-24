@@ -1050,6 +1050,13 @@ def info_changed(
     has to be told about itself -- the two are not one rule, and the thing to
     look for is the own-id wrapper.
 
+    ⭐ WHERE IT SHOWS: the name card that comes up beside another player when
+    you right-click them -- 所属部 / 所属グループ / 称号 / キャッチコピー are
+    read out of that store. Measured with two retail clients side by side: one
+    changed its キャッチコピー, and the other's card had the new line on the
+    next right-click, with this one 0x4813 the only thing sent to it in between
+    (no 0x4810 / 0x480F, and the right-click itself sends nothing).
+
     ⚠️ ``coupleFlag`` is derived here exactly as `chara_info` derives it: the
     flag says whether there is a 恋人 and ``loverCharaId`` says who, so one is
     1 precisely when the other is set.

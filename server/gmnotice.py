@@ -38,32 +38,39 @@ both take their title from a row of `msg_text` written into the handler:
   * 0x680A (0x780E85) -> title 344 「ＧＭメッセージ」, body = the line this
     end sent, taken from the message at +4.
 
-⚠️⚠️ NEITHER BOX HAS BEEN SEEN ON SCREEN, AND THAT WAS MEASURED, not assumed.
-Both were pushed at a retail client standing on a map, and 0x680A also at one
-sitting in a live ＧＭチャット; thirty-two seconds of screenshots, four a
-second, covering the whole delivery window caught no box in any frame. What the client's own log shows is that
-everything up to the drawing happened: it parses the body and names the field
-(`MsgSvNotifyGMMessage, utterance[25]={…}`), hands it to its own
-GMResponseMessageProcedure, and the handler runs far enough to build the
-dialog -- the log prints its `title_`, the flags, and `button`.
+⭐⭐ BOTH BOXES ARE DRAWN. They are the small notice in the top right corner
+that every refusal on this wire uses -- the constructor places it at
+(0x1CC, 0x78) itself -- and it goes away on its own after about five seconds.
+Measured on a retail client standing in a classroom: 0x680A with an ASCII line
+and with a full-width one, and 0x6809 with its empty body, each drawn with
+its own title and sentence.
 
-⭐ What separates them from a box that does appear is one field. 0x6800, whose
-own box went up on that same screen in that same state, reads its window out
-of `this+0x400`; these two read `this+0x3f0` and `this+0x3ec`. All three are
-members of the one listener object -- so it is not the window machinery in
-general, it is which window these two are queued into, and what fills those
-two fields has not been found. ⛔️ So nothing here may be read as "the player
-sees this"; what is recovered is that the message is delivered, named and
-dispatched, and that the widths and the sentences are the client's.
+⚠️⚠️ An earlier reading of this file said neither box ever appeared and that
+the two handlers took their window from different fields than 0x6800's does
+(`this+0x3f0` / `this+0x3ec` against `this+0x400`). ⛔️ Both halves were wrong.
+The listener multiply-inherits one base per message and each handler is
+entered with `this` at its own base -- 0x6800 at +0x198, 0x6809 at +0x1A8,
+0x680A at +0x1AC -- so all three read the one field at +0x598 of the whole
+object; and 0x5A02 MsgSvNgClubEnter, whose box is certainly drawn, reads it
+at +0x180 + 0x418, the same place again. What that empty run had seen could
+not be reproduced; pushed unprompted from the console, each of the three
+boxes appears on its own. ⚠️ The control that settles it has to be well
+formed: a 0x5A02 cut short to one byte draws nothing either, because the
+reader never gets to the handler.
 
 ⚠️⚠️ 0x6809 LOGS NOBODY OUT. Its handler builds a window and returns; nothing
 in it closes a socket or unwinds a session. But its own sentence is in the past
 tense -- the player is told they *have* been logged out -- so a server that
 sent it and left the connection up would be saying something untrue. Closing
 the connection is therefore this end's own act, and the order is the one
-shutdown.py uses for the same reason: say it first, then go. ⭐ On the measured
-run the player was thrown out of the game with the client's own red
-「通信が断たれました」 box, which is what a closed socket always draws here.
+shutdown.py uses for the same reason: say it first, then go. ⭐ And the order
+is enough: a player on a map sees the 強制ログアウト notice and the client's
+own red 「通信が断たれました」 box on top of each other, the notice fading
+after its five seconds. ⚠️ Not in the middle of a ドラマイベント: that screen
+goes black the moment the socket closes and only the red box is drawn, so
+there the sentence is lost. Waiting before the close would save it, but for
+how long is nothing the client says -- that would be a number of this end's
+own, and none is set.
 
 ⭐ THE ONE RULE HERE WAS RECOVERED, not chosen. 0x670E, the refusal to the GM's
 own 強制ログアウト request, has a reason 3 reading 「指定したキャラクターが校内
