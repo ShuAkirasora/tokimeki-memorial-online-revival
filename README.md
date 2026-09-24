@@ -8,40 +8,23 @@ a character, go to school, sit through a lesson, talk to the people on campus, a
 match or a drama event — alone, or with somebody on a second machine.
 
 <!-- HTML rather than markdown for the width="50%": a markdown table would size its columns
-     from the caption text instead. The shots are 800x600, which is what the client draws
-     at; the four oldest were kept at the 1280x960 they were captured at. -->
+     from the caption text instead. The shots are what the client draws, 800x600 or 1280x960. -->
 <table>
 <tr>
 <td width="50%" valign="top">
 
-![School select](screenshots/school-select.jpg)
+![Another player and the menu behind them](screenshots/interaction-menu.jpg)
 
 </td>
 <td width="50%" valign="top">
 
-![Character creation](screenshots/character-create.jpg)
+![A conversation](screenshots/conversation.jpg)
 
 </td>
 </tr>
 <tr>
-<td valign="top"><b>Choosing a school.</b> Ten of them, each with a student count this server reports as zero.</td>
-<td valign="top"><b>Making a character.</b> The client's own creation sheet, kept verbatim by the server.</td>
-</tr>
-<tr>
-<td valign="top">
-
-![On the map](screenshots/map.jpg)
-
-</td>
-<td valign="top">
-
-![Another player and the menu behind them](screenshots/interaction-menu.jpg)
-
-</td>
-</tr>
-<tr>
-<td valign="top"><b>Standing in the courtyard.</b> The player is put into the scene by the server, the NPC by one of the <code>/npc</code> commands.</td>
-<td valign="top"><b>Somebody else on the same map.</b> Two clients, one server; right-clicking the other player opens the six slots, and the card underneath is filled in from their save.</td>
+<td valign="top"><b>Somebody else on the same map.</b> Two clients, one server. Right-clicking the other player opens the six slots, and the card underneath is filled in from their save.</td>
+<td valign="top"><b>A scripted scene.</b> The client plays the cut-scene out of its own copy of the game; this end answers the branches it stops on.</td>
 </tr>
 <tr>
 <td valign="top">
@@ -51,29 +34,13 @@ match or a drama event — alone, or with somebody on a second machine.
 </td>
 <td valign="top">
 
-![A conversation](screenshots/conversation.jpg)
-
-</td>
-</tr>
-<tr>
-<td valign="top"><b>A lesson under way.</b> The message that opened it carried three numbers and no text: the client holds the questions, and this end picks which one and marks the answer.</td>
-<td valign="top"><b>A scripted scene.</b> The client plays the cut-scene out of its own copy of the game; this end only answers the questions it stops on.</td>
-</tr>
-<tr>
-<td valign="top">
-
-![The club-deck window](screenshots/club-deck.jpg)
-
-</td>
-<td valign="top">
-
 ![A club match](screenshots/club-match.jpg)
 
 </td>
 </tr>
 <tr>
-<td valign="top"><b>The club deck.</b> The keywords a character owns, and the deck they are dealt into — both lists read back out of the save.</td>
-<td valign="top"><b>A club match.</b> Eight turns, and this is the sixty seconds a side gets to choose a card; the order they resolve in is settled at this end.</td>
+<td valign="top"><b>A lesson.</b> The message that opened it carried three numbers and no text: the client holds the questions, this end picks one and marks the answer.</td>
+<td valign="top"><b>A club match.</b> Eight turns, sixty seconds a side to choose a card; the order they resolve in is settled here.</td>
 </tr>
 </table>
 
@@ -632,7 +599,7 @@ repository and none of it is redistributed here.
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |
 | `runtime/` | created on the first run: the log, the certificate, your characters, your script exports, `console.txt` if you write one, and any tables you override |
-| `screenshots/` | the eight pictures above — captures of a running client, not game files |
+| `screenshots/` | the four pictures above — captures of a running client, not game files |
 | `.github/workflows/ci.yml` | on every push: compile, start, check the ports answer, stop — on Python 3.11 and 3.14 |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution redistribution has to carry |
 
