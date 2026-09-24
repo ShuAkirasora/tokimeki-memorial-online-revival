@@ -1907,6 +1907,14 @@ class _Session:
         # client rejects a reply whose sequence number went backwards -- which is
         # the whole point of the /seq probe. None is "owes nothing".
         self.icon_due: "int | None" = None
+        # 0x7210 bodies owed to THIS connection while it is the one being
+        # handled -- same reason as icon_due, found on a real client (round
+        # 499): the packet loop stamps the handler's reply first, and a
+        # NotifyScriptStatus pushed from inside that handler took the next
+        # number and left first, so the reply's number went backwards and the
+        # client's decipher_message dropped the connection. Built in
+        # _drain_script_status, after the reply. See _script_status.
+        self.script_status_due: list[bytes] = []
         # The markers standing in the scene, cached so the lobby's stand-ins and
         # the answers to MsgClQueryCharaInfo about them cannot disagree. Warping
         # changes the map, so this is rebuilt rather than computed once.
@@ -2325,6 +2333,12 @@ class MpsServer:
         # a party is something other players look at, so it cannot live on the
         # session that made it. See drama.Board.
         self.dramaparties = drama.Board()
+        # The session whose packet a handler is running for right now, None
+        # between packets. A Notify raised inside a handler for THIS connection
+        # must not be pushed: its bytes would be numbered after the reply that
+        # is still being built and leave the socket before it (see
+        # _Session.icon_due, _Session.script_status_due).
+        self._handling: "_Session | None" = None
         # ⭐⭐⭐ The cursors this end walks for the 代行ＮＰＣ of each party's
         # play, `party_id -> {actor_id: gs3vm.StandIn}`. A stand-in has no
         # session and so no shadow of its own to hang off; the argument for
@@ -6650,6 +6664,15 @@ class MpsServer:
         runner.told_waiting = waiting
         params = script.script_status_params(mine.actor_id, state)
         for other in self._scenario_members(session):
+            if other is getattr(self, "_handling", None):
+                # ⚠️ Not pushed: this connection's reply is still being built
+                # and already carries the lower sequence number. Round 499, on
+                # a real client: the pushed copy left first and the client's
+                # decipher_message answered "bad sequence number" and hung
+                # up. Queued and built behind the reply instead
+                # (_drain_script_status), the way icon_due is.
+                other.script_status_due.append(params)
+                continue
             self._push(other, self._answer(
                 other, 0, script.MSG_SV_NOTIFY_SCRIPT_STATUS, params))
 
@@ -7981,12 +8004,26 @@ class MpsServer:
                 other, 0, script.MSG_CL_NOTIFY_SCRIPT_COMMAND, held)
             if other.script is not None and other.script.held_branch is None:
                 # ⭐ Let through (or the play ended under it): the banner
-                # 0x7210 opened comes down before the answer goes out.
-                # Re-held instead: `_script_incoming` said state=5 again,
-                # which `_script_status` folds into nothing.
-                self._script_status(other, script.SCRIPT_STATUS_PLAYING)
+                # 0x7210 opened comes down. Re-held instead: `_script_incoming`
+                # said state=5 again, which `_script_status` folds into nothing.
+                # ⚠️⚠️ Round 499, on a real client: `reply` is already numbered,
+                # and pushing `other`'s own 0x7210 here sent a higher number
+                # ahead of it -- "bad sequence number" and the connection was
+                # dropped the moment the partner answered. So `other` is treated
+                # as the connection being handled for this one call: its copy
+                # is queued, and built after `reply` below. The banner comes
+                # down a packet later than the answer; the client closes it on
+                # any state but 5 either way, so nothing is drawn wrong.
+                handling = getattr(self, "_handling", None)
+                self._handling = other
+                try:
+                    self._script_status(other, script.SCRIPT_STATUS_PLAYING)
+                finally:
+                    self._handling = handling
             if reply:
                 self._push(other, reply)
+            if other is not getattr(self, "_handling", None):
+                self._push(other, self._drain_script_status(other))
 
     def _drama_result(
         self, session: "_Session", seen: int, op: int, local: int
@@ -8447,7 +8484,11 @@ class MpsServer:
                         continue
                     print(f"[{self.tag}] <- tag=0x{tag:04x} ({name}) {len(body)}B: {body.hex()}")
                     watched = self._info_watch()
-                    reply = self._reply(session, tag, body)
+                    self._handling = session
+                    try:
+                        reply = self._reply(session, tag, body)
+                    finally:
+                        self._handling = None
                     # 0x4813 for whatever this packet moved. The comparison
                     # runs here because here is where the handler's writes are
                     # the newest thing there is; what comes back is the copies
@@ -16902,6 +16943,7 @@ class MpsServer:
         """
         out = self._drain_console(session)
         out += self._drain_own_icon(session)
+        out += self._drain_script_status(session)
         out += self._drain_bells(session)
         out += self._drain_lesson(session)
         out += self._drain_exam(session)
@@ -16927,6 +16969,18 @@ class MpsServer:
             session, 0, MSG_SV_NOTIFY_ACTION_ICON,
             struct.pack(">IB", session.chara_id, action),
         )
+
+    def _drain_script_status(self, session: "_Session") -> bytes:
+        """The 0x7210s owed to this connection since its own reply was built.
+
+        Built here for the same reason as _drain_own_icon: the sequence number
+        is stamped when the bytes are made, and these have to be numbered after
+        the reply they were raised inside of.
+        """
+        due, session.script_status_due = session.script_status_due, []
+        return b"".join(
+            self._answer(session, 0, script.MSG_SV_NOTIFY_SCRIPT_STATUS, params)
+            for params in due)
 
     def _drain_battle(self, session: "_Session") -> bytes:
         """Close a クラブ対戦 turn whose 制限時間 has run out.
