@@ -297,6 +297,36 @@ MSG_SV_OK_SCRIPT_PAUSE = 0x720D
 MSG_SV_NG_SCRIPT_PAUSE = 0x720E
 MSG_SV_NOTIFY_SCRIPT_PAUSE = 0x720F
 
+# ⭐⭐⭐ 0x7210 NotifyScriptStatus {u16 actorId, u32 state}: 「this 役柄 is waiting
+# on the others」, and the client reads exactly one bit of it. Its handler
+# (0x784362) does nothing unless the script machine is in a ドラマ (mode 4) AND
+# actorId is the receiver's own 役柄 (`+0x30` of the party view, the same test
+# 0x720F makes); then `state == 5` opens the window built from GUI node 708 --
+# `window700series/form/form708_*`, the banner that reads 「他の参加者の行動
+# 待ちです。お待ちください。」 with a STOP badge -- and ANY other state closes
+# it (the two implementations behind the drama view both dispatch slot 26 to
+# 0x73cc9c = close-then-reopen, slot 27 to 0x73ccf9 = close). Nothing else in
+# the client ever closes that banner short of the play ending (0x7204 tears
+# the view down), so the clear has to be sent as well as the set.
+#
+# ⭐ So the trigger is the two places this end already makes a member wait on
+# the others: a branch held at `mps_session._click_fence` (their click has
+# not come) and a member parked at `OP_PLAYER_SYNC` (`_player_wait`). Both
+# are waits the *server* knows about and the client cannot infer -- from
+# where it sits, a held branch is indistinguishable from a slow server.
+MSG_SV_NOTIFY_SCRIPT_STATUS = 0x7210
+
+#: The one `state` value the client tests for: waiting on the other members.
+SCRIPT_STATUS_WAITING = 5
+
+# INVENTED — the `state` sent to clear the banner again. The client treats
+# every value but 5 identically (slot 27, close), so the number cannot be
+# read off it; 4 is picked because the client's own script-machine mode
+# enum uses 4 for 「a ドラマ is being played」 (every 0x72xx handler tests
+# `mode == 4` before touching the party view). ⛔️ Not 5, and that is the
+# whole of what the client cares about.
+SCRIPT_STATUS_PLAYING = 4
+
 #: The whole of 0x720E's table: 「一人プレイ時は強制終了されないため、ポーズする
 #: 必要はありません。」 Row 1 is 未使用.
 NG_PAUSE_SOLO = 0
@@ -363,6 +393,21 @@ def pause_notify_params(actor_id: int, on: int) -> bytes:
     presser: a message meant for one person does not name them.
     """
     return struct.pack(">HB", actor_id, on & 0xFF)
+
+
+def script_status_params(actor_id: int, state: int) -> bytes:
+    """0x7210's body: which 役柄, and whether it is waiting on the others.
+
+    Read off the deserializer (0x8e93f0): read-slot 0x28 (u16) into `actorId`,
+    then slot 0x24 (u32) into `state`. ⚠️ The object lays `state` at +8, two
+    bytes past `actorId`; the wire does not -- the widths come from the
+    stream's read-slot table and nothing is padded.
+
+    Addressed to the room like 0x720F: the client keeps every member's copy
+    and acts only on the one that names its own 役柄, which is why the body
+    names one at all.
+    """
+    return struct.pack(">HI", actor_id, state & 0xFFFFFFFF)
 
 
 #: 0x7206's `reason`, and the whole of what this end can honestly say about it.
@@ -2045,6 +2090,12 @@ class Runner:
         # click that has not arrived yet (`mps_session._click_fence`). Outside a
         # party it is always None.
         self.held_branch: bytes | None = None
+        # ⭐ Whether the last 0x7210 this end sent about this member said
+        # `SCRIPT_STATUS_WAITING`. The banner it opens stays up until a
+        # 0x7210 with any other state closes it, so a wait that ends has to
+        # be told as well as a wait that begins -- and told once, not once
+        # per instruction that finds the member still waiting.
+        self.told_waiting = False
         # ⭐⭐⭐ Two tallies per choice box, by the box's own ip, and the
         # question `_click_fence` asks of the pair (round 252):
         #   `answered[X]`  how often this member has answered the box at X;

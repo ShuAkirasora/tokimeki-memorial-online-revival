@@ -6424,6 +6424,41 @@ class MpsServer:
         return [a for a in party.actors
                 if a.chara_id != chara_id and not a.is_surrogate]
 
+    def _script_status(self, session: "_Session", state: int) -> None:
+        """0x7210 NotifyScriptStatus: this member's 役柄 is waiting on the
+        others (`SCRIPT_STATUS_WAITING`), or has stopped waiting.
+
+        ⭐⭐⭐ What the client does with it is read, not guessed, and it is
+        one thing: for the receiver's OWN 役柄, during a ドラマ, state 5 opens
+        the 「他の参加者の行動待ちです。お待ちください。」 banner and any
+        other state closes it (`script.MSG_SV_NOTIFY_SCRIPT_STATUS`). So it
+        goes to everybody playing the scenario, the way 0x720F does -- the
+        body names a 役柄 and each client keeps or drops it by that -- and
+        it goes out once per change: `Runner.told_waiting` remembers what was
+        last said, so a member found still waiting by a second instruction
+        is not told twice, and a member never told is not 「cleared」.
+
+        ⚠️ Outside a party there is nobody to wait on and nobody is told:
+        the client only draws this in mode 4 (a ドラマ) anyway, and a solo
+        script never reaches either wait (`_click_fence` needs a party,
+        `_player_wait` releases at once).
+        """
+        runner = session.script
+        if runner is None:
+            return
+        party = self.dramaparties.party_of(session.chara_id)
+        mine = party.actor_of(session.chara_id) if party is not None else None
+        if mine is None:
+            return
+        waiting = state == script.SCRIPT_STATUS_WAITING
+        if runner.told_waiting == waiting:
+            return
+        runner.told_waiting = waiting
+        params = script.script_status_params(mine.actor_id, state)
+        for other in self._scenario_members(session):
+            self._push(other, self._answer(
+                other, 0, script.MSG_SV_NOTIFY_SCRIPT_STATUS, params))
+
     def _script_touch(self, session: "_Session") -> bytes:
         """Something arrived from this player: restart the five minutes.
 
@@ -7075,6 +7110,10 @@ class MpsServer:
                     session.script.held_branch = params
                     print(f"[{self.tag}] script at ip={local} — "
                           f"{len(held)} 人がまだ選択中、待たせたまま")
+                    # ⭐ …and say so: 0x7210 state=5 is what puts 「他の参加者
+                    # の行動待ちです」 on this member's screen while the
+                    # branch sits here (`_script_status`).
+                    self._script_status(session, script.SCRIPT_STATUS_WAITING)
                     return None
             fall_through, taken = session.script.script.branch_roads(wire_ip)
             # ⭐⭐⭐ Inside a party the choice-chain heuristic stands down for
@@ -7571,6 +7610,9 @@ class MpsServer:
         if missing:
             print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
                   f"{len(waiting) - len(missing)}/{len(waiting)} 到着、待たせたまま")
+            # ⭐ 0x7210 state=5: the banner this member sees while parked here.
+            # Each arrival tells its own; `_player_release` clears them all.
+            self._script_status(session, script.SCRIPT_STATUS_WAITING)
             # ⭐ Arriving here is the third thing that can change `_click_fence`'s
             # answer (round 252): a member parked at a rendezvous cannot go and
             # click anything, so a branch held on that click has to be let go
@@ -7720,6 +7762,12 @@ class MpsServer:
                 other.script.shadow.recompute_condition()
             reply = self._script_incoming(
                 other, 0, script.MSG_CL_NOTIFY_SCRIPT_COMMAND, held)
+            if other.script is not None and other.script.held_branch is None:
+                # ⭐ Let through (or the play ended under it): the banner
+                # 0x7210 opened comes down before the answer goes out.
+                # Re-held instead: `_script_incoming` said state=5 again,
+                # which `_script_status` folds into nothing.
+                self._script_status(other, script.SCRIPT_STATUS_PLAYING)
             if reply:
                 self._push(other, reply)
 
@@ -7871,6 +7919,11 @@ class MpsServer:
                     shadow.flowed()
             other.script.begun = None
             other.script.disarm_input()
+            # ⭐ The wait is over for this one: 0x7210 clears the banner
+            # before the 0x721D that walks them on. A no-op for anybody who
+            # was never told they were waiting (the last to arrive, or a
+            # solo `PLAYER_WAIT_TIME`).
+            self._script_status(other, script.SCRIPT_STATUS_PLAYING)
             reply = self._answer(other, seen if other is session else 0,
                                  script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
                                  script.command_end_params(begun_ip, begun_op))
