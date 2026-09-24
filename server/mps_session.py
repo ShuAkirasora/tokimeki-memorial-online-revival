@@ -611,13 +611,12 @@ MSG_SV_NG_CHARACTER_DESTROY = 0x0311
 # The slot is read-int8, i.e. **signed**: a byte above 127 arrives negative.
 NG_DESTROY_NO_CHARA_INFO = 2
 
-# ⭐ Read on the way past and NOT acted on here: 0x0311's row 9 is
-# 「仲良しグループのリーダーになっている場合、削除することはできません。」 -- the
-# original refused to delete a character who leads a group, where this end
-# deletes them and lets GroupBook take the group down under them. That is a
-# rule rather than a reason byte, and it wants its own look at a real client
-# before the delete button starts saying no; it is written down as an open
-# question rather than quietly implemented.
+# ⭐ Row 9 is 「仲良しグループのリーダーになっている場合、削除することはでき
+# ません。」 -- the original refused to delete a character who leads a group.
+# This end used to delete them anyway and let GroupBook take the group down
+# under them; it refuses now (the destroy branch of _reply). The sentence
+# is the client's own, so what is left to watch on a real client is how the
+# refusal is drawn, not whether it exists.
 NG_DESTROY_IS_GROUP_LEADER = 9
 MSG_CL_REQUEST_SCHOOL_LOGIN = 0x0306
 MSG_SV_OK_SCHOOL_LOGIN = 0x0307
@@ -867,6 +866,12 @@ MSG_SV_NOTIFY_CHARACTER_INFO_CHANGED = 0x4813
 MSG_CL_QUERY_CHARA_INFO = 0x6500
 MSG_SV_RESULT_CHARA_INFO = 0x6501
 MSG_SV_ERROR_CHARA_INFO = 0x6502
+#: 0x6502's rows, under its own id: 0 「選択されたキャラクターの情報が不正です。」,
+#: 1 「選択されたキャラクターは削除されています。」.
+#: UNSENT-REASON 0x6502 2 -- 「キャラクターデータの取得に失敗しました。」 is the
+#: original's own storage failing; this end's reads do not fail that way.
+ERROR_CHARA_INFO_INVALID = 0
+ERROR_CHARA_INFO_DELETED = 1
 MSG_CL_REQUEST_MINIMAP_START = 0x3C00
 # 校内新聞. The whole family is these four: two requests that read nothing off
 # the wire and two Oks that carry nothing back. The paper itself never crosses
@@ -5342,6 +5347,8 @@ class MpsServer:
             reason = drama.NG_ALREADY_IN_PARTY
         elif len(self.dramaparties.parties) >= drama.PARTY_MAX:
             reason = drama.NG_NO_ROOM
+        elif self.accounts.ngwords.hit(name) is not None:
+            reason = drama.NG_NAME_FORBIDDEN
         elif self.dramaparties.named(name) is not None:
             reason = drama.NG_DUPLICATE_NAME
         if reason is not None:
@@ -5802,6 +5809,8 @@ class MpsServer:
                 reason = drama.NG_NOT_LEADER
             elif name == party.name and password == party.password:
                 reason = drama.NG_ENV_UNCHANGED
+            elif self.accounts.ngwords.hit(name) is not None:
+                reason = drama.NG_NAME_FORBIDDEN
             elif other is not None and other is not party:
                 reason = drama.NG_DUPLICATE_NAME
         if reason is not None:
@@ -6570,6 +6579,37 @@ class MpsServer:
             party, drama.MSG_SV_NOTIFY_UPDATE, drama.party_record(party),
         )
 
+    def _drama_disconnect_retire(self, session: "_Session") -> None:
+        """A connection that goes in the middle of a running play is a 離脱.
+
+        ⭐⭐ Round 506, and it is the client's own table that says so: 0x7206
+        files 「通信が切断されたため、イベントを強制終了しました。」 as its row 1,
+        beside the 中断 (0) and the five minutes (2) this end already sent. So
+        the original took a dropped player out of a running play the same way
+        the other two roads do -- a stand-in takes the 役柄 and the people who
+        stay are asked 「続けますか？」 -- and until now this end only ran the
+        matching-screen road (0xE00A 「切断による」) for it, which leaves the
+        others waiting at the next rendezvous for somebody who is not coming.
+
+        ⚠️ The same gate `_drain_script_idle` keeps: in the script, a member of
+        the party, and somebody else still playing. Alone in a play, there is
+        nobody to tell and nobody to stand in for; `_drama_party_gone` right
+        after this takes the room down as before. When this does run, the
+        stand-in has taken the charaId off the roster, so `_drama_party_gone`
+        finds nothing of this player's left to remove.
+        """
+        party = self.dramaparties.party_of(session.chara_id)
+        actor = party.actor_of(session.chara_id) if party is not None else None
+        if (party is None or actor is None or session.script is None
+                or party.state != drama.STATE_RUNNING
+                or not self._script_others(party, session.chara_id)):
+            return
+        print(f"[{self.tag}] script retire on disconnect: actor={actor.actor_id}")
+        # The reply half is addressed to a connection that is closing; only
+        # the pushes to the people who stay matter, and they go out as pushes.
+        self._script_retire(session, 0, party, actor,
+                            reason=script.RETIRE_DISCONNECTED)
+
     def _drama_party_gone(self, chara_id: int, why: str) -> None:
         """Take a character out of their party and tell the people left behind.
 
@@ -6857,7 +6897,8 @@ class MpsServer:
                   f"{idle:.0f}s -- 離脱、代行ＮＰＣが進行させる")
             session.script_idle_at = 0.0
             session.script_idle_warned = False
-            return self._script_retire(session, 0, party, actor)
+            return self._script_retire(session, 0, party, actor,
+                                       reason=script.RETIRE_IDLE)
         if (not session.script_idle_warned
                 and idle >= force - script.SCRIPT_IDLE_WARN_LEAD_MS / 1000):
             session.script_idle_warned = True
@@ -6950,6 +6991,7 @@ class MpsServer:
     def _script_retire(
         self, session: "_Session", seen: int,
         party: "drama.Party", actor: "drama.Actor",
+        reason: int = script.RETIRE_ASKED,
     ) -> bytes:
         """Take this player out of the running play and stand an NPC in.
 
@@ -7025,7 +7067,7 @@ class MpsServer:
                    else "空いている順")
             print(f"[{self.tag}] script retire: actor={actor.actor_id} -> "
                   f"代行ＮＰＣ {proxynpc.CATEGORY}:{npc_id} ({why})")
-        body = script.retire_notify_params(actor.actor_id, npc_id)
+        body = script.retire_notify_params(actor.actor_id, npc_id, reason)
         # The leaver is no longer in `party.actors` under their own charaId, so
         # there is nobody to skip: everybody still in the room is somebody else.
         self._drama_push_members(
@@ -8320,9 +8362,12 @@ class MpsServer:
         """What the player typed (0x7216): keep it, or refuse it as 禁止語.
 
         ⭐⭐ This is the whole reason the 禁止用語 dictionary is on this side of
-        the wire. The client never loads it, and 0x7218's only reason is
+        the wire. The client never loads it, and 0x7218's row 0 is
         「入力された文字列に禁止語が含まれています。」 -- a sentence it is
         holding for somebody else to select. See ngwords.py.
+        ⭐ Row 1 is the other rule (round 506): 「全て空白文字の文字列を登録
+        することはできません。」 -- a string of nothing but blanks is refused
+        the same way, box up, same timer.
 
         ⚠️ A refusal does NOT release the client. The box stays up and the
         player types again, so `begun` is deliberately left where it is; only
@@ -8335,6 +8380,13 @@ class MpsServer:
         """
         typed = script.input_text(params)
         shown = typed.split(b"\x00")[0]
+        if ngwords.is_blank(shown.decode("cp932", "replace")):
+            print(f"[{self.tag}] ⚠️ 入力が空白だけ -> NgScriptCommandInput "
+                  f"reason={ngwords.SCRIPT_INPUT_BLANK_REASON}")
+            return self._answer(
+                session, seen, script.MSG_SV_NG_SCRIPT_COMMAND_INPUT,
+                script.input_ng_params(session.script.input_stamp,
+                                       ngwords.SCRIPT_INPUT_BLANK_REASON))
         hit = self.accounts.ngwords.hit_bytes(shown)
         if hit is not None:
             print(f"[{self.tag}] ⚠️ 入力に禁止語「{hit}」 -> "
@@ -8692,6 +8744,7 @@ class MpsServer:
             # holds four people now, and the ones still in the room are who it
             # was written for.
             if session.chara_id:
+                self._drama_disconnect_retire(session)
                 self._drama_party_gone(session.chara_id, "on disconnect")
             self._settle()
             writer.close()
@@ -8906,6 +8959,26 @@ class MpsServer:
                 # answer rather than silence, which would leave the dialog
                 # spinning forever.
                 chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+                # ⭐⭐ A group's leader is refused, with 0x0311's own row 9:
+                # 「仲良しグループのリーダーになっている場合、削除することはで
+                # きません。」 The original did not delete a character out from
+                # under a group; the leader hands it over (引継) or folds it up
+                # (解散) first, which is exactly what 0x6223 already asks of a
+                # leader who tries to leave (see _group_part). Before this, the
+                # delete went through and GroupBook.forget took the whole group
+                # down with it, members and all -- a path the original never had.
+                # ⚠️ Only for this account's own character: a charaId that is
+                # somebody else's is row 2 below, and must not learn whether
+                # that somebody leads a group.
+                led = self.accounts.groups.of(chara_id)
+                if (led is not None and led.leader == chara_id
+                        and self._chars(session).find(chara_id) is not None):
+                    print(f"[{self.tag}] destroy charaId={chara_id} refused: "
+                          f"leads {led.label()}")
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_CHARACTER_DESTROY,
+                        refusals.byte(NG_DESTROY_IS_GROUP_LEADER),
+                    )
                 # ⭐⭐⭐ What the character leaves behind, BEFORE the record goes:
                 # `manual/p02_06` says the items survive the deletion and go into
                 # the account's ロッカー, all of them but the uniform being worn,
@@ -9624,8 +9697,19 @@ class MpsServer:
                     # an Error back is one the client draws nothing for.
                     info = self._chars(session).find(session.chara_id)
                 if info is None:
-                    print(f"[{self.tag}] chara info: no charaId={chara_id}, answering Error")
-                    return self._answer(session, sequence, MSG_SV_ERROR_CHARA_INFO, bytes(1))
+                    # ⭐ Round 506: which of 0x6502's rows. Row 1 is 「選択された
+                    # キャラクターは削除されています。」 and the id counter says
+                    # so without guessing (charaids.CharaIndex.was_deleted);
+                    # anything else is row 0, 「選択されたキャラクターの情報が
+                    # 不正です。」, the one this used to send for both.
+                    gone = self.accounts.charas.was_deleted(chara_id)
+                    print(f"[{self.tag}] chara info: no charaId={chara_id}"
+                          f"{' (deleted)' if gone else ''}, answering Error")
+                    return self._answer(
+                        session, sequence, MSG_SV_ERROR_CHARA_INFO,
+                        refusals.byte(ERROR_CHARA_INFO_DELETED if gone
+                                      else ERROR_CHARA_INFO_INVALID),
+                    )
                 print(f"[{self.tag}] chara info for charaId={chara_id}")
                 # The four 仲良しグループ fields. The book is one table for the
                 # whole server, so unlike the club flag there is no owner store
@@ -9775,7 +9859,14 @@ class MpsServer:
                 # they are not on the wire at all, and the client fills them
                 # from lesson.bin. Whether it really does is what opening this
                 # screen is meant to show.
-                chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+                # ⭐ Round 506: each refusal carries the row that says it
+                # (curriculum.SCORE_CARD_*); they all used to go out as row 0.
+                if len(params) < 4:
+                    return self._answer(
+                        session, sequence, curriculum.MSG_SV_ERROR_SCORE_CARD,
+                        refusals.byte(curriculum.SCORE_CARD_BAD_BODY),
+                    )
+                chara_id = struct.unpack_from(">I", params, 0)[0]
                 store = self._chars(session)
                 if chara_id != session.chara_id:
                     store = self.accounts.owner_of(chara_id) or store
@@ -9785,14 +9876,20 @@ class MpsServer:
                         print(f"[{self.tag}] scorecard for charaId={chara_id}: "
                               f"refused, {why}")
                         return self._answer(
-                            session, sequence, curriculum.MSG_SV_ERROR_SCORE_CARD, bytes(1)
+                            session, sequence, curriculum.MSG_SV_ERROR_SCORE_CARD,
+                            refusals.byte(curriculum.SCORE_CARD_NO_SUCH_CHARACTER
+                                          if opts is None
+                                          else curriculum.SCORE_CARD_PRIVATE),
                         )
                 card = store.scorecard(chara_id)
                 names = store.full_name(chara_id)
                 if card is None or names is None:
                     print(f"[{self.tag}] scorecard: no charaId={chara_id}, answering Error")
                     return self._answer(
-                        session, sequence, curriculum.MSG_SV_ERROR_SCORE_CARD, bytes(1)
+                        session, sequence, curriculum.MSG_SV_ERROR_SCORE_CARD,
+                        refusals.byte(curriculum.SCORE_CARD_OWN_MISSING
+                                      if chara_id == session.chara_id
+                                      else curriculum.SCORE_CARD_NO_SUCH_CHARACTER),
                     )
                 print(f"[{self.tag}] scorecard for charaId={chara_id}: {card.summary()}")
                 return self._answer(
@@ -9978,9 +10075,16 @@ class MpsServer:
                 # client's doing; each query is answered for the id it names,
                 # because guessing who it "meant" would turn a difference that
                 # can be seen into an assumption that cannot.
-                chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+                # ⭐ Round 506: rows per refusal (career.CAREER_*), as for 0x430E.
+                if len(params) < 4:
+                    return self._answer(
+                        session, sequence, career.MSG_SV_ERROR_CHARA_CAREER,
+                        refusals.byte(career.CAREER_BAD_BODY),
+                    )
+                chara_id = struct.unpack_from(">I", params, 0)[0]
+                own = chara_id == session.chara_id
                 store = self._chars(session)
-                if chara_id != session.chara_id:
+                if not own:
                     store = self.accounts.owner_of(chara_id) or store
                     opts = store.options(chara_id)
                     if opts is None or not opts["career"]:
@@ -9989,13 +10093,17 @@ class MpsServer:
                               f"refused, {why}")
                         return self._answer(
                             session, sequence,
-                            career.MSG_SV_ERROR_CHARA_CAREER, bytes(1)
+                            career.MSG_SV_ERROR_CHARA_CAREER,
+                            refusals.byte(career.CAREER_NO_SUCH_CHARACTER
+                                          if opts is None else career.CAREER_PRIVATE),
                         )
+                missing = refusals.byte(career.CAREER_OWN_MISSING if own
+                                        else career.CAREER_NO_SUCH_CHARACTER)
                 state = store.career(chara_id)
                 if state is None:
                     print(f"[{self.tag}] career: no charaId={chara_id}, answering Error")
                     return self._answer(
-                        session, sequence, career.MSG_SV_ERROR_CHARA_CAREER, bytes(1)
+                        session, sequence, career.MSG_SV_ERROR_CHARA_CAREER, missing
                     )
                 if msg_type == career.MSG_CL_QUERY_CHARA_CAREER_LIST:
                     print(f"[{self.tag}] career list for charaId={chara_id}: "
@@ -10008,7 +10116,7 @@ class MpsServer:
                 if names is None:
                     print(f"[{self.tag}] career: no charaId={chara_id}, answering Error")
                     return self._answer(
-                        session, sequence, career.MSG_SV_ERROR_CHARA_CAREER, bytes(1)
+                        session, sequence, career.MSG_SV_ERROR_CHARA_CAREER, missing
                     )
                 # 授業出席数 and 習得部活奥義 are read off the 通知表 and the
                 # 部活奥義 list rather than stored a second time; career.py says
@@ -10087,7 +10195,8 @@ class MpsServer:
                 locker = self._locker(session)
                 if msg_type == item.MSG_CL_CAST_ITEM_EQUIP:
                     replies, changed = item.equip_replies(
-                        inv, session.chara_id, params)
+                        inv, session.chara_id, params,
+                        sex=self._chars(session).sex(session.chara_id))
                 elif msg_type == item.MSG_CL_CAST_ITEM_USE:
                     replies, changed = item.use_replies(
                         inv, session.chara_id, params)

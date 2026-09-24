@@ -83,6 +83,20 @@ import struct
 MSG_CL_QUERY_CHARA_CAREER = 0x4315
 MSG_SV_RESULT_CHARA_CAREER = 0x4316
 MSG_SV_ERROR_CHARA_CAREER = 0x4317
+
+#: 0x4317's rows, read under its own id. The same six-row shape 0x430E has, and
+#: the same fix (round 506): 経歴公開 off is row 5, not the row 0 it used to go
+#: out as.
+#:  0 プレイヤー情報が不正です。                            -- a body too short to name anybody
+#:  1 選択されたキャラクターの情報取得に失敗しました。      -- the id names no character
+#:  5 選択したキャラクターは、現在、経歴を公開していません。
+#:  6 キャラクター情報が取得できませんでした。              -- the asker's own record is missing
+#: UNSENT-REASON 0x4317 2,3,4 -- 「この機能は、現在、使用することができません」 and
+#: the two 申込み states are gates this end has no state for.
+CAREER_BAD_BODY = 0
+CAREER_NO_SUCH_CHARACTER = 1
+CAREER_PRIVATE = 5
+CAREER_OWN_MISSING = 6
 MSG_CL_QUERY_CHARA_CAREER_LIST = 0x4318
 MSG_SV_RESULT_CHARA_CAREER_LIST = 0x4319
 MSG_SV_NOTIFY_CHARA_CAREER_LIST = 0x431A

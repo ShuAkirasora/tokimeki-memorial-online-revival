@@ -73,7 +73,7 @@ server:
 
 ⚠️⚠️ 0x6807 AND 0x680B CARRY A BYTE THAT NEITHER HANDLER READS. Both readers
 take one, and both handlers go straight to the window without touching the
-message. Their sentences (rows 11-17 of the table 0x6802's neighbours share)
+message. Their sentences (rows 11-17 of 0xFF04, the table every Notify*Cancel shares)
 are about the 申し込み and are drawn by the applicant's end, not by this one.
 So the value below is chosen for the log and for whoever reads this next, and
 changing it cannot change a pixel.
@@ -205,14 +205,19 @@ GM_CHARA_ID = id_of(0)
 #: terminator the count includes.
 TEXT_MAX = 94
 
-#: 0x6802's two reasons, by the rows the client's own table gives them. These
-#: are what a retail client sends unprompted; nothing here ever sends 0x6802.
+#: 0x6802's two reasons. These are what a retail client sends unprompted;
+#: nothing here ever sends 0x6802. ⚠️ The row texts beside them are labels, not
+#: what anybody sees: they are 0xFF0A's, the ＧＭチャット table, which the client
+#: looks up for the GM side's three refusals (0x6702 0x6705 0x6721) -- not for
+#: 0x6802, which is the client's own message and goes the other way.
 NG_BAD_CHARA_INFO = 5   # 未使用：：：キャラクターの情報が不正です。 (not on campus)
 NG_ALREADY_APPLIED = 8  # 既に申し込んでいます。 (already in a GM chat)
 
-#: 0x6806's rows, from the same table. reason 3 is the one that fits a line
-#: arriving with no chat open: 「指定されたキャラクターは、現在申し込みを受けて
-#: いません。」
+#: 0x6806's row. ⚠️ Not out of 0xFF0A: FUN_008163e9 sends 0x6806 to 0xFF00, the
+#: table every chat channel's Error shares, and 0xFF00's row 3 is 「チャット相手が
+#: 存在していません。」 -- which is what a line arriving with no chat open is.
+#: (This comment used to quote 0xFF0A's row 3; the value was right, the table
+#: named for it was not.)
 ERROR_NOT_APPLIED = 3
 
 #: 0x6807's byte. Neither of the two rows is read by the handler (see the

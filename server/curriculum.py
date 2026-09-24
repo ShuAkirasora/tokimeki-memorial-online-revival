@@ -54,6 +54,24 @@ MSG_CL_QUERY_SCORE_CARD = 0x430C
 MSG_SV_RESULT_SCORE_CARD = 0x430D
 MSG_SV_ERROR_SCORE_CARD = 0x430E
 
+#: 0x430E's rows, which the client looks up under 0x430E's own id (no redirect).
+#: ⚠️ Until round 506 every refusal went out as row 0, 「キャラクター情報が不正です。」,
+#: including the one refusal that has a sentence of its own: a card whose owner
+#: keeps 通知表公開 off is row 5, word for word.
+#:  0 キャラクター情報が不正です。                          -- a body too short to name anybody
+#:  1 指定されたキャラクターの情報取得に失敗しました。      -- the id names no character
+#:  5 選択したキャラクターは、現在、通知表を公開していません。
+#:  6 キャラクター情報が取得できませんでした。              -- the asker's own card is missing
+#: ⚠️ Rows 1 and 6 read alike; which of the two goes with "somebody else's id is
+#: unknown" and which with "my own record is gone" is this end's reading of
+#: 指定された (the one you named) against the bare 6.
+#: UNSENT-REASON 0x430E 2,3,4 -- 交流メニュー off and the two 申込み states are the
+#: PC menu's gates; this end has no state that closes the menu or the target.
+SCORE_CARD_BAD_BODY = 0
+SCORE_CARD_NO_SUCH_CHARACTER = 1
+SCORE_CARD_PRIVATE = 5
+SCORE_CARD_OWN_MISSING = 6
+
 NAME_LEN = 11  # tmn::MAX_CHARA_FAMILYNAME + 1, same as characters.NAME_LEN
 
 # `subject_type.bin` and `lesson.bin` agree, keys 0–7 in this order. The wire's

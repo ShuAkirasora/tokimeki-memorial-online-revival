@@ -225,6 +225,10 @@ NG_ALREADY_STARTED = 23     # 既にドラマイベントが開始されてい�
 NG_KICK_SELF = 24           # 自分自身を強制退室させることはできません。
 NG_ENV_UNCHANGED = 25       # 入力されたパーティ名とパスワードが両方とも…
 NG_DUPLICATE_NAME = 26      # 同名のパーティが存在しています。
+#: 入力されたパーティ名に適切でない表現・言葉が含まれています。 -- ⭐ round 506:
+#: the party name goes through the same 禁止用語 dictionary 0x7218 and 0xFF07's
+#: row 29 already use (ngwords.py), on create and on 0xE021's rename alike.
+NG_NAME_FORBIDDEN = 6
 
 # 0xE00A's reason, from the client's own three sentences at 0xBD75D8:
 # 自分自身の要求による / リーダーに排除された / 切断による.

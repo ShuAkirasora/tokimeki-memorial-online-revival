@@ -154,6 +154,21 @@ class CharaIndex:
 
     # -- lookup and allocation --------------------------------------------
 
+    def was_deleted(self, chara_id: int) -> bool:
+        """Handed out once and owned by nobody now: a character that was deleted.
+
+        ⭐ This is what the counter never going backwards buys (module
+        docstring): an id below ``next_id`` was minted, and one that is no
+        longer in ``owners`` was released by a delete. 0x6502's row 1,
+        「選択されたキャラクターは削除されています。」, is the client's own
+        sentence for exactly this, distinct from row 0 for an id that was
+        never a character at all.
+        ⚠️ An id minted under the old shift and never backfilled would read as
+        deleted too; backfill() runs at startup, so on this server there is
+        none.
+        """
+        return CHARA_ID_BASE <= chara_id < self.next_id and chara_id not in self.owners
+
     def owner(self, chara_id: int) -> int | None:
         """The account holding this charaId, or None if nothing does.
 

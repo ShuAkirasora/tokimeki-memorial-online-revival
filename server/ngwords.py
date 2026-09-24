@@ -97,9 +97,25 @@ from pathlib import Path
 #: in two directories, for the reason naming.RESERVED_FILE gives.
 NGWORDS_FILE = "ngwords.json"
 
-#: 0x7218 MsgSvNgScriptCommandInput. The list has one row and this is it:
+#: 0x7218 MsgSvNgScriptCommandInput, row 0:
 #: 「入力された文字列に禁止語が含まれています。」
 SCRIPT_INPUT_REASON = 0
+
+#: 0x7218 row 1: 「全て空白文字の文字列を登録することはできません。」 -- the other
+#: rule the original held for this box (round 506; this file used to say row 0
+#: was the only one). Row 2 is 「デバッグ用：：：その他」, the developers' own.
+#: UNSENT-REASON 0x7218 2 -- a debugging catch-all the developers labelled as such.
+SCRIPT_INPUT_BLANK_REASON = 1
+
+
+def is_blank(text: str) -> bool:
+    """Nothing but blanks: ASCII spaces and tabs, and the full-width space.
+
+    ⚠️ An empty string counts. 「全て空白文字」 is true of it, and a name that
+    shows as nothing on the other player's screen is the very thing the rule
+    keeps out.
+    """
+    return text.strip(" \t\r\n\u3000") == ""
 
 #: 0xFF07 reason 29, which is what a refused 0x6202 MsgSvNgCharaGroupCreate
 #: selects: 「入力されたグループ名に禁止語が含まれています。」

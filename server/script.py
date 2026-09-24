@@ -434,23 +434,32 @@ def script_status_params(actor_id: int, state: int) -> bytes:
     return struct.pack(">HI", actor_id, state & 0xFFFFFFFF)
 
 
-#: 0x7206's `reason`, and the whole of what this end can honestly say about it.
+#: 0x7206's `reason`: why the 役柄 was emptied.
 #:
 #: ⚠️⚠️ THE CLIENT NEVER READS IT. Its handler (0x78550E) takes `actorId` out
 #: of the body, compares it with its own 役柄 (`+0x30`), and branches on that:
 #: somebody else's retire draws 「%1%さんが\nパーティーから抜けました。」
 #: (`msg_text` 573) and its own takes it out of the play. `reason` is never
-#: loaded. ⇒ a second value here would be a number with no way to be right and
-#: no way to be caught being wrong -- a field with one observable value cannot
-#: be measured, however long it is stared at -- so both ways out of a 役柄 --
-#: 「イベント中断」 and the five minutes -- send 0.
-#: ⚠️ Round 481 took `npcId` off that list: the somebody-else branch hands the
-#: `{actorId, npcId}` pair whole to the party object (0x6583E1 appends it to
+#: loaded.
+#: ⭐⭐ Round 506: which value goes with which road is NOT open, though, and
+#: this comment used to say it was ("a second value here would be a number with
+#: no way to be right"). error_message.bin files three sentences under 0x7206's
+#: own id -- it is in no redirect -- and they name the three roads one each:
+#:   0  イベントを中断しました。                                   (イベント中断, 続けますか？→いいえ)
+#:   1  通信が切断されたため、イベントを強制終了しました。         (the connection went)
+#:   2  ５分間操作が行われなかったため、イベントを強制終了しました。(the manual's five minutes)
+#: So the values are the client's own table, not a choice; that the handler of
+#: this build does not look is a fact about the reader, not about the byte.
+#: ⚠️ Round 481 took `npcId` off the unread list: the somebody-else branch hands
+#: the `{actorId, npcId}` pair whole to the party object (0x6583E1 appends it to
 #: a list), and when the play resumes the script screen (0x71AD32) walks that
 #: list and looks each `npcId` up in category 6 for the slot's name and looks
 #: -- the same lookup 0x7200's `npcInfo[]` gets. So the stand-in's identity
 #: is read, out of this message and out of nothing else.
-RETIRE_REASON = 0
+RETIRE_ASKED = 0
+RETIRE_DISCONNECTED = 1
+RETIRE_IDLE = 2
+RETIRE_REASON = RETIRE_ASKED
 
 
 def retire_notify_params(actor_id: int, npc_id: int,

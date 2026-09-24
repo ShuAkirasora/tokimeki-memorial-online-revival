@@ -162,10 +162,6 @@ What is still missing, and why:
   * WHICH ITEMS CANNOT GO IN A LOCKER (0x4D0C reason 2). ⚠️ NOT the same bit as
     NO_DISCARD: 0:119 and 1:236 carry that one and still had 「ロッカーにしまう」
     live, so this is a third flag with no sample yet.
-  * WHICH ITEMS ARE ONE GENDER'S (0x4D05 reasons 5 and 6). Undecoded, and the
-    obvious probe misfired -- a boy could not equip 1:237 ＧＭ用ネクタイ either,
-    and a necktie is not the girls' half of that pair, so whatever stops those
-    two is not gender.
   * HOW BIG A LOCKER IS (0x4D0C reason 4). See LOCKER_CAPACITY.
 
 INVENTED, beyond the grant itself
@@ -224,11 +220,11 @@ EQUIP_BAD_ITEM = 1          # 選択されたアイテムの情報もしくは�
 EQUIP_NOT_HELD = 2          # 選択されたアイテムを所持していません。
 EQUIP_ALREADY_WORN = 3      # 選択された装飾品は既に身に付けています。
 EQUIP_NOT_WORN = 4          # 選択された装飾品は身に付けていません。
-EQUIP_MALE_ONLY = 5         # ⚠️ never sent: no gender flag decoded
-EQUIP_FEMALE_ONLY = 6       # ⚠️ never sent: no gender flag decoded
+EQUIP_MALE_ONLY = 5         # 男子専用の装飾品です。女子が身に付けることはできません。(MALE_ONLY)
+EQUIP_FEMALE_ONLY = 6       # 女子専用の装飾品です。男子が身に付けることはできません。(FEMALE_ONLY)
 EQUIP_NOT_WEARABLE = 7      # 身に付けられるアイテムではありません。
 EQUIP_CANNOT_REMOVE = 8     # その装飾品を外すことはできません。(NO_UNEQUIP)
-EQUIP_OTHER_PC = 9          # ⚠️ never sent: nothing here equips another player
+EQUIP_OTHER_PC = 9          # 他のＰＣ用の装備品ですので、操作できません。(OTHER_PC)
 
 # 0x4D08 MsgSvErrorItemUse, five. ⚠️ reason 4 is a 未使用 placeholder in the
 # file itself (「未使用：：：その他のエラー」), so four are usable.
@@ -295,6 +291,57 @@ NO_DISCARD: "dict[int, tuple[tuple[int, int], ...]]" = {
     1: ((236, 245),),
     2: ((23, 23),),
 }
+
+# ⭐⭐⭐ WHO MAY WEAR WHAT, round 506 -- three bytes of every 装飾 record's tail,
+# read off `item.bin` and not off any refusal. Counting from the 188-byte tail
+# (record offset 0x99), bytes 2, 3 and 4 are:
+#
+#     [2]  a player's item at all   0 on every ＧＭ／流用ＮＰＣ／友達 piece
+#     [3]  a boy may wear it        1 on every ネクタイ, 0 on every リボン
+#     [4]  a girl may wear it       0 on every ネクタイ, 1 on every リボン
+#
+# ⭐ Two readings that do not know about each other agree with no exception:
+# the bytes, and the names. What [3]-only marks besides the neckties is
+# 3:8 無精ひげ and 2:19 モミアゲ; what [4]-only marks besides the ribbons is
+# every ヘアバンド, ポニーリボン, サイド結び, リボン２ and the メイド帽子;
+# both are set on the uniforms, the glasses, the ほくろ, ネコ耳 and ウサ耳.
+# ⭐⭐ And [2] = 0 marks EXACTLY the set NO_DISCARD above was measured to be
+# (through the grey 「捨てる」 button, at another offset) -- the staff and NPC
+# wardrobe -- which is 0x4D05's row 9 in as many words: 「他のＰＣ用の装備品
+# ですので、操作できません。」 That is also the old puzzle the docstring kept:
+# a boy could not put on 1:237 ＧＭ用ネクタイ even though it is a necktie,
+# because it is not a player's necktie at all.
+# ⚠️ Transcribed; the other tree re-reads the three bytes out of `item.bin`
+# and compares these runs to them, both ways.
+MALE_ONLY: "dict[int, tuple[tuple[int, int], ...]]" = {
+    1: tuple((i, i) for i in range(1, 34, 2)) + ((237, 237), (239, 239)),
+    2: ((19, 19),),
+    3: ((8, 8),),
+}
+FEMALE_ONLY: "dict[int, tuple[tuple[int, int], ...]]" = {
+    1: tuple((i, i) for i in range(0, 33, 2)) + ((236, 236), (238, 238)),
+    2: ((1, 6), (9, 10), (12, 14), (16, 18), (20, 22), (23, 23)),
+}
+#: The staff and NPC wardrobe: the same runs as NO_DISCARD, byte for byte.
+OTHER_PC = NO_DISCARD
+
+
+def wear_refusal(category: int, item_id: int, sex: "int | None") -> "int | None":
+    """0x4D05's row for putting this on, from the three bytes above, or None.
+
+    Row 9 first: an item that is not a player's is refused whoever asks, and
+    its sex bytes are the NPC's, not a rule for players. ``sex`` is the
+    character's 性別 (0 男, 1 女); None skips the sex test, which is what a
+    record this end cannot read the create block of gets.
+    """
+    if _in_runs(OTHER_PC, category, item_id):
+        return EQUIP_OTHER_PC
+    if sex == 1 and _in_runs(MALE_ONLY, category, item_id):
+        return EQUIP_MALE_ONLY
+    if sex == 0 and _in_runs(FEMALE_ONLY, category, item_id):
+        return EQUIP_FEMALE_ONLY
+    return None
+
 
 # How many distinct rows one account's ロッカー holds, or None for no limit.
 # ⚠️ There WAS a limit -- 0x4D0C spends a sentence on 「ロッカーがいっぱいです」
@@ -972,7 +1019,8 @@ def _refusal(msg_type: int, reason: int) -> "tuple[list[tuple[int, bytes]], bool
 
 
 def equip_replies(
-    inv: "Inventory | None", chara_id: int, params: bytes
+    inv: "Inventory | None", chara_id: int, params: bytes,
+    sex: "int | None" = None,
 ) -> "tuple[list[tuple[int, bytes]], bool]":
     """0x4D04 -> one or more 0x4D06, or 0x4D05. ``(replies, changed)``.
 
@@ -1000,6 +1048,12 @@ def equip_replies(
         return _refusal(MSG_SV_ERROR_ITEM_EQUIP, EQUIP_NOT_WORN)
     if not equip and not can_unequip(category, item_id):
         return _refusal(MSG_SV_ERROR_ITEM_EQUIP, EQUIP_CANNOT_REMOVE)
+    # ⭐ Round 506: 男子専用／女子専用／他のＰＣ用 -- putting on only. Taking
+    # off is never refused for these: whatever got it onto the character, a
+    # player left unable to remove it would be worse than the rule.
+    refused = wear_refusal(category, item_id, sex) if equip else None
+    if refused is not None:
+        return _refusal(MSG_SV_ERROR_ITEM_EQUIP, refused)
     replies = []
     if equip:
         for was_category, was_id in inv.wear(category, item_id):
