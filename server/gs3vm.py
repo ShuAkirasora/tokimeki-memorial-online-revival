@@ -37,6 +37,7 @@ than no answer:
 from __future__ import annotations
 
 import json
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -303,6 +304,11 @@ def event_key(field: int, table: str) -> tuple[int, int]:
 # the field, so this end is the only side that can use it -- and the only side
 # that can ever prove it wrong.
 OP_RESULT_MULTI_PLAYER_EVENT = 0x9200
+
+# The rendezvous. Every member of a party stops on it and the server lets them
+# all go together (`mps_session._player_wait`); `PLAYER_WAIT_TIME` next to it
+# is the client's own timer and not a rendezvous at all.
+OP_PLAYER_SYNC = 0x9100
 
 # The choice box. The client stops dead on it and asks (0x721c); the answer is
 # a bitmask, one bit per option, and the options' own on/off flags are the
@@ -2985,6 +2991,240 @@ def follow(script_id: int, cells: dict | None = None,
     """
     script = by_script_id(script_id)
     return (Follower(script, cells, registers, actor)
+            if script is not None else None)
+
+
+#: ⚠️ INVENTED — which of a choice box's lit lines a 代行ＮＰＣ takes: the
+#: first one (0). The game's manual says a stand-in 「単純な選択しかできません」
+#: and the scenarios narrow a stand-in's boxes to one lit line where it
+#: matters (`un007` ip=6721 on `PC[0x7000]`), which is where the choice is
+#: not this end's; this number only decides the boxes they leave open.
+#: Clamped into the lit lines the way the client clamps a highlight
+#: (`StandIn.step_once`). `TMO_STAND_IN_CHOICE` overrides it.
+STAND_IN_CHOICE = int(os.environ.get("TMO_STAND_IN_CHOICE", "0"))
+
+#: ⚠️ INVENTED — which of the answers a free-text box carries in its own
+#: operand a 代行ＮＰＣ 「types」: the first one (0). Nineteen of the 21 text
+#: boxes in the two-role scenarios sit on the shared road with no stand-in
+#: arm in front of them (`un111` ip=9992 is the first), so a stand-in that
+#: is asked one has to put *something* in the register the box names, and
+#: the three lines the instruction itself offers (`un127` ip=17689 carries
+#: the very three its stand-in arm picks from by counter) are the only text
+#: in reach that is the scenario's own. `TMO_STAND_IN_TYPES` overrides it.
+STAND_IN_TYPES = int(os.environ.get("TMO_STAND_IN_TYPES", "0"))
+
+
+class StandIn(Follower):
+    """A 代行ＮＰＣ's cursor: the same walk as a member's shadow, steered here.
+
+    ⭐⭐⭐ **Why this end walks it, read off the client.** A client runs one
+    役柄 and one only: the script machine keeps four 役柄 frames, the load
+    marks every frame but its own 0x400 (0x9F1498), the main loop steps a
+    frame only while its stop bits are clear (0x9FC050), and the three
+    downstream messages that clear them -- 0x721A branch, 0x721D end, 0x721E
+    variables -- all go through 0x9F1796, which is the frame of *this
+    client's* 役柄 (+0x34) and nothing else. Those five are the only writers
+    of a frame's stop bits in the whole machine. So nothing on the wire can
+    make a client take one step for a 役柄 that is not its own, and a 役柄
+    nobody is sitting at has no client at all.
+
+    ⭐⭐⭐ And the scenarios are written for that 役柄 to be walked all the
+    same: `un127` puts, *inside 役柄 1's own bracket*, a 「that seat is a
+    stand-in」 arm (`PC[0x7000]`, ip=17674) that picks one of three canned
+    secrets by counter instead of opening the text box -- code that only a
+    cursor for 役柄 1 can ever reach, and that 役柄 1 only needs when it is
+    a stand-in. Whatever walked it was not a client; the one machine left
+    with the register file and the cursor is the server. This class is that
+    walk: the same instruction semantics as `Follower` (it *is* one), over
+    the party's register file, with the four stops a client would answer
+    for itself answered here -- 役柄 test, branch, choice box, text box --
+    and the rendezvous parked on until the members arrive.
+
+    ⚠️⚠️ What is read and what is invented are kept apart: the walk, the
+    役柄 test, the branch and 「the register the box fills」 are the
+    scenario's own; *which* lit line and *which* carried answer a stand-in
+    takes are `STAND_IN_CHOICE` / `STAND_IN_TYPES`, and marked so.
+
+    ⚠️ It steers, unlike its parent: `Follower` goes where the client went,
+    this one goes where its own arithmetic says. `walk` stops at a
+    rendezvous (`blocked`), on a branch whose click has not come (`held`,
+    the same fence `mps_session._click_fence` keeps for the members), at
+    `OP_END` (`done`) or when it lost its place (`lost`), and never anywhere
+    else, so a caller that has walked it knows which of the four it is in.
+    """
+
+    def __init__(self, script: Script, cells: dict | None = None,
+                 registers: dict | None = None, actor: int = 0) -> None:
+        super().__init__(script, cells, registers, actor)
+        #: The rendezvous this cursor is parked at, `(ip, op)`, or None.
+        self.blocked: tuple[int, int] | None = None
+        #: Reached `OP_END` (or the scenario ended some other way).
+        self.done = False
+        #: The 役柄 whose click the branch in front reads and has not come.
+        self.held: tuple[int, ...] | None = None
+        #: `(stand_in) -> list of 役柄 to wait for` -- the click fence, which
+        #: only the session layer can answer since it is about who is sitting
+        #: on which box. None means no fence, which is what the offline
+        #: callers want.
+        self.fence = None
+        self.steps = 0
+        #: What the last `walk` did, one line each, for the log.
+        self.events: list[str] = []
+        # The three books `mps_session._click_fence` keeps per member, kept
+        # here for a member with no session.
+        self.answered: dict[int, int] = {}
+        self.walked_by: dict[int, int] = {}
+        self.awaiting: dict[int, int] = {}
+
+    # -- state -----------------------------------------------------------
+    @property
+    def parked(self) -> bool:
+        return self.done or self.lost is not None or self.blocked is not None
+
+    def release(self) -> None:
+        """The rendezvous opened: step past it."""
+        if self.blocked is None:
+            return
+        self.blocked = None
+        self.pos += 1
+
+    def describe(self) -> str:
+        ip = self.script.code[self.pos][0] if 0 <= self.pos < len(self.script.code) else -1
+        if self.lost:
+            return f"役柄 {self.actor} lost: {self.lost}"
+        if self.done:
+            return f"役柄 {self.actor} OP_END"
+        if self.blocked is not None:
+            return f"役柄 {self.actor} PLAYER_SYNC ip={self.blocked[0]} で待機"
+        if self.held is not None:
+            who = ",".join(str(n) for n in self.held)
+            return f"役柄 {self.actor} ip={ip} 役柄 {who} の選択待ち"
+        return f"役柄 {self.actor} ip={ip}"
+
+    # -- the walk ----------------------------------------------------------
+    def walk(self) -> list[str]:
+        """Go on until parked, held, done or lost. Returns what happened."""
+        self.events = []
+        try:
+            while not self.parked and self.held is None:
+                if not self.step_once():
+                    break
+        except (UnsupportedOp, UnknownCell, Runaway) as exc:
+            self._lose(str(exc))
+        return self.events
+
+    def _goto(self, ip: int) -> None:
+        found = self.script.index.get(ip)
+        if found is None:
+            raise Runaway(f"{self.script.name}: ip={ip} is not an instruction start")
+        self.pos = found
+
+    def step_once(self) -> bool:
+        """One instruction. False when nothing moved (parked, held, done)."""
+        if self.parked or self.held is not None:
+            return False
+        if not 0 <= self.pos < len(self.script.code):
+            self.done = True
+            return False
+        ip, op, args = self.script.code[self.pos]
+        if op == OP_BR and self.fence is not None:
+            waiting = self.fence(self)
+            if waiting:
+                self.held = tuple(waiting)
+                self.events.append(f"ip={ip} 役柄 "
+                                   f"{','.join(str(n) for n in waiting)} の選択待ち")
+                return False
+        self.steps += 1
+        if self.steps > self.STEP_BUDGET:
+            raise Runaway(f"{self.script.name}: 役柄 {self.actor} "
+                          f"{self.STEP_BUDGET} steps and still going")
+        if op == OP_PLAYER_SYNC:
+            self.blocked = (ip, op)
+            self.events.append(f"PLAYER_SYNC ip={ip} で待機")
+            return False
+        if op == OP_END:
+            self.done = True
+            self.events.append("OP_END")
+            return False
+        if op == OP_RESULT_MULTI_PLAYER_EVENT:
+            # The members' ending is booked per session (`_drama_result`);
+            # a stand-in has no record to book it against and walks on.
+            self.pos += 1
+            return True
+        if op == OP_BA:
+            mask = int.from_bytes(args[0:2], "little")
+            if mask & (1 << self.actor):
+                self._goto(_jump_target(args))
+            else:
+                self.pos += 1
+            return True
+        if op == OP_BA_END:
+            self.pos += 1
+            return True
+        if op == OP_BR:
+            register = _register(int.from_bytes(args[0:2], "little"))
+            condition = (self.own[register] if register in self.own
+                         else self._get(register))
+            if is_die(condition):
+                # A die nobody rolled falls through (`_Die`); with `roll`
+                # installed this never happens, since OP_RAND then draws.
+                take = False
+                self.events.append(f"ip={ip} unrolled die -> falls through")
+            else:
+                take = not _unknown(condition) and bool(condition)
+            if take:
+                self._goto(_jump_target(args))
+            else:
+                self.pos += 1
+            return True
+        if op == OP_INPUT_SELECT:
+            asked = int.from_bytes(args[2:4], "little")
+            options = int.from_bytes(args[14:18], "little") & 0x3F
+            if asked >> self.actor & 1:
+                mask, unknown, _ = self.select()
+                lit = mask | unknown
+                pick = STAND_IN_CHOICE
+                if options > 0:
+                    pick = min(max(pick, 0), options - 1)
+                if lit and not lit >> pick & 1:
+                    pick = (lit & -lit).bit_length() - 1
+                self.registers[(CAT_SELECT, self.actor)] = pick
+                self.answered[ip] = self.answered.get(ip, 0) + 1
+                self.events.append(f"選択肢 ip={ip} → {pick} "
+                                   f"(lit={lit:#x} of {options})")
+            else:
+                self.walked_by[ip] = self.walked_by.get(ip, 0) + 1
+                for who in range(8):
+                    if asked >> who & 1 and who != self.actor:
+                        self.awaiting[who] = ip
+            self.pos += 1
+            return True
+        if op in INPUT_STRING_OPS:
+            box = self.script.inputs.get(ip)
+            if box is not None and box.get("actor") == self.actor:
+                answers = list(box.get("answers") or ())
+                text = answers[STAND_IN_TYPES % len(answers)] if answers else ""
+                self.registers[box["register"]] = text
+                self.events.append(f"文字入力 ip={ip} → 「{text}」")
+            self.pos += 1
+            return True
+        if op == OP_SYNC_VARIABLE:
+            self.pos += 1
+            return True
+        nxt = self._step(self.pos)
+        if nxt is None or not 0 <= nxt < len(self.script.code):
+            self.done = True
+            self.events.append(f"op {op:#06x} at ip={ip} ended the walk")
+            return False
+        self.pos = nxt
+        return True
+
+
+def stand_in(script_id: int, cells: dict | None = None,
+             registers: dict | None = None, actor: int = 0) -> StandIn | None:
+    """A stand-in's cursor for the scenario, or None when it is not exported."""
+    script = by_script_id(script_id)
+    return (StandIn(script, cells, registers, actor)
             if script is not None else None)
 
 

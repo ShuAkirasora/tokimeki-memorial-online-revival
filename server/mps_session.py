@@ -2325,6 +2325,16 @@ class MpsServer:
         # a party is something other players look at, so it cannot live on the
         # session that made it. See drama.Board.
         self.dramaparties = drama.Board()
+        # ⭐⭐⭐ The cursors this end walks for the 代行ＮＰＣ of each party's
+        # play, `party_id -> {actor_id: gs3vm.StandIn}`. A stand-in has no
+        # session and so no shadow of its own to hang off; the argument for
+        # why anything walks it at all is `gs3vm.StandIn`'s docstring, and
+        # the moments it is walked are `_stand_in_walk`'s callers.
+        self._stand_ins: dict[int, dict[int, "gs3vm.StandIn"]] = {}
+        # `_stand_in_walk` is reached from `_click_fence`, which a walk can
+        # reach again through `_release_held_branches`; this keeps one walk
+        # from nesting inside itself.
+        self._stand_in_walking = False
         # Every connection currently up on this port. Kept so that a Notify can
         # find a player by charaId rather than only being able to answer the
         # connection it is standing on -- which is all a one-player server ever
@@ -5050,6 +5060,8 @@ class MpsServer:
                 if actor.chara_id == session.chara_id:
                     actor_id = actor.actor_id
             self.dramaparties.part(session.chara_id)
+            if party.party_id not in self.dramaparties.parties:
+                self._stand_in_drop(party)
             print(f"[{self.tag}] drama party part: #{party.party_id}, "
                   f"now {self.dramaparties.summary()}")
             # ⭐ …and comes down at 離脱. ⚠️ Only here and not in
@@ -5595,6 +5607,8 @@ class MpsServer:
 
         gone = target.chara_id
         self.dramaparties.part(gone)
+        if party.party_id not in self.dramaparties.parties:
+            self._stand_in_drop(party)
         print(f"[{self.tag}] drama party kick: #{party.party_id} actorId={actor_id}, "
               f"now {self.dramaparties.summary()}")
         # ⚠️ The party cannot have emptied: the leader is doing the kicking and
@@ -5955,6 +5969,7 @@ class MpsServer:
             if other is not None and other.script is not None:
                 return b""
         party.state = drama.STATE_RECRUITING
+        self._stand_in_drop(party)
         print(f"[{self.tag}] drama party end: #{party.party_id} back to "
               f"参加者募集中, now {self.dramaparties.summary()}")
         record = drama.party_record(party)
@@ -6175,17 +6190,194 @@ class MpsServer:
                 # them, not a number chosen here (`script.PC_SKIN_COLOR`).
                 cells[("PC", script.PC_SKIN_COLOR)] = profile_numbers(
                     proxynpc.create_info(row))[2]
-            stand_in = gs3vm.follow(
+            # ⭐⭐⭐ Round 498: the stand-in's cursor is walked by this end.
+            # Until now this was a `Follower` that only ever supplied its
+            # cells -- 「supplies cells, never steps」 -- and the half of every
+            # two-role play written inside the stand-in's own `OP_BA` bracket
+            # (`un127` ip=17634..17750: the canned-secret arm) had no executor
+            # at all, since a client walks one 役柄 only. `gs3vm.StandIn` for
+            # why the server is the one machine that can, and what it invents.
+            stand_in = gs3vm.stand_in(
                 found.script_id, cells, party_registers, actor.actor_id)
             if stand_in is not None:
+                stand_in.roll = self._script_roll
+                stand_in.season = _season()
+                stand_in.fence = (lambda cursor, party=party:
+                                  self._stand_in_fence(party, cursor))
                 shadows[actor.actor_id] = stand_in
+                self._stand_ins.setdefault(party.party_id, {})[
+                    actor.actor_id] = stand_in
                 print(f"[{self.tag}] vm: 役柄 {actor.actor_id} is a "
                       f"代行ＮＰＣ -- PC/{actor.actor_id}[0x7000] <- 1"
                       + (f", name <- {family} {first}" if row is not None
-                         else ""))
+                         else "") + ", this end walks its cursor")
         for shadow in shadows.values():
             shadow.peers = shadows
+        # The stand-ins start walking now, ahead of the members' first
+        # report: what they write before the first rendezvous (the prologue
+        # zero-fill among it, which `Follower._prologue_done` then sees done)
+        # has to be in the file before anybody reads it.
+        self._stand_in_walk(party, "点火")
         return out
+
+    # -- 代行ＮＰＣ: the cursors this end walks ------------------------------
+    def _stand_in_fence(self, party: "drama.Party",
+                        cursor: "gs3vm.StandIn") -> list[int]:
+        """`_click_fence` for a stand-in: whose click does the branch in front
+        of it read, that has not come yet.
+
+        The same four rules as the members' fence, line for line, with the
+        session-side books read off the member and the cursor-side ones off
+        the stand-in (`gs3vm.StandIn.answered` / `walked_by` / `awaiting`).
+        ⚠️ The two ways out are the same two and for the same reason: a member
+        held on a rung or parked at a rendezvous cannot reach a box while we
+        sit here, so waiting for them would wedge the play. Another stand-in
+        is never waited for: it answers a box the instant it walks onto it.
+        """
+        needs = cursor.branch_clicks() - {cursor.actor}
+        if not needs:
+            return []
+        out: list[int] = []
+        for actor in party.actors:
+            if actor.actor_id not in needs or actor.is_surrogate:
+                continue
+            other = self._session_of(actor.chara_id)
+            if other is None or other.script is None:
+                continue
+            if (other.script.held_branch is not None
+                    or (other.script.begun is not None
+                        and other.script.begun[1] == script.OP_PLAYER_SYNC)):
+                continue
+            if (other.script.begun is not None
+                    and other.script.begun[1] == gs3vm.OP_INPUT_SELECT):
+                out.append(actor.actor_id)
+                continue
+            box = cursor.awaiting.get(actor.actor_id)
+            if box is not None and (other.script.answered.get(box, 0)
+                                    < cursor.walked_by.get(box, 0)):
+                out.append(actor.actor_id)
+        return out
+
+    def _stand_in_walk(self, party: "drama.Party | None", why: str = "") -> bool:
+        """Let every stand-in of this party's play go as far as it can.
+
+        ⭐ Called at every moment something a stand-in could be waiting for
+        can have changed: ignition, a member's click or line, a rendezvous
+        opening, a member leaving -- and from `_click_fence`, so a member's
+        branch never waits on a stand-in that merely had not caught up yet.
+        A held cursor has its fence asked again first; a parked one waits for
+        `_stand_in_release`. Returns whether anything moved.
+        """
+        if party is None or self._stand_in_walking:
+            return False
+        cursors = self._stand_ins.get(party.party_id)
+        if not cursors:
+            return False
+        self._stand_in_walking = True
+        moved = False
+        try:
+            for cursor in cursors.values():
+                if cursor.parked:
+                    continue
+                if cursor.held is not None:
+                    if cursor.fence is not None and cursor.fence(cursor):
+                        continue
+                    cursor.held = None
+                    why_lost = cursor.recompute_condition()
+                    if why_lost:
+                        print(f"[{self.tag}] 代行ＮＰＣ 役柄 {cursor.actor}: "
+                              f"lost its place: {why_lost}")
+                        continue
+                before = cursor.steps
+                start = (cursor.script.code[cursor.pos][0]
+                         if 0 <= cursor.pos < len(cursor.script.code) else -1)
+                events = cursor.walk()
+                if cursor.steps != before or events:
+                    moved = True
+                    told = "; ".join(events) if events else "-"
+                    print(f"[{self.tag}] 代行ＮＰＣ {cursor.describe()}"
+                          + (f" ({why})" if why else "")
+                          + f": ip={start} から {cursor.steps - before} 命令 — {told}")
+        finally:
+            self._stand_in_walking = False
+        return moved
+
+    def _stand_in_release(self, party: "drama.Party | None") -> None:
+        """A rendezvous opened for the members: open it for the stand-ins too,
+        and let them walk on to the next one.
+
+        ⚠️ Before opening, they are walked once more: a stand-in held on a
+        rung whose click is now unreachable (the member it waited for is
+        parked at the rendezvous) gets the same way out `_click_fence` gives
+        a member, and reaches its rendezvous; one that cannot is not made to
+        skip ahead -- a stand-in never counts towards 「そろった」, so nothing
+        waits on it.
+        """
+        if party is None:
+            return
+        cursors = self._stand_ins.get(party.party_id)
+        if not cursors:
+            return
+        self._stand_in_walk(party, "そろった")
+        for cursor in cursors.values():
+            cursor.release()
+        self._stand_in_walk(party, "解除")
+
+    def _stand_in_adopt(self, party: "drama.Party", actor: "drama.Actor",
+                        gone: "_Session") -> None:
+        """A member left mid-play and a 代行ＮＰＣ took the 役柄: its cursor
+        picks up where the member's shadow was.
+
+        The manual's promise to the people who stay is 「離脱後は、そのプレイ
+        ヤーに代わってNPCがドラマイベントを進行させます」 -- *進行させます*,
+        which is exactly a cursor going on from here. The shadow's position,
+        stack and own registers are the member's place in the play; the
+        stand-in's own cells (`PC[0x7000]` = 1 and the names) are what the
+        seat now answers with. ⚠️ Nothing when the member had no shadow: a
+        play this end could not follow is not one it can take over.
+        """
+        runner = gone.script
+        shadow = runner.shadow if runner is not None else None
+        if shadow is None or shadow.lost or actor.npc is None:
+            return
+        cells: dict = {("PC", script.PC_IS_SURROGATE): 1}
+        row = proxynpc.find(*actor.npc)
+        if row is not None:
+            family, first, nick = proxynpc.name_trio(row)
+            cells[("PC", script.PC_FAMILY_NAME)] = family
+            cells[("PC", script.PC_FIRST_NAME)] = first
+            cells[("PC", script.PC_NICK_NAME)] = nick
+            cells[("PC", script.PC_SKIN_COLOR)] = profile_numbers(
+                proxynpc.create_info(row))[2]
+        cursor = gs3vm.stand_in(shadow.script.script_id, cells,
+                                shadow.registers, actor.actor_id)
+        if cursor is None:
+            return
+        cursor.roll = self._script_roll
+        cursor.season = shadow.season
+        cursor.fence = (lambda c, party=party: self._stand_in_fence(party, c))
+        cursor.pos = shadow.pos
+        cursor.stack = list(shadow.stack)
+        cursor.own = dict(shadow.own)
+        cursor.answered = dict(runner.answered)
+        cursor.walked_by = dict(runner.walked_by)
+        cursor.awaiting = dict(runner.awaiting)
+        # The stop the member was sitting on is the stand-in's to answer now:
+        # a box or a text box is answered by walking onto it again, a
+        # rendezvous is parked at (the release below opens it with the rest).
+        if runner.begun is not None and runner.begun[1] == script.OP_PLAYER_SYNC:
+            cursor.blocked = (shadow.script.code[cursor.pos][0], script.OP_PLAYER_SYNC)
+        cursor.peers = shadow.peers
+        if isinstance(shadow.peers, dict):
+            shadow.peers[actor.actor_id] = cursor
+        self._stand_ins.setdefault(party.party_id, {})[actor.actor_id] = cursor
+        print(f"[{self.tag}] 代行ＮＰＣ 役柄 {actor.actor_id} takes the cursor "
+              f"over at ip={cursor.script.code[cursor.pos][0]}")
+
+    def _stand_in_drop(self, party: "drama.Party | None") -> None:
+        """The play is over (or the party is): forget its stand-ins' cursors."""
+        if party is not None:
+            self._stand_ins.pop(party.party_id, None)
 
     def _drama_push_members(
         self, party: "drama.Party", msg_type: int, params: bytes, skip: int = 0,
@@ -6286,6 +6478,8 @@ class MpsServer:
             party.leader_actor_id,
         )
         self.dramaparties.part(chara_id)
+        if party.party_id not in self.dramaparties.parties:
+            self._stand_in_drop(party)
         self._drama_part_notice(party, actor_id, drama.PART_DISCONNECTED)
         # ⭐ And the list, for the people watching it: a party whose last member
         # dropped their socket has to come off the board, and one that still has
@@ -6727,6 +6921,11 @@ class MpsServer:
             party, script.MSG_SV_NOTIFY_SCRIPT_RETIRE, body)
         out = self._answer(
             session, seen, script.MSG_SV_NOTIFY_SCRIPT_RETIRE, body)
+        # ⭐ Round 498: the stand-in that took the 役柄 goes on from where this
+        # member's shadow stood -- 「代わってNPCがドラマイベントを進行させ
+        # ます」 -- so it is adopted before the Runner (and the shadow) go.
+        if picked is not None:
+            self._stand_in_adopt(party, actor, session)
         session.script = None
         session.script_idle_at = 0.0
         session.script_idle_warned = False
@@ -6746,10 +6945,13 @@ class MpsServer:
         # ⭐ …and the ドラマイベント中 icon over their head comes down, as it
         # does at 0xE014 -- they are out of the party now, whichever way.
         self._presence_icon_onlookers(session)
-        # ⭐⭐ Whatever this player was being waited for, they are not coming.
+        # ⭐⭐ Whatever this player was being waited for, they are not coming --
+        # and the stand-in that took their seat may have a rung to answer now.
+        self._stand_in_walk(party, "離脱")
         self._release_held_branches(party)
         self._script_unblock(party, session)
         if self.dramaparties.drop_if_unpeopled(party):
+            self._stand_in_drop(party)
             # ⭐ Round 486: the last person out of a play with stand-ins in it.
             # The room goes the way `drama.Board.part` sends one (see
             # `drop_if_unpeopled`), and the people browsing the list are told
@@ -6790,6 +6992,7 @@ class MpsServer:
             if missing:
                 continue
             print(f"[{self.tag}] script retire: {len(waiting)} 人そろった、解除")
+            self._stand_in_release(party)
             self._player_release(waiting, gone, 0)
             return
 
@@ -7437,9 +7640,12 @@ class MpsServer:
             session.script.answered[box] = session.script.answered.get(box, 0) + 1
             out = self._player_release([session], session, seen)
             # ⭐ …and now the rest of the party may be able to move: a member
-            # held at `_click_fence` was waiting for exactly this answer.
-            self._release_held_branches(
-                self.dramaparties.party_of(session.chara_id))
+            # held at `_click_fence` was waiting for exactly this answer --
+            # and so may a stand-in held on a rung that reads it, which goes
+            # first so the members' re-asked branches see what it wrote.
+            party = self.dramaparties.party_of(session.chara_id)
+            self._stand_in_walk(party, "選択")
+            self._release_held_branches(party)
             return out
         if msg_type == script.MSG_CL_REQUEST_SCRIPT_COMMAND_INPUT:
             # ⭐ What the player typed into a free-text box, and the one place
@@ -7622,6 +7828,10 @@ class MpsServer:
             return None
         print(f"[{self.tag}] {script.stop_name(op)} ip={local} — "
               f"{len(waiting)} 人そろった、解除")
+        # ⭐ The stand-ins' rendezvous opens with the members' (round 498).
+        # They walk on to their next one right here, ahead of the members'
+        # next report, so what their bracket writes is in the file first.
+        self._stand_in_release(self.dramaparties.party_of(session.chara_id))
         return self._player_release(waiting, session, seen)
 
     def _scenario_members(self, session: "_Session") -> list["_Session"]:
@@ -7695,6 +7905,13 @@ class MpsServer:
         needs = shadow.branch_clicks() - {shadow.actor}
         if not needs:
             return []
+        # ⭐ Round 498: a 代行ＮＰＣ's click is this end's to give, so the
+        # stand-ins are walked up to date first -- a stand-in that has merely
+        # not caught up yet is not somebody to wait for. After the walk a
+        # stand-in is parked, held, done or lost, and in every one of those
+        # the branch goes on with the register as it stands, for the same
+        # reasons the two ways out below give a member.
+        self._stand_in_walk(self.dramaparties.party_of(session.chara_id))
         out = []
         for other in self._scenario_members(session):
             if other is session or other.script is None:
@@ -8020,6 +8237,8 @@ class MpsServer:
             why = session.script.shadow.typed(text)
             if why:
                 print(f"[{self.tag}] vm 影子ここまで: {why}")
+        # The line is in the file: a stand-in whose road reads it may go on.
+        self._stand_in_walk(self.dramaparties.party_of(session.chara_id), "入力")
         reply = self._answer(session, seen, script.MSG_SV_OK_SCRIPT_COMMAND_INPUT,
                              script.input_ok_params(shown))
         # …and then the same closing bracket the choice box needs. Answering
