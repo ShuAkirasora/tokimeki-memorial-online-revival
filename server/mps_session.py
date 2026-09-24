@@ -1907,14 +1907,17 @@ class _Session:
         # client rejects a reply whose sequence number went backwards -- which is
         # the whole point of the /seq probe. None is "owes nothing".
         self.icon_due: "int | None" = None
-        # 0x7210 bodies owed to THIS connection while it is the one being
-        # handled -- same reason as icon_due, found on a real client (round
-        # 499): the packet loop stamps the handler's reply first, and a
-        # NotifyScriptStatus pushed from inside that handler took the next
-        # number and left first, so the reply's number went backwards and the
-        # client's decipher_message dropped the connection. Built in
-        # _drain_script_status, after the reply. See _script_status.
-        self.script_status_due: list[bytes] = []
+        # ⭐⭐⭐ Sequence numbers this connection has been given and whose bytes
+        # have not reached MpsServer._emit yet, and the packets _emit is holding
+        # back behind them. The client drops the connection on a number that is
+        # not strictly greater than the last one, and a number is stamped when
+        # the bytes are MADE, not when they are written -- so anything that
+        # pushes to a connection while a lower-numbered blob for it is still in
+        # somebody's hands (a reply being built, a drain half done, a release
+        # holding the answer it is about to push) would overtake it. Twice on a
+        # real client in round 499. See _emit and _settle.
+        self.unwritten: set[int] = set()
+        self.parked: "list[tuple[int, bytes]]" = []
         # The markers standing in the scene, cached so the lobby's stand-ins and
         # the answers to MsgClQueryCharaInfo about them cannot disagree. Warping
         # changes the map, so this is rebuilt rather than computed once.
@@ -2333,12 +2336,9 @@ class MpsServer:
         # a party is something other players look at, so it cannot live on the
         # session that made it. See drama.Board.
         self.dramaparties = drama.Board()
-        # The session whose packet a handler is running for right now, None
-        # between packets. A Notify raised inside a handler for THIS connection
-        # must not be pushed: its bytes would be numbered after the reply that
-        # is still being built and leave the socket before it (see
-        # _Session.icon_due, _Session.script_status_due).
-        self._handling: "_Session | None" = None
+        # The connections with a number in `_Session.unwritten`, so _settle
+        # does not have to walk every live one.
+        self._unsettled: "set[_Session]" = set()
         # ⭐⭐⭐ The cursors this end walks for the 代行ＮＰＣ of each party's
         # play, `party_id -> {actor_id: gs3vm.StandIn}`. A stand-in has no
         # session and so no shadow of its own to hang off; the argument for
@@ -2692,6 +2692,9 @@ class MpsServer:
 
     def _answer(self, session: "_Session", seen: int, msg_type: int, params: bytes) -> bytes:
         send_seq = session.take_seq(seen)
+        # Owed to the wire from here on; _emit takes it off. See _Session.unwritten.
+        session.unwritten.add(send_seq)
+        self._unsettled.add(session)
         name = MESSAGE_NAMES.get(msg_type, "unknown")
         print(f"[{self.tag}] -> {name} (0x{msg_type:04x}) seq={send_seq} params={params.hex()}")
         return self._packet(
@@ -3248,12 +3251,102 @@ class MpsServer:
         A closing socket is skipped rather than raising: the disconnect path
         broadcasts a 0x580D through here, so the connection that just went away
         can be the very thing being told about.
+
+        ⭐ Safe to call on ANY connection at any moment, including the one whose
+        reply is being built: _emit holds the bytes back until everything
+        numbered before them has gone. Round 499 had to guard two call sites
+        by hand before this existed.
         """
+        self._emit(session, blob, "push")
+
+    def _split_out(
+        self, session: "_Session", blob: bytes
+    ) -> "list[tuple[int | None, bytes]]":
+        """Cut outgoing bytes into packets, each with the sequence number it carries.
+
+        Only a message (tag 0x30) has one, and it sits in the first cipher
+        block (``message_body``: u16 checksum, u32 sequence), so one block is
+        deciphered per message -- ECB, so that is the whole cost. Everything
+        else -- the timesync answer, the key exchange -- carries None. The key
+        exchange is the one tag sent without the connection's header, which is
+        all zero, so a KEX tag at the header's place tells the two apart.
+        """
+        out: "list[tuple[int | None, bytes]]" = []
+        skip = len(self.header)
+        at = 0
+        while at + 4 <= len(blob):
+            size = struct.unpack_from(">H", blob, at)[0]
+            one = blob[at:at + 2 + size]
+            at += 2 + size
+            seq = None
+            if (struct.unpack_from(">H", one, 2)[0]
+                    not in (TAG_KEX1, TAG_KEX2, TAG_KEX3)
+                    and len(one) >= 4 + skip + 8
+                    and struct.unpack_from(">H", one, 2 + skip)[0] == TAG_MESSAGE
+                    and session.out_cipher is not None):
+                plain = session.out_cipher.decipher(one[4 + skip:12 + skip])
+                seq = struct.unpack_from(">I", plain, 2)[0]
+            out.append((seq, one))
+        if at < len(blob):
+            out.append((None, blob[at:]))
+        return out
+
+    def _emit(self, session: "_Session", blob: bytes, how: str) -> None:
+        """The one door every outgoing byte goes through, in sequence order.
+
+        ⭐⭐⭐ The rule it enforces is the client's: decipher_message drops the
+        connection on a number not strictly greater than the last it accepted
+        (round 499, 「bad sequence number」, twice). A packet whose number is
+        higher than one still in `session.unwritten` -- made, not yet handed
+        here -- waits in `session.parked` until that one arrives or _settle
+        declares it never will. What goes out is sorted, so a reply built
+        before a push and handed over after it still leaves first.
+
+        ⚠️ The rule is the whole judgement. Before this, every caller had to
+        ask 「does this connection have a numbered blob that has not gone
+        yet?」, and round 499 found two that answered wrong -- one of them
+        because the blob was built ten lines up in the same function.
+        """
+        for seq, one in self._split_out(session, blob):
+            if seq is None:
+                # No number, nothing to overtake: ahead of what is parked,
+                # which only ever holds messages.
+                self._write(session, one, how)
+                continue
+            session.unwritten.discard(seq)
+            session.parked.append((seq, one))
+        if not session.parked:
+            return
+        session.parked.sort(key=lambda p: p[0])
+        low = min(session.unwritten, default=None)
+        ready = [p for p in session.parked if low is None or p[0] < low]
+        if not ready:
+            return
+        session.parked = session.parked[len(ready):]
+        self._write(session, b"".join(one for _, one in ready), how)
+
+    def _write(self, session: "_Session", blob: bytes, how: str) -> None:
         if not blob or session.writer is None or session.writer.is_closing():
             return
         write_packet_log(self.packet_dir, self.tag, "out", blob)
         session.writer.write(blob)
-        print(f"[{self.tag}] -> {len(blob)}B (push): {blob.hex()}")
+        print(f"[{self.tag}] -> {len(blob)}B ({how}): {blob.hex()}")
+
+    def _settle(self) -> None:
+        """End of a synchronous stretch: whatever is still unwritten never will be.
+
+        Called before every ``await`` in the connection loop, which is the only
+        place another connection's handler can run -- so no blob can be in
+        anybody's hands across it. A number still in `unwritten` here is bytes
+        a handler made and dropped (built, then decided against), and the
+        packets parked behind it go now: a gap is fine, the client only asks
+        that numbers go up.
+        """
+        unsettled, self._unsettled = self._unsettled, set()
+        for session in unsettled:
+            session.unwritten.clear()
+            if session.parked:
+                self._emit(session, b"", "settled")
 
     # ------------------------------------------------------------------
     # The script subsystem (0x72xx). See server/script.py for the protocol and
@@ -6663,16 +6756,11 @@ class MpsServer:
             return
         runner.told_waiting = waiting
         params = script.script_status_params(mine.actor_id, state)
+        # ⚠️ Pushed to the connection being handled too, and that is safe only
+        # because of _emit: its reply is often already built and numbered
+        # lower. Round 499 found this out on a real client (「bad sequence
+        # number」) and first fixed it here by hand.
         for other in self._scenario_members(session):
-            if other is getattr(self, "_handling", None):
-                # ⚠️ Not pushed: this connection's reply is still being built
-                # and already carries the lower sequence number. Round 499, on
-                # a real client: the pushed copy left first and the client's
-                # decipher_message answered "bad sequence number" and hung
-                # up. Queued and built behind the reply instead
-                # (_drain_script_status), the way icon_due is.
-                other.script_status_due.append(params)
-                continue
             self._push(other, self._answer(
                 other, 0, script.MSG_SV_NOTIFY_SCRIPT_STATUS, params))
 
@@ -8007,23 +8095,13 @@ class MpsServer:
                 # 0x7210 opened comes down. Re-held instead: `_script_incoming`
                 # said state=5 again, which `_script_status` folds into nothing.
                 # ⚠️⚠️ Round 499, on a real client: `reply` is already numbered,
-                # and pushing `other`'s own 0x7210 here sent a higher number
-                # ahead of it -- "bad sequence number" and the connection was
-                # dropped the moment the partner answered. So `other` is treated
-                # as the connection being handled for this one call: its copy
-                # is queued, and built after `reply` below. The banner comes
-                # down a packet later than the answer; the client closes it on
+                # so `other`'s own 0x7210 is numbered after it and pushed before
+                # it -- _emit parks it until `reply` arrives below. The banner
+                # comes down a packet after the answer; the client closes it on
                 # any state but 5 either way, so nothing is drawn wrong.
-                handling = getattr(self, "_handling", None)
-                self._handling = other
-                try:
-                    self._script_status(other, script.SCRIPT_STATUS_PLAYING)
-                finally:
-                    self._handling = handling
+                self._script_status(other, script.SCRIPT_STATUS_PLAYING)
             if reply:
                 self._push(other, reply)
-            if other is not getattr(self, "_handling", None):
-                self._push(other, self._drain_script_status(other))
 
     def _drama_result(
         self, session: "_Session", seen: int, op: int, local: int
@@ -8456,12 +8534,9 @@ class MpsServer:
                     if due is None:
                         print(f"[{self.tag}] idle timeout peer={peer}")
                         break
-                    push = self._drains(session)
-                    if push:
-                        write_packet_log(self.packet_dir, self.tag, "out", push)
-                        writer.write(push)
-                        await writer.drain()
-                        print(f"[{self.tag}] -> {len(push)}B (timer): {push.hex()}")
+                    self._emit(session, self._drains(session), "timer")
+                    self._settle()
+                    await writer.drain()
                     # A 強制ログアウト can arrive through runtime/console.txt,
                     # which is drained from here as well as from the packet
                     # branch below -- so the door out has to be on both paths.
@@ -8484,11 +8559,7 @@ class MpsServer:
                         continue
                     print(f"[{self.tag}] <- tag=0x{tag:04x} ({name}) {len(body)}B: {body.hex()}")
                     watched = self._info_watch()
-                    self._handling = session
-                    try:
-                        reply = self._reply(session, tag, body)
-                    finally:
-                        self._handling = None
+                    reply = self._reply(session, tag, body)
                     # 0x4813 for whatever this packet moved. The comparison
                     # runs here because here is where the handler's writes are
                     # the newest thing there is; what comes back is the copies
@@ -8497,11 +8568,12 @@ class MpsServer:
                     reply = (reply or b"") + self._info_changed(
                         watched, session)
                     reply = (reply or b"") + self._drains(session)
-                    if reply:
-                        write_packet_log(self.packet_dir, self.tag, "out", reply)
-                        writer.write(reply)
-                        await writer.drain()
-                        print(f"[{self.tag}] -> {len(reply)}B: {reply.hex()}")
+                    # ⭐ Through _emit like every push, and _settle before the
+                    # await: that is the one place another connection's handler
+                    # can run, so nothing numbered may be left in hand across it.
+                    self._emit(session, reply, "reply")
+                    self._settle()
+                    await writer.drain()
                     # ⚠️ After the write, never before it: the 0x6809 that says
                     # why this connection is about to end is inside that reply.
                     # The rest of the packets in this chunk go unanswered, which
@@ -8621,6 +8693,7 @@ class MpsServer:
             # was written for.
             if session.chara_id:
                 self._drama_party_gone(session.chara_id, "on disconnect")
+            self._settle()
             writer.close()
             try:
                 await writer.wait_closed()
@@ -15410,7 +15483,12 @@ class MpsServer:
             session, sequence, f"/seq: reply, numbered before {count} pushes"
         )
         for i in range(count):
-            self._push(session, pushed(i))
+            # ⚠️ Around _emit on purpose: it exists to put these back in
+            # order, and the stale number is the whole point of this probe.
+            blob = pushed(i)
+            for seq, _ in self._split_out(session, blob):
+                session.unwritten.discard(seq)
+            self._write(session, blob, "push, unordered")
         if control:
             reply = self._say(
                 session, sequence, f"/seq: reply, numbered after {count} pushes"
@@ -16943,7 +17021,6 @@ class MpsServer:
         """
         out = self._drain_console(session)
         out += self._drain_own_icon(session)
-        out += self._drain_script_status(session)
         out += self._drain_bells(session)
         out += self._drain_lesson(session)
         out += self._drain_exam(session)
@@ -16969,18 +17046,6 @@ class MpsServer:
             session, 0, MSG_SV_NOTIFY_ACTION_ICON,
             struct.pack(">IB", session.chara_id, action),
         )
-
-    def _drain_script_status(self, session: "_Session") -> bytes:
-        """The 0x7210s owed to this connection since its own reply was built.
-
-        Built here for the same reason as _drain_own_icon: the sequence number
-        is stamped when the bytes are made, and these have to be numbered after
-        the reply they were raised inside of.
-        """
-        due, session.script_status_due = session.script_status_due, []
-        return b"".join(
-            self._answer(session, 0, script.MSG_SV_NOTIFY_SCRIPT_STATUS, params)
-            for params in due)
 
     def _drain_battle(self, session: "_Session") -> bytes:
         """Close a クラブ対戦 turn whose 制限時間 has run out.
