@@ -220,8 +220,10 @@ REASON_NEUROSIS = 3          # ノイローゼ (`p06_02`: 参加できなくな�
 
 # How long after the bell a 0x6001 is still taken. The manual bans joining a
 # lesson in progress and says nothing about how much of a moment the client gets
-# to answer in; this is the round trip plus the up-to-30s the timesync-driven
-# bell can be late by, which is a fact about this server and not the original.
+# to answer in; this was sized when the bell rode on the timesync and could be
+# thirty seconds late, and is a fact about this server and not the original.
+# The bell has its own timer now (Bell.next_due), so what is left for it to
+# cover is the round trip.
 #
 # ⚠️ In practice this is unreachable: the client answers 0x6000 within the same
 # few packets, with no prompt in between, so nothing ever arrives late enough
@@ -346,13 +348,20 @@ class Bell:
     player who was logged out when it rang did not miss anything they can be
     given later.
 
-    ``poll`` is edge-triggered against the wall clock rather than scheduled,
-    because the server has no timer of its own: it wakes when a packet arrives,
-    and the client's timesync arrives every thirty seconds. That sets the
-    resolution — a bell can be up to one timesync late, never early. Fifteen
-    minutes between lessons and five minutes of warning leave room for that; if
-    the client turns out to care about the exact second, this becomes an
-    asyncio task and the drain goes away.
+    ``poll`` is edge-triggered against the wall clock, and ``next_due`` says
+    when it next will be, so that the socket loop can wake for it
+    (_Session.next_wake). Without that, a bell waited for whichever packet came
+    next -- the client's timesync every thirty seconds -- and was up to half a
+    minute late, a different half-minute on every connection.
+
+    ⚠️ INVENTED — the bells ring on the slot boundary itself, by this server's
+    own timer, on every connection at once. Once a room holds more than one
+    student that stopped being a detail: whoever's bell rang first opened the
+    room and started its clock (the 開始台詞 is PROBE["speech_ms"], eight
+    seconds), so a player whose timesync fell twenty seconds after another
+    student's walked in with question one already gone. What the original's
+    bell did to the second is on no wire this end has; that it rang for a whole
+    school at the same moment is what a school bell is.
     """
 
     def __init__(self) -> None:
@@ -438,6 +447,25 @@ class Bell:
             else:
                 owed.append(("skip", current))
         return owed
+
+    def next_due(self, when: datetime | None = None) -> datetime | None:
+        """When ``poll`` will next owe something, or None before ``prime``.
+
+        The same three edges ``poll`` tests, in the order they come round: a
+        slot whose 本鈴 has not been decided yet (due now), the 予鈴 of the
+        next lesson, then its 本鈴. Nothing before prime(), because until the
+        session has reached the world there is no bell to owe -- and a "now"
+        that nothing ever marks would be a loop that never sleeps.
+        """
+        if self.start_rung is None:
+            return None
+        now = when or datetime.now()
+        if self.start_rung != curriculum.slot_start(now):
+            return now
+        begins, _ = curriculum.next_lesson(now)
+        if self.pre_rung != begins:
+            return max(now, begins - timedelta(minutes=curriculum.PRE_BELL_MINUTES))
+        return begins
 
     def rang(self, subject: int, when: datetime | None = None) -> int:
         """Note that the 本鈴 has just gone out. Returns the subject, for brevity.

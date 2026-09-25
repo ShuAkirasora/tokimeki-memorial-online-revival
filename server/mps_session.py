@@ -2242,6 +2242,18 @@ class _Session:
         if self.script is not None and self.script.input_due:
             left = max(0.0, self.script.input_due - time.monotonic())
             seconds = left if seconds is None else min(seconds, left)
+        # ⭐ And the bells are the sixth -- the one the docstring above once
+        # waved off. With one student in a room, a bell up to a timesync late
+        # was late only for them; with two, the first bell opens the room and
+        # starts its clock, and the student whose bell rang twenty seconds
+        # later had lost question one before the door opened. See lesson.Bell.
+        # Only once 登校 has primed it and while there is a character, because
+        # a due-now that _drain_bells will not mark would never let this sleep.
+        if self.chara_id:
+            ring = self.bell.next_due()
+            if ring is not None:
+                left = max(0.0, (ring - datetime.now()).total_seconds())
+                seconds = left if seconds is None else min(seconds, left)
         return seconds
 
     def markers(self) -> tuple[tuple[str, int, int], ...]:
@@ -8582,20 +8594,27 @@ class MpsServer:
         except OSError:
             session.console_at = 0
         buf = b""
+        # When the client last said anything. The idle timeout counts from
+        # here rather than from each wait, because a wait can now end on a
+        # deadline with the client still silent: the bells give every session
+        # in the world one within ten minutes, and a timeout restarted on each
+        # would never be reached.
+        heard = time.monotonic()
         try:
             while True:
                 # Wait on the socket until either something arrives or something
-                # is due to go out. Only a lesson in progress ever sets a
-                # deadline; with none, this is the plain idle timeout it always
-                # was. See _Session.next_wake for why questions need one.
+                # is due to go out -- or the connection has been quiet for
+                # IDLE_TIMEOUT_S, whichever is first. See _Session.next_wake for
+                # what sets a deadline.
                 due = session.next_wake()
+                idle_left = max(0.0, IDLE_TIMEOUT_S - (time.monotonic() - heard))
                 try:
                     chunk = await asyncio.wait_for(
                         reader.read(65536),
-                        timeout=due if due is not None else IDLE_TIMEOUT_S,
+                        timeout=idle_left if due is None else min(due, idle_left),
                     )
                 except asyncio.TimeoutError:
-                    if due is None:
+                    if time.monotonic() - heard >= IDLE_TIMEOUT_S:
                         print(f"[{self.tag}] idle timeout peer={peer}")
                         break
                     self._emit(session, self._drains(session), "timer")
@@ -8611,6 +8630,7 @@ class MpsServer:
                 if not chunk:
                     print(f"[{self.tag}] EOF peer={peer}")
                     break
+                heard = time.monotonic()
                 write_packet_log(self.packet_dir, self.tag, "in", chunk)
                 buf += chunk
                 packets, buf = parse_packets(buf)
@@ -20595,11 +20615,11 @@ class MpsServer:
     def _drain_bells(self, session: "_Session") -> bytes:
         """Ring whatever the wall clock has made due.
 
-        Rides on arriving packets for the same reason _drain_console does: this
-        server has no timer, and the client's timesync every 30 seconds is the
-        heartbeat that stands in for one. So a bell is never early and can be up
-        to one timesync late — acceptable against a 15-minute period and a
-        5-minute warning, and the reason lesson.GRACE_SECONDS exists.
+        Runs after every arriving packet and when the socket loop wakes on a
+        deadline -- and Bell.next_due makes the boundary one, so a bell goes out
+        on the second rather than on whichever timesync comes next. It used to
+        be up to thirty seconds late, which one student alone never noticed and
+        two in one room did: see lesson.Bell.
 
         ⭐ 試験期間 changes which pair of messages the same two bells are, and
         nothing else: `p06_03` says entry works 「授業と同じように」, the 0x66xx
