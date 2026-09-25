@@ -278,10 +278,11 @@ class Career:
     def row_pages(self) -> "list[bytes]":
         """The same body, split into messages the client's reader can hold.
 
-        One page always, today: see CAREER_LIST_PAGE.
+        At most one page today (see CAREER_LIST_PAGE), and ⭐ none at all when
+        there is nothing -- see list_replies for why an empty page is wrong.
         """
         pages = []
-        for start in range(0, max(len(self.achievements), 1), CAREER_LIST_PAGE):
+        for start in range(0, len(self.achievements), CAREER_LIST_PAGE):
             pages.append(self.rows(self.achievements[start:start + CAREER_LIST_PAGE]))
         return pages
 
@@ -320,14 +321,28 @@ def describe(body: bytes) -> str:
 
 
 def list_replies(state: "Career | None") -> "list[tuple[int, bytes]]":
-    """The two messages 0x4318 is answered with.
+    """The messages 0x4318 is answered with: a Result, then the rows if any.
 
     ⚠️ The Result's count is a u16 here, not the u32 the キーワード and 部活奥義
     lists use for the same job -- Input_MsgSvResultCharaCareerList reads it
     through the stream's uint16 slot (vt+0x28). Two families, two widths, and
     the difference is the client's, not a slip.
+
+    ⭐ NONE OWNED ⇒ THE RESULT ALONE, the rule club.keyword_replies follows and
+    for the same reason. The window counts down rather than up:
+
+        Result  0x4319 -> 0x479445   remaining = nNum; if remaining == 0: finish
+        Notify  0x431A -> 0x479624   per row: append, remaining -= 1;
+                                     if remaining == 0: finish
+
+    where finish (0x47952A) draws the rows into the list and clears the
+    通信中 bit. An empty page after a zero count reached `remaining == 0` a
+    second time and ran finish twice. That happened to be invisible -- an empty
+    list draws nothing either time and the bit is only cleared -- but it is the
+    same shape that opened two 部活デッキ windows, and the client's own reading
+    of a zero count is that the list is complete.
     """
-    pages = state.row_pages() if state is not None else [struct.pack(">H", 0)]
+    pages = state.row_pages() if state is not None else []
     total = sum(struct.unpack_from(">H", page, 0)[0] for page in pages)
     return ([(MSG_SV_RESULT_CHARA_CAREER_LIST, struct.pack(">H", total))]
             + [(MSG_SV_NOTIFY_CHARA_CAREER_LIST, page) for page in pages])

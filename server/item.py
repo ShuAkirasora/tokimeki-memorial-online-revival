@@ -615,12 +615,27 @@ def list_body(rows: "list[list[int]]") -> bytes:
 def row_pages(rows: "list[list[int]]") -> "list[bytes]":
     """The same body, split into messages the client's reader can hold.
 
-    One empty page when there is nothing, because the window is waiting for a
-    notify and not merely for a count -- see ITEM_LIST_PAGE for what the 33rd
-    row in one message does.
+    See ITEM_LIST_PAGE for what the 33rd row in one message does.
+
+    ⭐ NO PAGE AT ALL WHEN THERE IS NOTHING -- the Result alone. This used to
+    send one empty page on the belief that the window waits for a notify; the
+    client's receivers say otherwise, for both lists this feeds:
+
+        Result  0x4D01 at 0x77B197, 0x0407 at 0x77671B
+            if nNum == 0: clear the 通信中 bit itself (0x46 / 0x47)
+            then hand the count to the view (0x751051 / 0x7517A5), which
+            stores it and marks the list as arrived
+        Notify  0x4D03 at 0x775ED7, 0x0409 at 0x776842
+            if count != 0: clear the same bit
+            then append the rows (0x7510BA / 0x75180E) -- no "received >=
+            expected" test anywhere
+
+    So a zero count is complete on its own, and an empty page after it
+    appended nothing. Unlike club.py's pair this was harmless (nothing runs
+    twice); it goes because the client's own reading of zero is "done".
     """
     return [list_body(rows[start:start + ITEM_LIST_PAGE])
-            for start in range(0, max(len(rows), 1), ITEM_LIST_PAGE)]
+            for start in range(0, len(rows), ITEM_LIST_PAGE)]
 
 
 def filter_tab(rows: "list[list[int]]", tab: int) -> "list[list[int]]":

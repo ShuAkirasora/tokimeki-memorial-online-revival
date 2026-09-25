@@ -261,9 +261,13 @@ def list_body(rows: "tuple | list") -> bytes:
 def row_pages(rows: "tuple | list") -> "list[bytes]":
     """The same body split into messages the client's reader can hold.
 
-    One empty page when there is nothing, because the window is waiting for a
-    notify and not merely for a count -- the same arrangement the アイテム list
-    needs, and for the same reason.
+    ⚠️ One empty page when there is nothing, and here -- unlike the アイテム and
+    ロッカー lists (item.row_pages) and 経歴 (career.list_replies) -- it is
+    needed. The shop's Result does not finish on a zero count: 0x4F01 reaches
+    0x752024, which only stores the expected number, and the one place that
+    compares "received >= expected" and closes the 通信中 bit is the notify's
+    (0x4F03 -> 0x757DAA). A shop with no goods and no page would wait forever.
+    It cannot happen with GOODS as shipped, which is never empty.
     """
     rows = list(rows)
     return [list_body(rows[start:start + SHOP_LIST_PAGE])

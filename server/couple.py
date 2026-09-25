@@ -219,6 +219,10 @@ def list_replies(entries: "list[bytes]") -> "list[tuple[int, bytes]]":
     of the first page -- that is the reading career.py settled on for 0x4319 and
     nothing here contradicts it, but ⚠️ with fewer than 32 rows on any account
     this server can build, it has never been on the wire either way.
+
+    ⚠️ The one empty page an empty list gets is left as it is. Whether the
+    count alone finishes cannot be read here the way it was for item.py and
+    career.py: this client registers a receiver for neither message.
     """
     replies: "list[tuple[int, bytes]]" = [
         (MSG_SV_RESULT_COUPLE_LIST, result_params(len(entries)))
