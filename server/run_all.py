@@ -35,6 +35,7 @@ def _utf8_output() -> None:
 import accounts
 import chat
 import clubbattle
+import gameclock
 import knobs
 import mps_session
 import shutdown
@@ -192,6 +193,7 @@ async def main(
     # to 443 and to nothing else in that family.
     open_host = bind or derive_bind(advertise_ip)
     print(f"[system] bind {open_host}, advertising {advertise_ip} to clients")
+    print(f"[calendar] {gameclock.describe()}")
     # ⚠️ Say so, loudly, when this run is NOT the shipping behaviour. Both of
     # these exist for measuring with a paused client (see their constants) and
     # both are the kind of thing that is set once and then forgotten — at which

@@ -55,6 +55,7 @@ from typing import NamedTuple
 # module asks it one question -- which cells a scenario date-stamps -- and asks
 # it of an export that may not exist, so everything below it still works on a
 # copy of this server that has no scripts at all.
+import gameclock
 import gs3vm
 
 SEX_MALE, SEX_FEMALE = 0, 1  # chara_sex.bin: 0 男 / 1 女 / 2 不詳
@@ -200,13 +201,15 @@ def date_cells(today: "date | None" = None) -> dict:
     narrower fence would only have been a fence against a script that does not
     exist.
 
-    ⚠️ The clock is this end's real one. The game had a clock of its own
-    (校内マップ has seasons) and this end does not model one, so borrowing the
-    real date is what keeps 「毎日少しずつ」 meaning something rather than
-    nothing. ⛔️ One clock, not two: everything that decides 「is it a new
-    day」 -- the daily rule, the 会話 slots, this -- reads it through here.
+    ⚠️ The clock is `gameclock.today()`: the real date by default, or a
+    compressed calendar when `gameclock.DAY_HOURS` is turned. The game had a
+    clock of its own (校内マップ has seasons) and this end does not model one,
+    so borrowing a calendar is what keeps 「毎日少しずつ」 meaning something
+    rather than nothing. ⛔️ One clock, not two: everything that decides 「is
+    it a new day」 -- the daily rule, the 会話 slots, this -- reads it through
+    gameclock.
     """
-    today = today or date.today()
+    today = today or gameclock.today()
     return {("SYSTEM", SYSTEM_YEAR): today.year,
             ("SYSTEM", SYSTEM_MONTH): today.month,
             ("SYSTEM", SYSTEM_DAY): today.day}
@@ -1469,7 +1472,7 @@ class Romance:
         row = self.state[name]
         if not row["debut"]:
             return False
-        today = today or date.today().isoformat()
+        today = today or gameclock.today().isoformat()
         if row["lastTalk"] != today:
             row["lastTalk"] = today
             row["todayBest"] = 0

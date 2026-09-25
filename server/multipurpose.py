@@ -147,6 +147,7 @@ import struct
 from datetime import date, timedelta
 from pathlib import Path
 
+import gameclock
 from characters import GROUP_NAME_LEN, NAME_LEN
 
 MSG_CL_QUERY_MULTIPURPOSE_ROOM_BOOKING = 0x0900
@@ -236,7 +237,7 @@ CANCEL_NG_NONE_HELD = 5
 
 def window(today: "date | None" = None) -> list[date]:
     """The days a booking may name: today and the HORIZON_DAYS-1 after it."""
-    first = today or date.today()
+    first = today or gameclock.today()
     return [first + timedelta(days=offset) for offset in range(HORIZON_DAYS)]
 
 

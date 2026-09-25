@@ -269,6 +269,7 @@ from datetime import date
 # tags, which are per-keyword data rather than a rule and so live in the feed
 # with attack/defence. Everything else here stays table-free on purpose.
 import clubdata
+import gameclock
 
 MSG_CL_REQUEST_CLUB_ENTER = 0x5A00
 MSG_SV_OK_CLUB_ENTER = 0x5A01
@@ -1131,7 +1132,7 @@ class Membership:
             # An unparseable stamp should not lock a club forever.
             print(f"[club] cannot read leave date {stamp!r} for {name(club_id)}, ignoring it")
             return None
-        return ((today or date.today()) - then).days
+        return ((today or gameclock.today()) - then).days
 
     def enter_refusal(self, club_id: int, today: "date | None" = None
                       ) -> "tuple[int, int] | None":
@@ -1171,7 +1172,7 @@ class Membership:
         """
         left = self.in_club
         if left != NO_CLUB:
-            self.left[left] = (today or date.today()).isoformat()
+            self.left[left] = (today or gameclock.today()).isoformat()
         self.in_club = NO_CLUB
         return left
 

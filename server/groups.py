@@ -58,7 +58,7 @@ that had both stopped being true:
   * 「the school clock is not the one those 30 days would be counted against」 —
     which was never a difficulty, only an undecided question, and club.py had
     already decided it for the identical shape: 退部後１０日間 counts on
-    ``date.today()`` (club.REJOIN_DAYS, ClubRecord.part). ⭐ The same calendar
+    ``gameclock.today()`` (club.REJOIN_DAYS, ClubRecord.part). ⭐ The same calendar
     is used here, so the two waits in this server are counted the same way.
 
 ⭐ And what let it be written at all is round 459: 0x6200 作成 is answered now,
@@ -99,6 +99,7 @@ import struct
 from datetime import date
 from pathlib import Path
 
+import gameclock
 import refusals
 from characters import GROUP_NAME_LEN, NAME_LEN, NO_GROUP
 
@@ -371,7 +372,7 @@ MAX_MEMBERS = 15
 #: ⭐ The day the event happens counts: a stamp written today makes
 #: ``days_since_step_down`` 0, and the refusal runs while it is under 30, so the
 #: wait covers the 引継 day and the twenty-nine after it. Same arithmetic as
-#: club.REJOIN_DAYS, and the same calendar -- ``date.today()``, not
+#: club.REJOIN_DAYS, and the same calendar -- ``gameclock.today()``, not
 #: curriculum.clock. ⚠️ p05_05 does not say 含めて the way p05_12 does for
 #: カップル's five days; this end reads the two the same way rather than making
 #: the unsaid one a day longer.
@@ -885,7 +886,7 @@ class GroupBook:
             print(f"[groups] cannot read step-down date {stamp!r} for "
                   f"charaId={chara_id}, ignoring it")
             return None
-        return ((today or date.today()) - then).days
+        return ((today or gameclock.today()) - then).days
 
     def create_wait(self, chara_id: int, today: "date | None" = None) -> int:
         """Days still to wait before this character may found a group; 0 = free.
@@ -905,7 +906,7 @@ class GroupBook:
 
         ⚠️ Does not save; every caller is inside a mutation that does.
         """
-        self.stepped_down[chara_id] = (today or date.today()).isoformat()
+        self.stepped_down[chara_id] = (today or gameclock.today()).isoformat()
 
     def clear_step_down(self, chara_id: int) -> bool:
         """Drop the wait. The console's back door -- see CREATE_WAIT_DAYS.
