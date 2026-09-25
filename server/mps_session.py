@@ -17051,7 +17051,9 @@ class MpsServer:
         # a seatId and the seatId is the room's to hand out.
         room = self.classrooms.open(session.map_id, subject)
         newcomer = session.chara_id not in room.students
-        seated = room.join(session.chara_id, max(0, int(lesson.PROBE["lunch"])))
+        seated = room.join(session.chara_id, 0)
+        if newcomer:
+            self._seat_lunch(session, seated)
         seat = self._seat_of(session, session.chara_id, subject, seated.seat_id)
         if seat is None:
             room.leave(session.chara_id)
@@ -17103,7 +17105,7 @@ class MpsServer:
             seats,
             speech_end,
             start_words=None if start_words < 0 else start_words,
-            lunch_count=max(0, int(lesson.PROBE["lunch"])),
+            lunch_count=seated.lunch,
         )
         print(
             f"[{self.tag}] lesson start: {curriculum.SUBJECTS[subject]}, "
@@ -19923,6 +19925,9 @@ class MpsServer:
                 raise lesson_skill.Refused(msg_type, "お弁当を所持していない")
             if sheet is not None and sheet.stress <= 0:
                 raise lesson_skill.Refused(msg_type, "ストレスがたまっていない")
+            if seated.lunch_from_bag and not self._spend_lunch(session):
+                seated.lunch = 0
+                raise lesson_skill.Refused(msg_type, "お弁当を所持していない")
             seated.lunch -= 1
             ok = self._rng().random() < lesson_skill.LUNCH_SUCCESS
             level = charge(lesson_skill.STRESS_LUNCH if ok else 0)
@@ -20222,7 +20227,7 @@ class MpsServer:
         off ``session`` and the room off ``period`` is exactly how a two-seat
         lesson would file one student's answers against the other's card.
 
-        Four things are filed, and the split between them is the point:
+        Five things are filed, and the split between them is the point:
 
         * 出席回数 — recovered. `p06_01` counts attendance towards 課程修了 and
           0x6102 carries the new total, so the client is told the number the
@@ -20234,6 +20239,8 @@ class MpsServer:
         * 能力 — *which* abilities move is read off `lesson.bin`
           (curriculum.SUBJECT_ABILITY); *how much* is INVENTED, see
           lesson.ABILITY_STEP.
+        * ご褒美 — goes into the bag; which 種 and for how well is INVENTED,
+          see lesson.rewards and _lesson_rewards.
 
         Everything else in resultInfo is not modelled at all, which end_params
         spells out one field at a time.
@@ -20282,13 +20289,16 @@ class MpsServer:
             print(f"[{self.tag}] lesson end: ストレス +{added} -> {stress_now} "
                   f"({stress.screen(stress_now)}/100), 体調 "
                   f"{stress.name(condition_now)}")
+        won = [] if measuring else self._lesson_rewards(session, period,
+                                                        chara_id, right, asked)
         out = self._answer(
             session,
             0,
             lesson.MSG_SV_NOTIFY_LESSON_END,
             lesson.end_params(period.end_words(chara_id), attendance,
                               stress=stress_now, condition=condition_now,
-                              ability=after, before_ability=before),
+                              ability=after, before_ability=before,
+                              items=won),
         )
         # The 結果発表 carries both values itself, but that screen goes away and
         # the bar under the character does not — and the client was told about
@@ -20296,6 +20306,61 @@ class MpsServer:
         if sheet is not None:
             out += self._push_vitals(session, sheet)
         return out
+
+    def _seat_lunch(self, session: "_Session", seated: "lesson.Student") -> None:
+        """How many 「お弁当」 this seat starts with: the bag's, or the probe's."""
+        forced = int(lesson.PROBE["lunch"])
+        if forced >= 0:
+            seated.lunch = forced
+            return
+        inventory = self._chars(session).items(session.chara_id)
+        held = inventory.held(*lesson.LUNCH_ITEM) if inventory is not None else 0
+        seated.lunch = min(held, 0xFF)
+        seated.lunch_from_bag = True
+
+    def _spend_lunch(self, session: "_Session") -> bool:
+        """Take one 「お弁当」 out of the bag for 早弁. WRITES THE SAVE.
+
+        False when it is no longer there -- given away or used from the アイテム
+        window since the period began, which the seat's count cannot know.
+        """
+        store = self._chars(session)
+        inventory = store.items(session.chara_id)
+        if inventory is None or inventory.take(*lesson.LUNCH_ITEM, 1) is None:
+            return False
+        store.set_items(session.chara_id, inventory)
+        return True
+
+    def _lesson_rewards(
+        self, session: "_Session", period: "lesson.Lesson",
+        chara_id: int, right: int, asked: int,
+    ) -> "list[tuple[int, int, int]]":
+        """This lesson's ご褒美, put in the bag. WRITES THE SAVE.
+
+        Returns the rows 0x6102 should list, which are the rows that were
+        actually received: the 「入手アイテム」 page is a statement of what the
+        player now carries, so an item that did not fit is logged and left off
+        it rather than drawn and lost. What and for how well are
+        lesson.rewards's, and invented.
+        """
+        earned = lesson.rewards(period.subject, right, asked)
+        if not earned:
+            return []
+        store = self._chars(session)
+        inventory = store.items(chara_id)
+        got = []
+        for category, item_id, count in earned:
+            if inventory is None or not inventory.receive(category, item_id, count):
+                print(f"[{self.tag}] lesson end: charaId={chara_id:#x} cannot "
+                      f"hold ご褒美 {category}:{item_id} ×{count}")
+                continue
+            got.append((category, item_id, count))
+        if got:
+            store.set_items(chara_id, inventory)
+            print(f"[{self.tag}] lesson end: ご褒美 "
+                  + " ".join(f"{c}:{i}×{n}" for c, i, n in got)
+                  + f" ({right}/{asked})")
+        return got
 
     def _file_ability(
         self, session: "_Session", period: "lesson.Lesson",

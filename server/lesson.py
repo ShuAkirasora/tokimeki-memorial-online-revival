@@ -57,10 +57,12 @@ them needs a classmate to name.
 """
 from __future__ import annotations
 
+import random
 import struct
 from datetime import datetime, timedelta
 
 import curriculum
+import item
 
 MSG_SV_NOTIFY_LESSON_READY = 0x6000
 MSG_CL_REQUEST_LESSON_READY = 0x6001
@@ -266,11 +268,10 @@ PROBE = {
     "charaid": -1,     # -1 = the session's own; see the id namespace below
     "testlv": -1,      # -1 = the 通知表's own 試験レベル
     # How many 「お弁当」 the player sits down with, and therefore whether 早弁 can
-    # be used at all. Zero is the honest default: `item.bin` 8 is a consumable and
-    # this server has no inventory to hold one, so 「消費アイテム「お弁当」を所持
-    # していないため」 (`error_message.bin` 531) is the true answer. The knob is
-    # what makes the skill reachable for a test without inventing a stock.
-    "lunch": 0,
+    # be used at all. -1 = what the bag holds (LUNCH_ITEM), which is also what
+    # 早弁 then spends. A count >= 0 is a stock for a test: it is not taken out
+    # of the bag and not put back into it.
+    "lunch": -1,
 }
 
 # ── refusal knobs ───────────────────────────────────────────────────────────
@@ -638,8 +639,8 @@ def start_params(
     ⚠️ INVENTED: `lunchCount` and `speechEndTime`.
 
     `lunchCount` is a u8 with no table behind it; 早弁 spends an 「お弁当」 item,
-    so a count of them is the obvious reading and zero is the honest value while
-    no inventory exists.
+    so a count of them is the obvious reading, and it is how many LUNCH_ITEM the
+    bag holds.
 
     `speechEndTime` is signed 64-bit, which in this protocol means one thing:
     the timesync's clock, milliseconds in the client's own frame since it
@@ -734,6 +735,9 @@ GRADING_FAIR = 0.40
 ABILITIES = 6
 # (0xE6 - 0x26) / 6 — the client's item buffer in 0x6102. A capacity, not a count.
 MAX_ITEMS = 32
+# The 「お弁当」 早弁 eats: `item.bin` 8:0, named by `error_message.bin` 531
+# 「消費アイテム「お弁当」を所持していないため」.
+LUNCH_ITEM = (8, 0)
 
 # A ruler for the 結果発表, set by `/quiz ab` and nothing else. None means send
 # the two ability arrays equal, which is what a server with no 能力 subsystem
@@ -786,8 +790,9 @@ END_ABILITY_RULER = (250, 500, 1000, 2000, 4000, 8000)
 # nothing. It is this lesson's own rate and not the 通算 one, matching the same
 # 「その授業での成績」 the manual uses for ご褒美.
 #
-# ⚠️ Not modelled and deliberately so: the biorhythm the third slot names, ご褒美
-# items, and any dependence on 試験レベル or on how far the ability already is.
+# ⚠️ Not modelled and deliberately so: the biorhythm the third slot names, and
+# any dependence on 試験レベル or on how far the ability already is. (ご褒美 is
+# below, and reads the same rate.)
 ABILITY_STEP = 64
 
 
@@ -805,6 +810,52 @@ def ability_delta(subject: int, right: int, asked: int) -> "list[int]":
     for index in curriculum.SUBJECT_ABILITY[subject % len(curriculum.SUBJECT_ABILITY)]:
         delta[index] += step
     return delta
+
+
+# ── ご褒美 ─────────────────────────────────────────────────────────────────
+# 「その授業での成績によっては、ご褒美のアイテムが手に入ることもあります」
+# (`p06_02`). Where it lands is recovered: 0x6102's item array is drawn on page
+# two of the 結果発表, a 「入手アイテム」 table of name and 数. *What* is given
+# and *for how well* are nowhere -- `lesson.bin` has no item column (its one
+# per-subject u16 that is not the teacher is a `bg.bin` key, 17 一般教室 23
+# 理科室 24 美術室 22 家庭科室 38 グラウンド), and no table names a reward.
+#
+# ⚠️ INVENTED — which item a lesson gives: a 「種」, category 10 of `item.bin`.
+# Not a free choice, though: that category is exactly six items and each one's
+# own 能力 column names one of the six abilities (item.ITEM_EFFECTS, 文学の種 →
+# 文系 … パワフルプロテイン → スタミナ), while `lesson.bin` names the two a
+# subject trains (curriculum.SUBJECT_ABILITY). So the reward is the 種 of one of
+# those two, picked at random -- which puts all six in reach, スタミナ through
+# 体育's second slot. Nothing else in this server hands out a 種: they are not
+# among the 購買部's five goods.
+REWARD_CATEGORY = 10
+
+# ⚠️ INVENTED — how well a lesson has to go for a ご褒美: this lesson's own rate
+# (「その授業での成績」, the same figure ability_delta signs by), at or above
+# this. 0.8 is eight of ten; 「こともあります」 says it is not every lesson, and
+# a bar a careful player clears most periods keeps it reachable for one person.
+REWARD_RATE = 0.8
+
+# ⚠️ INVENTED — how many a ご褒美 is.
+REWARD_COUNT = 1
+
+
+def rewards(subject: int, right: int, asked: int,
+            rng=random) -> "list[tuple[int, int, int]]":
+    """This lesson's ご褒美 as 0x6102 rows, ``(categoryId, id, count)``.
+
+    INVENTED; see REWARD_CATEGORY. A lesson that asked nothing earns nothing,
+    as it moves no ability either. Empty when the category has no 種 for the
+    ability chosen, which no row of the shipped tables produces.
+    """
+    if asked <= 0 or right / asked < REWARD_RATE or REWARD_COUNT <= 0:
+        return []
+    slots = curriculum.SUBJECT_ABILITY[subject % len(curriculum.SUBJECT_ABILITY)]
+    wanted = rng.choice(slots)
+    for (category, item_id), (axis, _, _) in sorted(item.ITEM_EFFECTS.items()):
+        if category == REWARD_CATEGORY and axis == wanted:
+            return [(category, item_id, REWARD_COUNT)]
+    return []
 
 
 def question_params(
@@ -886,7 +937,7 @@ def end_params(
         u16 count; { u16 itemId.categoryId, u16 itemId.id, u8 param.count } × count
 
     The item array sits at +0x26 with a stride of 6 and its count at +0xE6, so
-    the client can hold 32 — a capacity, not a number, and this sends none.
+    the client can hold 32 — a capacity, not a number.
 
     ⚠️ INVENTED / not modelled, in descending order of how visible each is:
 
@@ -905,7 +956,8 @@ def end_params(
       (`p06_02`) with an entry condition and a set of places that reduce it, and
       none of it exists; zero is the value of a thing that is never raised.
     * ``items``. ご褒美 「その授業での成績によっては、ご褒美のアイテムが手に入る
-      こともあります」 — there is no inventory to put one in.
+      こともあります」 — drawn on page two as 「入手アイテム」; what and for how
+      well is invented, see rewards.
 
     ``attendance_count`` and ``end_words`` are the two that are real.
     """
@@ -952,8 +1004,11 @@ class Student:
         self.narrowed: "list[int] | None" = None
         # 「お弁当」 in hand for 早弁, and spent as they are used. It is the same
         # number 0x6100 went out with, so the buttons the client drew match what
-        # this will allow. Nothing outlives the period — there is no inventory.
+        # this will allow.
         self.lunch = lunch
+        # Whether that count is the bag's, so a spent one leaves the bag too;
+        # off for PROBE["lunch"]'s test stock.
+        self.lunch_from_bag = False
         self.asked = 0
         self.right = 0
 

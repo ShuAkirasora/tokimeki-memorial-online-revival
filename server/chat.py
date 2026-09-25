@@ -2263,9 +2263,9 @@ def respond(
         #   speech    speechEndTime's offset in ms. Ten minutes proved the crash
         #             is not the speech running out — it happened just the same.
         #   words     startWordsId, or -1 for the subject's own 開始台詞.
-        #   lunch     how many 「お弁当」 the player sits down with, which is the
-        #             only thing that lets 早弁 be used at all. Zero is honest —
-        #             there is no inventory — so this is a probe, not a stock.
+        #   lunch     how many 「お弁当」 the player sits down with, or -1 for
+        #             what the bag holds. A count here is a test stock: 早弁
+        #             spends it without touching the bag.
         words_in = rest.split()
         if len(words_in) >= 2:
             key = words_in[0].lower()
