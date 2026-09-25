@@ -18607,6 +18607,45 @@ class MpsServer:
             trade.reason(trade.NOTIFY_PARTNER_GONE),
         ))
 
+    def _trade_withdraw(self, session: "_Session", seen: int) -> bytes:
+        """0x5106 before anybody answered: the asker's 「やめる」.
+
+        ⭐ MEASURED, not assumed: the window that says 「〇〇さんにトレードを
+        申し込んでいます」 has one button, and pressing it sends 0x5106
+        (RequestTradeCancel; the 中止 inside an open trade sends 0x5109, also
+        measured the same round). Until this was
+        handled the asker got 0x5108 reason 11 「まだアイテムトレードを開始して
+        いません」 on screen for withdrawing, and the other end was never told:
+        its 承諾 box stayed up and answering it went to "nobody is asking" and
+        got no reply at all, which leaves a real client waiting for good.
+
+        Ok to the asker, and 0x510E with 0xFF04 row 13 「申し込みがキャンセル
+        されました」 to BOTH ends -- the asker's copy after its Ok.
+
+        ⭐⭐ Why the asker needs one too, read off the client: pressing the
+        button put the view in its 申し込み state, which greys a toolbar button
+        (FUN_00703092(…, 9, 1) in 0x756d25), and only 0x510D/0x510E ungrey it
+        (0x759bc1 / 0x759da7). 0x5107's handler (0x756be0) sets the view's busy
+        byte +0x41 to 1, and 0x510E reason 13 reads exactly that byte: set ⇒
+        skip the teardown and the sentence, but still reset the view and the
+        toolbar. So Ok-then-Notify is a pair the client was written to expect,
+        and Ok alone left the 看板 icon grey for the rest of the session
+        (measured, round 512).
+        """
+        me = session.chara_id
+        partner = session.trade_asked
+        other = self._session_of(partner) if partner is not None else None
+        session.trade_asked = None
+        print(f"[{self.tag}] トレード: charaId={me} withdrew the application "
+              f"to {partner}")
+        notify = trade.reason(trade.NOTIFY_CANCELLED)
+        if other is not None and other.trade_asking == me:
+            other.trade_asking = None
+            self._push(other, self._answer(
+                other, 0, trade.MSG_SV_NOTIFY_TRADE_CANCEL, notify))
+        return (self._answer(session, seen, trade.MSG_SV_OK_TRADE_CANCEL, b"")
+                + self._answer(session, 0, trade.MSG_SV_NOTIFY_TRADE_CANCEL, notify))
+
     def _trade_peer(self, session: "_Session") -> "_Session | None":
         """The other end of an open trade, if it is still there and agrees.
 
@@ -18757,6 +18796,9 @@ class MpsServer:
                        else trade.MSG_SV_NG_TRADE_CANCEL)
             notify_type = (trade.MSG_SV_NOTIFY_TRADE_END if closing
                            else trade.MSG_SV_NOTIFY_TRADE_CANCEL)
+            if not closing and session.trade_with is None and (
+                    session.trade_asked is not None):
+                return self._trade_withdraw(session, seen)
             other = self._trade_peer(session)
             if other is None:
                 # ⚠️ Also the honest answer for a session that thinks it is in a
@@ -18781,10 +18823,25 @@ class MpsServer:
             # 「未使用：：：エラーなし」. Both are 未使用 because a sentence saying
             # so is never meant to reach the screen; only one of them is in the
             # list this message is looked up in.
-            self._push(other, self._answer(
-                other, 0, notify_type, trade.reason(trade.NOTIFY_END),
-            ))
-            return self._answer(session, seen, ok_type, b"")
+            notify = trade.reason(trade.NOTIFY_END)
+            self._push(other, self._answer(other, 0, notify_type, notify))
+            if not closing:
+                return self._answer(session, seen, ok_type, b"")
+            # ⭐⭐⭐ 0x510D GOES TO BOTH ENDS -- the ツーショット lesson (0x5203,
+            # _twoshot_end), arrived at from the client's code this time and then
+            # measured. The client's 0x510A handler does one thing: it clears a
+            # busy byte on the trade view (state slot +0x1c, 0x756d03). The only
+            # handlers that call the teardown (FUN_007023e4 -> FUN_00662f36, which
+            # takes down the トレード and アイテム windows together) are 0x510D's
+            # and 0x510E's (0x759bc1 / 0x759da7). So Ok alone left the closer
+            # looking at both windows for good -- the "window that will not
+            # close" of rounds 327 and 370 -- and a hand-pushed 0x510D reason 15
+            # on a real client after 成立 took all of it down at once. The
+            # closer's client set its own "I asked to close" byte (view +0x3f,
+            # FUN_007586fd) when the button was pressed, and 0x510D reads it to
+            # skip the 「取引はキャンセルされました」 sentence at that end only.
+            return (self._answer(session, seen, ok_type, b"")
+                    + self._answer(session, 0, notify_type, notify))
 
         # Everything left needs an open trade.
         error_type = {
