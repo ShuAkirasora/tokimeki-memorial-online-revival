@@ -1857,6 +1857,14 @@ class _Session:
         # itself replaces the screen (0x7200, round 231), and the client sends
         # 0xE000 again by itself when the play is over (round 262's capture).
         self.drama_matching = False
+        # The step before that bracket opens: 0x4201 has said yes, and the
+        # client is tearing the map down (0x4003) on its way to asking for the
+        # list with 0xE000. Nothing on the wire marks this stretch, so it is
+        # kept here, and it exists for one reader -- _drain_bells, which must
+        # not ring into it (see the admits rule there). Cleared by 0xE000,
+        # which turns it into drama_matching, and by 0x4000, which means the
+        # player is standing on a map again whatever happened in between.
+        self.drama_entering = False
         # The period actually in progress, once 0x6100 has gone out. Not saved,
         # for the same reason: ten questions half answered are not owed to
         # anybody, and the original ends a lesson you walk out of too.
@@ -4725,6 +4733,9 @@ class MpsServer:
             #
             # The body the query carries is the charaId of the NPC that was
             # right-clicked (0x0003001b = general_npc 3:27), not an npcId.
+            #
+            # A yes sends the client off the map; see _Session.drama_entering.
+            session.drama_entering = True
             return self._answer(
                 session, seen, script.MSG_SV_RESULT_DRAMAEVENT_MATCHING_POSSIBLE,
                 bytes((0, 0)),
@@ -5117,6 +5128,7 @@ class MpsServer:
             # it without that bracket being written down. See
             # _drama_push_onlookers.
             session.drama_matching = True
+            session.drama_entering = False
             return (
                 self._answer(
                     session, seen, script.MSG_SV_OK_DRAMA_EVENT_MATCHING_START,
@@ -9487,6 +9499,8 @@ class MpsServer:
                 # write is fine — the client's parser reads them off the stream in
                 # order, and every other reply already goes out as one blob.
                 reply = self._answer(session, sequence, MSG_SV_OK_LOBBY_DATA_START, b"")
+                # Back on a map, so no longer on the way to the ドラマ screen.
+                session.drama_entering = False
                 info = self._chars(session).find(session.chara_id)
                 if info is None:
                     print(f"[{self.tag}] lobby: no charaId={session.chara_id}, adding nobody")
@@ -20503,10 +20517,26 @@ class MpsServer:
         # client that does not do what this one does, and with this one it is
         # unreachable — which is why it must not be read as a measurement.
         attends = sitting or self._attends(session, sitting=False)
+        # INVENTED — no 本鈴 for a player who has gone to the ドラマ screen, or
+        # is on the way there. Measured on a real client standing in its own
+        # classroom, ringing the teacher's ドラマイベント at the bell: when
+        # 0x6000 goes out in the same breath as the 0x4201 that says yes, both
+        # take the map down (two 0x4003), and then neither 0xE000 nor 0x6001
+        # ever comes -- a black screen that only killing the client ends.
+        # Pushed by hand at the 一覧 screen, or into a play in progress, the
+        # client simply ignores 0x6000, so skipping it there costs nothing that
+        # ringing would have given; and a 右クリック into an NPC event (0x6305)
+        # at the same bell went through untouched, so this is about the one
+        # door, not every screen. The original surely never rang into that
+        # window either -- or its players would have been stranded on the
+        # quarter hour -- but how it avoided it is not on any wire this end has
+        # seen, so the rule is ours.
+        on_drama_screen = session.drama_entering or session.drama_matching
         admits = (
             attends
             and session.map_id == lesson.classroom_of(session.in_class)
             and not neurotic
+            and not on_drama_screen
         )
         for kind, subject in session.bell.poll(admits=admits):
             name = curriculum.SUBJECTS[subject]
@@ -20521,6 +20551,7 @@ class MpsServer:
                     # Only ever 授業's row: 試験's is left to the client, above.
                     "オプション 授業の有無 is OFF" if not attends
                     else "player is ノイローゼ" if neurotic
+                    else "player is on the ドラマ screen" if on_drama_screen
                     else f"player is on map {session.map_id}, not classroom "
                          f"{lesson.classroom_of(session.in_class)}"
                 )
