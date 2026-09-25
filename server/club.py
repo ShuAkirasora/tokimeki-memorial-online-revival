@@ -365,7 +365,12 @@ CLUB_SKILL_LIST_PAGE = 32
 #
 # ⭐⭐ ROUND 329 RE-MEASURED IT NOW THAT ALL THREE ARE ANSWERED: every opening
 # of the window sends 0x4303 ×1, 0x4306 ×1, 0x5B00 ×2 per deck, and that is the
-# whole of it — the repetition above was the retry, not the shape. ⭐⭐⭐ AND IT
+# whole of it — the repetition above was the retry, not the shape.
+# ⚠️⚠️ SUPERSEDED IN ROUND 513: neither doubling was the client's. Both came
+# from this server sending an empty notify after a zero count (see the block
+# above keyword_replies) -- 「0x4306 twice」 with no キーワード, 「0x5B00 ×2」
+# with no 部活奥義. Answered the way the client reads it, one opening is
+# 0x4303, 0x4306, then 0x5B00 once for each of decks 0, 1, 2. ⭐⭐⭐ AND IT
 # SENDS NO 0x5B03: the window never re-registers a deck by itself, opening or
 # closing, so what this server stored stays the client's whole picture of it.
 # That is why the 習熟度 a fight reads comes from the キーワード list rather
@@ -1201,29 +1206,52 @@ def ng_part_params(reason: int) -> bytes:
     return struct.pack(">B", reason & 0xFF)
 
 
+# ⭐⭐⭐ AN EMPTY LIST IS THE RESULT ALONE -- NO NOTIFY. Read off the client's
+# two receivers for each pair, which are the whole of what it does with them:
+#
+#     Result (0x4304 at 0x705337, 0x4307 at 0x70534a)
+#         expected = nNum; if nNum == 0: next step
+#     Notify (0x4305 at 0x706753, 0x4308 at 0x706792)
+#         append the rows; if received >= expected: next step
+#
+# so a zero count already moves on, and an empty Notify after it passes the
+# `>=` test a second time. The next step is a queued request (0x4306 after the
+# キーワード, 0x5B00 deck 0 after the 部活奥義), and the deck chain behind it
+# runs twice to the end, where each run opens its own 部活デッキ window. That was
+# the 「0x5B00 ×2 per deck」 this server had measured and filed as the window's
+# own shape. ⚠️ It is not harmless: from a 自主トレ room the window is opened
+# with its ✕ and ＯＫ disabled (0x49badb, the forced mode), leaving the room
+# closes the one window the client still holds a handle to, and the other stays
+# on screen with nothing left that can close it -- the only way out of a room
+# nobody came to. Measured on the real client: with the empty notify, two
+# windows and one left behind after leaving; without it, one, and it goes with
+# the room.
 def keyword_replies(member: "Membership | None") -> "list[tuple[int, bytes]]":
-    """The two messages the キーワード inventory query is answered with.
+    """The messages the キーワード inventory query is answered with.
 
     The Result's count and the Notify's count are the same number said twice, so
-    both come off one list and cannot drift apart.
+    both come off one list and cannot drift apart. None owned ⇒ the Result
+    only; see the block above.
     """
     rows = member.keyword_rows() if member is not None else struct.pack(">H", 0)
     owned = struct.unpack_from(">H", rows, 0)[0]
-    return [(MSG_SV_RESULT_KEYWORD_LIST, struct.pack(">I", owned)),
-            (MSG_SV_NOTIFY_KEYWORD_LIST, rows)]
+    return ([(MSG_SV_RESULT_KEYWORD_LIST, struct.pack(">I", owned))]
+            + ([(MSG_SV_NOTIFY_KEYWORD_LIST, rows)] if owned else []))
 
 
 def skill_replies(member: "Membership | None") -> "list[tuple[int, bytes]]":
     """Same, for the 部活奥義 half of the window.
 
     One Result carrying the total, then as many notifies as the list needs --
-    see Membership.club_skill_row_pages for why it cannot go in one.
+    see Membership.club_skill_row_pages for why it cannot go in one. None
+    owned ⇒ the Result only; see the block above keyword_replies.
     """
     pages = (member.club_skill_row_pages() if member is not None
              else [struct.pack(">H", 0)])
     owned = sum(struct.unpack_from(">H", page, 0)[0] for page in pages)
     return ([(MSG_SV_RESULT_CLUB_SKILL_LIST, struct.pack(">I", owned))]
-            + [(MSG_SV_NOTIFY_CLUB_SKILL_LIST, page) for page in pages])
+            + ([(MSG_SV_NOTIFY_CLUB_SKILL_LIST, page) for page in pages]
+               if owned else []))
 
 
 def deck_reply(deck_id: int, use_type: int = USE_TYPE_NONE,
