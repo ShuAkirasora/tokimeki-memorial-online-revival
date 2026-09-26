@@ -122,7 +122,11 @@ which end to bend.
 from __future__ import annotations
 
 import os
+import random
 import struct
+
+import clubbattle
+import clubdata
 
 MSG_CL_REQUEST_GOUSEI_START = 0x5300
 MSG_SV_OK_GOUSEI_START = 0x5301
@@ -264,28 +268,80 @@ GOUSEI_RATE_MIN = max(0, min(100, int(
 GOUSEI_RATE_MAX = max(0, min(100, int(
     os.environ.get("TMO_CLUB_GOUSEI_RATE_MAX") or 100)))
 
-#: ⚠️ INVENTED — how much one 消費アイテム moves 完成度, and this one is invented
-#: BY DESIGN AT THE OTHER END TOO: 「この消費アイテム（種類や適切な個数）は「奥義
-#: の書」には書かれていませんので、…プレイヤー自身が合成を繰り返して見つけていく
-#: 必要があります」. The original hid the rule from the player on purpose, so
-#: there is no page anywhere that could carry it and no table it could be read
-#: off. ⛔️ That makes it the one number here that cannot be redeemed by finding
-#: a better source, only by an account of what someone actually observed.
-#: ⭐ INEQUALITIES: 完成度 ∈ [1, 10] (restored) · no boosters ⇒ exactly 1
-#: (restored, read off 「加えると…変動します」) · non-decreasing in the number of
-#: KINDS and in the number of items, because the manual names both 「種類や数」 ·
-#: DETERMINISTIC, because 「繰り返して見つけていく」 is only possible if there is
-#: something stable to find · reachable, because a ceiling nobody can touch is
-#: the same as not having one.
-#: ⭐ 1 + kinds + total is the smallest expression satisfying all five, and its
-#: tightest constraint is the last: the maximum arrives at three kinds of two,
-#: which is exactly the 3-kind registration limit being fully used.
-#: ⚠️ The manual's 「適切な個数」 hints that the original had a right ANSWER per
-#: book rather than a monotone ramp. That is a different shape, not a different
-#: number, and it stays unbuilt rather than half-built.
-#: ⚠️ In DISPLAY levels, not in wire units -- the invented rule is stated in the
-#: units the manual and the player use, and completeness() converts once at the
-#: end. Stating it in percent would make the 1-10 range invisible in the number.
+#: ⚠️ INVENTED — how 完成度 is decided: "recipe" gives every 奥義の書 one
+#: hidden booster recipe (which 消費アイテム, how many of each) and grades a 合成
+#: by how close the registered boosters come to it; "ramp" is 1 + kinds + total,
+#: rising with anything added.
+#: ⭐ What the original most likely did: "recipe". p07_05 says it in three words
+#: and "ramp" honours none of them -- 「適切な個数」 (there is a RIGHT count, so
+#: too many is as wrong as too few), 「変動します」 (it moves both ways, not only
+#: up), and 「繰り返して見つけていく」 (there is something fixed per book to find;
+#: under "ramp" every book has the same answer and nothing is found). The same
+#: paragraph says the answer is 「「奥義の書」には書かれていません」 -- per BOOK,
+#: which is why the book's key is the seed (HIDDEN_RECIPE_SALT).
+#: ⭐ The FRAME is the user's (2026-09-26): one hidden recipe per book, kind and
+#: count, closer is higher, over and under both cost, the same for every player.
+#: The rule inside it, the smallest one that frame admits:
+#:   * every hidden kind is worth 1 when registered at exactly its count and
+#:     falls off linearly with the miss, 1 - |registered - right| / right,
+#:     floored at 0 -- so a right count of 1 registered twice earns nothing;
+#:   * a kind the recipe does not name earns nothing, and costs the slot it sits
+#:     in, since registration is capped (BOOSTER_KINDS_MAX, and 合成可アイテム数
+#:     over materials and boosters together);
+#:   * 完成度 = 1 + floor(9 x the mean over the hidden kinds), so only the exact
+#:     recipe reaches 10 and no boosters is 1, as before;
+#:   * a book whose materials already fill every slot a maxed club can register
+#:     (19:2, eight kinds against clubbattle.GOUSEI_ENTRY_MAX 8) has an EMPTY
+#:     hidden recipe and is always 10 -- nothing could ever be added to it, and
+#:     the rarest book in the table should not be the one frozen at Lv.1 (the
+#:     user's call, 2026-09-26).
+#: ⭐ What would overturn it: any account of a 合成 at a known book with the
+#: boosters and the resulting 完成度 both readable.
+#: "ramp" is what this server did up to round 521.
+#: Knob: TMO_CLUB_GOUSEI_COMPLETENESS_RULE (recipe / ramp).
+COMPLETENESS_RULE = os.environ.get("TMO_CLUB_GOUSEI_COMPLETENESS_RULE") or "recipe"
+
+#: ⚠️ INVENTED — the 消費アイテム a hidden recipe is drawn from.
+#: They are the ones this server has a source for, so that every recipe can
+#: actually be completed.
+#: That is 購買部's five goods (shop.GOODS: お弁当, 焼きそばパン and the three
+#: gifts) and the six 種 a 授業ご褒美 can hand out (lesson.REWARD_CATEGORY).
+#: ⭐ The 消費 tab has 27 keys (categories 8-12); the other sixteen have no way
+#: into anyone's bag here, and a recipe naming one would put 10 out of reach.
+#: ⚠️ WIDENING THIS RESHUFFLES EVERY BOOK'S RECIPE -- the draw is over this
+#: tuple -- so it is widened deliberately, when a source arrives, and never
+#: as a side effect (the user's call, 2026-09-26).
+#: Knob: none by environment; /knob BOOSTER_POOL.
+BOOSTER_POOL = ((8, 0), (8, 1), (9, 3), (9, 4), (9, 5),
+                (10, 0), (10, 1), (10, 2), (10, 3), (10, 4), (10, 5))
+
+#: ⚠️ INVENTED — the largest right count a hidden recipe may ask of one kind.
+#: ⭐ THE COUNTS THEMSELVES ARE NOT INVENTED, only this cut: they are drawn with
+#: the weights of the counts the original's own 57 recipes ask of a material
+#: (item_skillbook.bin: 1 x84, 2 x27, 3 x49, 4 x3, 5 x46, 7, 10 x14, 20 x3).
+#: The cut at 5 keeps 91% of that table and drops the 10s and 20s, which are
+#: the bulk クラブの素 (体力の素 and its kind) a 練習 hands out by the handful;
+#: a booster comes one 種 per lesson or one purchase at a time.
+#: Knob: TMO_CLUB_GOUSEI_BOOSTER_COUNT_MAX.
+BOOSTER_COUNT_MAX = max(1, int(
+    os.environ.get("TMO_CLUB_GOUSEI_BOOSTER_COUNT_MAX") or 5))
+
+#: ⚠️ INVENTED — mixed into every book's seed. Empty means the hidden recipes
+#: are the ones anyone reading this file can compute; an instance that wants
+#: its recipes to be found by playing sets its own in the environment and
+#: keeps it out of every file (it is an operator's secret, not a game number).
+#: Changing it reshuffles every book on that instance.
+#: Knob: TMO_CLUB_GOUSEI_RECIPE_SALT.
+HIDDEN_RECIPE_SALT = os.environ.get("TMO_CLUB_GOUSEI_RECIPE_SALT") or ""
+
+#: ⚠️ INVENTED — the "ramp" rule's step: how much one 消費アイテム moves 完成度
+#: when COMPLETENESS_RULE is "ramp". Invented BY DESIGN AT THE OTHER END TOO:
+#: 「この消費アイテム（種類や適切な個数）は「奥義の書」には書かれていません」, so
+#: there is no page that could carry the rule, only an account of play.
+#: "ramp" is 1 + kinds + total: non-decreasing in both, deterministic, and it
+#: tops out at three kinds of two -- the smallest thing that satisfies those,
+#: and the one this server shipped up to round 521.
+#: ⚠️ In DISPLAY levels, not in wire units; completeness() converts once.
 #: Knob: TMO_CLUB_GOUSEI_COMPLETENESS_PER_ITEM.
 COMPLETENESS_PER_ITEM = max(0, int(
     os.environ.get("TMO_CLUB_GOUSEI_COMPLETENESS_PER_ITEM") or 1))
@@ -299,8 +355,60 @@ def success_rate(club_level: int) -> int:
     return GOUSEI_RATE_MIN + span * level // 99
 
 
-def completeness(boosters: "list[tuple[int, int, int]]") -> int:
-    """完成度 for this many 消費アイテム. See COMPLETENESS_PER_ITEM.
+def _count_ruler() -> "tuple[list[int], list[int]]":
+    """The right counts a hidden recipe may ask, with the original's weights.
+
+    Read off every recipe in `item_skillbook.bin`, cut at BOOSTER_COUNT_MAX.
+    Falls back to 1..BOOSTER_COUNT_MAX evenly for a feed without ``mats``.
+    """
+    weights: "dict[int, int]" = {}
+    for row in clubdata._data().get("skillbook", {}).values():
+        for entry in row.get("mats") or ():
+            count = int(entry.get("count") or 0)
+            if 1 <= count <= BOOSTER_COUNT_MAX:
+                weights[count] = weights.get(count, 0) + 1
+    if not weights:
+        weights = {n: 1 for n in range(1, BOOSTER_COUNT_MAX + 1)}
+    counts = sorted(weights)
+    return counts, [weights[n] for n in counts]
+
+
+def hidden_recipe(book: "tuple[int, int]") -> "list[tuple[int, int, int]]":
+    """This book's hidden booster recipe, ``[(category, itemId, right count)]``.
+
+    Deterministic in the book's key and HIDDEN_RECIPE_SALT alone, so a restart,
+    another machine or another player gets the same one. ``[]`` for a book that
+    has no room for any (see COMPLETENESS_RULE) or no recipe at all.
+    """
+    materials = clubdata.recipe_of(*book)
+    if not materials:
+        return []
+    room = min(BOOSTER_KINDS_MAX,
+               clubbattle.GOUSEI_ENTRY_MAX - len(materials))
+    pool = sorted({(int(c), int(i)) for c, i in BOOSTER_POOL})
+    room = min(room, len(pool))
+    if room <= 0:
+        return []
+    rng = random.Random(f"{HIDDEN_RECIPE_SALT}:{book[0]}:{book[1]}")
+    kinds = rng.randint(1, room)
+    counts, weights = _count_ruler()
+    return [(c, i, rng.choices(counts, weights)[0])
+            for c, i in sorted(rng.sample(pool, kinds))]
+
+
+def closeness(hidden: "list[tuple[int, int, int]]",
+              boosters: "list[tuple[int, int, int]]") -> "list[float]":
+    """Per hidden kind, 1 at the right count down to 0. See COMPLETENESS_RULE."""
+    got: "dict[tuple[int, int], int]" = {}
+    for category, item_id, count in boosters[:BOOSTER_KINDS_MAX]:
+        got[(category, item_id)] = got.get((category, item_id), 0) + count
+    return [max(0.0, 1 - abs(got.get((c, i), 0) - right) / right)
+            for c, i, right in hidden]
+
+
+def completeness(boosters: "list[tuple[int, int, int]]",
+                 book: "tuple[int, int] | None" = None) -> int:
+    """完成度 for these 消費アイテム on this book. See COMPLETENESS_RULE.
 
     ⚠️ RETURNS THE WIRE VALUE (10-100), not the 1-10 the manual talks about.
     See COMPLETENESS_PER_LEVEL for why those are two different numbers.
@@ -310,10 +418,19 @@ def completeness(boosters: "list[tuple[int, int, int]]") -> int:
     count, in the order the client sent them -- the manual caps registration at
     three and the client is what enforces it, so a fourth arriving here is a
     probe rather than a player and is ignored instead of refused.
+    ``book`` is needed by "recipe"; without one the "ramp" rule answers.
     """
     kept = boosters[:BOOSTER_KINDS_MAX]
-    total = sum(count for _c, _i, count in kept)
-    level = LEVEL_MIN + COMPLETENESS_PER_ITEM * (len(kept) + total)
+    if COMPLETENESS_RULE == "recipe" and book is not None:
+        hidden = hidden_recipe(book)
+        if not hidden:
+            level = LEVEL_MAX
+        else:
+            share = sum(closeness(hidden, kept)) / len(hidden)
+            level = LEVEL_MIN + int((LEVEL_MAX - LEVEL_MIN) * share + 1e-9)
+    else:
+        total = sum(count for _c, _i, count in kept)
+        level = LEVEL_MIN + COMPLETENESS_PER_ITEM * (len(kept) + total)
     return max(LEVEL_MIN, min(LEVEL_MAX, level)) * COMPLETENESS_PER_LEVEL
 
 

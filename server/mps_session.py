@@ -11712,14 +11712,21 @@ class MpsServer:
             for category, item_id, count in spend:
                 inventory.take(category, item_id, count)
             store.set_items(chara_id, inventory)
-            made = gousei.completeness(boosters)
+            made = gousei.completeness(boosters, book)
             rate = gousei.success_rate(level)
             roll = random.randrange(100)
             won = roll < rate
+            # ⚠️ The per-kind closeness goes to the log and nowhere else: it is
+            # the hidden recipe's shadow, which the operator may read and the
+            # player is meant to find by repeating (see gousei.COMPLETENESS_RULE).
+            how = gousei.COMPLETENESS_RULE
+            if how == "recipe":
+                near = gousei.closeness(gousei.hidden_recipe(book), boosters)
+                how += " 近さ=" + ("/".join(f"{x:.2f}" for x in near) or "なし")
             print(f"[{self.tag}] 奥義合成: 部活Lv={level} 成功率={rate}% "
                   f"roll={roll} → {'成功' if won else '失敗'} · "
-                  f"消費アイテム={gousei.describe(boosters)} → 完成度={made} · "
-                  f"spent {gousei.describe(spend)}")
+                  f"消費アイテム={gousei.describe(boosters)} → 完成度={made} "
+                  f"({how}) · spent {gousei.describe(spend)}")
             if won:
                 # ⚠️ INVENTED, and it is a design choice rather than a number:
                 # a repeat 合成 of a skill already owned keeps the HIGHER 完成度.
