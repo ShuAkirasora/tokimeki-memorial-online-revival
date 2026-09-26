@@ -90,6 +90,7 @@ not been taken. Nothing here reads them.
 """
 from __future__ import annotations
 
+import math
 import os
 import struct
 
@@ -249,11 +250,42 @@ MEMBER_SIZE = 83
 #: behind and make the next measurement unreadable.
 #: ⚠️ Not to be confused with the 残り体力/残り気力 inside a fight: those live on
 #: the Battle's Fighter objects, end with the fight, and never touched a save.
+#:
+#: ⭐⭐ ABOVE 35 THE SAME RULE KEEPS GOING, because the table does. Wherever a
+#: level has opponents that share one row -- or, where they vary, one row most
+#: of them take -- that row is a rung:
+#:
+#:     部活Lv  43   51-69   70    99
+#:     体力   999   1200   1399  1999
+#:     素早さ 192    210    224   255
+#:
+#: 43 is the four キャプテン's first row, identical in all four clubs and the
+#: same row the four 先生 carry at 41-47. 51/57/63/69 are 部員Ｌ-Ｏ: the four
+#: 文化部 give 1200/210 on every one of them, and the four 運動部 trade 体力
+#: against 素早さ around that row (1500/120, 1050/240, ...), which is a club's
+#: character rather than a different rung. 70 is the four キャプテン again
+#: (1299-1499, three of seven leaders' rows in the 70s on 1399, all on 224).
+#: 99 is all eight leaders' last row: 素早さ 255 on every one, 体力 1699-1999
+#: with 1999 on four. The bottom rung is where 対戦レベル１'s opponent stands,
+#: and the top is where the last one does -- same-for-same at both ends.
+#: ⭐ Why this is the most likely original rather than stopping at 35:
+#: 部活レベル runs to 99 (CLUB_LEVEL_MAX) and 「部活レベルは、クラブ活動時の
+#: プレイヤーパラメータ…に影響します」 (`p07_01`) names no level where that stops;
+#: a player who stopped growing at 35 would meet 1200-体力 部員 at 51 with 830
+#: of their own -- the only fighters in the game who never grow past a third of
+#: the way up.
 PLAYER_STAT_CURVE = (
     (0, 550, 128), (2, 610, 136), (5, 630, 144), (8, 650, 152),
     (11, 680, 160), (15, 710, 168), (19, 730, 176), (23, 750, 184),
     (27, 780, 192), (31, 810, 192), (35, 830, 192),
+    (43, 999, 192), (51, 1200, 210), (70, 1399, 224), (99, 1999, 255),
 )
+
+#: ⚠️ INVENTED — the highest rung of PLAYER_STAT_CURVE a player climbs to:
+#: rungs above this 部活レベル are ignored, so a player stays on the last one
+#: at or below it. 99 is the whole curve; 35 is what this server did up to
+#: round 520, when the curve stopped at 部員Ｋ. Knob: TMO_CLUB_PLAYER_STAT_CEILING.
+PLAYER_STAT_CEILING = int(os.environ.get("TMO_CLUB_PLAYER_STAT_CEILING") or 99)
 
 #: 気力 on every row of `training_npc.bin`, all 144 of them.
 PLAYER_ENERGY = 99
@@ -265,11 +297,11 @@ def player_stats(club_level: int) -> "tuple[int, int, int]":
     The curve is a step function, not an interpolation: it names the rungs the
     opponents actually stand on, and a player between two rungs takes the lower
     one. ⚠️ Reading it as a line through those points would be inventing a
-    shape the table does not have -- 部員 exist only at those eleven levels.
+    shape the table does not have -- opponents stand only on those rungs.
     """
     vitality, speed = PLAYER_STAT_CURVE[0][1], PLAYER_STAT_CURVE[0][2]
     for rung, rung_vitality, rung_speed in PLAYER_STAT_CURVE:
-        if club_level >= rung:
+        if club_level >= rung and rung <= PLAYER_STAT_CEILING:
             vitality, speed = rung_vitality, rung_speed
     return (vitality, PLAYER_ENERGY, speed)
 
@@ -493,14 +525,40 @@ MASTERY_BONUS_AT_FULL = float(os.environ.get("TMO_CLUB_MASTERY_BONUS") or 0.5)
 #: still send any of them.
 EFFECT_DAMAGE = 8
 
-#: ⚠️ INVENTED — how the damage wording is banded: even shares of the TARGET's
-#: maximum 体力. The count of five is the client's. value2 picks the band,
-#: adjectives from 蚊に刺されたような to 痛烈な, measured in order 0-4 (round
-#: 135). ⚠️ INVENTED: what fraction of the target's 体力 belongs in each band.
-#: ⭐ Even fifths of the TARGET's maximum, so that the adjective means the same
-#: thing to a 550-体力 部員 and a 1999-体力 キャプテン -- the alternative,
-#: absolute thresholds, would call every hit on a captain 「a mosquito bite」.
+#: The count of five is the client's: value2 picks the band, adjectives
+#: 蚊に刺されたような / 小さな / それなりの / 大きな / 痛烈な, measured in order
+#: 0-4 (round 135).
 DAMAGE_BANDS = 5
+
+#: ⚠️ INVENTED — how a hit is banded into those five words: "pace" measures it
+#: against the hit that would finish the target in TURN_LIMIT turns (maximum
+#: 体力 / 8) and puts that hit in the middle word, それなりの, each band either
+#: side being DAMAGE_BAND_STEP times smaller or larger; "share" cuts the
+#: target's maximum 体力 into even fifths.
+#: ⭐ Both measure against the TARGET, so a word means the same to a 550-体力
+#: 部員 and a 1999-体力 キャプテン. What the original most likely did: "pace".
+#: Nobody writes five words to use two, and under "share" the stock damage
+#: rule hardly leaves the bottom two -- across every ladder opponent's deck
+#: against every キーワード, a player's hits land 62% 蚊に刺されたような and
+#: under 4% anything above 小さな, and an opponent's hits on a player 90% and
+#: under 1%. A fifth of 体力 is a hit that ends a fight in five turns, which is
+#: rare by design; the one restored measure of an ordinary hit is the eight-turn
+#: limit, and それなりの -- 「as much as one would expect」 -- is its word.
+#: Under "pace" the same pairings spread 3/13/38/40/7% and 36/21/29/14/1%.
+#: ⭐ What would overturn it: any operator-era log or video of a 練習 with the
+#: damage lines and the 体力 bar readable together.
+#: "share" is what this server did up to round 520.
+#: Knob: TMO_CLUB_DAMAGE_BAND_RULE (pace / share).
+DAMAGE_BAND_RULE = os.environ.get("TMO_CLUB_DAMAGE_BAND_RULE") or "pace"
+
+#: ⚠️ INVENTED — under DAMAGE_BAND_RULE "pace", how many times larger each
+#: band's hits are than the band below: 2 puts the edges at 0.35 / 0.71 / 1.41
+#: / 2.83 times the eight-turn hit (4 / 9 / 18 / 35% of the target's 体力).
+#: ⭐ A ratio rather than a difference because the words are about how a hit
+#: feels next to the target's health, and doubling is the plainest ratio that
+#: keeps 痛烈な for a third of a fighter's 体力 in one blow. Nothing restored
+#: fixes it. Knob: TMO_CLUB_DAMAGE_BAND_STEP.
+DAMAGE_BAND_STEP = float(os.environ.get("TMO_CLUB_DAMAGE_BAND_STEP") or 2.0)
 
 #: ⚠️ INVENTED — the 「did I hurt them enough」 threshold: what share of the other
 #: side's total 体力 has to be gone to count as 「十分」. `p07_03`'s second branch
@@ -514,12 +572,45 @@ DAMAGE_BANDS = 5
 #: does that. Knob: TMO_CLUB_DAMAGE_ENOUGH.
 DAMAGE_ENOUGH_SHARE = float(os.environ.get("TMO_CLUB_DAMAGE_ENOUGH") or 0.5)
 
-#: ⚠️ INVENTED — what share of its turns an NPC opponent spends defending rather
-#: than attacking.
-#: 0.0 -- always attack -- because that is the version with no second number in
-#: it, and because a first fight wants the damage rule visible rather than an
-#: opponent's temperament. See _battle_npc_choose for the whole of what an
-#: opponent's behaviour is. Knob: TMO_CLUB_NPC_DEFEND.
+#: ⚠️ INVENTED — the cards an NPC opponent draws from each turn:
+#: "deck" is every card `npc_clubdeck.bin` gives it, キーワード and 部活奥義
+#: alike, less any 奥義 whose 消費気力 it can no longer pay; "keywords" is the
+#: キーワード alone.
+#: ⭐ What the original most likely did: "deck". 123 of the table's 200 decks
+#: are fielded, every one holds exactly eight cards -- the eight a player's own
+#: deck holds -- and only 8 of the 144 opponents hold no 奥義 at all; four hold
+#: one キーワード and seven 奥義. Nobody fills seven slots with cards that are
+#: never played, and under "keywords" those four play the same card every turn
+#: of every fight. The ladder also hands 奥義 out on a rising curve -- 1.5 per
+#: opponent over 対戦レベル１-20, 2.4 over 21-50, 3.2 over 51-100 -- which is
+#: a difficulty somebody drew rather than filler.
+#: The 気力 gate is the one the client puts on a player (both of its reads of
+#: +0xb6 are 「is there enough」), so an opponent that has spent itself falls
+#: back to its キーワード the way a player has to.
+#: ⭐ Uniform over what is left: nothing says how an opponent chooses, and a
+#: uniform draw is the choice with no opinion in it.
+#: "keywords" is what this server did up to round 520.
+#: Knob: TMO_CLUB_NPC_CARD_POOL (deck / keywords).
+NPC_CARD_POOL = os.environ.get("TMO_CLUB_NPC_CARD_POOL") or "deck"
+
+#: ⚠️ INVENTED — whether an NPC opponent attacks or defends with the card it
+#: drew: "card" defends when the キーワード's 守備力 is larger than its
+#: 攻撃力 and attacks otherwise (a 部活奥義 has no 守備力 and always
+#: attacks); "share" defends on NPC_DEFEND_SHARE of turns regardless of card.
+#: ⭐ What the original most likely did: "card". The table prices every
+#: キーワード on both sides, and 39% of those the opponents hold are worth more
+#: as a shield than as a blow -- a deck built that way is built to be played to
+#: each card's strength. 「攻撃時、このパワーは半分になります」 (`p07_03`) is
+#: what makes the choice matter at all: a high-守備力 card swung as an attack
+#: throws half its guard away.
+#: "share" at 0.0 is what this server did up to round 520 (always attack).
+#: Knob: TMO_CLUB_NPC_STANCE (card / share).
+NPC_STANCE = os.environ.get("TMO_CLUB_NPC_STANCE") or "card"
+
+#: ⚠️ INVENTED — under NPC_STANCE "share", what share of its turns an NPC
+#: opponent spends defending rather than attacking. 0.0 -- always attack --
+#: because that is the version with no second number in it; unused under
+#: "card". Knob: TMO_CLUB_NPC_DEFEND.
 NPC_DEFEND_SHARE = float(os.environ.get("TMO_CLUB_NPC_DEFEND") or 0.0)
 
 
@@ -561,10 +652,15 @@ def damage(
 
 def damage_band(value: int, max_vitality: int) -> int:
     """0x5C11's ``value2``: which of the five adjectives narrates this hit."""
-    if max_vitality <= 0:
+    if max_vitality <= 0 or value <= 0:
         return 0
-    share = value * DAMAGE_BANDS // max_vitality
-    return max(0, min(DAMAGE_BANDS - 1, share))
+    if DAMAGE_BAND_RULE == "share" or DAMAGE_BAND_STEP <= 1.0:
+        band = value * DAMAGE_BANDS // max_vitality
+    else:
+        pace = max_vitality / TURN_LIMIT
+        middle = DAMAGE_BANDS // 2
+        band = middle + round(math.log(value / pace, DAMAGE_BAND_STEP))
+    return max(0, min(DAMAGE_BANDS - 1, band))
 
 
 # ---------------------------------------------------------------------------

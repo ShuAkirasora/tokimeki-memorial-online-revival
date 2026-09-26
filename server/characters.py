@@ -1489,7 +1489,7 @@ class CharacterStore:
                     couple_names=self.lover_names(chara_id),
                     title=self.title(chara_id),
                     class_post=held.class_post,
-                    club_post=held.club_post,
+                    club_post=held.club_post_for(self.in_club(chara_id)),
                     tutorial_flag=1 if self.debut_pending(chara_id) else 0,
                     in_class=self.in_class(chara_id),
                     catch_copy=self.catch_copy(chara_id),

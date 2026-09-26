@@ -74,7 +74,8 @@ to other players as a first-string regular. Measured, one variable at a time:
     2       0xFFFF    所属部：バレー部                (no 役職)
 
 ⇒ a key the table does not have degrades to the no-post line rather than to
-garbage or a crash, and NO_CLUB_POST below is the one this server sends.
+garbage or a crash, and NO_CLUB_POST below is the one this server sends
+when a character has no post to show (see CLUB_POST_DEFAULT for when that is).
 ⚠️ Which of two rules the client follows for the 無所属 rows above is NOT
 separable from this end: it may skip the 役職 half whenever `inClub` is 0, or
 whenever the row it finds is 「無職」. `club_post.bin` has no row that would
@@ -83,6 +84,8 @@ sends, which is why it does not matter yet.
 """
 
 from __future__ import annotations
+
+import os
 
 # クラス委員長選挙 -- the subsystem the 役職 label above belongs to. It ships
 # whole and cannot be started, which is why this module is deliberately only
@@ -140,15 +143,37 @@ CLUB_POST_COUNTS = (1, 6, 6, 4, 4, 3, 3, 10, 3)
 #: `club_post.bin` does not have, and 0xFFFF is measured to be one, in a club
 #: and out of it.
 #:
-#: ⭐ INVENTED — the 部活役職 key sent for a member who has no post at all.
-#: The smallest invention available: the table has no 「無職」
-#: row for clubs 1-8 -- every club's row 0 is a real rank -- so the original game
-#: most likely gave every member a post on 入部 and never had this state at all.
-#: This server has members with no post because it has no post system, and
-#: something has to go on the wire for them. 0xFFFF is the idiom the rest of this
-#: protocol already uses for 「none」 (unequipped accessories, and
-#: friendGroupId's 0xFFFFFFFF).
+#: ⭐ INVENTED — the 部活役職 key sent for a character who has no post at all.
+#: Under CLUB_POST_DEFAULT "entry" it goes out only for 無所属 (inClub 0), where
+#: 0 would draw the same line; under "none" it also goes out for a member of a
+#: club nobody has given a post. 0xFFFF is the idiom the rest of this protocol
+#: already uses for 「none」 (unequipped accessories, and friendGroupId's
+#: 0xFFFFFFFF).
 NO_CLUB_POST = 0xFFFF
+
+#: RESTORED: each club's entry rank, the one row per club whose tail carries
+#: the same two u16 as 0:0 無職 -- 20000 and 255 at +0x4e/+0x50, against
+#: 0xFFFF and a small count (監督 1, 脇役 9, 出展候補者 10, ...) on every
+#: rank somebody has to be picked for, and 4/255 on マネージャー. It is the
+#: last row of every club except the four that end in マネージャー:
+#: 予備軍 (1-4), 出展希望者 (5, 6, 8), サクラ (7). ⭐ Nine rows out of forty
+#: carry that tail, one per clubId 0-8, with no exceptions.
+CLUB_ENTRY_POSTS = {1: 4, 2: 4, 3: 2, 4: 2, 5: 2, 6: 2, 7: 9, 8: 2}
+
+#: ⚠️ INVENTED — what 部活役職 a club member nobody has given a post is shown
+#: with: "entry" is that club's entry rank (CLUB_ENTRY_POSTS), "none" is
+#: NO_CLUB_POST, which draws the club line with no 役職 half.
+#: ⭐ What the original most likely did: "entry". The table has no 「無職」 row
+#: for clubs 1-8 -- every row is a real rank -- so a member with no post is a
+#: state the original never had, and the one rank a newcomer can hold without
+#: being picked for anything is the one the table marks like 無職: 予備軍 /
+#: 出展希望者 / サクラ, 「reserve」 and 「hoping to exhibit」 in so many words.
+#: ⭐ It is decided when the card is sent, from inClub, and NOT written to the
+#: save: a post somebody sets (/post) still wins, and leaving the club takes the
+#: rank with it without anything to clear.
+#: "none" is what this server did up to round 520.
+#: Knob: TMO_CLUB_POST_DEFAULT (entry / none).
+CLUB_POST_DEFAULT = os.environ.get("TMO_CLUB_POST_DEFAULT") or "entry"
 
 #: `club_post.bin`'s row 0:0, 「無職」. ⚠️ Only reachable for 無所属, and even
 #: there the card draws no 役職 -- it is here to name the row, not as a default.
@@ -234,6 +259,19 @@ class Posts:
 
     def to_json(self) -> dict:
         return {"classPost": self.class_post, "clubPost": self.club_post}
+
+    def club_post_for(self, in_club: int) -> int:
+        """The clubPost that goes on the wire for a character in club ``in_club``.
+
+        The stored post when there is one; otherwise, for a member of a club,
+        that club's entry rank under CLUB_POST_DEFAULT "entry". Every packer
+        asks this rather than reading ``club_post`` itself, so the card, the
+        list entry and 0x4813 cannot disagree.
+        """
+        if (self.club_post == NO_CLUB_POST and CLUB_POST_DEFAULT == "entry"
+                and in_club in CLUB_ENTRY_POSTS):
+            return CLUB_ENTRY_POSTS[in_club]
+        return self.club_post
 
     def summary(self) -> str:
         return f"classPost={self.class_post} clubPost={self.club_post}"

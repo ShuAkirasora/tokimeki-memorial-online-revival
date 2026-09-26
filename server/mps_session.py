@@ -3067,7 +3067,7 @@ class MpsServer:
         return (
             store.title(chara_id),
             held.class_post,
-            held.club_post,
+            held.club_post_for(store.in_club(chara_id)),
             store.in_club(chara_id),
             store.lover(chara_id),
             group_id,
@@ -9777,7 +9777,7 @@ class MpsServer:
                         lover_chara_id=lover,
                         title=title,
                         class_post=held.class_post,
-                        club_post=held.club_post,
+                        club_post=held.club_post_for(owner.in_club(chara_id)),
                         # ⭐ Out of the owner's store for the same reason the
                         # 役職 are: the line belongs to the character being
                         # looked at, and this card is usually somebody else's.
@@ -12243,21 +12243,22 @@ class MpsServer:
     def _battle_npc_choose(self, battle: "clubbattle.Battle") -> None:
         """Give every NPC in this fight a card and a target for this turn.
 
-        ⚠️⚠️ INVENTED, the whole of it, and it is the one invention in this
-        subsystem with NO restored source of any kind: nothing anywhere says
-        how an opponent picks. What IS restored is the material it picks FROM
-        -- `npc_clubdeck.bin` gives each of the 144 opponents a named deck of
-        up to eight キーワード and eight 部活奥義, and `training_npc.bin` says
-        which deck is whose, 144 rows with no exceptions.
-        ⭐ So the choice is uniform over that deck and always an attack, which
-        is the least this can be and still be a fight. It is deliberately not
-        clever: an opponent that played well would be a design decision dressed
-        up as a restoration, and there would be no way to tell from a screen
-        which of the two it was.
+        ⚠️⚠️ INVENTED, the whole of it: nothing anywhere says how an opponent
+        picks. What IS restored is the material it picks FROM --
+        `npc_clubdeck.bin` gives each of the 144 opponents a named deck of
+        eight cards, キーワード and 部活奥義 with each 奥義's 完成度, and
+        `training_npc.bin` says which deck is whose, 144 rows with no
+        exceptions.
+        ⭐ Which cards are in the draw is clubbattle.NPC_CARD_POOL and whether
+        the card is swung or held up is clubbattle.NPC_STANCE; both carry
+        their reasoning there. The draw itself is uniform. It is deliberately
+        not clever: an opponent that played well would be a design decision
+        dressed up as a restoration, and there would be no way to tell from a
+        screen which of the two it was.
         ⚠️ The player is the only target there can be -- 練習 is one human
-        against one to three NPCs -- so no targeting rule is invented here.
-        Knob: TMO_CLUB_NPC_DEFEND, the share of turns spent defending instead
-        (0.0 by default, which is 「always attack」).
+        against one to three NPCs -- so no targeting rule is invented here. A
+        奥義 aims itself by its own 対象 columns (_battle_skill_targets), which
+        is how an ally-side one lands on its caster.
         """
         humans = [
             f for f in battle.fighters
@@ -12270,30 +12271,49 @@ class MpsServer:
                 continue
             row = clubdata.npc(clubdata.npc_key(fighter.chara_id))
             deck = clubdata.npc_deck(row["deck"]) if row else None
-            cards = list(deck.get("keywords", [])) if deck else []
+            # ⚠️ The six bytes are composed here rather than echoed, which is
+            # the one place in this family that happens on an NPC's behalf.
+            # LITTLE-ENDIAN, the same way club.keyword_deck_item and
+            # club_skill_deck_item do it and for the same measured reason.
+            # ⭐ A キーワード's ``useCount`` GOES OUT AS ZERO, and that is the
+            # reading with the least invention in it rather than a stub:
+            # 習熟度 belongs to a character's own キーワード list,
+            # `npc_clubdeck.bin` has no such column, and an opponent has no
+            # save to keep one in. So an NPC has no 習熟度 and takes no 習熟度
+            # bonus. ⚠️ Sending full scale instead -- the first thing tried --
+            # silently handed every opponent the +50% while a player's fresh
+            # card got none, which is a difficulty curve invented by accident.
+            # ⭐ A 奥義 goes out with the 完成度 its deck row gives it, which
+            # is the table's own number for exactly that byte.
+            cards: "list[tuple[int, bytes]]" = [
+                (club.DECK_ITEM_KEYWORD,
+                 struct.pack("<HHH", int(keyword_id), 0, fighter.club_id))
+                for keyword_id in (deck.get("keywords", []) if deck else [])
+            ]
+            if clubbattle.NPC_CARD_POOL != "keywords":
+                for entry in (deck.get("skills", []) if deck else []):
+                    category, _, skill_id = str(entry.get("key", "")).partition(":")
+                    skill = (clubdata.club_skill(int(category), int(skill_id))
+                             if category.isdigit() and skill_id.isdigit() else None)
+                    if skill is None or int(skill.get("energy") or 0) > fighter.energy:
+                        continue
+                    cards.append((club.DECK_ITEM_CLUB_SKILL, struct.pack(
+                        "<HHBB", int(category), int(skill_id),
+                        int(entry.get("completeness") or 0) & 0xFF, 0)))
             if not cards:
                 print(f"[{self.tag}] 練習 npc {fighter.chara_id:#x} has no deck "
                       f"to play from — sits this turn out")
                 continue
-            keyword_id = random.choice(cards)
-            attack = 0 if random.random() < clubbattle.NPC_DEFEND_SHARE else 1
+            kind, payload = random.choice(cards)
+            if clubbattle.NPC_STANCE == "share":
+                attack = 0 if random.random() < clubbattle.NPC_DEFEND_SHARE else 1
+            elif kind == club.DECK_ITEM_KEYWORD:
+                shown = clubdata.keyword(struct.unpack_from("<H", payload)[0]) or {}
+                attack = 0 if int(shown.get("defence") or 0) > int(shown.get("attack") or 0) else 1
+            else:
+                attack = 1
             target = random.choice(humans).chara_id
-            # ⚠️ The six bytes are composed here rather than echoed, which is
-            # the one place in this family that happens on an NPC's behalf.
-            # LITTLE-ENDIAN, the same way club.keyword_deck_item does it and
-            # for the same measured reason.
-            # ⭐ ``useCount`` GOES OUT AS ZERO, and that is the reading with the
-            # least invention in it rather than a stub: 習熟度 belongs to a
-            # character's own キーワード list, `npc_clubdeck.bin` has no such
-            # column, and an opponent has no save to keep one in. So an NPC has
-            # no 習熟度 and takes no 習熟度 bonus. ⚠️ Sending full scale instead
-            # -- the first thing tried -- silently handed every opponent the
-            # +50% while a player's fresh card got none, which is a difficulty
-            # curve invented by accident.
-            fighter.npc_card = (
-                club.DECK_ITEM_KEYWORD,
-                struct.pack("<HHH", keyword_id, 0, fighter.club_id),
-            )
+            fighter.npc_card = (kind, payload)
             fighter.command = (0, attack, target)
 
     def _owned_use_count(
