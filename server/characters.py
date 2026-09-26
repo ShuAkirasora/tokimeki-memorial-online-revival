@@ -180,11 +180,11 @@ SPAWN_POS = (106, 84)
 #: by headcount as the likeliest rule -- a school held 5000 by the top bucket of
 #: `student_num_scale.bin`, so roughly 192 to a 組.
 #:
-#: ⭐ None of which this server can usefully copy. 授業 and 試験 happen in the
-#: classroom of your own 組, so spreading a handful of players over 26 rooms
-#: would mean nobody is ever in class with anybody. One open 組 is the choice;
-#: turning this knob moves everyone to a different one (5 = Ｆ組) rather than
-#: spreading them out.
+#: ⭐ That spreading is CLASS_ASSIGNMENT's, below. This is the one 組 its
+#: "fixed" setting puts everybody in -- the setting a small school wants, since
+#: 授業 and 試験 happen in the classroom of your own 組 -- and the 組 a record
+#: written before the key existed reads as. Turning it moves "fixed" to a
+#: different room (5 = Ｆ組) rather than spreading anyone out.
 #:
 #: ⚠️ Deliberately not per-character: a 組 that differs between characters
 #: needs a school-wide roster to balance against, plus a slot in the record to
@@ -200,17 +200,22 @@ IN_CLASS = 0
 #: "fixed" (every character gets IN_CLASS), "balanced" (whichever of the 26 has
 #: the fewest), or "random".
 #:
-#: ⭐ The rule the original used is not recoverable, and this is the knob that
-#: admits it rather than hiding one choice inside a literal. "fixed" is the
-#: default because of who plays here, not because of what the original did: 授業
-#: and 試験 happen in the classroom of your own 組, so on a server with a handful
-#: of players 26 open rooms means nobody is ever in class with anybody. "balanced"
-#: is the likeliest reconstruction of the original -- a 組 was decided at
+#: ⭐ What the original most likely did: "balanced". A 組 was decided at
 #: registration with no say from the player, cohorts mixed inside one, every
 #: letter was in use, and classes were the unit official events scored (試験 の
 #: クラス平均点, and the 2006-11-08 server merge moved whole ones 「バランスよく」)
-#: -- but likeliest is not measured, and "random" is the other candidate that
-#: the same evidence cannot rule out.
+#: -- a school that is scored class against class keeps its classes even.
+#: "random" is the other candidate the same evidence cannot rule out, and loses
+#: only because nothing that scores classes would leave their size to chance.
+#: ⭐ What would overturn it: a roster, or any account of a new player finding
+#: their 組 already full or already empty.
+#:
+#: ⚠️ "fixed" is this server's default up to round 519, kept whole as the
+#: knob's other setting, and it is the one a small school wants: 授業 and 試験
+#: happen in the classroom of your own 組, so with a handful of players 26 open
+#: rooms means nobody is ever in class with anybody. That is a reason to turn
+#: the knob on a small server, not a reason to ship the original a different
+#: shape: an invention's factory value is the likeliest original.
 #:
 #: ⚠️ A character's 組 is written into its record when it is created and never
 #: read from this knob again: 登録内容は変更できません, and a 組 that moved when an
@@ -218,7 +223,7 @@ IN_CLASS = 0
 #: their lesson attendance with it. Turning this decides where the NEXT
 #: character enrols. Records written before the key existed read as IN_CLASS,
 #: which is what they have always been sent as.
-CLASS_ASSIGNMENT = os.environ.get("TMO_CLASS_ASSIGNMENT") or "fixed"
+CLASS_ASSIGNMENT = os.environ.get("TMO_CLASS_ASSIGNMENT") or "balanced"
 
 #: The 組 a character lands in under CLASS_ASSIGNMENT, given how many are in
 #: each. Pure, so the policy can be read (and tested) without a store on disk.

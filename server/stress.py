@@ -56,13 +56,13 @@ Restored, and each traceable to a sentence above or to a table:
 Invented, because no table carries a number for any of it:
 
   * STRESS_PER_LESSON, NEUROSIS_AT, and the two recovery rates
-  * that crossing NEUROSIS_AT is *certain* rather than a chance. The manual
-    says 「なることがあります」, which is a probability, and this server makes it
-    a threshold. A coin flip that cannot be reproduced would make the whole
-    subsystem untestable — the run that produced a ノイローゼ and the run that
-    did not would look identical in the log — and picking the coin's weight
-    would be one more invented number on top of the threshold, not instead of
-    it. Recorded as a divergence, not as a reading.
+  * BREAK_CHANCE, how often an activity taken over NEUROSIS_AT breaks the
+    player. The manual says 「なることがあります」 and 「なる場合があります」,
+    which is a probability, and up to round 519 this server made it a
+    certainty for the sake of reproducible tests. Since round 520 the factory
+    value is a chance and certainty is the knob turned to 1 -- the test's
+    setting, not the game's. Every outcome is logged either way, so a run
+    that broke and a run that did not no longer look the same.
 
 ⭐ 泉 and テラス are places on 屋外 rather than maps of their own, so the test
 is per *cell* and not per map. Every cell of every `cld_*.bin` names its
@@ -82,6 +82,8 @@ through the notify — FULL is 257 on the sheet and the packers clamp.
 """
 from __future__ import annotations
 
+import os
+import random
 import struct
 
 MSG_CL_CAST_CHARA_POSE = 0x4806
@@ -132,6 +134,24 @@ STRESS_PER_LESSON = 26          # ≈ 10 / 100 on screen
 NEUROSIS_AT = 180               # ≈ 70 / 100 on screen
 SIT_SECONDS_PER_POINT = 3.0     # a full bar in ~13 minutes
 HEALING_SECONDS_PER_POINT = 1.0 # three times that, in the 保健室
+
+# ⚠️ INVENTED — the chance that one activity taken at or over NEUROSIS_AT
+# breaks the player: ノイローゼ for 授業／試験, 怪我 for クラブ活動.
+# ⭐ What the original most likely did: a chance, not a certainty. Every
+# sentence the manual has on it says so -- 「ノイローゼになることがあります」,
+# 「怪我をすることがあります」 (p05_09), 「ノイローゼになる場合があります」
+# (p06_02, β and later alike) -- while the very next sentence of p06_02 puts
+# what follows a ノイローゼ as a flat 「参加できなくなります」: the page writes
+# a certainty differently. How big a chance no page says; a quarter is
+# the figure this server already reads 「ことがあります」 as (a クラブの素 off
+# one play, clubbattle.SOZAI_DROP_CHANCE), so one phrase gets one number. At
+# 26 a lesson that means about four lessons over the line before it breaks.
+# ⭐ What would overturn it: any account of a player sitting well over the
+# line and staying 健康, or of breaking the first time every time.
+# 1 is the certainty this server used up to round 519, and what a test that
+# needs the break to happen should turn it to.
+# Knob: TMO_STRESS_BREAK_CHANCE.
+BREAK_CHANCE = float(os.environ.get("TMO_STRESS_BREAK_CHANCE") or 0.25)
 
 # 「クラブ活動」 is the second entry on the manual's list of what adds ストレス,
 # and it is worth what a lesson is worth for the same reason 試験 is: the page
@@ -205,7 +225,8 @@ def worsen(condition: int, added: int) -> int:
     return DOCTOR_STOP
 
 
-def charge(sheet, amount: int, breaks_into: int = NEUROSIS) -> "tuple[int, int]":
+def charge(sheet, amount: int, breaks_into: int = NEUROSIS,
+           rng: "random.Random | None" = None) -> "tuple[int, int]":
     """Charge `amount` of stress, and decide whether it broke the player.
 
     Returns (stress_added, new_condition). Order matters and follows the
@@ -225,11 +246,18 @@ def charge(sheet, amount: int, breaks_into: int = NEUROSIS) -> "tuple[int, int]"
     になることがあります」 and 「クラブ活動を行なうと、怪我をすることがあります」
     — and this end only ever charged the 学業 half. See worsen for what happens
     when a player collects both.
+
+    ⭐ Over the line it breaks on BREAK_CHANCE, not every time: 「ことがあります」.
     """
     was = sheet.stress
     sheet.stress = min(FULL, was + amount)
     if was >= NEUROSIS_AT:
-        sheet.condition = worsen(sheet.condition, breaks_into)
+        broke = (rng or random).random() < BREAK_CHANCE
+        print(f"[stress] {was} >= {NEUROSIS_AT}: "
+              f"{'broke into ' + CONDITIONS[breaks_into] if broke else 'held'} "
+              f"(chance {BREAK_CHANCE})")
+        if broke:
+            sheet.condition = worsen(sheet.condition, breaks_into)
     return sheet.stress - was, sheet.condition
 
 

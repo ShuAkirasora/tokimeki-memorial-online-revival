@@ -55,6 +55,7 @@ are **not here and are not shipped**. This file cannot show anyone a question.
 from __future__ import annotations
 
 import json
+import os
 import random
 from pathlib import Path
 
@@ -81,10 +82,23 @@ LEVELS = (0, 1, 2)
 # Which of the two *types* a question is has no such sentence behind it. `p06_02`
 # says only 「種類は「４択」か「○×」の２種類になります」, one line before the
 # 難易度 sentence that does specify.
-# ⚠️ INVENTED — what share of questions come out as ○×, the rest being 四択.
-# So the type roll below is
-# is a coin flip because that is the least assuming shape, not because anything
-# says even odds.
+# ⚠️ INVENTED — how a question's type is decided: "pool" draws the question
+# out of both types' categories together, so the type follows the bank;
+# "coin" rolls the type first on TYPE_ODDS_TRUEFALSE.
+# ⭐ What the original most likely did: "pool". The manual singles out the
+# difficulty as the thing rolled per question and says nothing of the type,
+# which is how a writer describes a type that simply comes with the question.
+# The bank is lopsided in a way nobody would write for a coin: ○× is 1899 of
+# the 7212 questions at the three lesson levels (26%), so a coin doubles how
+# often ○× comes up and asks each ○× about three times as often as a 4択.
+# ⭐ What would overturn it: any record of a run of lessons from the operated
+# game with its ○×/4択 split, or client code that rolls quizType itself.
+# "coin" is what this server did up to round 519.
+# Knob: TMO_QUIZ_TYPE_PICK (pool / coin).
+TYPE_PICK = os.environ.get("TMO_QUIZ_TYPE_PICK") or "pool"
+# ⚠️ INVENTED — what share of questions come out as ○× when TYPE_PICK is
+# "coin", the rest being 4択. Even odds because a coin is the least assuming
+# shape, not because anything says even odds; unused under "pool".
 TYPE_ODDS_TRUEFALSE = 0.5
 
 
@@ -108,6 +122,23 @@ def count(subject: int, quiz_type: int, level: int) -> int:
     """How many quizIds this category has. 0 if it has none, or if no bank loaded."""
     entry = BANK.get((subject, quiz_type, level))
     return int(entry["count"]) if entry else 0
+
+
+def roll_type(subject: int, level: int, rng: "random.Random | None" = None) -> int | None:
+    """Which type this subject's next question at this level is, by TYPE_PICK.
+
+    None if the subject has no question at all at this level. A category the
+    client's own table leaves empty (外国語's level-5 ○×) is never chosen.
+    """
+    rng = rng or random
+    counts = {t: count(subject, t, level) for t in (TYPE_TRUEFALSE, TYPE_CHOICE)}
+    if not any(counts.values()):
+        return None
+    if TYPE_PICK == "coin":
+        wanted = TYPE_TRUEFALSE if rng.random() < TYPE_ODDS_TRUEFALSE else TYPE_CHOICE
+        return wanted if counts[wanted] else next(t for t, n in counts.items() if n)
+    types = list(counts)
+    return rng.choices(types, weights=[counts[t] for t in types])[0]
 
 
 def available(subject: int) -> list[tuple[int, int]]:
@@ -200,9 +231,17 @@ def pick(subject: int, rng: random.Random | None = None) -> Question | None:
     pairs = available(subject)
     if not pairs:
         return None
-    wanted = TYPE_TRUEFALSE if rng.random() < TYPE_ODDS_TRUEFALSE else TYPE_CHOICE
-    candidates = [pair for pair in pairs if pair[0] == wanted] or pairs
-    quiz_type, level = rng.choice(candidates)
+    if TYPE_PICK == "coin":
+        # The shape up to round 519, kept whole as the knob's other setting:
+        # the type first, then a level among those that type has.
+        wanted = TYPE_TRUEFALSE if rng.random() < TYPE_ODDS_TRUEFALSE else TYPE_CHOICE
+        candidates = [pair for pair in pairs if pair[0] == wanted] or pairs
+        quiz_type, level = rng.choice(candidates)
+    else:
+        # The difficulty is what p06_01 rolls per question; the type then
+        # comes with whichever question the level's pool hands out.
+        level = rng.choice(sorted({lv for _t, lv in pairs}))
+        quiz_type = roll_type(subject, level, rng)
     quiz_id = rng.randrange(count(subject, quiz_type, level))
 
     if quiz_type == TYPE_CHOICE:

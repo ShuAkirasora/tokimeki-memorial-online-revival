@@ -406,13 +406,13 @@ class Bell:
         suppresses the 本鈴, never the 予鈴, because the 予鈴 is exactly the
         warning that sends a player to the right room in time.
 
-        ⚠️ That rationale covers the two situational conditions — wrong room,
-        ノイローゼ — and does *not* obviously cover 授業の有無 OFF, where there
-        is no room to be sent to and nothing the warning could avert. The 予鈴
-        is left ringing anyway because it is a bare notice with no consequence
-        and there is no evidence either way; what would settle it is a capture
-        of the original, or a client that reacts to 0x6005 differently with the
-        option off. INVENTED, and the cheaper half of the choice to undo.
+        ⭐ That rationale covers the situational conditions — wrong room,
+        ノイローゼ — and NOT 授業の有無 OFF, and the manual settles that one in
+        so many words: 「OFFにしておくと授業モードが発生せず、予鈴もありません」
+        (p06_02, both the β and the later page). So the caller drops the 予鈴
+        too for a player with that row OFF; this method, which does not know
+        the option, still reports it as owed. Up to round 519 it rang anyway,
+        recorded here as an invention the manual had already answered.
 
         ⚠️ This is an inference, not something read off the wire: the original
         server cannot have rung 本鈴 at players in corridors either, or every

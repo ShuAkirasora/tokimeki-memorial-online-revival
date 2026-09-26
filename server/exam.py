@@ -426,24 +426,18 @@ def draw(subject: int, level: int, rng: "random.Random | None" = None
     from quiz.pick in, and it is why it cannot simply call it — pick rolls the
     difficulty, which is the lesson's rule.
 
-    The type still rolls, on quiz.TYPE_ODDS_TRUEFALSE's invented coin, and only
-    among the types this subject actually has at this level: 外国語's level-5 ○×
-    category is empty in the client's own table, and a category with no
-    questions cannot be asked out of.
+    The type comes from quiz.roll_type (by the invented quiz.TYPE_PICK), and
+    only among the types this subject actually has at this level: 外国語's
+    level-5 ○× category is empty in the client's own table, and a category
+    with no questions cannot be asked out of.
     """
     rng = rng or random
-    types = [
-        quiz_type
-        for quiz_type in (quiz.TYPE_TRUEFALSE, quiz.TYPE_CHOICE)
-        if quiz.count(subject, quiz_type, level) > 0
-    ]
-    if not types:
+    if not any(quiz.count(subject, t, level)
+               for t in (quiz.TYPE_TRUEFALSE, quiz.TYPE_CHOICE)):
         return []
     out: "list[quiz.Question]" = []
     for _ in range(QUESTIONS_PER_EXAM):
-        wanted = quiz.TYPE_TRUEFALSE if rng.random() < quiz.TYPE_ODDS_TRUEFALSE \
-            else quiz.TYPE_CHOICE
-        quiz_type = wanted if wanted in types else types[0]
+        quiz_type = quiz.roll_type(subject, level, rng)
         quiz_id = rng.randrange(quiz.count(subject, quiz_type, level))
         if quiz_type == quiz.TYPE_CHOICE:
             # No choiceId[] goes out for an exam, so there is no deal to record.

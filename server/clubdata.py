@@ -16,8 +16,9 @@ that file, and an operator may override any row or add rows of their own at
                success rate, the three +-% modifiers, two heals, one ailment,
                and the 能力属性 it raises
     skillbook   57 rows: every 奥義の書 -- which 部活奥義 it makes, whose club
-               that is, and ⭐ the RECIPE (2-8 合成アイテム with a count each),
-               which round 226 added because 奥義合成 now consumes it
+               that is, ⭐ the RECIPE (2-8 合成アイテム with a count each),
+               which round 226 added because 奥義合成 now consumes it, and
+               the unclaimed +0xDD a book drop is drawn by (round 520)
     npcdeck    200 rows: which キーワード and 部活奥義 an opponent brings
 
 ⚠️ WHY A FILE AND NOT LITERALS IN HERE. Two reasons, and the second is the one
@@ -212,6 +213,19 @@ def recipe_of(category_id: int, book_id: int) -> "list[tuple[int, int, int]] | N
         except ValueError:
             return None
     return out or None
+
+
+def book_weight(key: str) -> int:
+    """`item_skillbook.bin` +0xDD for one ``"17:0"`` book, 0 when absent.
+
+    ⚠️ The column is unclaimed: the client never reads it. It runs against the
+    price and sums per club to the scale of a percentage split, which is why
+    clubbattle.BOOK_PICK_WEIGHTED draws by it -- and that use is an invention.
+    """
+    try:
+        return max(0, int((_data().get("skillbook", {}).get(key) or {}).get("weight") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def books_of_club(club_id: int) -> "list[str]":

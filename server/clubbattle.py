@@ -736,24 +736,60 @@ CLUB_GAUGE_PER_ACTIVITY = max(1, CLUB_GAUGE_FULL // ACTIVITIES_PER_CLUB_LEVEL)
 #: eight +0x36 slots, 94 items inside `item.bin` 32-40 with no exceptions).
 #: ⭐ A quarter because 「ことがあります」 has to stay true of a single play —
 #: most plays give nothing — while a recipe's twenty-odd materials still land
-#: in the same order of fights as a 部活レベル does. ⚠️ Which of an eligible
-#: card's slots is drawn is uniform: the table gives no weights, and
-#: `item_skillbook.bin`'s +0xDD (which looks like a rarity and moves inversely
-#: to price) is DELIBERATELY NOT USED — 2.158 三 says in so many words that it
-#: has no third witness and must not be taken for a drop rate.
+#: in the same order of fights as a 部活レベル does. Which slot is drawn is
+#: SOZAI_SLOT_DECAY, below.
 #: Knob: TMO_CLUB_SOZAI_DROP.
 SOZAI_DROP_CHANCE = float(os.environ.get("TMO_CLUB_SOZAI_DROP") or 0.25)
+
+#: ⚠️ INVENTED — how much less likely each of a card's クラブの素 slots is to be
+#: the one drawn than the slot before it: slot i weighs SOZAI_SLOT_DECAY ** i.
+#: ⭐ What the original most likely did: the slots are already sorted by how
+#: common their item is. Slot 0 is one of the ten basic 32:x materials on 260
+#: of 261 cards; the average item in slots 0-5 turns up on 91, 52, 14, 7, 5 and
+#: 4 cards in turn, and 85 of 体力の素's 98 appearances are in slot 0. A table
+#: laid out that way is laid out to be drawn by position, and the per-slot
+#: ratio of that curve is 0.53 (geometric mean over slots 0-5) -- hence a half.
+#: ⚠️ The prices agree: the cheapest goods (お弁当, 焼きそばパン) cost the most
+#: common materials and 本命チョコ costs an item only one card yields, which is
+#: a price list that assumes the early slots come up far more often.
+#: ⭐ What would overturn it: any drop record from the operated game, or a
+#: client-side weight column for the +0x36 slots.
+#: 1.0 is the uniform draw this server used up to round 519.
+#: Knob: TMO_CLUB_SOZAI_SLOT_DECAY.
+SOZAI_SLOT_DECAY = float(os.environ.get("TMO_CLUB_SOZAI_SLOT_DECAY") or 0.5)
+
+
+def sozai_weights(count: int) -> "list[float]":
+    """The draw weight of each of a card's `count` クラブの素 slots, in order."""
+    return [SOZAI_SLOT_DECAY ** i for i in range(count)]
+
 
 #: ⚠️ INVENTED — the chance one 練習 yields a 奥義の書, and 練習 only: p07_04
 #: drops the book from 自主トレ's otherwise identical sentence.
 #: ⭐ RESTORED around it: that it happens 「ことがあります」, that the reward is
 #: for taking part, and WHICH books are eligible — a book's category is its
 #: club + 16 and that equals its 奥義's クラブ属性, 57 rows out of 57, so 「the
-#: eight books of the club you are practising with」 is the table's own grouping
-#: rather than a guess. ⚠️ A quarter for the same reason as the materials, and
-#: the pick among the eligible eight is uniform for the same reason.
+#: seven or eight books of the club you are practising with」 is the table's own
+#: grouping rather than a guess. ⚠️ A quarter for the same reason as the
+#: materials. Which book is drawn is BOOK_PICK_WEIGHTED, below.
 #: Knob: TMO_CLUB_BOOK_DROP.
 BOOK_DROP_CHANCE = float(os.environ.get("TMO_CLUB_BOOK_DROP") or 0.25)
+
+#: ⚠️ INVENTED — whether the book is drawn by `item_skillbook.bin` +0xDD (the
+#: table's ``weight``) rather than evenly among the club's books.
+#: ⭐ What the original most likely did: +0xDD is an unclaimed u8 taking ten
+#: values (1-30) that runs against the price -- 神業の書 at 250 円 is 1,
+#: 体調管理入門書 at 10 円 is 30, and in every club the dearest book carries
+#: the club's smallest number. Each club's column sums to 63-97, the scale of
+#: a percentage split rather than of a count. A per-book number that the
+#: table carries, that nothing else reads, and that falls as the book gets
+#: better is the draw weight a book drop would be written against.
+#: ⚠️ Still a reading, not a restoration: the client never reads the column,
+#: so there is no third witness and the name 「weight」 is ours.
+#: ⭐ What would overturn it: the client or any operator-era page using +0xDD
+#: for something else. False is the even draw this server used up to round 519.
+#: Knob: TMO_CLUB_BOOK_PICK_WEIGHTED (0 / 1).
+BOOK_PICK_WEIGHTED = (os.environ.get("TMO_CLUB_BOOK_PICK_WEIGHTED") or "1") != "0"
 
 #: ⭐ RESTORED, both ends of 合成可アイテム数 — the count 0x5C1A carries as
 #: before/afterGouseiEntryMax and 0x5301 as nGouseiEntryMax. That 部活レベル

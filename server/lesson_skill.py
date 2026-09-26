@@ -38,6 +38,7 @@ import random
 import struct
 
 import curriculum
+import item
 
 
 # ── the wire ────────────────────────────────────────────────────────────────
@@ -280,7 +281,16 @@ STRESS_CHEATING_OK = 3
 STRESS_TEACHING = 3             # spent by the teacher, not the taught
 STRESS_SUPPORT_GIVER = 0        # 「あなたが応援することで」 — the cost is theirs
 STRESS_SUPPORT_TARGET = -8      # 「相手のストレスを少し減らす」
-STRESS_LUNCH = -13              # 「ストレスがちょっとふっと回復します」 (`item.bin` 8)
+
+# ⭐ 早弁 is eating the お弁当 (lesson.LUNCH_ITEM is what it takes out of the
+# bag), so what it takes off is what that お弁当 takes off when it is used from
+# the アイテム window: `item.bin` +0xB0, 10. ⚠️ A reading rather than a
+# measurement -- nothing states that eating it in class and eating it anywhere
+# else relieve the same -- but the one table that prices the meal is the
+# obvious reading, and it is why this is not an invention any more. Up to
+# round 519 it was an invented -13 (half a lesson), which left the お弁当
+# worth more in class than out of it.
+STRESS_LUNCH = -item.effect_of(8, 0)[2]
 
 
 def _ability_fraction(params: "list[int]", subject: int) -> float:

@@ -974,19 +974,6 @@ NG_NPC_MENU_ALREADY_OPEN = 4
 #     nobody. ⛔️ Inventing a selection for it to refuse would be restoring the
 #     rule by inventing its subject.
 
-# ⚠️ INVENTED — how long the teacher's opening line is given, in the client's
-# own milliseconds. Only meaningful if speechEndTime really is a moment in the
-# timesync's frame rather than a duration — see lesson.start_params.
-#
-# Ten minutes rather than the eight seconds that seemed reasonable, and that is
-# an experiment rather than a setting. The first 0x6100 was accepted — the client
-# built the lesson scene and drew 体育's 校庭 backdrop, so the packet parsed —
-# and then the process died. If the speech is what ends and nothing follows it,
-# a speech that outlasts the period moves the crash out of reach; if the client
-# dies just the same, the fault is in the packet and not in what comes after it.
-# Either answer is worth one restart.
-SPEECH_MS = 600_000
-
 #: ⚠️ INVENTED — what this end answers the tutorial's `PLAYER[0x2001]` with, and
 #: therefore whether 初登校 asks the player its four 「shall I explain / shall I
 #: show you around」 questions or decides for them. ⛔️ It is an invention because
@@ -12714,7 +12701,8 @@ class MpsServer:
           (_battle_card_ability), HOW MUCH is invented
           (clubbattle.ABILITY_GAIN_PER_USE).
         * クラブの素 -- WHICH ones the card can yield are its own eight +0x36
-          slots, WITH WHAT CHANCE is invented (clubbattle.SOZAI_DROP_CHANCE).
+          slots, WITH WHAT CHANCE is invented (clubbattle.SOZAI_DROP_CHANCE,
+          and which slot by clubbattle.SOZAI_SLOT_DECAY).
           ⚠️ キーワード only: a 部活奥義 has no such column, which is the
           table's shape and not an omission here.
 
@@ -12735,7 +12723,9 @@ class MpsServer:
         slots = (row or {}).get("sozai") or []
         if not slots or random.random() >= clubbattle.SOZAI_DROP_CHANCE:
             return
-        category, _, item_id = random.choice(slots).partition(":")
+        # ⭐ Weighted by slot, not uniform: see clubbattle.SOZAI_SLOT_DECAY.
+        category, _, item_id = random.choices(
+            slots, weights=clubbattle.sozai_weights(len(slots)))[0].partition(":")
         try:
             key = (int(category), int(item_id))
         except ValueError:
@@ -13295,13 +13285,22 @@ class MpsServer:
         return payout
 
     def _battle_book(self, club_id: int) -> "tuple[int, int] | None":
-        """Roll this 練習's 奥義の書, or None. See clubbattle.BOOK_DROP_CHANCE."""
+        """Roll this 練習's 奥義の書, or None. See clubbattle.BOOK_DROP_CHANCE
+        and, for which book, clubbattle.BOOK_PICK_WEIGHTED."""
         if random.random() >= clubbattle.BOOK_DROP_CHANCE:
             return None
         books = clubdata.books_of_club(club_id)
         if not books:
             return None
-        category, _, book_id = random.choice(books).partition(":")
+        weights = None
+        if clubbattle.BOOK_PICK_WEIGHTED:
+            weights = [clubdata.book_weight(key) for key in books]
+            # ⚠️ A table written before round 520 has no weight column; every
+            # book then weighs 0 and the draw falls back to even rather than
+            # never dropping anything.
+            if not any(weights):
+                weights = None
+        category, _, book_id = random.choices(books, weights=weights)[0].partition(":")
         try:
             return (int(category), int(book_id))
         except ValueError:
@@ -20706,6 +20705,13 @@ class MpsServer:
                 )
                 print(f"[{self.tag}] {'試験' if sitting else '本鈴'} {name}: "
                       f"not ringing, {why}")
+                continue
+            if kind == "pre" and not attends:
+                # 「OFFにしておくと授業モードが発生せず、予鈴もありません」(p06_02).
+                # ⚠️ Only 授業's row can land here: during a 試験 期間 attends is
+                # True, since 試験の有無 is left to the client (above).
+                print(f"[{self.tag}] 予鈴 {name}: not ringing, "
+                      f"オプション 授業の有無 is OFF")
                 continue
             if kind == "pre":
                 print(f"[{self.tag}] 予鈴: 次は{name}{'の試験' if sitting else ''}")
