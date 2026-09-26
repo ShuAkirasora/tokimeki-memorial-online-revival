@@ -741,9 +741,13 @@ QUESTIONS_PER_LESSON = 10
 # `quiz_level.bin` or `error_message.bin` holds a duration either. Twenty seconds
 # is a guess that leaves time to read four choices.
 #
-# GRADING_SECONDS is a gap this server has to fill because it drives beats the
-# client used to be driven through: how long the 評価 takes before the next
-# question goes out. The original's was however long its own animation ran.
+# GRADING_SECONDS is how far after a reveal the next question's startTime lies.
+# The question itself goes out at the reveal (see Lesson.pump); the client plays
+# the 評価 and puts the question up once it is done and startTime is under four
+# seconds away. The original's gap was whatever its own schedule said. Measured
+# with these two values: every question was on screen twelve seconds after its
+# reveal with 13-14 of its 20 seconds left, where sending it six seconds after
+# the reveal had left about seven.
 #
 # The opening pause is not here — it is PROBE["speech_ms"], because 0x6100 has to
 # tell the client the same number and one knob for both cannot drift.
@@ -1083,8 +1087,7 @@ class Lesson:
 
     # Phases, in order. Each ends at ``self.due``.
     OPENING = "opening"    # the teacher's 開始台詞 is running
-    ASKING = "asking"      # a question is out and 残り時間 is counting down
-    GRADING = "grading"    # 正解 revealed, 評価 being said
+    ASKING = "asking"      # a question is out, its 評価 lead and 残り時間 running
     OVER = "over"
 
     def __init__(self, subject: int, map_id: int = 0,
@@ -1170,18 +1173,14 @@ class Lesson:
             return ERROR_ANSWER_TOO_LATE
         if seated.reported is not None:
             return ERROR_ANSWER_ALREADY
-        # ⚠️ Whether the client counts questions from one or from zero is not
-        # settled — nothing on the wire has said, and the deserializer only says
-        # it is a u8. Both are accepted, because the cost of guessing wrong is a
-        # lesson in which every answer is silently refused and every question
-        # marked wrong, which looks like broken marking rather than a mismatched
-        # convention. The cost of being lenient is much smaller: the only thing
-        # it lets through is an answer to the previous question arriving during
-        # this one, and a player can only click once per question anyway.
-        #
-        # Which one it is will be obvious the first time this runs against a
-        # client, because the log line below prints what arrived.
-        if question_no not in (self.question_no, self.question_no - 1):
+        # 1-based, and settled: every answer this server has logged, real
+        # clients' among them (8595 in all), named the question that was out. This used to accept the
+        # previous number too, while the base was unknown; it has to be exact
+        # now that the next question goes out at the reveal (see pump), or an
+        # answer to question k that arrives just after its timer would be booked
+        # against question k+1 — which is exactly the late answer the refusal
+        # sentence 「…制限時間内に間に合いませんでした」 is for.
+        if question_no != self.question_no:
             return ERROR_ANSWER_TOO_LATE
         seated.reported = choice_id
         return None
@@ -1222,8 +1221,6 @@ class Lesson:
         Returns [] when nothing is due yet, which is the common case: this gets
         called on every wake, of every member.
         """
-        import quiz  # local: only lessons need the bank, and only while one runs
-
         if self.phase == self.OVER or now < self.due:
             return []
         if not self.students:
@@ -1231,35 +1228,8 @@ class Lesson:
             self.phase = self.OVER
             return []
 
-        if self.phase == self.GRADING or self.phase == self.OPENING:
-            if self.question_no >= QUESTIONS_PER_LESSON:
-                self.phase = self.OVER
-                return []
-            question = quiz.pick(self.subject, rng)
-            if question is None:
-                # No bank, or an empty category. Ending the period is better
-                # than asking a quizId the client cannot resolve.
-                self.phase = self.OVER
-                return []
-            self.question = question
-            self.question_no += 1
-            for seated in self.students.values():
-                seated.reported = None
-                seated.narrowed = None
-            self.phase = self.ASKING
-            self.due = now + timedelta(seconds=ANSWER_SECONDS)
-            start_ms = client_now_ms
-            return [(
-                MSG_SV_NOTIFY_LESSON_QUESTION_START,
-                question_params(
-                    question.quiz_type,
-                    question.level,
-                    question.quiz_id,
-                    question.choice_ids,
-                    start_ms,
-                    start_ms + ANSWER_SECONDS * 1000,
-                ),
-            )]
+        if self.phase == self.OPENING:
+            return self._ask(now, client_now_ms, 0, rng)
 
         # ASKING, and 残り時間 has reached zero: reveal, then grade.
         question = self.question
@@ -1273,12 +1243,74 @@ class Lesson:
             right_here += 1 if correct else 0
             out.append((MSG_SV_NOTIFY_LESSON_ANSWER,
                         answer_params(seated.chara_id, correct)))
-        self.phase = self.GRADING
-        self.due = now + timedelta(seconds=GRADING_SECONDS)
         out.append((MSG_SV_NOTIFY_LESSON_QUESTION_END,
                     question_end_params(
                         self.grading_words(right_here, len(self.students), rng))))
+        # ⭐ …and whatever comes next goes out in the same breath: the next
+        # question, or (after the tenth) nothing here and the 結果発表 straight
+        # after, from the caller — see finished().
+        #
+        # This is the client's arithmetic, not a pacing choice. The panel over
+        # each desk prints 正解率 and the client recomputes it at exactly one
+        # moment, when 0x6104 lands (0x79E375, run from state 10 of 0x7A92F9):
+        #
+        #   (right this period + 通算 right) / (通算 asked + questions started − 1)
+        #
+        # and drops the −1 only once 0x6102 has arrived (the flag its handler
+        # 0x76CA6E raises). "Started" is a counter 0x6103's handler bumps. So the
+        # −1 assumes the NEXT 0x6103 is already in by the time 0x6104 is acted
+        # on, and the flag is there for the one time there is no next question.
+        # Sent GRADING_SECONDS later instead, every recompute divided by one too
+        # few: 10 right out of 10 read 111%, and a lesson that missed only the
+        # first question read 100% from the second question to the last.
+        #
+        # The client is built for a question that arrives early. It holds it
+        # until startTime − 4 s (0x7A7B07) and plays the 評価 in between, and
+        # state 12 of the same machine waits for "question in, or lesson over"
+        # before it goes on — so an early question is what it was waiting for.
+        if self.question_no >= QUESTIONS_PER_LESSON:
+            self.phase = self.OVER
+        else:
+            out += self._ask(now, client_now_ms, GRADING_SECONDS * 1000, rng)
         return out
+
+    def _ask(self, now: datetime, client_now_ms: int, lead_ms: int,
+             rng=None) -> "list[tuple[int, bytes]]":
+        """The next 0x6103, opening ``lead_ms`` from now on both clocks.
+
+        ``lead_ms`` is 0 for the first question, which goes out when the
+        teacher's opening line ends, and GRADING_SECONDS for the rest, which go
+        out at the previous reveal and open once the 評価 has had its time.
+        The room is ASKING from the moment this returns, so ``due`` covers the
+        lead as well as the question.
+        """
+        import quiz  # local: only lessons need the bank, and only while one runs
+
+        question = quiz.pick(self.subject, rng)
+        if question is None:
+            # No bank, or an empty category. Ending the period is better
+            # than asking a quizId the client cannot resolve.
+            self.phase = self.OVER
+            return []
+        self.question = question
+        self.question_no += 1
+        for seated in self.students.values():
+            seated.reported = None
+            seated.narrowed = None
+        self.phase = self.ASKING
+        self.due = now + timedelta(milliseconds=lead_ms + ANSWER_SECONDS * 1000)
+        start_ms = client_now_ms + lead_ms
+        return [(
+            MSG_SV_NOTIFY_LESSON_QUESTION_START,
+            question_params(
+                question.quiz_type,
+                question.level,
+                question.quiz_id,
+                question.choice_ids,
+                start_ms,
+                start_ms + ANSWER_SECONDS * 1000,
+            ),
+        )]
 
     def grading_words(self, right: int, asked: int, rng=None) -> int:
         """Which 評価台詞 the teacher uses for the question just marked.

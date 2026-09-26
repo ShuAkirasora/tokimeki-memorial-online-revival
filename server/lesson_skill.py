@@ -440,10 +440,13 @@ def check_common(period, student, msg_type: int, question_no: int,
     if period is None or student is None \
             or period.phase != period.ASKING or period.question is None:
         raise Refused(msg_type, "制限時間外")
-    # Lenient exactly as Lesson.take_answer is, and for the same unsettled
-    # reason: whether the client counts questions from one or from zero. A stale
-    # questionNo is the same thing as being late, so it draws the same sentence.
-    if question_no not in (period.question_no, period.question_no - 1):
+    # Exact, as Lesson.take_answer is. The client fills this byte from the same
+    # counter it puts in 0x6105 — the lesson's +0x6EC, which 0x6103's handler
+    # bumps (0x65C1F3 for the skills, 0x596C00 for the answer) — and that one is
+    # measured 1-based. A stale questionNo is the same thing as being late, so it
+    # draws the same sentence; and since the next question now goes out at the
+    # reveal, the previous number is always a question already marked.
+    if question_no != period.question_no:
         raise Refused(msg_type, "制限時間外",
                       f"questionNo {question_no} は今の問題ではない")
     # ⭐ RESTORED by absence: six of the eight have a 解答済み sentence and the

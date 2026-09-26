@@ -10606,8 +10606,6 @@ class MpsServer:
                         struct.pack(">B", refusal),
                     )
                 print(f"[{self.tag}] answer: questionNo={question_no} "
-                      f"(ours is {period.question_no}, so the client counts from "
-                      f"{'one' if question_no == period.question_no else 'zero'}) "
                       f"choiceId={choice_id} "
                       f"({'○' if period.would_be_right(session.chara_id) else '×'}"
                       f" once time is up)")
