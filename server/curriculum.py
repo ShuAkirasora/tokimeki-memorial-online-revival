@@ -445,6 +445,11 @@ class ScoreCard:
             ]
             pairs += [(NO_SCORE, 0)] * (COURSES - len(pairs))
             self.scores.append(pairs)
+        # Which 試験期間 the subjects in ``exam_sat`` were sat in (exam.Period's
+        # key: the opening Friday's date). Kept so that 「１科目につき１回しか
+        # 受けられません」 survives logging out and back in inside one period.
+        self.exam_key: str | None = saved.get("exam_key") or None
+        self.exam_sat = [int(v) for v in saved.get("exam_sat") or []]
 
     # ── derived, never stored ───────────────────────────────────────────────
 
@@ -675,6 +680,8 @@ class ScoreCard:
             "scores": [[list(pair) for pair in row] for row in self.scores],
             "asked": list(self.asked),
             "right": list(self.right),
+            "exam_key": self.exam_key,
+            "exam_sat": list(self.exam_sat),
         }
 
     def lines(self) -> list[str]:

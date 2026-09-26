@@ -9255,6 +9255,13 @@ class MpsServer:
                 # later answer on this connection reads -- which classroom a
                 # lesson happens in, what 経歴 and the name card print.
                 session.in_class = self._chars(session).in_class(chara_id)
+                # What this character has already sat in the 試験期間 now in
+                # session, off its 通知表 -- and nothing of whoever this
+                # connection 登校'd as before.
+                session.exam.forget()
+                sat_card = self._chars(session).scorecard(chara_id)
+                if sat_card is not None:
+                    session.exam.restore(sat_card.exam_key, sat_card.exam_sat)
                 session.map_id, *pos = self._chars(session).location(chara_id)
                 session.pos = (pos[0], pos[1])
                 session.walk = None  # put down somewhere, not walking there
@@ -20587,7 +20594,14 @@ class MpsServer:
                 exam.ng_params(exam.REASON_ALREADY_STARTED),
             )
         session.exam.paper = None
-        session.exam.sat.add(paper.subject)
+        session.exam.sit(paper.subject)
+        # Filed on the 通知表 as well, whatever the paper scored: a sitting that
+        # left no trace in the save file could be sat again after a relog.
+        filed = self._chars(session).scorecard(session.chara_id)
+        if filed is not None:
+            filed.exam_key = session.exam.key
+            filed.exam_sat = sorted(session.exam.sat)
+            self._chars(session).set_scorecard(session.chara_id, filed)
         name = curriculum.SUBJECTS[paper.subject]
         if paper.sheet is None:
             marked, right = 0, 0

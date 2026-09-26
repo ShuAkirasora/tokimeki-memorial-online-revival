@@ -57,6 +57,28 @@ def today(now: "datetime | None" = None) -> date:
     return EPOCH.date() + timedelta(days=int(elapsed // hours))
 
 
+def school_now(now: "datetime | None" = None) -> datetime:
+    """The school calendar's date *and* time of day, on the same clock as today().
+
+    For the few rules that fall on an hour of a school day rather than on the day
+    — 試験期間 opens on a Friday at 14:00 (`exam.scheduled`). At DAY_HOURS == 24
+    it is the wall clock itself; compressed, the school day's 24 hours are spread
+    over DAY_HOURS real ones, so its date always agrees with today().
+
+    ⚠️ The 時間割 is NOT on this clock: lessons are fifteen real minutes
+    (`p06_01`) whatever the calendar does, and curriculum reads the wall clock.
+    """
+    now = now or datetime.now()
+    hours = DAY_HOURS
+    if hours == 24:
+        return now
+    elapsed = (now - EPOCH).total_seconds() / 3600.0
+    days = int(elapsed // hours)
+    into = (elapsed - days * hours) / hours * 24.0
+    return datetime.combine(EPOCH.date() + timedelta(days=days),
+                            datetime.min.time()) + timedelta(hours=into)
+
+
 def describe() -> str:
     """One line for the startup log."""
     if DAY_HOURS == 24:

@@ -505,7 +505,7 @@ HELP = (
     "/lopt [seats|speech|words|lunch] <数> 0x6100 の実験用つまみ",
     "/skill [<拒否メッセージ> <reason>|clear] お助けスキル の reason を画面で確かめる",
     "/bell [<科目番号>|ready|force|ng <値|off>|imp <値>] 予鈴/本鈴/入場拒否の実験",
-    "/exam [on|off|ready|force|ans|sec <秒>|<科目番号>] 試験期間・鐘・正解・制限時間",
+    "/exam [on|off|auto|ready|force|ans|sec <秒>|<科目番号>] 試験期間・鐘・正解・制限時間",
     "/quiz [sec <秒>|wait <秒>|ab [before|after] <値×6>|ab off] 出題の状態と正解 (採点の検証用)",
     "/npcx 補充をやめる (画面上の分は地図を跨ぐまで残る)",
     "/nev [<cat>:<id>] [<npcCat>:<npcId>|echo] 会話イベントキー (既定 16:1 + echo)",
@@ -1981,10 +1981,9 @@ def respond(
         )
 
     if word == "exam":
-        # 試験期間 has no calendar behind it — see exam.Period — so this switch
-        # *is* the period, and the command is how the whole subsystem is
-        # reached. ⭐ The name was checked against CLIENT_RESERVED first, which
-        # is not idle: the two obvious alternatives, `test` and `study`, are
+        # 試験期間 follows exam.CALENDAR; this overrides it for this session
+        # (`on`/`off`) or hands it back (`auto`). ⭐ The name was checked
+        # against CLIENT_RESERVED first, which is not idle: the two obvious alternatives, `test` and `study`, are
         # both on that list and would have been eaten by the client's own chat
         # bar without ever reaching the wire.
         if exam_period is None:
@@ -2001,7 +2000,11 @@ def respond(
             ])
         if argument in ("off", "end", "終了"):
             exam_period.close()
-            return Reply(["試験期間を終了した。鐘は授業のものに戻る"])
+            return Reply(["試験期間を止めた（/exam auto で暦に戻す）。鐘は授業のものに戻る"])
+        if argument in ("auto", "暦"):
+            exam_period.follow_calendar()
+            return Reply([f"試験期間は暦に従う（CALENDAR={exam.CALENDAR}）",
+                          exam_period.summary()])
 
         # Ring out of turn, for the same reason /bell does: waiting fifteen
         # minutes to find out whether the client reacts is not an experiment.
@@ -2066,7 +2069,7 @@ def respond(
             try:
                 subject = int(argument, 0)
             except ValueError:
-                return Reply(["/exam [on|off|ready|force|ans|sec <秒>|<科目番号>]"])
+                return Reply(["/exam [on|off|auto|ready|force|ans|sec <秒>|<科目番号>]"])
             if not 0 <= subject <= 0xFFFF:
                 return Reply(["科目番号は 0〜65535 (u16)"])
             name = (
@@ -2083,7 +2086,7 @@ def respond(
         if exam_period.paper is not None:
             paper = exam_period.paper
             lines.append(f"試験中: {paper.summary()}、締切 {paper.due:%H:%M:%S}")
-        lines.append("/exam [on|off|ready|force|ans|sec <秒>|<科目番号>]")
+        lines.append("/exam [on|off|auto|ready|force|ans|sec <秒>|<科目番号>]")
         return Reply(lines)
 
     if word == "quiz":

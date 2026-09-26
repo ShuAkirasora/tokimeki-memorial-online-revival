@@ -122,10 +122,11 @@ Invented, because no table and no sentence carries a number for it:
 
   * WHEN 試験期間 happens. Nothing in the data describes a school calendar;
     `annual_event.bin`, the only candidate, turned out to be fifteen ドラマ
-    scripts (`ev_00NN.gsb`) whose names merely contain the word テスト. So the
-    period is switched on by hand here — see `Period` — rather than fabricated
-    into a calendar the original would have had and this one would have got
-    wrong.
+    scripts (`ev_00NN.gsb`) whose names merely contain the word テスト, and the
+    two `pr_*.gsb` programs `event_program.bin` names for 試験 carry no date
+    either. The original's calendar was its operator's, announced on the
+    official site one period at a time — so the one this server keeps is
+    rebuilt from those announcements. See CALENDAR.
   * POINTS_PER_QUESTION. Twenty questions and a score the 通知表 compares
     against 70/80/80 make five the only round number that reaches 100, but no
     sentence says the paper is marked out of a hundred, so it is a choice.
@@ -164,11 +165,13 @@ the クラス half of `p06_03`'s zero rule; see CLASS_BLANK.
 
 from __future__ import annotations
 
+import os
 import random
 import struct
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import curriculum
+import gameclock
 import quiz
 
 # ── the wire ────────────────────────────────────────────────────────────────
@@ -488,44 +491,201 @@ def score(questions: "list[quiz.Question]", sheet: dict) -> "tuple[int, int]":
 
 # ── 試験期間 ────────────────────────────────────────────────────────────────
 
+# ⚠️ INVENTED — when 試験期間 happens: "school" (the original's own calendar,
+# below) or "manual" (never by itself, only `/exam on`, as before round 526).
+#
+# ⭐ What the original most likely did: exactly what its operator announced, and
+# those announcements survive. The periods of the live service, from the
+# official site's 行事 pages, a player's blog of the time and the service's
+# timeline as it was written up afterwards:
+#
+#     2006-07-21 (金) 14:00 – 07-24 (月)          一学期末試験
+#     2006-11-17 (金)       – 11-20 (月)          二学期中間試験
+#     2007-01-12 (金) 14:00 – 01-15 (月) 11:59    冬季実力試験
+#     2007-03-16 (金) 14:00 – 03-19 (月) 11:59    学年末試験
+#     2007-05-25 (金)       – 05-28 (月)          一学期中間試験
+#     2007-07-20 (金)       – 07-23 (月)          一学期末試験
+#
+# Six out of six open on a Friday and close on the Monday, and the two pages
+# that print the hours print the same ones (maintenance 12:00–14:00 either
+# side). The weeks are just as regular: the third Friday of July (twice),
+# November and March, the second of January, the fourth of May — 「試験は実際
+# の学校で試験を行う時期に予定してるぞ！」, as the service's own roadmap put
+# it. So the factory value is that year, repeated: TERMS below, each one from
+# OPENS on its Friday to CLOSES on the Monday after, on the school calendar
+# (`gameclock.school_now`, which is the real one unless TMO_DAY_HOURS is set).
+#
+# ⚠️ What was deliberately not taken from those pages: the 2007 papers ran five
+# minutes, not ten. That is a later rule; this server keeps the ten minutes the
+# manual of its own version states (EXAM_MINUTES).
+# ⚠️ The only period of this client's own era — the β2 test's, 2006-02-15 to
+# 02-20, six days — was one stage of a twenty-day test, not a calendar, which
+# is why it is not the shape used here.
+# ⭐ What would overturn it: a period of the live service that did not open on
+# a Friday, or a year that had a 二学期末 of its own.
+#
+# "manual" is the shape this server had before: no period at all unless the
+# console opens one — the setting for a development server that wants its
+# lessons undisturbed on the weekends the calendar would have taken.
+CALENDAR = os.environ.get("TMO_EXAM_CALENDAR") or "school"
+
+# (month, which Friday of it, the name the operator gave it). One school year's
+# worth, in calendar order; the 二学期末 slot is the 冬季実力試験 the service
+# held in its place.
+TERMS = (
+    (1, 2, "冬季実力試験"),
+    (3, 3, "学年末試験"),
+    (5, 4, "一学期中間試験"),
+    (7, 3, "一学期末試験"),
+    (11, 3, "二学期中間試験"),
+)
+FRIDAY = 4                 # date.weekday()
+OPENS = timedelta(hours=14)                 # Friday 14:00
+CLOSES = timedelta(days=3, hours=12)        # the Monday after, 12:00 (last minute 11:59)
+# ── end INVENTED (inventions:skip) ────────────────────────────────────────
+
+
+_WARNED: set[str] = set()   # bad CALENDAR values already reported; this runs per packet
+
+
+def nth_friday(year: int, month: int, nth: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(FRIDAY - first.weekday()) % 7 + 7 * (nth - 1))
+
+
+def scheduled(now: "datetime | None" = None) -> "tuple[str, str] | None":
+    """``(key, name)`` of the calendar's period in session, or None.
+
+    The key is the opening Friday's date on the school calendar, which is what
+    「already sat this 期間」 is filed under, so a period is told apart from the
+    next one by date and not by counting.
+    """
+    if CALENDAR != "school":
+        if CALENDAR != "manual" and CALENDAR not in _WARNED:
+            _WARNED.add(CALENDAR)
+            print(f"[exam] CALENDAR={CALENDAR!r} is not one of school/manual; "
+                  f"treating it as manual")
+        return None
+    when = gameclock.school_now(now)
+    for month, nth, name in TERMS:
+        friday = nth_friday(when.year, month, nth)
+        opens = datetime.combine(friday, datetime.min.time()) + OPENS
+        closes = datetime.combine(friday, datetime.min.time()) + CLOSES
+        if opens <= when < closes:
+            return friday.isoformat(), name
+    return None
+
+
+def next_scheduled(now: "datetime | None" = None) -> "tuple[datetime, str] | None":
+    """When (school calendar) and what the next period opens, for the console."""
+    if CALENDAR != "school":
+        return None
+    when = gameclock.school_now(now)
+    upcoming = []
+    for year in (when.year, when.year + 1):
+        for month, nth, name in TERMS:
+            opens = datetime.combine(nth_friday(year, month, nth),
+                                     datetime.min.time()) + OPENS
+            if opens > when:
+                upcoming.append((opens, name))
+    return min(upcoming) if upcoming else None
+
+
+def describe() -> str:
+    """One line for the startup log."""
+    if CALENDAR != "school":
+        return f"試験期間: none unless the console opens one (TMO_EXAM_CALENDAR={CALENDAR})"
+    found = scheduled()
+    if found:
+        return f"試験期間: {found[1]} in session (opened {found[0]})"
+    ahead = next_scheduled()
+    return (f"試験期間: next is {ahead[1]}, {ahead[0]:%Y-%m-%d %H:%M} "
+            f"on the school calendar" if ahead else "試験期間: none scheduled")
+
 
 class Period:
     """Whether an exam period is running, and what has already been sat in it.
 
-    ⚠️ INVENTED, all of it. There is no school calendar anywhere in the client's
-    data, so rather than invent dates this is a switch — `/exam on` — and the
-    ordinary 時間割 supplies the subjects while it is held down. One pass of the
-    eight slots is one exam per subject, which is `p06_03`'s
-    「各科目の試験を１回ずつ」 landing on the timetable that already exists.
+    The calendar decides (CALENDAR, `scheduled`); the console can override it
+    either way — `/exam on` opens one now, `/exam off` holds it shut, `/exam
+    auto` hands it back to the calendar. The ordinary 時間割 supplies the
+    subjects while it is open: one pass of the eight slots is one exam per
+    subject, which is `p06_03`'s 「各科目の試験を１回ずつ」 landing on the
+    timetable that already exists.
 
-    Not saved, and deliberately: an exam period is a thing the operator turns on
-    to watch it work. A period that survived a restart would need an end date,
-    and an end date is the calendar this avoids inventing.
+    ⭐ What has been sat is filed per period (``key``), and the session restores
+    it from the 通知表 at login (``restore``) — 「１科目につき１回しか受けられ
+    ません」 would otherwise reset every time the player logged in again. A
+    console-opened period is keyed "manual" and starts empty each time it is
+    opened.
     """
 
+    MANUAL = "manual"
+
     def __init__(self) -> None:
-        self.on = False
-        self.sat: set[int] = set()      # subjectIds already examined this period
+        # None follows the calendar; True/False is the console holding it.
+        self.forced: "bool | None" = None
+        self.key: "str | None" = None   # which period `sat` belongs to
+        self.sat: set[int] = set()      # subjectIds already examined in it
         # The paper in progress, if any.
         self.paper: "Paper | None" = None
 
+    def current(self, now: "datetime | None" = None) -> "str | None":
+        """The key of the period in session, or None."""
+        if self.forced is not None:
+            return self.MANUAL if self.forced else None
+        found = scheduled(now)
+        return found[0] if found else None
+
+    @property
+    def on(self) -> bool:
+        return self.current() is not None
+
     def open(self) -> None:
-        self.on = True
+        self.forced = True
+        self.key = self.MANUAL
         self.sat.clear()
 
     def close(self) -> None:
-        self.on = False
+        self.forced = False
         self.sat.clear()
         self.paper = None
 
+    def follow_calendar(self) -> None:
+        self.forced = None
+
+    def forget(self) -> None:
+        """Drop what was sat, keeping whatever the console is holding."""
+        self.key, self.sat, self.paper = None, set(), None
+
+    def restore(self, key: "str | None", subjects: "list[int]") -> None:
+        """Take up what the save file says was sat, if it was this period."""
+        if key and key != self.MANUAL and key == self.current():
+            self.key = key
+            self.sat = set(subjects)
+
     def taken(self, subject: int) -> bool:
-        return subject in self.sat
+        return self.key == self.current() and subject in self.sat
+
+    def sit(self, subject: int) -> None:
+        key = self.current()
+        if key != self.key:
+            self.key, self.sat = key, set()
+        self.sat.add(subject)
 
     def summary(self) -> str:
-        if not self.on:
-            return "試験期間ではない"
-        done = "、".join(curriculum.SUBJECTS[s] for s in sorted(self.sat)) or "まだ"
-        return f"試験期間中（受験済み: {done}）"
+        key = self.current()
+        if key is None:
+            ahead = next_scheduled() if self.forced is None else None
+            tail = (f"（次は {ahead[0]:%Y-%m-%d %H:%M} {ahead[1]}）"
+                    if ahead else "")
+            held = "（/exam off で停止中）" if self.forced is False else ""
+            return f"試験期間ではない{held}{tail}"
+        found = scheduled() if key != self.MANUAL else None
+        name = found[1] if found else "手動"
+        done = ("、".join(curriculum.SUBJECTS[s] for s in sorted(self.sat))
+                if self.key == key and self.sat else "まだ")
+        return f"試験期間中 {name}（受験済み: {done}）"
 
 
 class Paper:
