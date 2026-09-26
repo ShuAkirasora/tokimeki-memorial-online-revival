@@ -17007,6 +17007,7 @@ class MpsServer:
             return None
         fields = parse_create_info(info)
         card = store.scorecard(chara_id)
+        sheet = store.ability(chara_id)
         probe_id = lesson.PROBE["charaid"]
         return lesson.seat_params(
             seat_id=seat_id,
@@ -17023,7 +17024,15 @@ class MpsServer:
                 if lesson.PROBE["testlv"] >= 0
                 else (card.test_level() - 1 if card is not None else 0)
             ),
-            stress=0,
+            # ⭐ The sheet's own ストレス, on the same scale 0x4811 and the skill
+            # Notifies already carry it. This was a hardcoded zero from before
+            # this server had any ストレス to send, and the zero was not
+            # harmless: the client keeps it in its own seat record and the
+            # 早弁 button is only lit while that record's stress is non-zero
+            # (the ring's predicate at 0x5B560F, next to the lunch count at
+            # +0x14 of the lesson block) — so with a bag full of 「お弁当」 the
+            # button stayed grey. Same rule as the refusal the server sends.
+            stress=sheet.stress if sheet is not None else 0,
             # 通算, not this period's — `p06_02` is explicit, and this is where
             # the 「正解率」 on the panel over the desk comes from. Zero until a
             # lesson has actually been sat; it used to be hardcoded zero because

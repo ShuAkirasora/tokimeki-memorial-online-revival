@@ -640,7 +640,7 @@ def seat_params(
     for raw in (family_name, first_name):
         text = raw.split(b"\x00", 1)[0][: SEAT_NAME_LEN - 1] + b"\x00"
         out += struct.pack(">H", len(text)) + text
-    out += struct.pack(">HHB", sex, test_lv, stress & 0xFF)
+    out += struct.pack(">HHB", sex, test_lv, max(0, min(0xFF, stress)))
     out += struct.pack(">II", question_count, correct_count)
     for value in list(looks)[:9] + [0] * max(0, 9 - len(looks)):
         out += struct.pack(">H", value)
@@ -984,9 +984,11 @@ def end_params(
       between them**, so a screenshot taken mid-climb reads the wrong number.
       Send them equal when the point is to read a value off the screen; that is
       what `/quiz ab still` is for.
-    * ``stress`` and ``condition``. ストレス／ノイローゼ is a whole subsystem
-      (`p06_02`) with an entry condition and a set of places that reduce it, and
-      none of it exists; zero is the value of a thing that is never raised.
+    * ``stress`` and ``condition``: the sheet's after this period's charge, and
+      the size of that charge is invented (stress.STRESS_PER_LESSON). The
+      defaults of zero are only for callers with no sheet.
+      One byte on the wire against a sheet that runs to stress.FULL (257), so
+      the packer clamps rather than wraps, as stress.stress_params does.
     * ``items``. ご褒美 「その授業での成績によっては、ご褒美のアイテムが手に入る
       こともあります」 — drawn on page two as 「入手アイテム」; what and for how
       well is invented, see rewards.
@@ -994,7 +996,7 @@ def end_params(
     ``attendance_count`` and ``end_words`` are the two that are real.
     """
     out = bytearray(struct.pack(">HIBb", end_words, attendance_count,
-                                stress & 0xFF, max(-128, min(127, condition))))
+                                max(0, min(0xFF, stress)), max(-128, min(127, condition))))
     for values in (ability, before_ability):
         row = list(values or [])[:ABILITIES]
         row += [0] * (ABILITIES - len(row))

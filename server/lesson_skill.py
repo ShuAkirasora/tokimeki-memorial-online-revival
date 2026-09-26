@@ -315,17 +315,17 @@ def notify_help_params(user_id: int) -> bytes:
 
 def notify_lunch_params(user_id: int, stress: int, success: bool) -> bytes:
     """0x6113 — `userId`, `stress`, `successFlag`."""
-    return struct.pack(">IBB", user_id, stress & 0xFF, 1 if success else 0)
+    return struct.pack(">IBB", user_id, max(0, min(0xFF, stress)), 1 if success else 0)
 
 
 def notify_stress_params(user_id: int, stress: int) -> bytes:
     """0x6118 直感 and 0x6127 明鏡止水 — `userId`, `stress`. No successFlag."""
-    return struct.pack(">IB", user_id, stress & 0xFF)
+    return struct.pack(">IB", user_id, max(0, min(0xFF, stress)))
 
 
 def notify_self_params(user_id: int, stress: int, success: bool) -> bytes:
     """0x6120 精神集中 — `userId`, `stress`, `successFlag`."""
-    return struct.pack(">IBB", user_id, stress & 0xFF, 1 if success else 0)
+    return struct.pack(">IBB", user_id, max(0, min(0xFF, stress)), 1 if success else 0)
 
 
 def notify_target_params(user_id: int, user_stress: int,
@@ -336,7 +336,7 @@ def notify_target_params(user_id: int, user_stress: int,
     `targetStress` for そっと応援 and `successFlag` for the other two — the same
     four slots either way, which is why they share a builder.
     """
-    return struct.pack(">IBIB", user_id, user_stress & 0xFF,
+    return struct.pack(">IBIB", user_id, max(0, min(0xFF, user_stress)),
                        target_id, last & 0xFF)
 
 
