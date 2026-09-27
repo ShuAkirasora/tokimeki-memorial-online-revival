@@ -79,10 +79,19 @@ kept it out was a sentence rather than a wall. It had been written down as
 namespace was enumerated whole (menu.bin's 20 menus over menu_item.bin's 44
 items) and **no item anywhere is 作成**: the 理事長秘書's ring is exactly 校則
 参照 / グループ一覧参照 / 同好会登録 / 多目的室予約 / リーダー試験. The window
-that does send it is opened from the client's own 「/_cgroup」 command, which
-was already measured opening 「仲良しグループ作成」 (グループ名・キャッチコピー・
-公開▽ and a ［作 成］ button) in round 297. ⇒ this end had been refusing to
-answer a message the client can send today.
+that does send it is 「仲良しグループ作成」 (グループ名・キャッチコピー・公開▽ and a
+［作 成］ button). ⇒ this end had been refusing to answer a message the client
+can send today.
+
+⭐⭐ Round 528 corrected where that window opens from. Round 459 found it behind
+the client's own 「/_cgroup」 command and wrote that down as *the* entrance --
+but the main menu's 「仲良しグループ」 icon is a dropdown the client draws
+itself (it is not in menu.bin), and for somebody with リーダー資格 and no group
+its one row is 「グループ作成」 (tooltip 「作成します」), grey without the
+qualification. manual/p05_02 said so all along: 「仲良しグループの情報…
+参照／作成／脱退／解散を行うことができます」. So a player reaches 0x6200 the
+ordinary way: pass the リーダー試験, re-login so 0x6501 carries the flag, open
+the menu. 「/_cgroup」 is a second door to the same window, not the only one.
 
 0x4700 グループチャット is not this menu's either: it is a 会話ツール message and
 round 334 answered it there.
@@ -113,7 +122,9 @@ from characters import GROUP_NAME_LEN, NAME_LEN, NO_GROUP
 #     never behind a wall, it was behind a spawn.
 #   * 0x6200, round 459: it is not on her ring at all -- it is not on ANY ring,
 #     menu.bin and menu_item.bin have no 作成 item in the whole namespace. It
-#     comes from a window, and 「/_cgroup」 opens that window (round 297).
+#     comes from a window, which the main menu's own 仲良しグループ dropdown
+#     opens for a qualified player with no group (round 528; 「/_cgroup」 opens
+#     the same window, round 297).
 # ⭐ The lesson is the one worth keeping: a reason written down once does not
 # re-check itself, and both of these stayed shut long after they had opened.
 # ⭐ 0x4700 グループチャット is not one of them either, since round 334: it is a

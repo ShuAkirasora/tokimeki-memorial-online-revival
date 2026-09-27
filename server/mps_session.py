@@ -16243,7 +16243,8 @@ class MpsServer:
         for two things that do not exist here: the リーダー試験 NPC event, which
         is what awards 「リーダー資格」 in the real game, and the 0x6200 create
         handshake. ⭐ The second half of that stopped being true in round 459 --
-        0x6200 is answered now (_group_create) and 「/_cgroup」 reaches it, so
+        0x6200 is answered now (_group_create) and the main menu's
+        「グループ作成」 row reaches it (round 528; so does 「/_cgroup」), so
         `/group create` is a shortcut rather than a stand-in. It still differs in
         one way worth keeping: it skips every refusal the wire path applies, so
         it can found a group for somebody with no リーダー資格 and under any name.
@@ -17818,6 +17819,11 @@ class MpsServer:
             measured in round 297 drawing グループ名, キャッチコピー, a 公開▽
             dropdown and ［作 成］ -- and 「zero on the wire until ［作 成］ is
             pressed」 was written down at the time, which is this message.
+            ⚠️ Round 528: that is not the only door. The main menu's
+            仲良しグループ dropdown (drawn by the client, not from menu.bin)
+            shows 「グループ作成」 to a qualified player with no group and opens
+            the same window -- the ordinary way in, and what manual/p05_02
+            describes.
 
         ⭐ The body was read out of the client rather than guessed. The message
         struct's constructor takes (name, catchcopy, publicFlag) and caps the two
