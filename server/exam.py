@@ -161,6 +161,26 @@ mps_session.SCHOOL_ID.
 one-letter box the client converts itself (A→0 … Z→25, lowercase folded), and a
 box it cannot read as a letter — empty, or a digit — arrives as 26. That closes
 the クラス half of `p06_03`'s zero rule; see CLASS_BLANK.
+
+⚠️⚠️ **0x6A05 hands in the last autosave, not the screen.** A live paper with all
+twenty rows filled came back 16/20: the 0x6A05 was byte for byte the 0x6A04
+before it, and the four rows filled after that autosave were 0xFF. That is the
+client's own design, read out of it:
+
+  * Both messages are built from one buffer in the exam object (+0x72, ctors
+    0x0065946B and 0x006594BC copy it whole), and the one call that brings the
+    sheet's marks into that buffer (0x0080C907) has exactly one caller: the
+    0x6A04 sender, 0x0065981B.
+  * 0x6A04 goes out from the exam clock (0x005AF94E) when the seconds left,
+    rounded, are a multiple of sixty — once a minute, on the minute of the
+    countdown. The interval is the client's; `endTime` only sets the phase.
+  * 0x6A05 goes out from two places, the 退出 confirmation (0x0080D630) and the
+    exam state machine's time-up case (0x00811F1A, state 0x12), and neither
+    syncs the sheet first.
+
+So a mark made after the last whole minute of the countdown is not handed in,
+whether the paper is left early or runs out; the original's server received the
+same bytes. Nothing here tries to recover it — the marks never reach the wire.
 """
 
 from __future__ import annotations
@@ -420,6 +440,40 @@ def has_questions(subject: int, level: int) -> bool:
     )
 
 
+# ⚠️ INVENTED — whether one paper may ask the same question twice: "distinct"
+# (no question twice until this subject's bank at this level is used up, and
+# only then from the top again) or "replace" (every question drawn afresh).
+# ⭐ What the original most likely did: "distinct". A 試験 is one sheet of
+# twenty numbered questions, answered once each and marked together; a paper
+# that prints one of them twice (a live paper drew 問４ and 問１２ the same
+# question, in two orders of the same four choices) is what drawing with
+# replacement does, and not what a paper is. The lesson is different on
+# purpose: quiz.pick keeps no memory, because a lesson is a run of separate
+# questions with nothing to compare across (see there).
+# The top-over rule is only for the smallest banks (数学's and 外国語's quizLv 4
+# hold four and three questions), where twenty distinct cannot be had; the
+# other type is taken first, so a repeat comes only once the level is spent.
+# ⭐ What would overturn it: an operated-game paper with the same question twice.
+# "replace" is what this server did up to round 526.
+# Knob: TMO_EXAM_DRAW (distinct / replace).
+DRAW = os.environ.get("TMO_EXAM_DRAW") or "distinct"
+
+
+def _fresh(subject: int, level: int, quiz_type: int, asked: "set[tuple[int, int]]",
+           rng: "random.Random") -> "tuple[int, int]":
+    """A (quizType, quizId) not yet on this paper, for DRAW "distinct": of the
+    rolled type if it has one left, else of the other, else -- the level spent --
+    the paper starts over (``asked`` is emptied) with the rolled type."""
+    others = [t for t in (quiz.TYPE_TRUEFALSE, quiz.TYPE_CHOICE) if t != quiz_type]
+    for kind in [quiz_type, *others]:
+        left = [n for n in range(quiz.count(subject, kind, level))
+                if (kind, n) not in asked]
+        if left:
+            return kind, rng.choice(left)
+    asked.clear()
+    return quiz_type, rng.randrange(quiz.count(subject, quiz_type, level))
+
+
 def draw(subject: int, level: int, rng: "random.Random | None" = None
          ) -> "list[quiz.Question]":
     """Twenty questions for one subject at one 難易度, or fewer if the bank is short.
@@ -427,7 +481,8 @@ def draw(subject: int, level: int, rng: "random.Random | None" = None
     ⚠️ Every question comes from ``level`` and only ``level``: 「試験レベルに
     応じた難易度の問題しか出題されません」. That is the one thing this differs
     from quiz.pick in, and it is why it cannot simply call it — pick rolls the
-    difficulty, which is the lesson's rule.
+    difficulty, which is the lesson's rule. And no question twice on one
+    paper, by DRAW.
 
     The type comes from quiz.roll_type (by the invented quiz.TYPE_PICK), and
     only among the types this subject actually has at this level: 外国語's
@@ -439,9 +494,14 @@ def draw(subject: int, level: int, rng: "random.Random | None" = None
                for t in (quiz.TYPE_TRUEFALSE, quiz.TYPE_CHOICE)):
         return []
     out: "list[quiz.Question]" = []
+    asked: "set[tuple[int, int]]" = set()
     for _ in range(QUESTIONS_PER_EXAM):
         quiz_type = quiz.roll_type(subject, level, rng)
-        quiz_id = rng.randrange(quiz.count(subject, quiz_type, level))
+        if DRAW == "replace":
+            quiz_id = rng.randrange(quiz.count(subject, quiz_type, level))
+        else:
+            quiz_type, quiz_id = _fresh(subject, level, quiz_type, asked, rng)
+            asked.add((quiz_type, quiz_id))
         if quiz_type == quiz.TYPE_CHOICE:
             # No choiceId[] goes out for an exam, so there is no deal to record.
             # The natural order is what the client is left to render.
