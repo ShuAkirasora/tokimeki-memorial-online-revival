@@ -331,6 +331,7 @@ BOOSTER_COUNT_MAX = max(1, int(
 #: its recipes to be found by playing sets its own in the environment and
 #: keeps it out of every file (it is an operator's secret, not a game number).
 #: Changing it reshuffles every book on that instance.
+#: knobs:secret -- so config/knobs.toml refuses it and `/knob save` leaves it out.
 #: Knob: TMO_CLUB_GOUSEI_RECIPE_SALT.
 HIDDEN_RECIPE_SALT = os.environ.get("TMO_CLUB_GOUSEI_RECIPE_SALT") or ""
 

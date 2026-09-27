@@ -3,6 +3,10 @@
 # belongs in the repository, and runtime/certs/ holds a private key.
 runtime/
 
+# This machine's knobs: what it runs differently from stock (server/knobs.py).
+# An operator's choice, not the program's, so a pull must never touch it.
+config/
+
 .venv/
 
 __pycache__/

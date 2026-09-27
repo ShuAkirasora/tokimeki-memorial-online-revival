@@ -24,6 +24,13 @@ jobs:
       - name: Compile everything
         run: python -m compileall -q .
 
+      - name: The knobs file renders and reads back
+        # The start below then reads it too, so a template the loader chokes on
+        # shows up here rather than on somebody's first edited copy.
+        run: |
+          python server/knobs.py init
+          python server/knobs.py check
+
       - name: Start, confirm the ports answer, stop
         run: |
           python start_servers.py

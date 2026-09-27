@@ -219,12 +219,12 @@ async def main(
         if value != default:
             print(f"[system] ⚠️ {name}={value:g} (stock is {default:g}) -- "
                   f"measuring knob, NOT shipping behaviour")
-    # The invented numbers somebody turned and saved (`/knob save`). Printed for
-    # the same reason the two above are: a number that is not the stock one has
-    # to be visible from the outside, or the next reader debugs a game that was
-    # tuned on purpose.
+    # The invented numbers config/knobs.toml sets (written by hand, or by `/knob
+    # save`). Printed for the same reason the two above are: a number that is
+    # not the stock one has to be visible from the outside, or the next reader
+    # debugs a game that was tuned on purpose.
     for knob, _stock, value in knobs.load():
-        print(f"[system] ⚠️ knob {knob.key}={knobs.show(value)} (from {knobs.SAVE_PATH.name})")
+        print(f"[system] ⚠️ knob {knob.key}={knobs.show(value)} (from {knobs.CONFIG_PATH.name})")
     # ⚠️ Loud, and only when it is open: a console on a server with players on
     # it is the one setting here that changes what another account can do to
     # yours. Silence means the deployed state. See chat.CONSOLE_ENABLED.

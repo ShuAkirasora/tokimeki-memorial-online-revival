@@ -2370,8 +2370,8 @@ def respond(
         # restored number is not reachable from this command at all, which is
         # the point -- tuning is meant to happen where inventing happened.
         # ⚠️ Nothing is written to any save; a turn lives until the process
-        # ends unless `/knob save` writes it to runtime/knobs.json, which the
-        # next start reads back.
+        # ends unless `/knob save` writes it to config/knobs.toml, which the
+        # next start reads back (see knobs.py for that file).
         words = rest.split()
         usage = ("/knob [<名前> [<値>|reset]|list [語]|changed|reset|save]"
                  "  例: /knob DAMAGE_SCALE 0.6")
@@ -2395,8 +2395,8 @@ def respond(
                               for k, a, b in done] or ["全部既定値"])
             if head == "save":
                 n = knobs.save()
-                return Reply([f"{knobs.SAVE_PATH.name} に {n} 個書いた"
-                              if n else f"{knobs.SAVE_PATH.name} を消した (全部既定値)"])
+                return Reply([f"{knobs.CONFIG_PATH.name} に {n} 個書いた"
+                              if n else f"{knobs.CONFIG_PATH.name} は全部既定値"])
             knob = knobs.find(words[0])
             if len(words) == 1:
                 lines = [knobs.describe(knob)]

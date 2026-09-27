@@ -233,6 +233,23 @@ reason to hand them out. Lines appended to `runtime/console.txt` run either way 
 takes a shell on the server's machine — and that file is also the only way to reach a command
 while a script has the client's input locked.
 
+**Every number this server made up is a knob, set in one file.** A damage scale, a drop
+chance, how long a school day lasts: each is marked `INVENTED` in the source, and its factory
+value is this project's best guess at what the original servers did. To run with something
+else, start the file and uncomment what you mean to change:
+
+```sh
+python3 server/knobs.py init    # writes config/knobs.toml: every knob, labelled, commented out
+python3 server/knobs.py check   # what it would change, without starting a server
+```
+
+A line left commented out is the factory value, and it keeps following the code when a later
+version revises it — so write down only what should differ. `config/` is not tracked and a
+pull never touches it. The start prints one `knob …` line for each value it applied. The
+`TMO_*` variables a few knobs also answer to keep working, and win over the file when both
+are set (the start says so). The one knob that is a secret rather than a number, the salt in
+`TMO_CLUB_GOUSEI_RECIPE_SALT`, is taken from the environment only.
+
 ## Japanese, and one Windows setting
 
 **The game is a Japanese program from 2006.** It, its installer, and everything you type into
@@ -512,14 +529,12 @@ it back to the save.
 | `/raw <msgid16> [hex]` | send one message by hand, by number |
 | `/knob [<name> [<value>\|reset]\|list [word]\|changed\|reset\|save]` | turn one of the invented numbers, without a restart |
 
-**Tuning.** Every number this server made up rather than read off the game — a damage
-scale, a drop chance, how long a question stays open — is marked `INVENTED` in the source,
-and `/knob` finds them by that mark. `/knob list` prints them with their current and factory
-values, `/knob DAMAGE_SCALE 0.6` changes one in place, `/knob changed` shows what differs from
-stock, `/knob save` writes those to `runtime/knobs.json` so the next start picks them up, and
-`/knob reset` puts everything back. A number without the mark was read off the game and cannot
-be reached from here at all: tuning is confined to what was invented. The `TMO_*` environment
-variables some of these also answer to keep working as before.
+**Tuning.** `/knob` reaches the [knobs](#running-the-server) while the server runs.
+`/knob list` prints them with their current and factory values, `/knob DAMAGE_SCALE 0.6`
+changes one in place, `/knob changed` shows what differs from stock, `/knob save` writes those
+into `config/knobs.toml` so the next start picks them up (the file is rewritten, labels and
+all), and `/knob reset` puts everything back. A number without the `INVENTED` mark was read off
+the game and cannot be reached from here at all: tuning is confined to what was invented.
 
 **Operator.** These say something to players rather than read anything back.
 
@@ -531,12 +546,6 @@ variables some of these also answer to keep working as before.
 | `/gm chat [<family> <given>\|<charaId>]`, `/gm say <text>` | GM chat with one player |
 | `/gm as [row]` | which of the fourteen game masters this connection speaks as |
 | `/gm msg [to <charaId>] <text>`, `/gm logout [charaId]` | the GM's two notices: a message, and a forced logout that says so before the socket closes |
-
-**Tuning.** Every number this server made up rather than read off the game is marked
-`INVENTED` in the source, and `/knob` finds them by that mark: `list` prints them with current
-and factory values, `/knob DAMAGE_SCALE 0.6` changes one in place, `changed` shows what differs
-from stock, `save` writes those to `runtime/knobs.json`, `reset` puts everything back. A number
-without the mark was read off the game and cannot be reached from here.
 
 **Probes.** `/cb` drives a club battle a piece at a time and `/seq` replies with a sequence
 number that goes backwards, to find out what the client makes of it.
@@ -616,6 +625,7 @@ repository and none of it is redistributed here.
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |
+| `config/` | yours, if you make it: `knobs.toml`, the invented numbers this server runs differently from stock |
 | `runtime/` | created on the first run: the log, the certificate, your characters, your script exports, `console.txt` if you write one, and any tables you override |
 | `screenshots/` | the six pictures above — captures of a running client, not game files |
 | `.github/workflows/ci.yml` | on every push: compile, start, check the ports answer, stop — on Python 3.11 and 3.14 |
