@@ -357,12 +357,6 @@ CLUBLIKE_TEST_LEVEL = 3
 #: no sentence and no fixed-width field states it.
 MAX_GROUP_NAME = 20
 
-#: 「仲良しグループ」は１５人まで登録できます (p05_05 §3). The client checks
-#: nothing about the size before it sends 0x6218 -- the icon is live whatever
-#: the roster holds -- so this end is the only place the manual's number can be
-#: enforced.
-MAX_MEMBERS = 15
-
 #: The 30 days p05_05 §3 gives twice, once under each door, and this build's own
 #: manual gives them -- unlike CLUBLIKE_TEST_LEVEL, nothing here is borrowed
 #: from the later manual:
@@ -490,7 +484,18 @@ NG_CLUBLIKE_PUBLIC_REQUIRED = refusals.NG_CLUBLIKE_PUBLIC_REQUIRED
 ANSWER_YES = 1
 
 #: 15 for a 仲良しグループ, 30 once it is a 同好会 (p05_05 §3). Enforced only as
-#: a refusal on join; nothing on the wire has been seen to carry it.
+#: a refusal; nothing on the wire has been seen to carry it.
+#:
+#: The client checks nothing about the size before it sends 0x6218 -- the icon
+#: is live whatever the roster holds -- so this end is the only place the
+#: manual's numbers can be enforced, and ``Group.limit`` is the one place that
+#: picks between them.
+#:
+#: ⚠️ Until round 533 the 勧誘 handler compared against a separate constant,
+#: MAX_MEMBERS = 15, while ``join()`` read ``limit``. A 同好会 is born at
+#: exactly 15 members (同好会登録 refuses with fewer), so every one of them was
+#: refused its sixteenth with NG_GROUP_FULL and the 30 in the manual was out of
+#: reach on the wire. The size check now lives in one place, here.
 MEMBER_LIMIT = 15
 CLUBLIKE_MEMBER_LIMIT = 30
 

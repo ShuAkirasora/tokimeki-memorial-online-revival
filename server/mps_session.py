@@ -17395,8 +17395,9 @@ class MpsServer:
         ⭐⭐ Round 143 added the 勧誘 handshake behind 「グループ登録申込み」. The
         icon needs the *inviter's* leaderAuthorityFlag set and the *target's*
         friendGroupId equal to -1; nothing else about either side is consulted,
-        and in particular the client never checks the roster size, so 15 is
-        enforced here (groups.MAX_MEMBERS) and nowhere else.
+        and in particular the client never checks the roster size, so the
+        limit (15, or 30 for a 同好会: Group.limit) is enforced here and
+        nowhere else.
 
         ⭐⭐ Round 144 answered the two buttons inside the 仲良しグループ情報
         window itself -- ［更 新］ (0x620A) and ［除 名］ (0x6226) -- which until
@@ -18484,8 +18485,8 @@ class MpsServer:
                 why, code = "not a leader", groups.NG_NOT_LEADER
             elif book.of(target) is not None:
                 why, code = "already in a group", groups.NG_ALREADY_IN_A_GROUP
-            elif len(group.members) >= groups.MAX_MEMBERS:
-                why, code = f"full ({groups.MAX_MEMBERS})", groups.NG_GROUP_FULL
+            elif len(group.members) >= group.limit:
+                why, code = f"full ({group.limit})", groups.NG_GROUP_FULL
             elif session.group_invited is not None or other.group_inviter is not None:
                 why, code = ("an application is already open",
                              groups.NG_ALREADY_ASKED)
