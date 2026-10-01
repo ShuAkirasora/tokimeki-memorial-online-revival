@@ -530,19 +530,25 @@ KEYWORD_SEX_EITHER = 2
 #   - the operator-era player material mirrored here (fansites, press, video):
 #     zero hits for 習熟 of any kind.
 #
-# ⭐ WHY 1 RATHER THAN ANYTHING ELSE — the choice that invents least:
-#   1 makes KEYWORD_FULL_SCALE mean exactly what it reads like, a number of
-#   uses; any other step adds a second made-up number on top of a restored
-#   table. It also lands on every scale exactly (a step of 3 would overshoot
-#   64, 80 and 100), and the default 64 comes out as 8 uses × 8 battles, where
-#   8 is the RESTORED turn limit (clubbattle.TURN_LIMIT). Pacing, for the
-#   record: 8 battles to master one keyword if it is played every single turn,
-#   about 22 at three plays a battle.
+# ⭐⭐ WHY 8 (user, round 534). The factory value used to be 1, on the
+# reasoning that it invents least: 1 makes KEYWORD_FULL_SCALE read as a number
+# of uses, and the default 64 came out as 8 uses × 8 battles -- 8 being the
+# RESTORED turn limit (clubbattle.TURN_LIMIT) -- on the premise that a keyword
+# can be played every turn. Round 534 measured that premise false on the real
+# client: a card played once is greyed out for the rest of the battle (the
+# deck holds one of each), so a keyword is used AT MOST ONCE A BATTLE. Under 1,
+# mastering a card took one battle per point -- 64 of them for the common
+# scale, 80 for `633`, which is the only road to `462` and so to 弥生's debut
+# (9:4); a player actually sat through 63 練習 for it in round 534.
+# ⇒ 8 restores what the 1 was argued from, 「a keyword masters in about eight
+# battles」, now that one battle is one use: the four scales in keyword.bin
+# (64 on 251 rows, 80, 90, 100) become 8 / 10 / 12 / 13 battles. 90 and 100
+# overshoot by 6 and 4; the clamp below keeps the gauge at full.
 #
 # ⭐ WHAT WOULD OVERTURN IT (the rule asks for this in writing): any operator-era
 # source that counts plays or battles to a 習熟度 MAX; a surviving server-side
 # table; or a client build that displays 習熟度 as a number instead of a gauge.
-USE_COUNT_PER_USE = 1
+USE_COUNT_PER_USE = 8
 
 # ⚠️ INVENTED — whether 習熟度 stops at the full scale or counts on past it.
 # A separate decision from the step above, and this end stops it. It is not only

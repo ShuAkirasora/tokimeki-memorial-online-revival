@@ -777,6 +777,11 @@ ABILITY_CEILING = ABILITY_LEVEL_STEPS * 128 - 1
 #: masters in 64 plays. Giving an ability level the same pace is
 #: 256 / 64 = 4 steps a play — one ability level per 64 plays, the same 64 the
 #: table already uses for 「this much practice is a lot」.
+#: ⚠️ Round 534 moved that neighbour to +8 a use (a card is playable once a
+#: battle, see club.USE_COUNT_PER_USE), so 「the same pace」 would now read 32.
+#: This value was NOT moved with it: it is counted per card played, up to eight
+#: a battle, not once a battle, so the premise that changed there does not hold
+#: here. Whether it should follow is an open question, not a decision.
 #: ⭐ Which also keeps it inside the shape the manual describes: p07_01 says
 #: players change clubs 「能力パラメータのレベルアップをしたいとき」, so club
 #: activity is a REAL source of ability levels and not a rounding error.

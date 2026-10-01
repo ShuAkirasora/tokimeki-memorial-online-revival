@@ -858,6 +858,7 @@ NG_REENTRANCE_NOT_ELIGIBLE = 6
 #   handler this build declares and never registers.
 MSG_CL_REQUEST_LOBBY_DATA_START = 0x4000
 MSG_SV_OK_LOBBY_DATA_START = 0x4001
+MSG_CL_REQUEST_LOBBY_DATA_END = 0x4003
 MSG_CL_QUERY_POOL_MESSAGE = 0xA100
 MSG_SV_NOTIFY_CHARACTER_ADD = 0x480F
 MSG_SV_NOTIFY_CHARACTER_DEL = 0x4810
@@ -9515,6 +9516,10 @@ class MpsServer:
                 reply = self._answer(session, sequence, MSG_SV_OK_LOBBY_DATA_START, b"")
                 # Back on a map, so no longer on the way to the ドラマ screen.
                 session.drama_entering = False
+                # ...and standing on it, whatever pose the last map left behind.
+                # 0x4003 does not always come first (see its FIXED_REPLIES row),
+                # so this is the backstop.
+                self._stand_up(session, "map rebuilt")
                 info = self._chars(session).find(session.chara_id)
                 if info is None:
                     print(f"[{self.tag}] lobby: no charaId={session.chara_id}, adding nobody")
@@ -11122,6 +11127,10 @@ class MpsServer:
                 return None
             if msg_type == MSG_CL_QUERY_POOL_MESSAGE:
                 return self._pool_message(session, sequence, params)
+            if msg_type == MSG_CL_REQUEST_LOBBY_DATA_END:
+                # The map is coming down (練習, a lesson, the ドラマ screen ...),
+                # so whoever was sitting on it is not any more; see _stand_up.
+                self._stand_up(session, "map torn down")
             if msg_type in FIXED_REPLIES:
                 reply_type, reply_params = FIXED_REPLIES[msg_type]
                 return self._answer(session, sequence, reply_type, reply_params)
@@ -17285,6 +17294,27 @@ class MpsServer:
                 everyone,
             )
         return out + self._battle_resolve(session, battle)
+
+    def _stand_up(self, session: "_Session", why: str) -> None:
+        """Forget a sitting pose once the map it was taken on is gone.
+
+        ストレス comes off 「マップ上で座ってじっとしていると」 (p05_09) -- on the
+        map. The move cast and the console warp already stand the character up,
+        for the reason given at the move branch: the client stands it up by
+        itself and does not cast a pose to say so. Leaving the map is the third
+        such case, and it is measured rather than inferred: round 534 sat a
+        character down ([Insert], 0x4806 params=01), went straight from the
+        seat into 練習 (0x5D00 -> 0x4003), and the client drew the character
+        standing when the map came back -- with no 0x4806 params=00 in between.
+        Until this, the session stayed 座る through every game that followed,
+        the drain went on crediting rest during the battles, and the four
+        練習 after that rest each ended at ストレス 0 instead of 26 more; with
+        this, the first game after the next rest ended at 26.
+        """
+        if session.pose != stress.POSE_STANDING:
+            print(f"[{self.tag}] pose: 立つ ({why})")
+            session.pose = stress.POSE_STANDING
+            session.sat_at = 0.0
 
     def _drain_vitals(self, session: "_Session") -> bytes:
         """Let a sitting player recover, and tell the client what changed.
