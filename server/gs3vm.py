@@ -2132,6 +2132,10 @@ class Follower(Machine):
         #: writing a register off it would be guessing. None the rest of the
         #: time, which is almost always.
         self.default_pending: int | None = None
+        #: ⭐ The same for a free-text box: the register a timed-out box would
+        #: have filled, waiting for 0x7224. `timed_out` sets it, `input_default`
+        #: consumes it, a real answer on a later box drops it.
+        self.input_default_pending: object | None = None
         # ⭐ Which season the four-armed switch should see, or None to let the
         # script's own constant stand. ⚠️ None is not "the original": it is what
         # a server that only evaluates the bytecode would do, and the original
@@ -2850,8 +2854,13 @@ class Follower(Machine):
         comes leaves exactly the stale `E<n>` this method used to leave
         unconditionally -- the old behaviour is the floor, not a regression.
 
-        ⚠️⚠️ A free-text box gets no such message (its twin 0x7224 has never
-        been seen on a close) and keeps whatever it held.
+        ⭐⭐ A free-text box gets its twin, 0x7224, carrying what the line held
+        when the box shut -- round 539 saw the first one, from a real client
+        whose 24-character box in `un127` ran out its 180 seconds untouched
+        (the line had the box's first candidate in it, which is how the box
+        opens). `input_default` is where it lands. A box whose export does not
+        say which register it fills arms nothing, so a 0x7224 for it is
+        dropped -- the floor, as for 0x7223.
         """
         if self.lost:
             return self.lost
@@ -2859,7 +2868,30 @@ class Follower(Machine):
         if op != OP_INPUT_SELECT and op not in INPUT_STRING_OPS:
             return self._lose("a box timed out and this end is not on one")
         self.default_pending = ip if op == OP_INPUT_SELECT else None
+        box = self.script.inputs.get(ip) if op in INPUT_STRING_OPS else None
+        self.input_default_pending = box["register"] if box else None
         self.pos += 1
+        return None
+
+    def input_default(self, text: str) -> str | None:
+        """The client says what the line held when a free-text box was shut.
+
+        ⭐ The twin of `select_default`, and it writes where `typed` would
+        have: verbatim, into the box's own register. ⚠️ Only for a box this
+        end has just closed -- 0x7224 is a timeout message like 0x7223, so
+        without `timed_out` in front of it there is nothing it could be
+        about. (Of this server's 467 logs, ten hold real typed answers, dozens
+        of them, and not one 0x7224 among them.) Whether the string is fit to
+        keep is the caller's question, asked before this: the same two rules a
+        typed answer meets.
+        """
+        if self.lost:
+            return self.lost
+        register = self.input_default_pending
+        if register is None:
+            return None
+        self.input_default_pending = None
+        self.registers[register] = text
         return None
 
     def select_default(self, option: int) -> str | None:
@@ -2962,6 +2994,7 @@ class Follower(Machine):
         if box is None:
             return self._lose(f"a text box was answered at ip={ip}, and this "
                               f"export does not say which register it fills")
+        self.input_default_pending = None    # same reason as in `chose`
         self.registers[box["register"]] = text
         self.pos += 1
         return None

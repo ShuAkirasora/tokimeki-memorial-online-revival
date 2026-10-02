@@ -7851,10 +7851,46 @@ class MpsServer:
             # the 禁止用語 dictionary (see ngwords.py).
             return self._script_input_result(session, seen, params)
         if msg_type == script.MSG_CL_NOTIFY_SCRIPT_COMMAND_INPUT_DEFAULT:
-            # Arrives unasked, the way 0x7223 does for the choice box —
-            # presumably as the field is edited. Logged only, same reason.
-            typed = script.input_text(params)
-            print(f"[{self.tag}] script input default={typed!r}")
+            # ⭐⭐ Arrives unasked, and -- like 0x7223 -- only after a box was
+            # forced shut by 0x720B: what the line held at that moment. Round
+            # 539 saw the first one (`un127` ip=16507, 180 seconds untouched):
+            # 「中学に上がるまでおねしょしてた！」, the box's first candidate,
+            # which is what the line opens with. Until then it was logged and
+            # dropped, so the SYNC_VARIABLE that reads the box's register went
+            # out empty to both players and the line built on it had a hole.
+            # ⇒ it goes where a typed answer goes (`Follower.input_default`).
+            #
+            # ⚠️ The line can hold what the player typed, not only the
+            # candidate, so it meets the two rules a typed answer meets.
+            # ⚠️ Still nothing goes back on the wire: the client did not stop
+            # for this (same argument as 0x7223 below).
+            shown = script.input_text(params).split(b"\x00")[0]
+            text = shown.decode("cp932", "replace")
+            shadow = session.script.shadow if session.script else None
+            if ngwords.is_blank(text) or self.accounts.ngwords.hit_bytes(shown):
+                # ⚠️ INVENTED — a timed-out line the box would have refused
+                # (all blank, or a 禁止語) is not kept: with the box already
+                # shut there is no 0x7218 to send, and keeping it would let a
+                # 禁止語 through by waiting out the clock. The register keeps
+                # what it held, which is what this end did with every 0x7224
+                # before round 539.
+                print(f"[{self.tag}] script input default「{text}」"
+                      f" -- would be refused if typed, not kept")
+                if shadow is not None:
+                    shadow.input_default_pending = None
+                return None
+            taken = shadow is not None and shadow.input_default_pending is not None
+            if taken:
+                why = shadow.input_default(text)
+                if why:
+                    print(f"[{self.tag}] vm follower stopped here: {why}")
+            print(f"[{self.tag}] script input default「{text}」"
+                  + (" -> the box's register" if taken else " (no box waiting)"))
+            if taken:
+                # The line is in the file: a stand-in whose road reads it may
+                # go on, the same as after a typed answer.
+                self._stand_in_walk(self.dramaparties.party_of(session.chara_id),
+                                    "入力")
             return None
         if msg_type == script.MSG_CL_NOTIFY_SCRIPT_COMMAND_SELECT_DEFAULT:
             # ⭐⭐⭐ Arrives unasked, and only after a choice box was forced
