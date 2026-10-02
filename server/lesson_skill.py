@@ -212,10 +212,11 @@ def reason_for(msg_type: int, why: str = "") -> int:
 # skill is refused, because a refusal the original server never sent would have
 # no string. Read as rules rather than as sentences:
 #
-#   all five self-skills   refused once you have answered this question
+#   five self-skills       refused once you have answered this question
 #                          (529 助けてコール, 534 直感, 543 精神集中,
 #                           551 明鏡止水; カンニング 539)
-#   早弁                   refused with no 「お弁当」 in hand (531);
+#   早弁                   refused with no 「お弁当」 in hand (531) — and not
+#                          for having answered: it has no such sentence;
 #                          no effect at zero ストレス (532)
 #   直感 / 明鏡止水        no effect when one choice is left (536, 554)
 #   精神集中 / ティーチング no effect when the list is already narrowed (546, 558)
@@ -372,12 +373,6 @@ TARGETED = (
     MSG_CL_CAST_LESSON_TEACHING,
 )
 
-# The two skills you may still use after you have answered — see check_common.
-ANSWERED_IS_FINE = (
-    MSG_CL_CAST_LESSON_SUPPORT,
-    MSG_CL_CAST_LESSON_TEACHING,
-)
-
 # Every client message this module answers, and for each one the reply to refuse
 # with. Cast skills refuse with an Error, Request skills with an Ng — the client
 # named them differently and they are kept apart.
@@ -392,6 +387,19 @@ REFUSAL = {
     MSG_CL_CAST_LESSON_TEACHING: MSG_SV_ERROR_LESSON_TEACHING,
 }
 HANDLED = frozenset(REFUSAL)
+
+# The skills you may still use after you have answered — see check_common.
+# ⭐ READ OFF REASON, not listed by hand: a skill refuses for 「解答済み」 exactly
+# when its refusal has a 解答済み sentence to send. The hand-kept list this
+# replaced named only そっと応援 and ティーチング and so refused 早弁 too —
+# whose three sentences (531-533) say nothing about having answered — and since
+# its table had no such situation the byte fell back to 0, which the client
+# draws as 531 「消費アイテム「お弁当」を所持していないため…」 to a player with
+# two お弁当 in the bag (seen on a real client, round 537).
+ANSWERED_IS_FINE = tuple(
+    cast for cast, refusal in REFUSAL.items()
+    if "解答済み" not in REASON.get(refusal, {})
+)
 
 NAMES = {
     MSG_CL_CAST_LESSON_HELP: "助けてコール",
@@ -459,10 +467,12 @@ def check_common(period, student, msg_type: int, question_no: int,
     if question_no != period.question_no:
         raise Refused(msg_type, "制限時間外",
                       f"questionNo {question_no} は今の問題ではない")
-    # ⭐ RESTORED by absence: six of the eight have a 解答済み sentence and the
-    # two that help *someone else* do not. そっと応援 has none at all, and
-    # ティーチング has the slot 「未使用：：：回答済み」 — reserved and left unused.
-    # So having answered stops you helping yourself, not helping others.
+    # ⭐ RESTORED by absence: five of the eight have a 解答済み sentence; 早弁
+    # and the two that help *someone else* do not. そっと応援 has none at all,
+    # ティーチング has the slot 「未使用：：：回答済み」 — reserved and left
+    # unused — and 早弁's three are the お弁当, the ストレス and the clock.
+    # So having answered stops the skills that work on your own answer, not
+    # helping others and not eating.
     if msg_type in ANSWERED_IS_FINE:
         return
     if student.reported is not None:
