@@ -2141,6 +2141,11 @@ class Runner:
         # round, and the answer from the round before is not this round's.
         self.answered: dict[int, int] = {}
         self.walked_by: dict[int, int] = {}
+        # ⭐ A choice box of this member's that 0x720B closed and whose answer
+        # has not landed yet: its local ip, or None. The answer is the 0x7223
+        # the client sends after a forced close, and until it is in `E<n>` the
+        # box is not done with -- `mps_session._settle_timed_out_box` (round 535).
+        self.timed_out_box: int | None = None
         # 役柄 -> the ip of the last box addressed to them that this member
         # walked past. What `walked_by`/`answered` get looked up under.
         self.awaiting: dict[int, int] = {}

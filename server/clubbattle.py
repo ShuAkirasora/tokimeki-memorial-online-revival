@@ -781,7 +781,8 @@ ABILITY_CEILING = ABILITY_LEVEL_STEPS * 128 - 1
 #: battle, see club.USE_COUNT_PER_USE), so 「the same pace」 would now read 32.
 #: This value was NOT moved with it: it is counted per card played, up to eight
 #: a battle, not once a battle, so the premise that changed there does not hold
-#: here. Whether it should follow is an open question, not a decision.
+#: here. ⭐ Decided in round 535, by the user: it stays at 4 -- an ability level
+#: is still 64 cards of that 能力属性 played.
 #: ⭐ Which also keeps it inside the shape the manual describes: p07_01 says
 #: players change clubs 「能力パラメータのレベルアップをしたいとき」, so club
 #: activity is a REAL source of ability levels and not a rounding error.

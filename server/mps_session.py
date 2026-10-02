@@ -6984,21 +6984,48 @@ class MpsServer:
                 print(f"[{self.tag}] vm follower stopped here: {why}")
         print(f"[{self.tag}] ⏱ 制限時間終了 ip={local} op={begun_op:#06x} — "
               f"0x720B で閉じて 0x721D で先に進む")
-        # ⭐ The same bookkeeping an answer does, for the same reason: a member
-        # this end is holding at `_click_fence` is waiting for this box to be
-        # *done with*, and a box that timed out is done with. ⛔️ Leaving the
-        # tally alone would hold them until the play ended.
-        if begun_op == gs3vm.OP_INPUT_SELECT:
-            session.script.answered[local] = (
-                session.script.answered.get(local, 0) + 1)
         out = self._answer(session, 0, script.MSG_SV_NOTIFY_SCRIPT_TIMEOUT,
                            script.timeout_params(begun_ip, begun_op))
         out += self._answer(session, 0,
                             script.MSG_SV_NOTIFY_SCRIPT_COMMAND_END,
                             script.command_end_params(begun_ip, begun_op))
+        if begun_op == gs3vm.OP_INPUT_SELECT:
+            # ⚠️⚠️ NOT done with yet, and round 535 is why (two real clients,
+            # `un117` ip=6510, the box inside the 「ひ・み・つ」 loop). A member
+            # this end holds at `_click_fence` waits for this box to be *done
+            # with* -- and until round 535 a timeout counted as done with, so the
+            # hold came off here, the re-asked rung read `E1` as it stood, and
+            # that was still the previous round's answer: the client's 0x7223
+            # (the line the highlight was on, `Follower.select_default`) landed
+            # a few packets later. 役柄 0 went round the loop again, 役柄 1
+            # took the line it had actually defaulted to and left it, and 役柄 0
+            # stood at the next `PLAYER_SYNC` waiting for somebody who was never
+            # coming. ⇒ the answer is booked when the answer arrives.
+            session.script.timed_out_box = local
+            return out
         self._release_held_branches(
             self.dramaparties.party_of(session.chara_id))
         return out
+
+    def _settle_timed_out_box(self, session: "_Session") -> None:
+        """Book a timed-out choice box as answered and let its waiters go.
+
+        ⭐ Called when the 0x7223 for it arrives -- and, as the floor under that,
+        on this member's next report of any kind: the client sends 0x7223
+        *before* it resumes its own interpreter (round 445), so a report from
+        the far side of the box with no 0x7223 in front of it means none is
+        coming, and the register stays as it was -- which is exactly what the
+        release did before round 535. ⛔️ Never later than that: holding the
+        others past it would be a wedge, not a wait.
+        """
+        if session.script is None or session.script.timed_out_box is None:
+            return
+        box = session.script.timed_out_box
+        session.script.timed_out_box = None
+        session.script.answered[box] = session.script.answered.get(box, 0) + 1
+        party = self.dramaparties.party_of(session.chara_id)
+        self._stand_in_walk(party, "選択")
+        self._release_held_branches(party)
 
     def _script_retire(
         self, session: "_Session", seen: int,
@@ -7360,6 +7387,11 @@ class MpsServer:
             print(f"[{self.tag}] script REFUSED, reason={reason}")
             session.script = None
             return self._say(session, seen, f"台本を断られた reason={reason}")
+        if msg_type in (script.MSG_CL_NOTIFY_SCRIPT_COMMAND,
+                        script.MSG_CL_NOTIFY_SCRIPT_COMMAND_BEGIN):
+            # ⭐ The floor under 0x7223: past the box with no default in front
+            # of it means none is coming (`_settle_timed_out_box`).
+            self._settle_timed_out_box(session)
         if msg_type == script.MSG_CL_NOTIFY_SCRIPT_COMMAND:
             session.script.acks += 1
             if len(params) < 6:
@@ -7846,6 +7878,8 @@ class MpsServer:
                     print(f"[{self.tag}] vm follower stopped here: {why}")
             print(f"[{self.tag}] script select default={where}"
                   + (" -> E%d" % shadow.actor if taken else " (no box waiting)"))
+            # ⭐ Now the box is done with: the others may be held on it.
+            self._settle_timed_out_box(session)
             return None
         if msg_type == script.MSG_CL_NOTIFY_SCRIPT_COMMAND_EVENT_RESULT_END:
             # ⭐⭐⭐ The player is done looking at the 結果画面, and this is the
