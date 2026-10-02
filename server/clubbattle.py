@@ -806,8 +806,10 @@ ABILITY_GAIN_PER_USE = int(os.environ.get("TMO_CLUB_ABILITY_GAIN") or 4)
 #: unexplained offset ability.py records for the OTHER bar (「99 filled 37.8%,
 #: one point only, so the offset the ability bar carries was not separated
 #: out」) -- two bars, one unexplained constant, still unexplained.
-#: ⚠️ The CARRY itself is still a reading: no screen has been watched crossing
-#: the boundary, only the track it crosses.
+#: ⭐ The CARRY has been watched since: a 結果画面 reading 「部活レベル 15▶16」
+#: for a fight the server logged as 14(224)→15(0) -- the gauge's last step
+#: rolled into the level and the bar restarted empty (the screen draws every
+#: level one higher, which is the 結果画面's own +1).
 CLUB_GAUGE_FULL = 256
 #: RESTORED: 部活レベル is 0-99 — `npc_training_level.bin` is 8 clubs x 100 rungs
 #: and p07_06's 部活レベル制限 offers 1-99.
