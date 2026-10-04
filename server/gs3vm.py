@@ -3152,6 +3152,64 @@ class StandIn(Follower):
             raise Runaway(f"{self.script.name}: ip={ip} is not an instruction start")
         self.pos = found
 
+    #: The ops that end the straight run `_walk_by_arm` reads: anything that
+    #: could take the arm's owner somewhere else, or stop it.
+    ARM_STOPS = frozenset({OP_JP, OP_BR, OP_BA, OP_BA_END, OP_JS, OP_RTN,
+                           OP_END, OP_PLAYER_SYNC})
+
+    def _walk_by_arm(self, target: int, mask: int) -> None:
+        """Book the boxes in another 役柄's bracket arm as walked past.
+
+        ⭐⭐⭐ Round 540, `un184`: the two roles' first boxes sit in two arms of
+        one `OP_BA` switch (役柄 0 ip=221, 役柄 1 ip=245), and the ladder both
+        go on to reads `E0` at ip=268. A member walking past a box addressed
+        to somebody else books it (`walked_by` / `awaiting`), but here nobody
+        walks past anybody's box -- each takes only its own arm -- so the book
+        was empty and the fence had nothing to wait on: the stand-in answered
+        its own box and read `E0` before the member's client had even
+        reported reaching ip=221. (That first read happened to match the
+        member's answer; the one that did not, at ip=2305, is the other half
+        of the same round -- see `mps_session._stand_in_release`.)
+
+        ⭐ So skipping another 役柄's arm counts as walking past the boxes that
+        arm opens on: the same book, the same counting rule (a loop passes the
+        switch every round). ⛔️ Only the straight run from the arm's first
+        instruction to its first jump or stop -- boxes the owner of that arm
+        cannot miss once it enters. A box behind a branch inside the arm is
+        left unbooked, so this can only make a stand-in wait for an answer
+        that is certainly coming, never for one that may not.
+        """
+        found = self.script.index.get(target)
+        if found is None or found == self.pos + 1:
+            # An arm that opens on the very next instruction is the road this
+            # cursor walks on itself (`un184` ip=2264): its boxes are booked
+            # when it gets there, and booking them here too would count them
+            # twice.
+            return
+        # The arm opens on its own `OP_BA_END` marker (役柄 0's at ip=211,
+        # 役柄 1's at ip=235 in `un184`): step over it, it is not a stop.
+        if self.script.code[found][1] == OP_BA_END:
+            found += 1
+        for k in range(found, min(found + self.ARM_SCAN, len(self.script.code))):
+            ip, op, operands = self.script.code[k]
+            if op in self.ARM_STOPS:
+                return
+            if op != OP_INPUT_SELECT:
+                continue
+            # Both boxes in `un184` ask 0x0003, everybody: inside a bracket
+            # it is the arm's 役柄 mask that says who reaches it.
+            whose = (int.from_bytes(operands[2:4], "little") & mask
+                     & ~(1 << self.actor))
+            if not whose:
+                continue
+            self.walked_by[ip] = self.walked_by.get(ip, 0) + 1
+            for who in range(8):
+                if whose >> who & 1:
+                    self.awaiting[who] = ip
+
+    #: How far `_walk_by_arm` reads before giving up on finding a stop.
+    ARM_SCAN = 64
+
     def step_once(self) -> bool:
         """One instruction. False when nothing moved (parked, held, done)."""
         if self.parked or self.held is not None:
@@ -3189,6 +3247,7 @@ class StandIn(Follower):
             if mask & (1 << self.actor):
                 self._goto(_jump_target(args))
             else:
+                self._walk_by_arm(_jump_target(args), mask)
                 self.pos += 1
             return True
         if op == OP_BA_END:

@@ -6430,23 +6430,32 @@ class MpsServer:
             self._stand_in_walking = False
         return moved
 
+    def _stand_in_arrive(self, party: "drama.Party | None") -> None:
+        """The members are all at a rendezvous: let the stand-ins reach it too.
+
+        ⚠️ Called while the members are still parked, and that is the point:
+        a stand-in held on a rung whose click is now unreachable (the member
+        it waited for is at the rendezvous) gets the same way out
+        `_click_fence` gives a member, and reaches its rendezvous; one that
+        cannot is not made to skip ahead -- a stand-in never counts towards
+        「そろった」, so nothing waits on it.
+        """
+        self._stand_in_walk(party, "そろった")
+
     def _stand_in_release(self, party: "drama.Party | None") -> None:
         """A rendezvous opened for the members: open it for the stand-ins too,
         and let them walk on to the next one.
 
-        ⚠️ Before opening, they are walked once more: a stand-in held on a
-        rung whose click is now unreachable (the member it waited for is
-        parked at the rendezvous) gets the same way out `_click_fence` gives
-        a member, and reaches its rendezvous; one that cannot is not made to
-        skip ahead -- a stand-in never counts towards 「そろった」, so nothing
-        waits on it.
+        ⚠️ Called after `_player_release`, never before: from here on the
+        members are walking again, and a rung that reads a click of theirs
+        has to wait for it (`_stand_in_fence`) rather than take the parked
+        member's way out.
         """
         if party is None:
             return
         cursors = self._stand_ins.get(party.party_id)
         if not cursors:
             return
-        self._stand_in_walk(party, "そろった")
         for cursor in cursors.values():
             cursor.release()
         self._stand_in_walk(party, "解除")
@@ -7184,8 +7193,10 @@ class MpsServer:
             if missing:
                 continue
             print(f"[{self.tag}] script retire: {len(waiting)} 人そろった、解除")
-            self._stand_in_release(party)
+            # The same order as `_player_wait`, for the same reason.
+            self._stand_in_arrive(party)
             self._player_release(waiting, gone, 0)
+            self._stand_in_release(party)
             return
 
     def _script_ask_continue(self, party: "drama.Party") -> bytes:
@@ -8066,8 +8077,16 @@ class MpsServer:
         # ⭐ The stand-ins' rendezvous opens with the members' (round 498).
         # They walk on to their next one right here, ahead of the members'
         # next report, so what their bracket writes is in the file first.
-        self._stand_in_release(self.dramaparties.party_of(session.chara_id))
-        return self._player_release(waiting, session, seen)
+        # ⚠️⚠️ But only once the members are let go (round 540): while their
+        # `begun` still says PLAYER_SYNC the fence takes them for parked and
+        # waves a stand-in past every rung that reads their next click --
+        # `un184` walked 役柄 1 to ip=15698 on the stand-in's own choices
+        # before the member had seen its first box, and 463 never came.
+        party = self.dramaparties.party_of(session.chara_id)
+        self._stand_in_arrive(party)
+        out = self._player_release(waiting, session, seen)
+        self._stand_in_release(party)
+        return out
 
     def _scenario_members(self, session: "_Session") -> list["_Session"]:
         """`session` plus every party member playing the same scenario.
