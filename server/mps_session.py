@@ -1509,6 +1509,20 @@ def _season() -> int | None:
 LOGIN_PARAM_SIZE = 0
 
 
+def _book_walk_by(runner: "script.Runner", ip: int, whose: int) -> None:
+    """Book somebody else's box at `ip` as walked past by this member.
+
+    The two books `_click_fence` compares (round 252): how often this member
+    has gone past the box, and whose answer it is waiting on. Called by the
+    member's shadow when its client skipped an arm that opens on that box
+    (`gs3vm.Follower._walk_by_arm`, round 541).
+    """
+    runner.walked_by[ip] = runner.walked_by.get(ip, 0) + 1
+    for who in range(8):
+        if whose >> who & 1:
+            runner.awaiting[who] = ip
+
+
 def ok_login_params(
     host_be: int = 0x0100007F,
     port: int = GAME_PORT,
@@ -3602,6 +3616,11 @@ class MpsServer:
         # that has to have the number rather than a coin over it.
         runner.shadow.roll = self._script_roll
         runner.shadow.season = _season()
+        # ⭐⭐ Round 541: an arm this member's client skipped may open on
+        # somebody else's box (`un184` ip=221 / ip=245) -- the same walk-past
+        # `_script_select_others` books, into the same two books.
+        runner.shadow.walk_by = (
+            lambda ip, whose, runner=runner: _book_walk_by(runner, ip, whose))
         # ⭐⭐⭐ Round 468: the fifteen 日常会話 daily-rule cells are ones this
         # end supplies above and writes back in `_script_talk_credit`, so a
         # road that writes one of them may be answered rather than defaulted.
