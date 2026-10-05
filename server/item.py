@@ -481,12 +481,20 @@ ITEM_COUNT = sum(last - first + 1
 # the other tree re-reads `item.bin` and compares this dict to it key by key,
 # the same drift check `shop.GOODS` has for `store_item.bin`.
 #
-# ⭐⭐ THE CLIENT READS NONE OF THE THREE. Of this record's 212 bytes the
-# client touches five offsets in total -- +0x00 and +0x02 (the key), +0xAA (the
-# 合成 group), +0xB6 (the 装備部位) and +0xBB (the name it draws) -- and no
-# effect column is among them. So the consequence of 使用 cannot happen on that
-# end. It is this end's arithmetic, exactly as 授業's 能力増減 is, which is
-# also what settles what has to go back on the wire: see use_replies.
+# ⭐⭐ THE CLIENT READS NONE OF THE THREE. No effect column is among the
+# offsets the client reads out of this record (the key, the レア度 at +0x9A,
+# the 使用 switch at +0x9B -- see NO_USE --, the 合成 group at +0xAA, the
+# 装備部位 at +0xB6, the name at +0xBB), so the consequence of 使用 cannot
+# happen on that end. It is this end's arithmetic, exactly as 授業's 能力増減
+# is, which is also what settles what has to go back on the wire: see
+# use_replies.
+#
+# ⚠️⚠️ BUT ONLY THE SEVEN MEALS EVER GET HERE FROM AN HONEST CLIENT. The six 種
+# and 9:5 本命チョコ are rows the client will not send 0x4D07 for (NO_USE), so
+# their figures are the table's numbers for a request this client never makes.
+# They stay: they are restored data, a later client could set the switch, and
+# lesson.py picks a 授業 reward by their 能力 column. A 種 a player holds is
+# not dead weight either -- it is a 合成 消費アイテム (gousei.BOOSTER_POOL).
 #
 # ⚠️ THE UNIT OF `amount` IS THE LITERAL ONE, and that is a reading. abilityParam
 # is 8.8 fixed point (lesson.ABILITY_STEP), so a 種's 5 is 5/256 of a level --
@@ -496,9 +504,9 @@ ITEM_COUNT = sum(last - first + 1
 #
 # ⚠️ 9:5 本命チョコ's 255 is the odd one: a 消費 item whose description is about
 # giving it away, carrying a stress figure that empties any bar 0x4811 can draw
-# (that notify is a u8, so 255 is every value it can report). It is applied as
-# the number it is rather than as a 「全快」 special case -- the only visible
-# difference is a sheet sitting at stress.FULL (257), which 255 leaves at 2.
+# (that notify is a u8, so 255 is every value it can report). It is kept as the
+# number it is rather than as a 「全快」 special case; NO_USE refuses it before
+# it could be applied.
 ITEM_EFFECTS: "dict[tuple[int, int], tuple[int | None, int, int]]" = {
     (8, 0): (None, 0, 10),              # お弁当
     (8, 1): (None, 0, 10),              # 焼きそばパン
@@ -518,6 +526,30 @@ ITEM_EFFECTS: "dict[tuple[int, int], tuple[int | None, int, int]]" = {
 
 # What a key with no row in ITEM_EFFECTS is worth.
 NO_EFFECT: "tuple[int | None, int, int]" = (None, 0, 0)
+
+# ⭐⭐⭐ THE 消費 ROWS 使用 IS SWITCHED OFF FOR, round 545 -- byte +0x9B of the
+# record, the same byte the 装飾 tail calls [2] in WHO MAY WEAR WHAT above.
+# Double-clicking a 消費 row builds a 0x4D07 only when that byte is set: the
+# client's one path to the message reads it and does nothing otherwise -- no
+# bytes on the wire, nothing on screen. Nothing else in the client builds a
+# 0x4D07.
+#
+# ⭐ It was a prediction before it was a reading: the byte splits category 9 in
+# two (柏餅, 桜餅, 豆 and the ケーキ set; the three チョコ not), so a live client
+# was asked to use one of each, blind. 9:0 and 9:6 sent; 9:3 sent nothing;
+# and so did 10:0, as before -- with the older trials (8:0 and 12:0 send, 9:5
+# and 11:0 do not) that is eight rows, no exception.
+#
+# ⚠️ Enforced here anyway even though an honest client never sends these, as
+# NO_DISCARD and NO_UNEQUIP are: 0x4D08 has the sentence for it (row 2), and
+# without the check a modified client could drink a 種 that this client cannot.
+# ⚠️ Transcribed; the other tree re-reads the byte out of `item.bin` and
+# compares these runs to it, both ways.
+NO_USE: "dict[int, tuple[tuple[int, int], ...]]" = {
+    9: ((3, 5),),                       # 義理チョコ キープチョコ 本命チョコ
+    10: ((0, 5),),                      # the six 種
+    11: ((0, 3),),                      # the three エサ and 草
+}
 
 # ⚠️⚠️ AN EXPERIMENT'S KNOB, AND IT IS OFF. With this on, every tab is answered
 # with the whole inventory instead of that tab's share, which turns the client's
@@ -1120,7 +1152,7 @@ def use_replies(
     category, item_id = fields
     if not exists(category, item_id):
         return _refusal(MSG_SV_ERROR_ITEM_USE, USE_BAD_ITEM)
-    if tab_of(category) != CONSUMABLE_TAB:
+    if tab_of(category) != CONSUMABLE_TAB or _in_runs(NO_USE, category, item_id):
         return _refusal(MSG_SV_ERROR_ITEM_USE, USE_NOT_USABLE)
     remain = inv.take(category, item_id, 1)
     if remain is None:
