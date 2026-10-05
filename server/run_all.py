@@ -281,8 +281,12 @@ async def main(
         tokens=tokens,
         advertise_ip=advertise_ip,
     )
-    # The school server the client hops to after picking a school. Assumed to
-    # use the same 4-byte skip as 25574 until the logs say otherwise.
+    # The school server the client used to hop to after picking a school; it
+    # uses the same 4-byte skip as 25574. ⚠️ Nothing hands this port out any
+    # more (mps_session.SCHOOL_HOP_PORT), so a real client only reaches it if
+    # that knob is turned back. Still served, because a client that was told
+    # this address by an older build may still come, and because a world of
+    # its own is a cheap place to test in.
     mps_school = MpsServer(
         root,
         ServiceConfig(host=open_host, port=SCHOOL_PORT),

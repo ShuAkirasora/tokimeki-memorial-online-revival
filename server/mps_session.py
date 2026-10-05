@@ -1449,7 +1449,25 @@ def school_list_params() -> bytes:
 GAME_PORT = 25574
 # And where picking a school sends it after that — the client puts up
 # 「学校に接続しています」, so this is a third connection, not a reuse of 25574.
+# ⚠️ Still listened on, but no longer handed out: see SCHOOL_HOP_PORT.
 SCHOOL_PORT = 25575
+
+# ⚠️ INVENTED — design: the school hop sends the client back to the game port,
+# so every player stands in one world. Each MpsServer keeps its own world --
+# who is on which map (`live`), the 看板, the 自主トレ rooms, the ドラマ parties,
+# the fights, the classrooms -- and only a client that has just created its
+# first character ever passes through MsgSvOkSchoolSelect. Pointing that at
+# SCHOOL_PORT put every new player in a school of their own on their first day
+# (nobody else in the lobby, no rooms, no parties to join) until they logged
+# out and came back in through the character list, which stays on GAME_PORT.
+# The original ran one school server per school, and this server opens one
+# school (SCHOOL_ID); one port is what one school looks like.
+# ⭐ Measured to cost nothing on the client's side: it closes its game
+# connection as soon as MsgSvOkSchoolSelect arrives and only then opens the
+# next one, so the two are never up at once (and _game_login_refusal
+# excuses the handed-on one regardless). Set it to SCHOOL_PORT to put the
+# separate school back.
+SCHOOL_HOP_PORT = GAME_PORT
 
 
 # Both of these are round-tripped by the client and neither is checked by it,
@@ -1806,6 +1824,10 @@ class _Session:
         # echoes a ticket to watch the wire has done the first only, and
         # refusing a player because of it would be this server's own doing.
         self.logged_in = False
+        # Whether this connection has asked for the school hop (0x0303), and
+        # so handed its player on to the connection that hop opens. Read only
+        # by the duplicate-login check.
+        self.handed_on = False
         # Set by a 強制ログアウト and read by the packet loop, which closes this
         # connection once the notice has been written. ⚠️ It cannot close the
         # socket where it is set: 0x6809 rides out with whatever reply is being
@@ -2455,10 +2477,14 @@ class MpsServer:
             )
         account_id = session.account_id or self._fallback_account(session)
         # 0 -- the same account, logged in on this port already. ⚠️ Only this
-        # port: the school connection is a second MpsServer with a live list of
-        # its own, and one player holds a game and a school connection at once
-        # by design, so a shared list here would refuse the player their own
-        # second hop.
+        # port: each MpsServer keeps a live list of its own.
+        #
+        # ⚠️ A connection that has asked for the school hop is excused: the
+        # player it belonged to is the one now logging in. Since SCHOOL_HOP_PORT
+        # sends that hop back to this same port, the two meet here. The real
+        # client closes the old one before opening the new (measured), so this
+        # is for a socket whose teardown has not run yet, and for tools that
+        # keep both open.
         #
         # ⚠️⚠️ What this costs is a client that dies without its socket dying
         # with it: the entry leaves self.live when the connection's teardown
@@ -2469,7 +2495,7 @@ class MpsServer:
         # connection: the client carries a message for being told to log out
         # (0x0001) and this end volunteers nothing.
         for other in self.live:
-            if other is session or not other.logged_in:
+            if other is session or not other.logged_in or other.handed_on:
                 continue
             if other.account_id != account_id:
                 continue
@@ -9332,8 +9358,12 @@ class MpsServer:
                     )
                     return None
                 auth_code = self.tickets.issue(account_id)
+                # The client is done with this connection once the answer is
+                # out; see _game_login_refusal for why that has to be written
+                # down now that the next one can land on this same port.
+                session.handed_on = True
                 print(
-                    f"[{self.tag}] school hop {self.advertise_ip}:{SCHOOL_PORT}, "
+                    f"[{self.tag}] school hop {self.advertise_ip}:{SCHOOL_HOP_PORT}, "
                     f"authCode={auth_code:#x} for account {account_id}"
                 )
                 return self._answer(
@@ -9341,7 +9371,8 @@ class MpsServer:
                     sequence,
                     0x0304,
                     ok_school_select_params(
-                        self.advertise_host_be, auth_code=auth_code
+                        self.advertise_host_be, port=SCHOOL_HOP_PORT,
+                        auth_code=auth_code,
                     ),
                 )
             if msg_type == MSG_CL_REQUEST_SCHOOL_LOGIN:
