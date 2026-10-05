@@ -227,7 +227,11 @@ CHAT_CANNOT_CONTINUE = 9  # キャラクターの情報が不正です。ツー�
 #: 0x5004's ``reply``. Read as a byte rather than trusted as a message id, the
 #: rule 勧誘 paid for in round 146 and trade.py restates: both buttons of a
 #: confirmation box can send the Ok message and put the answer in the byte.
-ANSWER_YES = 1
+#: ⭐⭐⭐ The yes is 0 -- measured on two real clients in round 542, the same
+#: 受ける／断る box as trade.ANSWER_YES: ［受ける］ sent ``00`` and the asker
+#: was told 「拒否されました」, ［断 る］ sent ``01`` and the screen opened.
+#: The 1 this used to be was copied from 勧誘, never measured here.
+ANSWER_YES = 0
 
 # ⭐⭐⭐ WHICH 感情 A WAIST-UP SCREEN CAN SHOW. The two tables answer it between
 # them, and round 214 then MEASURED both ends of the answer on a real client.

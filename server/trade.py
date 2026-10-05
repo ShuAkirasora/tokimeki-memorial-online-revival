@@ -252,7 +252,16 @@ NOTIFY_OTHER_ACCEPTED = refusals.NOTIFY_OTHER_ACCEPTED
 #: (groups.ANSWER_YES, round 146, three rounds after the handshake was built
 #: against a script that always said yes) -- so this end reads the byte rather
 #: than the message id.
-ANSWER_YES = 1
+#:
+#: ⭐⭐⭐ AND THE YES IS 0, NOT 1 -- measured, round 542, and it overturns a value
+#: that had been copied from 勧誘 and never measured here. Two real clients,
+#: the cursor screenshotted on the button before each click: ［受ける］ sent
+#: 0x5104 ``00`` twice and ［断 る］ sent ``01`` once, and the server, reading
+#: 1 as yes, refused the first and opened a trade on the third. Nobody had
+#: watched a real client ANSWER a trade before.
+#: ⚠️ The 承諾 box is a different template from 勧誘's 「引継ぎ依頼」 box
+#: (［引き継ぐ］ is 1 there, measured) -- do not unify the two constants.
+ANSWER_YES = 0
 
 # 0x5115's ``readyState``. ⭐⭐⭐ THREE VALUES, NOT TWO, AND THE THIRD ONE IS THE
 # ONE THAT MATTERS. Measured on a real client in round 213, which is also the

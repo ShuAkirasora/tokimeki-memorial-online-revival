@@ -2945,6 +2945,11 @@ class MpsServer:
                 blocked.add(peer.chara_id)
             elif self.battles.battle_of(peer.chara_id) is not None:
                 blocked.add(peer.chara_id)
+            elif peer.twoshot_with is not None:
+                # ⭐ Round 542: a ツーショット is the third screen that takes the
+                # map away, and a lone 0x4100 is not kinder to it than the pair
+                # -- see _presence_self_blocked, which is where it was measured.
+                blocked.add(peer.chara_id)
         return blocked
 
     def _presence_self_blocked(self, session: "_Session") -> bool:
@@ -2962,6 +2967,18 @@ class MpsServer:
         the scene comes back.
         """
         if session.lesson is not None:
+            return True
+        if session.twoshot_with is not None:
+            # ⭐⭐ MEASURED, round 542, two real clients, twice: the asker of a
+            # ツーショット crashed (0x6d2683, `mov ecx,[ecx]` on a null scene
+            # manager, the same RVA both times) right after the screen opened.
+            # Its own 会話中 copy was queued at the moment of 承諾 and went out
+            # behind its next packet -- which is the 0x4003 that tears the map
+            # down for the ウェストアップ screen -- so 0x4100's handler looked
+            # itself up in a scene that was no longer there. The answerer's copy
+            # happened to go out ahead of its own 0x4003 and survived; that is
+            # a race, not a rule. Round 214 never saw it because the subject's
+            # copy did not exist yet (round 442).
             return True
         return self.battles.battle_of(session.chara_id) is not None
 
@@ -10657,6 +10674,7 @@ class MpsServer:
                     f"[{self.tag}] lesson ready ok: {curriculum.SUBJECTS[subject]} "
                     f"in map {session.map_id}"
                 )
+                self._close_map_brackets(session, "授業")
                 reply = self._answer(
                     session, sequence, lesson.MSG_SV_OK_LESSON_READY, b""
                 )
@@ -18969,13 +18987,26 @@ class MpsServer:
                 # for 0x6222: the family has no 「they said no」 of its own, and
                 # 0x510E is the only message that tells somebody an application
                 # they were part of has ended.
+                #
+                # ⭐⭐ And the one who said no gets the same 0x510E back -- read
+                # off the client, measured on two real ones (round 542). Both
+                # buttons of the 承諾 box (0x75726e sends 0x5104 with the answer
+                # byte, 0x75749d sends 0x5105) set the view's busy byte +0x41
+                # to 1 after sending, and 0x75726e also greys the toolbar
+                # (FUN_00703092(…, 9, 1)). Only 0x510D/0x510E ungrey it, and
+                # 0x510E's reason-12 branch (0x759da7) draws 「申し込みを断られ
+                # ました」 ONLY when +0x41 is 0 -- the same gate reason 13 has
+                # for the 0x5107 pair above. So the decliner's copy tears down
+                # and resets in silence, and the asker's, whose +0x41 nobody
+                # set, says the sentence. Without it the 看板 icon stayed grey
+                # for the rest of the session on the side that refused.
                 print(f"[{self.tag}] トレード: charaId={me} declined {asker} "
                       f"(answer={answer})")
+                notify = trade.reason(trade.NOTIFY_DECLINED)
                 self._push(other, self._answer(
-                    other, 0, trade.MSG_SV_NOTIFY_TRADE_CANCEL,
-                    trade.reason(trade.NOTIFY_DECLINED),
-                ))
-                return b""
+                    other, 0, trade.MSG_SV_NOTIFY_TRADE_CANCEL, notify))
+                return self._answer(
+                    session, seen, trade.MSG_SV_NOTIFY_TRADE_CANCEL, notify)
             session.trade_with = asker
             other.trade_with = me
             session.trade_table.clear()
@@ -19839,11 +19870,11 @@ class MpsServer:
             # the asker in its address book answered 0x6407 with answer=1 on its
             # own. So 0 is not this family's yes, whatever else it is.
             #
-            # ⚠️ What has *not* been seen is a real client pressing ［いいえ］
-            # here -- the right-click menu would not open on the third try and
-            # the reading was dropped rather than guessed. Treating a non-yes as
-            # a refusal is the safe half of that uncertainty: if ［いいえ］ turns
-            # out to send 0x6408 after all, this branch is simply never taken.
+            # ⭐ Both buttons seen since, round 542, on two real clients: the
+            # 「アドレス帳に登録しますか？」 box sends 0x6407 with ``01`` from
+            # ［は い］ and ``00`` from ［いいえ］. ⚠️ Not the same box as trade's
+            # and twoshot's 受ける／断る, whose yes is 0 (trade.ANSWER_YES) --
+            # the byte is per box, never assume it from a sibling.
             msg_type = friends.MSG_CL_NG_FRIEND_RESPONSE
 
         if msg_type == friends.MSG_CL_OK_FRIEND_RESPONSE:
@@ -19912,10 +19943,21 @@ class MpsServer:
                 ))
             print(f"[{self.tag}] 友達登録: charaId={me} withdrew the "
                   f"application to {target}")
-            return self._answer(
+            # ⭐⭐ And the withdrawer's own 0x640D after its Ok -- the pair
+            # trade's 0x5107 + 0x510E(13) already is. Round 542, two real
+            # clients: Ok alone left the asker's 看板 icon grey for the rest of
+            # the session; a hand-pushed 0x640D(13) ungreyed it and drew
+            # msg_text 425 「友達登録申し込みをキャンセルしました。」 -- the
+            # withdrawer's own sentence, next to 427 「…がキャンセルされました」
+            # for the one who was asked. A line written for the person who
+            # pressed やめる is a line the original sent to that person.
+            return (self._answer(
                 session, seen, friends.MSG_SV_OK_FRIEND_ADD_CANCEL,
                 struct.pack(">I", target),
-            )
+            ) + self._answer(
+                session, 0, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
+                struct.pack(">IB", target, friends.NOTIFY_CANCELLED),
+            ))
 
         if msg_type == friends.MSG_CL_REQUEST_FRIEND_DEL:
             # The 消去 button under the list. Ok carries nothing (the shape reader:
@@ -20384,12 +20426,32 @@ class MpsServer:
             return b""
         members = period.members()
         out = b""
-        for msg_type, params in period.pump(datetime.now(), session.client_now()):
+        mine = session.client_now()
+        for msg_type, params in period.pump(datetime.now(), mine):
             name = MESSAGE_NAMES.get(msg_type, "?")
             print(f"[{self.tag}] lesson {period.question_no}/"
                   f"{lesson.QUESTIONS_PER_LESSON}: {name} (0x{msg_type:04x}) "
                   f"{params.hex()}")
-            out += self._tr_cast(session, 0, msg_type, params, members)
+            body: "bytes | Callable[[int], bytes]" = params
+            if msg_type == lesson.MSG_SV_NOTIFY_LESSON_QUESTION_START:
+                # ⭐⭐ Per-recipient clock, the rule _battle_turn_start is
+                # under: startTime/endTime name moments on the RECIPIENT's
+                # timebase, and the room was pumped on whichever member woke
+                # first. MEASURED, round 542: one client started the period,
+                # its clock (~58.9M ms) went to a second client whose own read
+                # ~2.0M, and that client sat on question 1's reveal for good --
+                # question 2 was due fifteen hours ahead. Two real players in
+                # one lesson are on two machines booted at two different times,
+                # so this is every shared lesson on the public instance; an
+                # earlier two-client lesson only passed because both machines
+                # had been booted in the same minute.
+                def rebased(chara_id: int, params: bytes = params) -> bytes:
+                    other = (session if chara_id == session.chara_id
+                             else self._session_of(chara_id))
+                    return lesson.rebase_question_params(
+                        params, (other or session).client_now() - mine)
+                body = rebased
+            out += self._tr_cast(session, 0, msg_type, body, members)
         if period.finished():
             out += self._lesson_over(session, period, members)
         return out
@@ -20603,6 +20665,37 @@ class MpsServer:
     # 試験
     # ------------------------------------------------------------------
 
+    def _close_map_brackets(self, session: "_Session", why: str) -> None:
+        """The map-side windows a bell took away: their brackets end here.
+
+        ⭐⭐ MEASURED for the ロッカー, round 542, a real client standing at its
+        own classroom's locker with the window open as the 本鈴 rang: the client
+        took 0x6000, tore the scene down and sent 0x6001 by itself -- and never
+        the 0x0403 that closes the bracket. So locker_open outlived the window,
+        and the moment the lesson ended this end pushed 0x4100 action 7 「ロッカ
+        ー開き中」 over a player who was standing at his desk; the other client
+        drew the locker icon over his head. And it is not only the onlookers'
+        problem: the subject reads his own byte back as a local gate (see
+        _presence_icon), so 看板作成 would have said 「他の行動中は…」 too.
+        ⚠️ The same bracket shape holds for the other three -- each is a
+        0x..00/0x..03 pair that reads nothing off the wire, and a window that
+        was on the map when the map went away is not open -- so they end with
+        it. Only the locker's half was watched; the 交流メニュー one would have
+        refused the next Start with 0x4E02 reason 4 by the same logic.
+        """
+        was = [name for name, flag in (("locker", session.locker_open),
+                                       ("newspaper", session.newspaper_open),
+                                       ("shop", session.shop_open),
+                                       ("npc menu", session.npc_menu_open)) if flag]
+        if not was:
+            return
+        session.locker_open = False
+        session.newspaper_open = False
+        session.shop_open = False
+        session.npc_menu_open = False
+        print(f"[{self.tag}] {why}: the bell closed {', '.join(was)} "
+              f"for charaId={session.chara_id}")
+
     def _exam_ready(self, session: "_Session", seen: int) -> bytes:
         """0x6602 → 0x6603 MsgSvOkExamReady, or 0x6604 and a lost connection.
 
@@ -20651,6 +20744,7 @@ class MpsServer:
             )
         print(f"[{self.tag}] exam ready ok: {curriculum.SUBJECTS[subject]} "
               f"段階{course + 1} (testLv={course}) in map {session.map_id}")
+        self._close_map_brackets(session, "試験")
         return self._answer(
             session,
             seen,
@@ -20866,11 +20960,33 @@ class MpsServer:
         # quarter hour -- but how it avoided it is not on any wire this end has
         # seen, so the rule is ours.
         on_drama_screen = session.drama_entering or session.drama_matching
+        # INVENTED -- and for the same reason as the ドラマ door above: no 本鈴
+        # for a player in the middle of a トレード or a ツーショット, or of an
+        # application for one. MEASURED, round 542, two clients trading in
+        # their own classroom at the quarter hour: the bell took
+        # both into the lesson, the client tore the trade and item windows down
+        # with the scene and never said so, and this end still held
+        # trade_with on both -- so after the lesson both stood under a
+        # 「取引中」 icon with no window, refused every new trade as 「already
+        # trading」, and the 看板 gate (which reads one's own icon) shut too.
+        # Ringing and then ending the trade server-side would need a 0x510D
+        # pushed into a partner whose scene may be coming down in the same
+        # breath -- the shape that crashed a client this same round (see
+        # _presence_self_blocked) -- so the bell waits instead: the trade goes
+        # on, and the cost is this one lesson. A ツーショット replaces the map
+        # with its own screen, which is the ドラマ case exactly.
+        dealing = (session.trade_with is not None
+                   or session.trade_asked is not None
+                   or session.trade_asking is not None
+                   or session.twoshot_with is not None
+                   or session.twoshot_asked is not None
+                   or session.twoshot_asking is not None)
         admits = (
             attends
             and session.map_id == lesson.classroom_of(session.in_class)
             and not neurotic
             and not on_drama_screen
+            and not dealing
         )
         for kind, subject in session.bell.poll(admits=admits):
             name = curriculum.SUBJECTS[subject]
@@ -20886,6 +21002,7 @@ class MpsServer:
                     "オプション 授業の有無 is OFF" if not attends
                     else "player is ノイローゼ" if neurotic
                     else "player is on the ドラマ screen" if on_drama_screen
+                    else "player is in a トレード／ツーショット" if dealing
                     else f"player is on map {session.map_id}, not classroom "
                          f"{lesson.classroom_of(session.in_class)}"
                 )

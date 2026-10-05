@@ -890,6 +890,20 @@ def rewards(subject: int, right: int, asked: int,
     return []
 
 
+def rebase_question_params(params: bytes, delta_ms: int) -> bytes:
+    """The same 0x6103 on another client's clock: move both i64 times by delta.
+
+    The two times are the body's last sixteen bytes (see question_params), so
+    the rest -- question, choices, the two empty flash arrays -- goes through
+    untouched. ``delta_ms`` is the recipient's client_now minus the clock the
+    body was built on.
+    """
+    if not delta_ms:
+        return params
+    start, end = struct.unpack_from(">qq", params, len(params) - 16)
+    return params[:-16] + struct.pack(">qq", start + delta_ms, end + delta_ms)
+
+
 def question_params(
     quiz_type: int,
     quiz_lv: int,
