@@ -712,6 +712,104 @@ AILMENT_EFFECT = {1: 0, 2: 1, 3: 2, 4: 3, 5: EFFECT_RETIRE}
 AILMENT_NONE = 0xFFFF
 AILMENT_CURE = 0
 
+#: 0x5C11 type 17: 状態異常全回復. ⭐ MEASURED (round 123, real client, a target
+#: carrying all four afflictions): it clears every lamp and prints the recovery
+#: line for each affliction the target has -- 「…は目をさました」, 「…の体から、
+#: しびれが消えた」 and so on -- and prints nothing for one it does not have. So
+#: it is both the cure a clubstatus-0 奥義 means and the line an affliction
+#: wearing off needs; the comment above on 「0 has no type」 predates it.
+EFFECT_CURE_ALL = 17
+
+# ── INVENTED — design: what a ステータス異常 stops (round 543, user's call) ─────
+# The four afflictions are restored as names, lamps and lines (clubstatus.bin,
+# clubmsg_template.bin, 0x5C11 types 0-3), and `p07_02` says only 「眠り・混乱な
+# どのステータス異常攻撃」. What each one PREVENTS, and for how long, is written
+# nowhere; up to round 542 they lit a lamp and stopped nothing. The user chose
+# to give them the meanings their names carry, every number below a knob:
+#
+#   眠り  the fighter does not act; being hit wakes them
+#   しびれ  each turn, a share of the time the action fails
+#   沈黙  no 部活奥義 (a キーワード still goes)
+#   混乱  a share of the time the attack lands on somebody else, self included
+#
+# A fighter carries ONE affliction at a time: a second one does not take. ⭐
+# That is what lets one 0x5C11 type 17 say exactly which line to print when it
+# wears off -- type 17 cures everything at once (above), so two afflictions
+# with different clocks could not be ended one by one.
+# ⭐ 「Does not act」 needs no line of ours: a fighter left out of 0x5C0D while
+# afflicted gets the client's own 「…は動けない！」 (template row 19, round 123).
+
+#: ⚠️ INVENTED — how many turns 眠り keeps a fighter from acting. 2 because it is
+#: the shortest stretch that still costs a whole turn after the one it lands in,
+#: and being hit ends it sooner (SLEEP_WAKES_ON_HIT). Knob: TMO_CLUB_SLEEP_TURNS.
+SLEEP_TURNS = int(os.environ.get("TMO_CLUB_SLEEP_TURNS") or 2)
+#: ⚠️ INVENTED — whether taking damage wakes a sleeping fighter. On, the
+#: genre's convention and the one that keeps 眠り from being a free win: the side
+#: that put you to sleep can hold you there only by not hitting you.
+#: Knob: TMO_CLUB_SLEEP_WAKES_ON_HIT (1 / 0).
+SLEEP_WAKES_ON_HIT = (os.environ.get("TMO_CLUB_SLEEP_WAKES_ON_HIT") or "1") != "0"
+#: ⚠️ INVENTED — how many turns しびれ lasts. Knob: TMO_CLUB_NUMB_TURNS.
+NUMB_TURNS = int(os.environ.get("TMO_CLUB_NUMB_TURNS") or 3)
+#: ⚠️ INVENTED — the chance a numbed fighter's action fails that turn. A coin,
+#: so that しびれ is half a 眠り spread over longer. Knob: TMO_CLUB_NUMB_FAIL.
+NUMB_FAIL_CHANCE = float(os.environ.get("TMO_CLUB_NUMB_FAIL") or 0.5)
+#: ⚠️ INVENTED — how many turns 沈黙 lasts. Knob: TMO_CLUB_SILENCE_TURNS.
+SILENCE_TURNS = int(os.environ.get("TMO_CLUB_SILENCE_TURNS") or 3)
+#: ⚠️ INVENTED — how many turns 混乱 lasts. Knob: TMO_CLUB_CONFUSE_TURNS.
+CONFUSE_TURNS = int(os.environ.get("TMO_CLUB_CONFUSE_TURNS") or 2)
+#: ⚠️ INVENTED — the chance a confused fighter's キーワード attack goes to a
+#: fighter drawn at random from everybody still standing, the attacker included,
+#: instead of the one they chose. Knob: TMO_CLUB_CONFUSE_CHANCE.
+CONFUSE_CHANCE = float(os.environ.get("TMO_CLUB_CONFUSE_CHANCE") or 0.5)
+
+AILMENT_SLEEP, AILMENT_NUMB, AILMENT_SILENCE, AILMENT_CONFUSE = 1, 2, 3, 4
+
+
+def ailment_turns(ailment: int) -> int:
+    """How long one affliction lasts, from the four knobs above (0 = not timed)."""
+    return {AILMENT_SLEEP: SLEEP_TURNS, AILMENT_NUMB: NUMB_TURNS,
+            AILMENT_SILENCE: SILENCE_TURNS,
+            AILMENT_CONFUSE: CONFUSE_TURNS}.get(ailment, 0)
+
+
+# ── INVENTED — design: the 守備特性 fire (round 543, user's call) ─────────────
+# RESTORED: which キーワード carries which (keyword.bin +0x6c over the five rows
+# of keyword_defense_characteristic.bin: 87 of the 261 carry one -- 回避 38,
+# 反撃 22, 反射 14, 奥義耐性 13), what each does (`p07_02`, below), that it is the
+# card the defender USED this turn (`p07_03`: 「使用したキーワードの「守備特性」
+# によって反撃などができることがあります」), and the wire and the lines (0x5C10
+# reaction 0-3, round 91). Missing from every source: 「一定確率」 and 「通常より
+# 強力」, and how much 奥義耐性 「軽減」s. Up to round 542 none of them fired.
+#
+#   回避  …一定確率で、相手のキーワードによる攻撃を回避します（ダメージを受けない）
+#   反射  …一定確率で、相手のキーワードによる攻撃を反射します（ダメージは受けな
+#          い）。反射による攻撃は、通常より強力になります
+#   反撃  …一定確率で、…攻撃を受けた（ダメージを受けた）際、反撃します。反撃
+#          による攻撃は、通常より強力になります
+#   奥義耐性 …「部活奥義」による攻撃のダメージ、…ステータス異常攻撃の成功率低下、
+#          …パラメータダウン効果の軽減 などの効果が無条件で付加されます
+KEYWORD_TRAIT_OFFSET = 0x6C
+TRAIT_NONE, TRAIT_EVADE, TRAIT_REFLECT, TRAIT_COUNTER, TRAIT_SKILL_RESIST = range(5)
+#: 0x5C10 ``reaction`` is the trait's id − 1 (see REACTION_NAMES below).
+REACTION_EVADE, REACTION_REFLECT, REACTION_COUNTER, REACTION_RESIST = range(4)
+
+#: ⚠️ INVENTED — the 「一定確率」 that 回避, 反射 and 反撃 fire with, one number for
+#: the three because the manual uses one phrase for the three. A quarter: often
+#: enough that a player who builds a deck around them sees them in most fights
+#: (a fight is up to eight exchanges), rare enough that a card's 攻撃力 is still
+#: what decides one. Knob: TMO_CLUB_TRAIT_CHANCE.
+TRAIT_CHANCE = float(os.environ.get("TMO_CLUB_TRAIT_CHANCE") or 0.25)
+#: ⚠️ INVENTED — how much 「通常より強力」 a 反射 or 反撃 is: the hit is multiplied
+#: by this. Half again, the size MASTERY_BONUS_AT_FULL already gives a fully
+#: practised card, so the two 「stronger than usual」s in this fight are one size.
+#: Knob: TMO_CLUB_TRAIT_POWER.
+TRAIT_POWER = float(os.environ.get("TMO_CLUB_TRAIT_POWER") or 1.5)
+#: ⚠️ INVENTED — how much 奥義耐性 「軽減」s, as the share that still gets through:
+#: a 部活奥義's damage and its ±% are scaled by it, and its ステータス異常 lands
+#: only this often. Half -- the plainest reading of 「軽減」 that is not 「無効」.
+#: Knob: TMO_CLUB_SKILL_RESIST.
+SKILL_RESIST_SHARE = float(os.environ.get("TMO_CLUB_SKILL_RESIST") or 0.5)
+
 #: `clubskill.bin`'s ±% columns are 100-based and this server keeps a fighter's
 #: modifier the same way, so 「no modifier」 is 100 rather than 0.
 PERCENT_BASE = 100
@@ -1981,6 +2079,11 @@ class Fighter:
         #: here can reach a screen. ``/cb states`` is the one writer, and it is
         #: a probe.
         self.states = [0] * NUM_OF_CLUB_STATUS
+        #: ⭐ The one timed ステータス異常 this fighter carries (clubstatus 1-4)
+        #: and how many more turns of it are left. See the design block next to
+        #: SLEEP_TURNS: one at a time, worn off by Battle.tick_ailments.
+        self.ailment: "int | None" = None
+        self.ailment_turns = 0
         #: Set by 0x5C07 — 「my battle scene is up」, not 「I am ready to play」.
         self.ready = False
         self.deck_id = 0
@@ -2084,8 +2187,13 @@ class Fighter:
         self.energy += gained_ep
         return (gained_hp, gained_ep)
 
-    def afflict(self, ailment: int) -> None:
+    def afflict(self, ailment: int) -> bool:
         """Set (or, for clubstatus 0, clear) this fighter's ステータス異常.
+
+        Returns whether it took. ⭐ One timed affliction at a time (see the
+        ステータス異常 design block): a second 眠り／しびれ／沈黙／混乱 on a
+        fighter who already carries one does not take, so the type 17 that ends
+        it later prints exactly one recovery line.
 
         ⚠️ The counters in ``states`` are what 0x5C09 carries, and the client
         does not read them: it keeps its own copy from 0x5C11, and its handler
@@ -2096,11 +2204,28 @@ class Fighter:
         """
         if ailment == AILMENT_CURE:
             self.states = [0] * NUM_OF_CLUB_STATUS
-            return
+            self.ailment, self.ailment_turns = None, 0
+            return True
+        if ailment_turns(ailment) and self.ailment is not None:
+            return False
         if 0 <= ailment < NUM_OF_CLUB_STATUS:
             self.states[ailment] = 1
+        if ailment_turns(ailment):
+            self.ailment, self.ailment_turns = ailment, ailment_turns(ailment)
         if ailment == 5:  # 練習不能 — the client sets 体力 to 0 on its own.
             self.vitality = 0
+        return True
+
+    def has(self, ailment: int) -> bool:
+        return self.ailment == ailment
+
+    def cure(self) -> "int | None":
+        """End the timed affliction, if any. Returns which one it was."""
+        was = self.ailment
+        if was is not None:
+            self.states[was] = 0
+        self.ailment, self.ailment_turns = None, 0
+        return was
 
     @property
     def retired(self) -> bool:
@@ -2555,7 +2680,10 @@ class Battle:
         finish in time」 case the same paragraph describes, permanently.
         """
         active = self.active()
-        return bool(active) and all(f.command is not None for f in active)
+        # ⭐ Round 543: a fighter asleep has nothing to send (the client takes
+        # their command window away itself), so the turn does not wait for them.
+        return bool(active) and all(
+            f.command is not None or f.has(AILMENT_SLEEP) for f in active)
 
     def all_turn_done(self) -> bool:
         """Has every fighter reported 0x5C16 「my turn animation is over」?

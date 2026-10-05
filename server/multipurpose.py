@@ -143,6 +143,7 @@ rather than deleted; nothing here rewrites the store on a date change.
 from __future__ import annotations
 
 import json
+import os
 import struct
 from datetime import date, timedelta
 from pathlib import Path
@@ -235,6 +236,26 @@ CANCEL_NG_NOT_YOURS = 4
 CANCEL_NG_NONE_HELD = 5
 
 
+#: The fixed fortnights the booking window is cut into (module docstring, round
+#: 368): a term starts on the days ``d`` with ``(d - 1970-01-01).days % 14 ==
+#: TERM_PHASE``. MEASURED off three client windows; restored, not a knob.
+TERM_DAYS = 14
+TERM_PHASE = 10
+
+#: ⚠️ INVENTED — whether a group may hold one booking per term (True) or one at
+#: a time across every term (False, this server up to round 542). The window's
+#: own header says 「２週間の期間内に１日予約できます」 and the terms are
+#: fortnights, so True is the header taken at its word; what the original did
+#: when a group's booking in one term was still ahead as the next term opened
+#: is not on any wire (round 543, user's call). Knob: TMO_ROOM_ONE_PER_TERM.
+ONE_PER_TERM = (os.environ.get("TMO_ROOM_ONE_PER_TERM") or "1") != "0"
+
+
+def term_of(day: date) -> int:
+    """Which fixed fortnight a day falls in (consecutive integers)."""
+    return ((day - date(1970, 1, 1)).days - TERM_PHASE) // TERM_DAYS
+
+
 def window(today: "date | None" = None) -> list[date]:
     """The days a booking may name: today and the HORIZON_DAYS-1 after it."""
     first = today or gameclock.today()
@@ -323,8 +344,11 @@ class BookingBook:
                 return booking
         return None
 
-    def of_group(self, group_id: int) -> "Booking | None":
+    def of_group(self, group_id: int, day: "date | None" = None) -> "Booking | None":
         """The one booking a group holds, if it holds one.
+
+        With ``day`` and ONE_PER_TERM on, only a booking in the same term as
+        ``day`` counts -- the question 0x0907 reason 5 asks for a new booking.
 
         ⚠️ Only inside the current window. A booking whose day has gone by is
         not deleted -- nothing sweeps this file -- and counting it would leave a
@@ -333,6 +357,9 @@ class BookingBook:
         live = set(window())
         for booking in self.bookings:
             if booking.group_id == group_id and booking.day in live:
+                if (day is not None and ONE_PER_TERM
+                        and term_of(booking.day) != term_of(day)):
+                    continue
                 return booking
         return None
 

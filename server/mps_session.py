@@ -12418,6 +12418,11 @@ class MpsServer:
         for fighter in battle.fighters:
             if not clubdata.is_npc(fighter.chara_id) or fighter.retired:
                 continue
+            if fighter.has(clubbattle.AILMENT_SLEEP):
+                # 眠り (round 543): no choice at all, so no command -- the same
+                # 「did not choose」 a human asleep is in, and _battle_resolve
+                # leaves them out of the order.
+                continue
             row = clubdata.npc(clubdata.npc_key(fighter.chara_id))
             deck = clubdata.npc_deck(row["deck"]) if row else None
             # ⚠️ The six bytes are composed here rather than echoed, which is
@@ -12439,7 +12444,8 @@ class MpsServer:
                  struct.pack("<HHH", int(keyword_id), 0, fighter.club_id))
                 for keyword_id in (deck.get("keywords", []) if deck else [])
             ]
-            if clubbattle.NPC_CARD_POOL != "keywords":
+            if (clubbattle.NPC_CARD_POOL != "keywords"
+                    and not fighter.has(clubbattle.AILMENT_SILENCE)):
                 for entry in (deck.get("skills", []) if deck else []):
                     category, _, skill_id = str(entry.get("key", "")).partition(":")
                     skill = (clubdata.club_skill(int(category), int(skill_id))
@@ -12592,6 +12598,7 @@ class MpsServer:
         self, session: "_Session", battle: "clubbattle.Battle",
         attacker: "clubbattle.Fighter", kind: int, payload: bytes,
         targets: "list[clubbattle.Fighter | None]", everyone: "list[int]",
+        self_hit: bool = False,
     ) -> bytes:
         """One attack landing on each of ``targets``: damage, take it off, narrate.
 
@@ -12609,13 +12616,14 @@ class MpsServer:
         restored boundaries, with every knob named and reversible. See the
         DAMAGE RULE block in clubbattle.
 
-        ⚠️ 0x5C10 Reaction is deliberately NOT sent. It narrates a 守備特性
-        (回避/反射/反撃/奥義耐性) firing, and both the probability those fire
-        with and the 「通常より強力」 multiplier two of them carry are missing
-        from every source. A fight that never fires one is a legal fight;
-        a fight that fires them on a made-up coin is a second invention on top
-        of this one. ⭐ The 守備特性 column itself is in `keyword.bin` +0x6c and
-        the client does read it, so this is a hole with a known shape.
+        ⭐ Round 543: the 守備特性 fire here (0x5C10, INVENTED numbers -- see the
+        design block next to clubbattle.TRAIT_CHANCE). Up to 542 they did not,
+        on the grounds that 「一定確率」 and 「通常より強力」 have no source; the
+        user chose to have them anyway, with both numbers knobs. A キーワード
+        attack on a defender holding a 回避／反射／反撃 card may be dodged,
+        bounced back at the attacker, or answered; a 部活奥義's damage on a
+        defender holding a 奥義耐性 card is scaled down. ⭐ ``self_hit`` lets a
+        confused attacker's own card land on themselves.
 
         ⚠️ The DEFENDER's card is the one they chose THIS turn, whether or not
         they have acted yet: 「全員のコマンド入力終了後、全員の行動が実行され
@@ -12631,7 +12639,7 @@ class MpsServer:
             return b""
         out = b""
         for target in targets:
-            if target is None or target is attacker:
+            if target is None or (target is attacker and not self_hit):
                 continue
             if target.retired:
                 print(f"[{self.tag}] battle damage: target "
@@ -12643,6 +12651,29 @@ class MpsServer:
             if guard is not None:
                 _atk, shield, guard_mastery, shield_label = self._battle_power(
                     target, *guard)
+            trait = self._battle_trait(guard) if target is not attacker else 0
+            is_keyword = kind == club.DECK_ITEM_KEYWORD
+            # ⭐ 回避 and 反射 decide before anything lands: 「ダメージを受けない」.
+            if (is_keyword and trait in (clubbattle.TRAIT_EVADE,
+                                         clubbattle.TRAIT_REFLECT)
+                    and random.random() < clubbattle.TRAIT_CHANCE):
+                reaction = trait - 1
+                print(f"[{self.tag}] battle reaction: charaId={target.chara_id:#x} "
+                      f"{clubbattle.REACTION_NAMES[reaction]} ({shield_label}) "
+                      f"against {label}")
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_REACTION,
+                    clubbattle.reaction_params(target.chara_id, reaction),
+                    everyone,
+                )
+                if trait == clubbattle.TRAIT_REFLECT:
+                    # 「反射による攻撃は、通常より強力になります」: the attacker's
+                    # own blow comes back, met by the attacker's own card.
+                    out += self._battle_trait_blow(
+                        session, attacker, attack_base * attacker.attack_pct
+                        // clubbattle.PERCENT_BASE, mastery,
+                        f"{label} 反射", everyone)
+                continue
             # ⭐ The ±% a 部活奥義 put on either side. 100 on both is the
             # untouched case and the arithmetic below is then exactly what
             # round 222 shipped. ⚠️ They scale the CARD, because that is where
@@ -12655,6 +12686,14 @@ class MpsServer:
                 attack, shield, mastery, target_attacking=not target.defending,
                 defender_mastery=guard_mastery,
             )
+            resisted = (not is_keyword and trait == clubbattle.TRAIT_SKILL_RESIST
+                        and target.team != attacker.team)
+            if resisted:
+                # 奥義耐性: 「「部活奥義」による攻撃のダメージ…の軽減」, silently --
+                # the client's 0x5C10 reaction 3 means 「it did not land」 and
+                # swallows the damage line (round 91), and this one did land.
+                hit = max(clubbattle.DAMAGE_FLOOR,
+                          int(hit * clubbattle.SKILL_RESIST_SHARE))
             taken = target.hurt(hit)
             band = clubbattle.damage_band(taken, target.max_vitality)
             print(f"[{self.tag}] battle damage: charaId={attacker.chara_id:#x} "
@@ -12665,6 +12704,7 @@ class MpsServer:
                      else f"[攻{pct[0]}% 守{pct[1]}%] ")
                   + f"= {taken} 体力 {target.vitality + taken}→{target.vitality}"
                   f"/{target.max_vitality} band={band}"
+                  f"{' (奥義耐性)' if resisted else ''}"
                   f"{' ⇒ リタイヤ' if target.retired else ''}")
             out += self._tr_cast(
                 session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
@@ -12673,7 +12713,92 @@ class MpsServer:
                 ),
                 everyone,
             )
+            out += self._battle_wake_on_hit(session, target, everyone)
+            # ⭐ 反撃 after the damage: 「攻撃を受けた（ダメージを受けた）際、反撃」
+            # -- so only a defender still standing answers.
+            if (is_keyword and trait == clubbattle.TRAIT_COUNTER
+                    and not target.retired and not attacker.retired
+                    and random.random() < clubbattle.TRAIT_CHANCE
+                    and guard is not None):
+                print(f"[{self.tag}] battle reaction: charaId={target.chara_id:#x} "
+                      f"反撃 ({shield_label}) against {label}")
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_REACTION,
+                    clubbattle.reaction_params(
+                        target.chara_id, clubbattle.REACTION_COUNTER),
+                    everyone,
+                )
+                counter_attack, _d, counter_mastery, counter_label = (
+                    self._battle_power(target, *guard))
+                out += self._battle_trait_blow(
+                    session, attacker, counter_attack * target.attack_pct
+                    // clubbattle.PERCENT_BASE, counter_mastery,
+                    f"{counter_label} 反撃", everyone)
         return out
+
+    def _battle_trait(self, guard: "tuple[int, bytes] | None") -> int:
+        """The 守備特性 of the card a defender holds this turn (0 = none).
+
+        Only a キーワード has one (`keyword.bin` +0x6c); a 部活奥義 held up as a
+        guard has no such column.
+        """
+        if guard is None or guard[0] != club.DECK_ITEM_KEYWORD:
+            return clubbattle.TRAIT_NONE
+        keyword_id = struct.unpack_from("<H", guard[1])[0]
+        return int((clubdata.keyword(keyword_id) or {}).get("trait") or 0)
+
+    def _battle_trait_blow(
+        self, session: "_Session", victim: "clubbattle.Fighter",
+        attack: int, mastery: float, label: str, everyone: "list[int]",
+    ) -> bytes:
+        """A 反射 or 反撃 landing on the original attacker: 「通常より強力」.
+
+        The blow is met by the victim's own card this turn (attacking, so at
+        half its 守備力, the same rule as any other hit) and then multiplied by
+        clubbattle.TRAIT_POWER.
+        """
+        if victim.retired:
+            return b""
+        shield, guard_mastery = 0, 0.0
+        guard = self._battle_deck_item(victim)
+        if guard is not None:
+            _a, shield, guard_mastery, _l = self._battle_power(victim, *guard)
+        shield = shield * victim.defence_pct // clubbattle.PERCENT_BASE
+        hit = clubbattle.damage(attack, shield, mastery,
+                                target_attacking=not victim.defending,
+                                defender_mastery=guard_mastery)
+        hit = max(clubbattle.DAMAGE_FLOOR, int(hit * clubbattle.TRAIT_POWER))
+        taken = victim.hurt(hit)
+        band = clubbattle.damage_band(taken, victim.max_vitality)
+        print(f"[{self.tag}] battle damage: {label} → charaId={victim.chara_id:#x} "
+              f"= {taken} 体力 {victim.vitality + taken}→{victim.vitality}"
+              f"/{victim.max_vitality} band={band} (x{clubbattle.TRAIT_POWER})"
+              f"{' ⇒ リタイヤ' if victim.retired else ''}")
+        out = self._tr_cast(
+            session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+            clubbattle.effect_params(
+                victim.chara_id, clubbattle.EFFECT_DAMAGE, taken, band),
+            everyone,
+        )
+        return out + self._battle_wake_on_hit(session, victim, everyone)
+
+    def _battle_wake_on_hit(
+        self, session: "_Session", fighter: "clubbattle.Fighter",
+        everyone: "list[int]",
+    ) -> bytes:
+        """眠り ends the moment its sleeper takes damage (SLEEP_WAKES_ON_HIT)."""
+        if (not clubbattle.SLEEP_WAKES_ON_HIT or fighter.retired
+                or not fighter.has(clubbattle.AILMENT_SLEEP)):
+            return b""
+        fighter.cure()
+        print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
+              f"眠り ends — hit (0x5C11 type={clubbattle.EFFECT_CURE_ALL})")
+        return self._tr_cast(
+            session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+            clubbattle.effect_params(
+                fighter.chara_id, clubbattle.EFFECT_CURE_ALL, 0, 0),
+            everyone,
+        )
 
     def _battle_skill_cast(
         self, actor: "clubbattle.Fighter", row: "dict", label: str,
@@ -12800,6 +12925,11 @@ class MpsServer:
             return b""
         out = b""
         for target in targets:
+            # ⭐ 奥義耐性 (round 543, INVENTED share): only against the other
+            # side's 奥義 -- a buff from one's own team is not an attack.
+            resist = (target.team != actor.team
+                      and self._battle_trait(self._battle_deck_item(target))
+                      == clubbattle.TRAIT_SKILL_RESIST)
             for column, field, effect_type, name in (
                 ("atkPct", "attack_pct", clubbattle.EFFECT_ATTACK_PCT, "攻撃力"),
                 ("defPct", "defence_pct", clubbattle.EFFECT_DEFENCE_PCT, "防御力"),
@@ -12808,6 +12938,11 @@ class MpsServer:
                 percent = int(row.get(column) or clubbattle.PERCENT_BASE)
                 if percent == clubbattle.PERCENT_BASE:
                     continue
+                if resist and percent < clubbattle.PERCENT_BASE:
+                    # 「パラメータダウン効果の軽減」: the drop is scaled down.
+                    percent = clubbattle.PERCENT_BASE - int(
+                        (clubbattle.PERCENT_BASE - percent)
+                        * clubbattle.SKILL_RESIST_SHARE)
                 now = target.modify_percent(field, percent)
                 drawn = now < clubbattle.PERCENT_BASE
                 print(f"[{self.tag}] battle skill: {label} {name} x{percent}% "
@@ -12841,12 +12976,34 @@ class MpsServer:
             ailment = int(row.get("ailment", clubbattle.AILMENT_NONE))
             if ailment == clubbattle.AILMENT_NONE:
                 continue
-            target.afflict(ailment)
-            effect_type = clubbattle.AILMENT_EFFECT.get(ailment)
+            if (ailment != clubbattle.AILMENT_CURE and resist
+                    and random.random() >= clubbattle.SKILL_RESIST_SHARE):
+                # 「ステータス異常攻撃の成功率低下」: it missed. reaction 3 is the
+                # client's 「…には効果がないようだ」, which with a 奥義 on the
+                # field is that 奥義's own 無効 line (round 124).
+                print(f"[{self.tag}] battle skill: {label} ステータス異常 "
+                      f"{ailment} → charaId={target.chara_id:#x} resisted (奥義耐性)")
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_REACTION,
+                    clubbattle.reaction_params(
+                        target.chara_id, clubbattle.REACTION_RESIST),
+                    everyone,
+                )
+                continue
+            if not target.afflict(ailment):
+                print(f"[{self.tag}] battle skill: {label} ステータス異常 "
+                      f"{ailment} → charaId={target.chara_id:#x} does not take — "
+                      f"already carries {target.ailment} (one at a time)")
+                continue
+            effect_type = (clubbattle.EFFECT_CURE_ALL
+                           if ailment == clubbattle.AILMENT_CURE
+                           else clubbattle.AILMENT_EFFECT.get(ailment))
             print(f"[{self.tag}] battle skill: {label} ステータス異常 "
                   f"{ailment} → charaId={target.chara_id:#x}"
                   + (f" (0x5C11 type={effect_type})" if effect_type is not None
-                     else " — 通常, a cure, and the client has no line for it")
+                     else "")
+                  + (f" for {target.ailment_turns} turn(s)"
+                     if target.ailment_turns else "")
                   + (" ⇒ リタイヤ" if target.retired else ""))
             if effect_type is not None:
                 out += self._tr_cast(
@@ -13103,7 +13260,25 @@ class MpsServer:
                       f"chose {self._battle_card(fighter, fighter.command[0])} "
                       f"— nothing to play, left out of the order")
                 continue
+            # ⭐ Round 543: a ステータス異常 that stops this action is rolled
+            # HERE, before 0x5C0D names the order -- a fighter announced in the
+            # order and then never given a 0x5C0E would leave every client
+            # waiting on an action that never begins. Left out of the order
+            # while afflicted, the client prints 「…は動けない！」 by itself.
+            held = self._battle_ailment_holds(fighter, card[0])
+            if held:
+                print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
+                      f"{held} — does not act this turn")
+                continue
             plays.append((fighter, card[0], card[1]))
+        # ⭐ Afflictions that were already on before this turn: they tick down
+        # once it is played, and the ones on their last turn end inside the
+        # LAST action's stream -- a 0x5C11 reaches a client only from inside an
+        # action (round 90), and the end of the turn is where 「…は目をさました」
+        # reads right.
+        afflicted_before = [(f, f.ailment) for f in battle.fighters
+                            if f.ailment is not None]
+        expiring = [f for f, _a in afflicted_before if f.ailment_turns <= 1]
         everyone = [f.chara_id for f in battle.fighters]
 
         def demo_start() -> bytes:
@@ -13138,9 +13313,22 @@ class MpsServer:
             clubbattle.action_order_params(order),
             everyone,
         )
-        for fighter, kind, payload in plays:
+        for play_index, (fighter, kind, payload) in enumerate(plays):
             assert fighter.command is not None
             _item_num, is_attck, target_id = fighter.command
+            # ⭐ 混乱 (round 543, INVENTED chance): a キーワード swung while
+            # confused may go to anybody still standing, the swinger included.
+            self_hit = False
+            if (fighter.has(clubbattle.AILMENT_CONFUSE) and is_attck
+                    and kind == club.DECK_ITEM_KEYWORD
+                    and random.random() < clubbattle.CONFUSE_CHANCE):
+                standing = [f for f in battle.fighters if not f.retired]
+                chosen = random.choice(standing)
+                print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
+                      f"混乱 — swings at {chosen.chara_id:#x} instead of "
+                      f"{target_id:#x}")
+                target_id = chosen.chara_id
+                self_hit = chosen is fighter
             # ⭐ Ahead of the probe, because this is about the card that was
             # actually played rather than the one /cb card swapped in — see
             # _battle_mastery. ⚠️⚠️ This one WRITES THE SAVE.
@@ -13200,7 +13388,8 @@ class MpsServer:
                     fighter, skill, club.describe_deck_item(kind, payload))
             if is_attck and landed and battle.card_probe is None:
                 out += self._battle_strike(
-                    session, battle, fighter, kind, payload, targets, everyone
+                    session, battle, fighter, kind, payload, targets, everyone,
+                    self_hit=self_hit,
                 )
             if skill is not None and landed and battle.card_probe is None:
                 out += self._battle_skill_effects(
@@ -13247,6 +13436,9 @@ class MpsServer:
                         ),
                         everyone,
                     )
+            if play_index == len(plays) - 1:
+                out += self._battle_ailments_wear_off(
+                    session, afflicted_before, expiring, everyone)
             out += self._tr_cast(
                 session,
                 0,
@@ -13321,6 +13513,55 @@ class MpsServer:
             )
             if demo:
                 out += demo_start()
+        return out
+
+    def _battle_ailment_holds(
+        self, fighter: "clubbattle.Fighter", kind: int
+    ) -> "str | None":
+        """Why this fighter's ステータス異常 keeps them from acting, or None.
+
+        See the design block next to clubbattle.SLEEP_TURNS (INVENTED, round
+        543): 眠り always, しびれ on a coin, 沈黙 when the card is a 部活奥義.
+        """
+        if fighter.has(clubbattle.AILMENT_SLEEP):
+            return "眠り"
+        if (fighter.has(clubbattle.AILMENT_NUMB)
+                and random.random() < clubbattle.NUMB_FAIL_CHANCE):
+            return "しびれ"
+        if (fighter.has(clubbattle.AILMENT_SILENCE)
+                and kind == club.DECK_ITEM_CLUB_SKILL):
+            return "沈黙 (a 部活奥義)"
+        return None
+
+    def _battle_ailments_wear_off(
+        self, session: "_Session",
+        afflicted_before: "list[tuple[clubbattle.Fighter, int | None]]",
+        expiring: "list[clubbattle.Fighter]", everyone: "list[int]",
+    ) -> bytes:
+        """End the afflictions on their last turn and tick the rest down.
+
+        Called once per played turn, inside the last action's stream. A
+        fighter cured or re-afflicted during the turn is left alone: what they
+        carry now is not what was counted. ⚠️ A turn in which nobody acts never
+        calls this, so nothing ticks -- the affliction simply runs a turn longer.
+        """
+        out = b""
+        for fighter, was in afflicted_before:
+            if fighter.ailment != was or fighter.ailment is None:
+                continue
+            if fighter in expiring:
+                fighter.cure()
+                print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
+                      f"clubstatus {was} wears off (0x5C11 type="
+                      f"{clubbattle.EFFECT_CURE_ALL})")
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                    clubbattle.effect_params(
+                        fighter.chara_id, clubbattle.EFFECT_CURE_ALL, 0, 0),
+                    everyone,
+                )
+            else:
+                fighter.ailment_turns = max(1, fighter.ailment_turns - 1)
         return out
 
     def _battle_sheet(
@@ -14994,13 +15235,34 @@ class MpsServer:
                 battle.turn, clock + battle.timeout_ms(), rows
             )
 
-        return self._tr_cast(
+        out = self._tr_cast(
             session,
             0,
             clubbattle.MSG_SV_NOTIFY_BATTLE_TURN_START,
             body,
             [f.chara_id for f in battle.fighters],
         )
+        # ⭐ Round 543: when everybody the fight would wait for is asleep, the
+        # turn is played now instead of after the 制限時間 -- a sleeper's client
+        # takes its own command window away (round 123) and has nothing to
+        # send. The path is the timeout's own: 0x5C0C reason 2 for each of them
+        # (which a real client takes without a box, round 87) and the resolve.
+        sleepers = [f for f in battle.active()
+                    if f.command is None and f.has(clubbattle.AILMENT_SLEEP)]
+        if sleepers and battle.all_chosen():
+            print(f"[{self.tag}] battle turn {battle.turn}: "
+                  + ", ".join(f"0x{f.chara_id:08x}" for f in sleepers)
+                  + " asleep — played without waiting")
+            everyone = [f.chara_id for f in battle.fighters]
+            for fighter in sleepers:
+                out += self._tr_cast(
+                    session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_COMMAND,
+                    clubbattle.command_params(
+                        fighter.chara_id, clubbattle.COMMAND_TOO_LATE),
+                    everyone,
+                )
+            out += self._battle_resolve(session, battle)
+        return out
 
     def _cb_part_notice(
         self, battle: "clubbattle.Battle", gone_id: int, reason: int
@@ -17898,14 +18160,16 @@ class MpsServer:
             return refuse(multipurpose.RESERVE_NG_CHARACTER, "in no group")
         if self._chars(session).scorecard(me) is None:
             return refuse(multipurpose.RESERVE_NG_NO_DATA, "no scorecard")
-        held = book.of_group(group.id)
-        if held is not None:
-            return refuse(multipurpose.RESERVE_NG_ALREADY,
-                          f"{group.label()} already holds {held.label()}")
         if day is None or day not in multipurpose.window():
             return refuse(multipurpose.RESERVE_NG_DATE,
                           f"{day.isoformat() if day else params[2:6].hex()} is "
                           f"outside the {multipurpose.HORIZON_DAYS}-day horizon")
+        # ⭐ Round 543: one per term (multipurpose.ONE_PER_TERM), so the day is
+        # read first -- which term it is in decides whether reason 5 applies.
+        held = book.of_group(group.id, day)
+        if held is not None:
+            return refuse(multipurpose.RESERVE_NG_ALREADY,
+                          f"{group.label()} already holds {held.label()}")
         if book.at(room, day) is not None:
             return refuse(multipurpose.RESERVE_NG_DATE,
                           f"room {room} {day.isoformat()} is already taken")
@@ -18656,6 +18920,18 @@ class MpsServer:
                     struct.pack(">B", code),
                 )
             assert other is not None
+            if self.accounts.ignores.holds(target, me):
+                # INVENTED -- 受信拒否 refuses 「各種申込み」 (round 543, user's
+                # call): answered as the target's ［いいえ］ would be -- Ok, then
+                # 0x6222 reason 12 -- and the target is never asked.
+                print(f"[{self.tag}] 勧誘 from charaId={me} to {target}: "
+                      f"on their 受信拒否 list, declined on their behalf")
+                return (self._answer(
+                            session, seen,
+                            groups.MSG_SV_OK_CHARA_GROUP_INVITE_REQUEST, b"")
+                        + self._answer(
+                            session, 0, groups.MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL,
+                            struct.pack(">B", groups.NOTIFY_DECLINED)))
             session.group_invited = target
             other.group_inviter = me
             print(f"[{self.tag}] 勧誘: charaId={me} is asking {target} "
@@ -18953,6 +19229,20 @@ class MpsServer:
                     session, seen, trade.MSG_SV_NG_TRADE_REQUEST, trade.reason(code),
                 )
             assert other is not None
+            if self.accounts.ignores.holds(target, me):
+                # INVENTED -- 受信拒否 refuses 「各種申込み」 (the client's own
+                # help text), round 543 by the user's call. No family has a
+                # 「they are not receiving」 sentence, so the application is
+                # answered the way the target's own ［断る］ answers it: Ok, then
+                # 0x510E reason 12 「申し込みを断られました」 to the asker alone.
+                # The target is not asked and sees nothing -- which is the point.
+                print(f"[{self.tag}] トレード from charaId={me} to {target}: "
+                      f"on their 受信拒否 list, declined on their behalf")
+                return (self._answer(session, seen,
+                                     trade.MSG_SV_OK_TRADE_REQUEST, b"")
+                        + self._answer(session, 0,
+                                       trade.MSG_SV_NOTIFY_TRADE_CANCEL,
+                                       trade.reason(trade.NOTIFY_DECLINED)))
             session.trade_asked = target
             other.trade_asking = me
             print(f"[{self.tag}] トレード: charaId={me} is asking {target}")
@@ -19559,6 +19849,17 @@ class MpsServer:
                 twoshot.reason(code),
             )
         assert other is not None
+        if self.accounts.ignores.holds(target, me):
+            # INVENTED -- 受信拒否 refuses 「各種申込み」 (round 543, user's
+            # call): answered as the target's ［断る］ would be, see the トレード
+            # branch for why.
+            print(f"[{self.tag}] ツーショット from charaId={me} to {target}: "
+                  f"on their 受信拒否 list, declined on their behalf")
+            return (self._answer(session, seen,
+                                 twoshot.MSG_SV_OK_TWOSHOT_REQUEST, b"")
+                    + self._answer(session, 0,
+                                   twoshot.MSG_SV_NOTIFY_TWOSHOT_CANCEL,
+                                   twoshot.reason(twoshot.NOTIFY_DECLINED)))
         session.twoshot_asked = target
         other.twoshot_asking = me
         print(f"[{self.tag}] ツーショット: charaId={me} is asking {target} "
@@ -19849,6 +20150,20 @@ class MpsServer:
                     session, seen, friends.MSG_SV_NG_FRIEND_ADD_REQUEST,
                     struct.pack(">IB", target, code),
                 )
+            if self.accounts.ignores.holds(target, me):
+                # INVENTED -- 受信拒否 refuses 「各種申込み」 (round 543, user's
+                # call): answered as the target's ［いいえ］ would be -- Ok, then
+                # 0x640D reason 12 「友達登録を拒否されました」 -- and the target
+                # is never asked.
+                print(f"[{self.tag}] 友達登録 from charaId={me} to {target}: "
+                      f"on their 受信拒否 list, declined on their behalf")
+                return (self._answer(session, seen,
+                                     friends.MSG_SV_OK_FRIEND_ADD_REQUEST,
+                                     struct.pack(">I", target))
+                        + self._answer(session, 0,
+                                       friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
+                                       struct.pack(">IB", target,
+                                                   friends.NOTIFY_DECLINED)))
             session.friends_asked.add(target)
             other.friends_asking.add(me)
             print(f"[{self.tag}] 友達登録: charaId={me} is asking {target}")
