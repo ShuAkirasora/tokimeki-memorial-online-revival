@@ -20852,14 +20852,21 @@ class MpsServer:
             void = exam.voided(paper.sheet)
             card = self._chars(session).scorecard(session.chara_id)
             if card is not None:
-                last, best = card.record_exam(paper.subject, paper.course, marked)
+                # ⭐ Held, not filed: 「自分の結果は、試験期間終了後に通知表で
+                # 確認することができます」 (`p06_03`). The score reaches the card
+                # -- and with it 修了 and 試験レベル -- when the period closes;
+                # CharacterStore.scorecard does the folding on the next read.
+                period = session.exam.key or exam.Period.MANUAL
+                card.hold_exam(paper.subject, paper.course, marked, period)
                 self._chars(session).set_scorecard(session.chara_id, card)
-                done = card.completed(paper.subject, paper.course)
                 print(f"[{self.tag}] exam end: {name} 段階{paper.course + 1} "
                       f"{right}/{len(paper.questions)}問正解 → {marked} 点"
                       f"{f' ({void} 未記入 → 0 点)' if void else ''} "
-                      f"(前回 {last}, 最高 {best}, 修了 {'済' if done else 'まだ'}, "
-                      f"試験レベル {card.test_level()})")
+                      f"(held for the 通知表 until period {period} closes)")
+                after = self._chars(session).scorecard(session.chara_id)
+                if after is not None and not after.exam_held:
+                    print(f"[{self.tag}] exam end: filed at once (console period); "
+                          f"試験レベル {after.test_level()}")
             else:
                 print(f"[{self.tag}] exam end: no charaId={session.chara_id}, "
                       f"{marked} 点 filed nowhere")

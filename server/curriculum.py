@@ -450,6 +450,17 @@ class ScoreCard:
         # 受けられません」 survives logging out and back in inside one period.
         self.exam_key: str | None = saved.get("exam_key") or None
         self.exam_sat = [int(v) for v in saved.get("exam_sat") or []]
+        # ⭐ Papers marked but not yet on the card: ``[subject, course, score,
+        # periodKey]``. `p06_03`: 「自分の結果は、試験期間終了後に通知表で確認
+        # することができます」 -- the result reaches the 通知表 when the period
+        # it was sat in is over, not when the paper is handed in. Held here so
+        # that a relog or a restart inside the period does not lose it, and
+        # folded in by ``release_due`` (CharacterStore.scorecard runs it).
+        self.exam_held: list[list] = []
+        for entry in saved.get("exam_held") or []:
+            if isinstance(entry, (list, tuple)) and len(entry) == 4:
+                self.exam_held.append([int(entry[0]), int(entry[1]),
+                                       int(entry[2]), str(entry[3])])
 
     # ── derived, never stored ───────────────────────────────────────────────
 
@@ -621,6 +632,27 @@ class ScoreCard:
         self.scores[subject][course] = (score, max(best, score))
         return self.scores[subject][course]
 
+    def hold_exam(self, subject: int, course: int, score: int, period: str) -> None:
+        """Mark a paper sat in ``period`` for the card, without filing it yet."""
+        self.exam_held.append([subject, course, max(0, min(100, score)), period])
+
+    def release_due(self, period_over) -> list[tuple[int, int, int]]:
+        """File every held paper whose period ``period_over(key)`` says is over.
+
+        Returns ``[(subject, course, score)]`` for what was filed, in the order
+        the papers were sat -- so a subject sat twice in two periods files its
+        last score last, which is what lastScore means.
+        """
+        filed, kept = [], []
+        for subject, course, score, period in self.exam_held:
+            if period_over(period):
+                self.record_exam(subject, course, score)
+                filed.append((subject, course, score))
+            else:
+                kept.append([subject, course, score, period])
+        self.exam_held = kept
+        return filed
+
     # ── the wire ────────────────────────────────────────────────────────────
 
     def params(self, family_name: bytes, first_name: bytes, in_class: int = 0) -> bytes:
@@ -682,6 +714,7 @@ class ScoreCard:
             "right": list(self.right),
             "exam_key": self.exam_key,
             "exam_sat": list(self.exam_sat),
+            "exam_held": [list(entry) for entry in self.exam_held],
         }
 
     def lines(self) -> list[str]:
@@ -712,6 +745,10 @@ class ScoreCard:
         ]
         if rates:
             out.append("正解率 " + ", ".join(rates))
+        if self.exam_held:
+            out.append("期末後に発表 " + ", ".join(
+                f"{SUBJECTS[s]} 段階{c + 1} {p}点（{period}）"
+                for s, c, p, period in self.exam_held))
         return out
 
     def summary(self) -> str:

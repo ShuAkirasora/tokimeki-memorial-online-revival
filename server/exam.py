@@ -636,6 +636,24 @@ def scheduled(now: "datetime | None" = None) -> "tuple[str, str] | None":
     return None
 
 
+def period_over(key: str, now: "datetime | None" = None) -> bool:
+    """Has the period filed under ``key`` closed? (When its results may show.)
+
+    ⭐ 「自分の結果は、試験期間終了後に通知表で確認することができます」 (`p06_03`):
+    a calendar period is over once the calendar no longer has it in session.
+    ⚠️ The console's period (``Period.MANUAL``, `/exam on`) counts as over at
+    once. It is a door for testing, opened and shut by hand per connection,
+    with no end this end could wait for -- and holding its papers would leave
+    every console-driven exam unable to move a 試験レベル until a calendar
+    period happened to pass. No player meets it: the console is off on a
+    deployed server.
+    """
+    if key == Period.MANUAL:
+        return True
+    found = scheduled(now)
+    return found is None or found[0] != key
+
+
 def next_scheduled(now: "datetime | None" = None) -> "tuple[datetime, str] | None":
     """When (school calendar) and what the next period opens, for the console."""
     if CALENDAR != "school":

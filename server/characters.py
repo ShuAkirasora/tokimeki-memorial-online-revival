@@ -38,6 +38,7 @@ import catchcopy
 import club
 import curriculum
 import dramarecord
+import exam
 import facing
 import item
 import options
@@ -1596,7 +1597,21 @@ class CharacterStore:
             if int(record["charaId"]) != chara_id:
                 continue
             saved = record.get("curriculum")
-            return curriculum.ScoreCard(saved if isinstance(saved, dict) else None)
+            card = curriculum.ScoreCard(saved if isinstance(saved, dict) else None)
+            if card.exam_held:
+                # ⭐ The one place every reader of the 通知表 goes through, so
+                # a paper reaches the card the first time anything looks after
+                # its period has closed -- the 通知表 window, 試験レベル for
+                # リーダー試験, the next lesson's 修了 check alike.
+                filed = card.release_due(exam.period_over)
+                if filed:
+                    record["curriculum"] = card.to_json()
+                    self._save()
+                    print(f"[characters] 通知表 charaId={chara_id:#x}: the 試験期間 "
+                          f"is over, filed "
+                          + ", ".join(f"{curriculum.SUBJECTS[s]} 段階{c + 1} {p} 点"
+                                      for s, c, p in filed))
+            return card
         return None
 
     def set_scorecard(self, chara_id: int, card: curriculum.ScoreCard) -> bool:
