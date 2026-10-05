@@ -12638,10 +12638,11 @@ class MpsServer:
                       f"charaId={target.chara_id:#x} has already retired, "
                       f"nothing to hit")
                 continue
-            shield, shield_label = 0, "no card"
+            shield, guard_mastery, shield_label = 0, 0.0, "no card"
             guard = self._battle_deck_item(target)
             if guard is not None:
-                _atk, shield, _m, shield_label = self._battle_power(target, *guard)
+                _atk, shield, guard_mastery, shield_label = self._battle_power(
+                    target, *guard)
             # ⭐ The ±% a 部活奥義 put on either side. 100 on both is the
             # untouched case and the arithmetic below is then exactly what
             # round 222 shipped. ⚠️ They scale the CARD, because that is where
@@ -12651,7 +12652,8 @@ class MpsServer:
             attack = attack_base * attacker.attack_pct // clubbattle.PERCENT_BASE
             shield = shield * target.defence_pct // clubbattle.PERCENT_BASE
             hit = clubbattle.damage(
-                attack, shield, mastery, target_attacking=not target.defending
+                attack, shield, mastery, target_attacking=not target.defending,
+                defender_mastery=guard_mastery,
             )
             taken = target.hurt(hit)
             band = clubbattle.damage_band(taken, target.max_vitality)
@@ -20988,12 +20990,30 @@ class MpsServer:
                    or session.twoshot_with is not None
                    or session.twoshot_asked is not None
                    or session.twoshot_asking is not None)
+        # INVENTED -- the same rule, for whoever has a 看板 up: an お知らせ or a
+        # チャットルーム (two of the three kinds of the one 看板作成 window; the
+        # third, 自主トレ, is refused in a classroom outright -- 「この場所は自主
+        # トレ禁止エリアです」, measured the same round -- so no 自主トレ board is
+        # ever there for a bell to find). MEASURED, round 543, two real clients in their own
+        # classrooms, one with a チャットルーム open and one with an お知らせ
+        # 看板: the 本鈴 took both into the lesson and each client dropped its
+        # window with the scene without a word (no 0x4B0x/0x4C8x up), while this
+        # end still held the room and the sign. Back on the map each stood under
+        # its icon with no window, and 看板 refused locally 「他の行動中は看板を
+        # 作成できません」 with nothing on the wire -- stuck until they logged
+        # out. Taking the board down server-side as the bell rings would push the
+        # notice into the other members, who may be taking the same bell in the
+        # same breath (the shape _presence_self_blocked records), so the bell
+        # waits here too and the board stays up.
+        boarded = (self.chatrooms.room_of(session.chara_id) is not None
+                   or self.billboards.sign_of(session.chara_id) is not None)
         admits = (
             attends
             and session.map_id == lesson.classroom_of(session.in_class)
             and not neurotic
             and not on_drama_screen
             and not dealing
+            and not boarded
         )
         for kind, subject in session.bell.poll(admits=admits):
             name = curriculum.SUBJECTS[subject]
@@ -21010,6 +21030,7 @@ class MpsServer:
                     else "player is ノイローゼ" if neurotic
                     else "player is on the ドラマ screen" if on_drama_screen
                     else "player is in a トレード／ツーショット" if dealing
+                    else "player has a 看板 up (お知らせ／チャット)" if boarded
                     else f"player is on map {session.map_id}, not classroom "
                          f"{lesson.classroom_of(session.in_class)}"
                 )

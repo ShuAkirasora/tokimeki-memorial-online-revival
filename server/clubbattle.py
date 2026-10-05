@@ -506,8 +506,12 @@ DEFENCE_DIVISOR_WHEN_ATTACKING = 2
 DAMAGE_FLOOR = int(os.environ.get("TMO_CLUB_DAMAGE_FLOOR") or 1)
 
 #: ⚠️ INVENTED — what a fully mastered card gains: 習熟度 at full scale adds this
-#: share to its 攻撃力 and 守備力 (0.5 = +50%, scaling linearly). The manual says
-#: 守備力. The manual says 「パワーがアップします」 and never how much.
+#: share to its 攻撃力 and 守備力 (0.5 = +50%, scaling linearly). That it is both
+#: sides is the manual's -- 「「習熟度」が高いと、キーワードによる攻撃や防御のパワ
+#: ーがアップします」 (`p07_02`) -- and only the size is ours: the manual says
+#: 「パワーがアップします」 and never how much. ⭐ Round 543: up to then only the
+#: attacker's side was scaled, so a well-practised card guarded no better than a
+#: fresh one; damage() now takes the defender's 習熟度 too (the same share).
 #: ⭐ 0.5 is picked to sit at the size the restored boundaries leave room for:
 #: median 400 attack against a captain needing 250 a turn is short by 75, and
 #: half again on a well-practised card closes that without making a fresh card
@@ -637,16 +641,19 @@ DAMAGE_SCALE = float(os.environ.get("TMO_CLUB_DAMAGE_SCALE") or 0.4)
 
 def damage(
     attack: int, defence: int, mastery: float = 0.0,
-    target_attacking: bool = True,
+    target_attacking: bool = True, defender_mastery: float = 0.0,
 ) -> int:
     """How much 体力 one card takes off, in the shape argued above.
 
-    ``mastery`` is useCount/fullScale for the attacking card, 0.0 to 1.0.
+    ``mastery`` is useCount/fullScale for the attacking card, 0.0 to 1.0, and
+    ``defender_mastery`` the same for the card the target is holding: 習熟度
+    raises 「攻撃や防御のパワー」 alike (`p07_02`, see MASTERY_BONUS_AT_FULL).
     ``target_attacking`` says whether the target spent this turn attacking,
     which is the half/full question for their own card's 守備力.
     """
     powered = attack * (1.0 + MASTERY_BONUS_AT_FULL * max(0.0, min(1.0, mastery)))
-    shield = defence / DEFENCE_DIVISOR_WHEN_ATTACKING if target_attacking else defence
+    guarded = defence * (1.0 + MASTERY_BONUS_AT_FULL * max(0.0, min(1.0, defender_mastery)))
+    shield = guarded / DEFENCE_DIVISOR_WHEN_ATTACKING if target_attacking else guarded
     return max(DAMAGE_FLOOR, int((powered - shield) * DAMAGE_SCALE))
 
 
