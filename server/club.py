@@ -649,6 +649,31 @@ DECK_ITEM_CLUB_SKILL = 1
 # the second witness for the eight slots round 227 read off the screen.
 DECK_CAPACITY = 8
 
+#: ⚠️ INVENTED — a 部活用 deck holding nothing the player's own club can play counts as no 部活用 deck: 練習 is refused with 0x5D02 reason 10 rather than started with no command to give.
+# ⭐ What 退部 and 入部 leave behind is NOT invented, and is left alone: the
+# キーワード, the 部活奥義 and the three decks all stay. p07_02 says keywords
+# 「クラブに依存しない」 and that a 自主トレ deck may hold every club's 奥義,
+# p07_01 that a player may 「何度でも入退部できます」, and the client's own
+# 0x5A04 handler changes nothing but its copy of the club id. ⭐⭐ The client is
+# the one that reads a deck against the club, both places it draws one
+# (measured round 547, 野球部 → 無所属 → バレーボール部 with the 部活用 deck
+# untouched): the 部活デッキ window leaves another club's 奥義 out of a
+# 部活用／行事用 deck altogether and 「更新」 sends the deck back without
+# them; a 練習's command window draws them greyed and unselectable but keeps
+# every row where it was, so itemNum stays an index into the stored deck
+# (row 5 of a mixed deck sent 04). A stale deck that still holds a キーワード
+# therefore plays correctly with no help from here.
+# ⚠️ The one shape that does not: every entry another club's 奥義. That fight
+# opens on 「選択可能なコマンドがありません」 and the player can only stand
+# there -- measured, it ran to a loss and left 怪我. The 部活デッキ window
+# already draws that deck as empty, and reason 10 is the restored sentence
+# for exactly that: 「部活デッキが作成されていない、もしくは『部活用』の部活
+# デッキがありません」. ⚠️ Whether the original refused here or let the fight
+# start is not known; this end refuses because the other way costs an injury
+# and says nothing. What would overturn it: an operator-era account of a 練習
+# that opened with no command after changing clubs.
+PRACTICE_DECK_NEEDS_PLAYABLE = True
+
 # error_message.bin 462: the sentence counts 日.
 REJOIN_DAYS = 10
 
@@ -1085,6 +1110,23 @@ class Membership:
 
     def deck(self, deck_id: int) -> "list[list]":
         return self.deck_items.get(deck_id, [])
+
+    def playable_entries(self, deck_id: int, club_id: int) -> "list[list]":
+        """The entries of this deck a 練習 of ``club_id`` lets the player pick.
+
+        Every キーワード, and the 部活奥義 whose category is that club -- the
+        category IS the 奥義's クラブ属性, 57 rows of `clubskill.bin` out of 57.
+        This is the client's reading, not a rule this end adds: it is what the
+        command window leaves selectable. See PRACTICE_DECK_NEEDS_PLAYABLE.
+        """
+        out = []
+        for kind, payload in self.deck(deck_id):
+            if int(kind) == DECK_ITEM_CLUB_SKILL:
+                raw = bytes.fromhex(str(payload))
+                if len(raw) < 2 or struct.unpack("<H", raw[:2])[0] != club_id:
+                    continue
+            out.append([kind, payload])
+        return out
 
     def keyword_deck_item(self, keyword_id: int) -> "tuple[int, bytes] | None":
         """Build the entry the client would have sent for an owned キーワード.

@@ -11553,7 +11553,8 @@ class MpsServer:
             [m.chara_id for m in room.members],
         )
 
-    def _practice_deck(self, chara_id: int) -> "int | None":
+    def _practice_deck(self, chara_id: int,
+                       playable_only: bool = True) -> "int | None":
         """Which deck is the 部活用 one, or None if there is not one.
 
         ⭐ RESTORED that this matters: 0x5D02 reason 10 is 「部活デッキが作成
@@ -11563,6 +11564,11 @@ class MpsServer:
         names one there) -- the 部活用 flag names it.
         ⚠️ USE_TYPE_PRACTICE is a BIT, not a value: a deck ticked for both uses
         reports 0x03. See club's useType block.
+
+        ⚠️ ``playable_only`` (the default) also passes over a deck holding
+        nothing this club can play -- see club.PRACTICE_DECK_NEEDS_PLAYABLE,
+        which turns that off. False is for the refusal's log line, to say
+        which of the two kinds of 「none」 it was.
         """
         store = self.accounts.owner_of(chara_id)
         state = store.club(chara_id) if store else None
@@ -11571,8 +11577,12 @@ class MpsServer:
         for deck_id in range(club.DECK_COUNT):
             if not state.deck(deck_id):
                 continue
-            if state.use_type(deck_id) & club.USE_TYPE_PRACTICE:
-                return deck_id
+            if not state.use_type(deck_id) & club.USE_TYPE_PRACTICE:
+                continue
+            if (playable_only and club.PRACTICE_DECK_NEEDS_PLAYABLE
+                    and not state.playable_entries(deck_id, state.in_club)):
+                continue
+            return deck_id
         return None
 
     def _npcbattle(
@@ -11618,7 +11628,13 @@ class MpsServer:
                 return refuse(clubbattle.NPC_START_BAD_STATE,
                               "no club tables on this server (not a game rule)")
             if self._practice_deck(chara_id) is None:
-                return refuse(clubbattle.NPC_START_NO_DECK, "no 部活用 deck")
+                stale = self._practice_deck(chara_id, playable_only=False)
+                return refuse(
+                    clubbattle.NPC_START_NO_DECK,
+                    "no 部活用 deck" if stale is None else
+                    f"部活用 deck {stale} holds nothing club {club_id} can play "
+                    "(other clubs' 奥義 only, left over from a club change)",
+                )
             member = store.club(chara_id) if store else None
             unlocked = (member.battle_level_of(club_id) if member
                         else club.FIRST_BATTLE_LEVEL)
