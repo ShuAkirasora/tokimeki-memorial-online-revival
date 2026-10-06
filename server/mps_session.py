@@ -19614,14 +19614,19 @@ class MpsServer:
             code = trade.may_offer(inv, category, item_id)
             if code is not None:
                 return refuse(code, f"{category}:{item_id} may not be traded")
-            # ⚠️ Against what is HELD MINUS WHAT IS ALREADY ON THE TABLE. The
-            # items do not leave the inventory when they are offered -- nothing
-            # has been agreed yet -- so a player holding one could otherwise
-            # offer it twice and hand over two.
-            spare = inv.held(category, item_id) - table.offered(category, item_id)
+            # ⚠️ Against what is HELD MINUS WHAT IS ALREADY ON THE TABLE, and
+            # minus the copy being worn -- see trade.spare. The items do not
+            # leave the inventory when they are offered -- nothing has been
+            # agreed yet -- so a player holding one could otherwise offer it
+            # twice and hand over two.
+            spare = trade.spare(inv, table, category, item_id)
             if spare < count:
-                return refuse(trade.REASON_NOT_ENOUGH_HELD,
-                              f"{category}:{item_id} holds {spare} spare, "
+                # Only when the worn copy is what makes the difference.
+                worn = inv.is_worn(category, item_id) and spare + 1 >= count
+                return refuse(trade.WORN_COPY_REASON if worn
+                              else trade.REASON_NOT_ENOUGH_HELD,
+                              f"{category}:{item_id} holds {spare} spare"
+                              f"{' (one is worn)' if worn else ''}, "
                               f"wants {count}")
             table.push(category, item_id, count)
 
@@ -19735,7 +19740,10 @@ class MpsServer:
                 session, other, trade.REASON_NO_CHARA_DATA, "no inventory")
         for who, inv in ((session, mine), (other, theirs)):
             for category, item_id, count in who.trade_table.rows:
-                if inv.held(category, item_id) < count:
+                # The worn copy stays out of it here too (trade.spare): an
+                # equip between the offer and 成立 must not hand it over.
+                worn = 1 if inv.is_worn(category, item_id) else 0
+                if inv.held(category, item_id) - worn < count:
                     return self._trade_settle_failed(
                         session, other, trade.REASON_NOT_ENOUGH_HELD,
                         f"charaId={who.chara_id} no longer holds "

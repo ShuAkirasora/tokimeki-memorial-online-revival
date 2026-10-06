@@ -325,6 +325,20 @@ FEMALE_ONLY: "dict[int, tuple[tuple[int, int], ...]]" = {
 #: The staff and NPC wardrobe: the same runs as NO_DISCARD, byte for byte.
 OTHER_PC = NO_DISCARD
 
+# ⭐⭐⭐ WHICH ITEMS CANNOT BE TRADED, round 553 -- read off the client, not off
+# a sample. Choosing a row to put on the トレード table runs through one function
+# (0x4b2888), and before it asks how many it reads byte +0xA6 of the row's record
+# (0x4b2a93, through the row object's +0x28 / +0x24 like the 使用 switch above);
+# 0 there and it puts 0x5110 reason 16 「選択されたアイテムは交換不可能な
+# アイテムです。」 on screen itself, with nothing on the wire. That is the only
+# place in the client that raises that sentence.
+# ⭐ +0xA6 is the first of the twin bytes NO_DISCARD was found at (tail offset
+# 142, record 0x18 + 142), so the set is the same 19 records -- the staff and
+# NPC wardrobe again. Every item_skillbook.bin record has it set.
+# ⚠️ Enforced here although an honest client never sends one of these, as
+# NO_USE is: without it a modified client could hand somebody a ＧＭ制服.
+NO_TRADE = NO_DISCARD
+
 
 def wear_refusal(category: int, item_id: int, sex: "int | None") -> "int | None":
     """0x4D05's row for putting this on, from the three bytes above, or None.
@@ -577,6 +591,11 @@ def _in_runs(runs: "dict[int, tuple[tuple[int, int], ...]]",
 def can_discard(category: int, item_id: int) -> bool:
     """May a player throw this away? See NO_DISCARD."""
     return not _in_runs(NO_DISCARD, category, item_id)
+
+
+def can_trade(category: int, item_id: int) -> bool:
+    """May a player put this on a トレード table? See NO_TRADE."""
+    return not _in_runs(NO_TRADE, category, item_id)
 
 
 def effect_of(category: int, item_id: int) -> "tuple[int | None, int, int]":

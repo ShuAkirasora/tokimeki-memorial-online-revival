@@ -105,22 +105,33 @@ message id and returns a pseudo id; its only caller (0x817048) builds the
     0xFF06 (デート, which has no messages at all) unreachable. Whatever else is
     true of the note above, "friend refusals should come out of 0xFF08" is not.
 
+WHAT THE CLIENT REFUSES BY ITSELF, round 553
+--------------------------------------------
+Putting a row on the table starts in the アイテム window, switched into its
+トレード mode (+0x170 == 1), at one function (0x4b2888). Before anything goes on
+the wire it does two things, and this end now does the same two:
+
+  * ⭐ REASON_ITEM_NOT_TRADEABLE (16) is the client's own sentence. It reads byte
+    +0xA6 of the item's record and, at 0, puts 0x5110 reason 16 on screen
+    itself -- the only place in the image that raises it. See item.NO_TRADE:
+    the set is the staff and NPC wardrobe, the same 19 records NO_DISCARD
+    found. The worn-and-NO_UNEQUIP case stays under the same sentence.
+  * ⭐ The quantity box it opens (0x4b2ac1) is capped at what is held, minus
+    one when that item is being worn. So a worn item's last copy never reaches
+    the table, and spare() below says the same.
+
 WHAT IS NOT SENT, AND WHY
 -------------------------
-Three sentences in the list need a number this project has not read:
-
   * REASON_TOO_MANY_KINDS (13) 「これ以上、交換するアイテムの種類を増やすことは
-    できません」 -- how many rows the trade table holds. That is the window's row
-    count, and nothing on this end has seen the window.
+    できません」. ⭐ Now read, and there is no number in the client to find: each
+    side of the table is a std::vector of 0x30-byte rows (0x4d0f43) drawn in
+    the paged, scrolling list widget 34 other windows use (0x638a04 works out
+    the page count from the row count), so the window holds as many rows as it
+    is sent. Whatever cap 13 enforced lived on the original server alone.
   * REASON_TOO_MANY_OF_ONE (14) 「これ以上、交換するアイテムの個数を増やすことは
     できません」 -- a per-row cap. ⭐ The only hard bound is the wire's: nNum is a
-    u8 and Inventory.ROW_MAX already refuses more than a row can hold.
-  * REASON_ITEM_NOT_TRADEABLE (16) 「選択されたアイテムは交換不可能なアイテム
-    です」 -- a per-item flag. ⚠️ NOT read as item.NO_DISCARD: the locker taught
-    that lesson once already (0:119 and 1:236 are undiscardable and go in a
-    locker fine), so a third flag with no sample is a third flag. What IS sent
-    under this reason is the one case that is derived rather than guessed: an
-    item being worn that item.NO_UNEQUIP says cannot come off.
+    u8 and Inventory.ROW_MAX already refuses more than a row can hold; the
+    client's box stops at what is held (above).
 
 Sending a cap this end invented would refuse a trade the original allowed, which
 is worse than allowing one it refused; so these stay unsent and stay written
@@ -284,6 +295,14 @@ READY_OFF = 0
 READY_CONFIRMED = 1
 READY_EXECUTE = 2
 
+#: ⚠️ INVENTED — offering the copy of an item that is being worn is refused with 19 「所持数が足りません」, the sentence for every other offer past what is spare.
+#: The rule is the client's (see spare): its quantity box never lets that copy
+#: go, so no honest client sends this and the original's wording for it was
+#: never seen. 14 「個数を増やすことはできません」 would also fit; 19 is chosen
+#: because to the player the worn copy is simply not one they have to give.
+#: What would overturn it: an operator-era account of that refusal.
+WORN_COPY_REASON = REASON_NOT_ENOUGH_HELD
+
 
 def reason(code: int) -> bytes:
     """One refusal byte. ⚠️ The client's reader is read-int8, i.e. signed; every
@@ -389,19 +408,34 @@ class Table:
 def may_offer(inv: "item.Inventory", category: int, item_id: int) -> "int | None":
     """The refusal for putting this item on the table, or None if it may go.
 
-    Two checks, and neither is invented:
+    Three checks, and none is invented:
 
       * the key has to be one the client's own tables have, or the row the
         Notify draws names an item the client cannot look up -- the same refusal
         item.py applies everywhere, after three crashes that were all this
         server sending a key `item.bin` does not have;
-      * ⭐ a worn item that item.NO_UNEQUIP says cannot come off cannot be given
-        away either, since handing it over takes it off. That is derived from
-        the flag the client reads out loud by greying its own button, not from a
-        trade flag nobody has sampled -- see the module docstring on 16.
+      * ⭐ the record's own 交換 byte (item.NO_TRADE), which the client checks
+        before it lets the row go -- see the module docstring;
+      * a worn item that item.NO_UNEQUIP says cannot come off cannot be given
+        away either, since handing it over takes it off.
     """
     if not item.exists(category, item_id):
         return REASON_BAD_ITEM_INFO
+    if not item.can_trade(category, item_id):
+        return REASON_ITEM_NOT_TRADEABLE
     if inv.is_worn(category, item_id) and not item.can_unequip(category, item_id):
         return REASON_ITEM_NOT_TRADEABLE
     return None
+
+
+def spare(inv: "item.Inventory", table: Table, category: int, item_id: int) -> int:
+    """How many more of this item may still go on ``table``.
+
+    What is held, less what is already on the table (an offer does not take
+    anything out of the inventory, so a player holding one could otherwise
+    offer it twice), less ⭐ the copy being worn: the client's quantity box
+    (0x4b2ac1) stops one short of the row's count when the item is on, so the
+    copy a player is wearing is never handed over.
+    """
+    worn = 1 if inv.is_worn(category, item_id) else 0
+    return inv.held(category, item_id) - worn - table.offered(category, item_id)
