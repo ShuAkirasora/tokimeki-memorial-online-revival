@@ -159,10 +159,10 @@ client never sends the request -- the refusal exists for the client that does.
 
 What is still missing, and why:
 
-  * WHICH ITEMS CANNOT GO IN A LOCKER (0x4D0C reason 2). ⚠️ NOT the same bit as
-    NO_DISCARD: 0:119 and 1:236 carry that one and still had 「ロッカーにしまう」
-    live, so this is a third flag with no sample yet.
   * HOW BIG A LOCKER IS (0x4D0C reason 4). See LOCKER_CAPACITY.
+
+(WHICH ITEMS CANNOT GO IN A LOCKER used to be on this list. It is NO_LOCKER
+now, read off the client rather than off a sample.)
 
 INVENTED, beyond the grant itself
 ---------------------------------
@@ -236,7 +236,7 @@ USE_NOT_HELD = 3            # 選択されたアイテムを所持していま�
 # 0x4D0C MsgSvNgItemPutInLocker, six.
 PUT_NO_CHARACTER = 0
 PUT_BAD_ITEM = 1            # 選択されたアイテムの情報が不正です。
-PUT_NOT_STORABLE = 2        # ⚠️ never sent: no per-item flag decoded
+PUT_NOT_STORABLE = 2        # ロッカーに格納できないアイテムです。(NO_LOCKER)
 PUT_NOT_ENOUGH = 3          # 指定された個数を所持していません。
 PUT_LOCKER_FULL = 4         # ⚠️ never sent while LOCKER_CAPACITY is None
 PUT_CANNOT_REMOVE = 5       # ⚠️ only for a worn item in NO_UNEQUIP
@@ -285,7 +285,12 @@ NO_UNEQUIP: "dict[int, tuple[tuple[int, int], ...]]" = {
 #
 # ⚠️ THIS IS NOT THE LOCKER'S FLAG. 1:236 and 0:119 are both undiscardable and
 # both had 「ロッカーにしまう」 live, so 0x4D0C's 「ロッカーに格納できない
-# アイテムです」 belongs to some other bit and stays unsent.
+# アイテムです」 belongs to some other bit -- NO_LOCKER below.
+# ⭐ Round 556 found which of the twin bytes this is by reading the client:
+# both 捨てる buttons -- the item window's (0x4D0D, through 0x661fb0) and the
+# locker window's (0x040D, through 0x66227b) -- test record +0xA7 through the
+# same accessor (0x4b3bf7), and nothing else does. +0xA6 is NO_TRADE's. The two
+# never differ in `item.bin`, so the runs are the same; the byte is not.
 NO_DISCARD: "dict[int, tuple[tuple[int, int], ...]]" = {
     0: ((118, 119), (240, 245)),
     1: ((236, 245),),
@@ -338,6 +343,21 @@ OTHER_PC = NO_DISCARD
 # ⚠️ Enforced here although an honest client never sends one of these, as
 # NO_USE is: without it a modified client could hand somebody a ＧＭ制服.
 NO_TRADE = NO_DISCARD
+
+# ⭐⭐⭐ WHICH ITEMS CANNOT GO IN A LOCKER, round 556 -- read off the client.
+# 「ロッカーにしまう」 runs through 0x661f3d (and its quantity box through
+# 0x4b380e), and both refuse a row whose record has +0xA5 == 0, by the same
+# accessor shape as +0xA6 / +0xA7 (0x4b389d). Nothing goes on the wire then;
+# 0x4D0C reason 2 is this server's answer to a client that sends one anyway.
+# ⭐ +0xA5 is 0 on exactly ONE record of `item.bin`: 2:23 髪付野球帽, the
+# placeholder with no display name that NO_DISCARD also holds. That is why
+# 0:119 and 1:236 had the button live -- the old note above was right that it
+# is a different bit, and there was never a sample to find because the only
+# member is a record no player is shown. Every item_skillbook.bin record has 1.
+# ⚠️ The other tree re-reads +0xA5 out of `item.bin` and compares, both ways.
+NO_LOCKER: "dict[int, tuple[tuple[int, int], ...]]" = {
+    2: ((23, 23),),
+}
 
 
 def wear_refusal(category: int, item_id: int, sex: "int | None") -> "int | None":
@@ -596,6 +616,11 @@ def can_discard(category: int, item_id: int) -> bool:
 def can_trade(category: int, item_id: int) -> bool:
     """May a player put this on a トレード table? See NO_TRADE."""
     return not _in_runs(NO_TRADE, category, item_id)
+
+
+def can_store(category: int, item_id: int) -> bool:
+    """May a player put this in a ロッカー? See NO_LOCKER."""
+    return not _in_runs(NO_LOCKER, category, item_id)
 
 
 def effect_of(category: int, item_id: int) -> "tuple[int | None, int, int]":
@@ -1343,9 +1368,10 @@ def put_in_locker_replies(
     if not exists(category, item_id) or count == 0:
         return _refusal(MSG_SV_NG_ITEM_PUT_IN_LOCKER, PUT_BAD_ITEM)
     # ⚠️ NOT NO_DISCARD here: an undiscardable item still had
-    # 「ロッカーにしまう」 live on screen, so the two flags are different bits
-    # and PUT_NOT_STORABLE stays unsent. Only being stuck on the character
-    # stops it.
+    # 「ロッカーにしまう」 live on screen. The locker's own bit is NO_LOCKER,
+    # tested first because the client tests it before it even opens the box.
+    if not can_store(category, item_id):
+        return _refusal(MSG_SV_NG_ITEM_PUT_IN_LOCKER, PUT_NOT_STORABLE)
     if inv.is_worn(category, item_id) and not can_unequip(category, item_id):
         return _refusal(MSG_SV_NG_ITEM_PUT_IN_LOCKER, PUT_CANNOT_REMOVE)
     if inv.held(category, item_id) < count or count <= 0:
@@ -1402,10 +1428,12 @@ TAKE_CANNOT_CARRY = 4       # これ以上アイテムを持ち歩くことは�
 LOCKER_DEL_NO_CHARACTER = 0
 LOCKER_DEL_BAD_ITEM = 1
 LOCKER_DEL_NO_ACCOUNT = 2   # ⚠️ never sent
-# ⚠️ reason 3 is 「選択されたアイテムは削除できないアイテムです。」 and NO_DISCARD
-# is the obvious candidate -- but that flag was measured against 「捨てる」 in the
-# item window, and this is a different verb in a different window that no click
-# has ever reached. Left unsent rather than assumed to be the same bit.
+# reason 3 is 「選択されたアイテムは削除できないアイテムです。」, for NO_DISCARD.
+# ⭐ That used to be left unsent as an assumption -- NO_DISCARD was measured on
+# the item window's 「捨てる」, and this is the locker window's. Round 556 read
+# both: the locker's button (0x4d63a8 greys it, 0x66227b sends 0x040D) tests
+# record +0xA7 through the very accessor the item window's does, so it is the
+# same bit, not a guess that it is.
 LOCKER_DEL_UNDELETABLE = 3
 
 
@@ -1483,6 +1511,8 @@ def locker_del_replies(
     category, item_id, count = fields
     if not exists(category, item_id) or count == 0:
         return _refusal(MSG_SV_NG_LOCKER_DEL, LOCKER_DEL_BAD_ITEM)
+    if not can_discard(category, item_id):
+        return _refusal(MSG_SV_NG_LOCKER_DEL, LOCKER_DEL_UNDELETABLE)
     if locker.take(category, item_id, count) is None:
         return _refusal(MSG_SV_NG_LOCKER_DEL, LOCKER_DEL_BAD_ITEM)
     return ([(MSG_SV_OK_LOCKER_DEL,
