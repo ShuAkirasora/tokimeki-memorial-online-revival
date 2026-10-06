@@ -2558,6 +2558,33 @@ class MpsServer:
               + " ".join(f"{c}:{i}" for c, i in inv.worn))
         return out
 
+    def _settle_accessories(self, session: "_Session") -> None:
+        """At 登校: make the 容姿's accessories and the bag's worn ones agree.
+
+        A no-op for every character registered since creation started taking
+        its accessories out of the ロッカー. What it exists for is one
+        registered before that -- see item.adopt_registered_accessories -- and,
+        after that, for a 容姿 written by hand. It runs before the scene is
+        built, so the 0x480F that scene sends already says the settled thing.
+        """
+        store = self._chars(session)
+        info = store.find(session.chara_id)
+        inv = store.items(session.chara_id)
+        if info is None or inv is None:
+            return
+        locker = self._locker(session)
+        done = item.adopt_registered_accessories(
+            parse_create_info(info), inv, locker)
+        if done:
+            store.set_items(session.chara_id, inv)
+            if locker is not None:
+                self.accounts.save_locker(session.account_id)
+            for line in done:
+                print(f"[{self.tag}] charaId={session.chara_id}: {line}")
+        if store.set_accessories(session.chara_id, item.worn_accessories(inv)):
+            print(f"[{self.tag}] charaId={session.chara_id}: 容姿 set to "
+                  "what the bag says is worn")
+
     def _equip_replay_peers(
         self, session: "_Session", peers: "list[_Session]"
     ) -> bytes:
@@ -9113,10 +9140,42 @@ class MpsServer:
                         session, sequence, MSG_SV_NG_CHARACTER_CREATE,
                         struct.pack(">B", reason),
                     )
+                # ⭐⭐ The accessories 容姿選択 offered came out of the ロッカー,
+                # and registering takes them out of it: the new character
+                # starts with them in its bag, worn. Why this is the original's
+                # rule, and what the client does not do on its own, is
+                # item.creation_accessories.
+                locker = self._locker(session)
+                picks, missing = item.creation_accessories(
+                    parse_create_info(params), locker)
+                if missing:
+                    # ⚠️ INVENTED — which 0x030E row refuses a 容姿選択 accessory the ロッカー does not hold: row 1, 「キャラクターの登録情報が不正です」, the one sentence of the six about the request itself.
+                    # Only two clients on one account reach it (the screen
+                    # offers what the locker list held a moment ago), and
+                    # re-opening 容姿選択 asks for that list again.
+                    print(f"[{self.tag}] create refused, reason="
+                          f"{naming.REASON_BAD_REQUEST}: the ロッカー holds no "
+                          + ", ".join(f"{f} {c}:{i}" for f, c, i in missing))
+                    return self._answer(
+                        session, sequence, MSG_SV_NG_CHARACTER_CREATE,
+                        struct.pack(">B", naming.REASON_BAD_REQUEST),
+                    )
                 # Output_MsgSvOkCharacterCreate::serialize (0x8DCD80) writes one
                 # u32 through the stream's write-u32 slot, and nothing else.
                 chara_id = store.add(params)
                 print(f"[{self.tag}] character #{chara_id}: {describe(params)}")
+                if picks and locker is not None:
+                    inv = store.items(chara_id)
+                    if inv is not None:
+                        for _, category, item_id in picks:
+                            locker.take(category, item_id, 1)
+                            inv.receive(category, item_id, 1)
+                            inv.wear(category, item_id)
+                        store.set_items(chara_id, inv)
+                        self.accounts.save_locker(session.account_id)
+                        print(f"[{self.tag}]   wearing "
+                              + ", ".join(f"{c}:{i}" for _, c, i in picks)
+                              + f" out of the ロッカー | {locker.summary()}")
                 return self._answer(
                     session, sequence, MSG_SV_OK_CHARACTER_CREATE, struct.pack(">I", chara_id)
                 )
@@ -9406,6 +9465,7 @@ class MpsServer:
                         struct.pack(">B", NG_SCHOOL_LOGIN_NO_SUCH_CHARACTER),
                     )
                 session.chara_id = chara_id
+                self._settle_accessories(session)
                 # ⭐ The 組 comes off the record, not off characters.IN_CLASS:
                 # under CLASS_ASSIGNMENT="balanced"/"random" two characters on
                 # one account are in different ones, and this is the value every
@@ -10398,6 +10458,14 @@ class MpsServer:
                     self._chars(session).set_items(session.chara_id, inv)
                     if msg_type == item.MSG_CL_REQUEST_ITEM_PUT_IN_LOCKER:
                         self.accounts.save_locker(session.account_id)
+                    # Any of the four can take an accessory off -- 装備 by
+                    # asking, the other three by the row leaving -- and the
+                    # 容姿 follows what is worn (item.worn_accessories).
+                    if self._chars(session).set_accessories(
+                            session.chara_id, item.worn_accessories(inv)):
+                        print(f"[{self.tag}] 容姿 now wears "
+                              + " ".join(f"{f}={v:#x}" for f, v in
+                                         item.worn_accessories(inv).items()))
                 print(f"[{self.tag}] item {name}: "
                       + " ".join(f"{t:#06x}" for t, _ in replies)
                       + (f" | {inv.summary()}" if inv is not None else "")

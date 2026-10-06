@@ -663,6 +663,23 @@ def relabel(info: bytes, label: str, frame_id: int) -> bytes:
     return bytes((frame_id,)) + info[1:at] + tag + info[at + NAME_LEN :]
 
 
+#: Where each ``looks``/``accessory`` u16 sits in the create block: after
+#: charaFrameId, the three names, sex, bloodType and the two birth bytes.
+LOOKS_AT = 1 + NAME_LEN * 3 + 2 + 2 + 1 + 1
+
+
+def with_accessories(info: bytes, values: "dict[str, int]") -> bytes:
+    """The create block with some ACCESSORY slots rewritten, everything else
+    byte for byte. Unknown field names are an error rather than ignored."""
+    out = bytearray(info)
+    order = LOOKS + ACCESSORY
+    for field, value in values.items():
+        if field not in ACCESSORY:
+            raise KeyError(field)
+        struct.pack_into(">H", out, LOOKS_AT + 2 * order.index(field), value)
+    return bytes(out)
+
+
 def describe(info: bytes) -> str:
     """One-line rendering of a create block, for the server log."""
     fields = parse_create_info(info)
@@ -1686,6 +1703,25 @@ class CharacterStore:
             if int(record["charaId"]) != chara_id:
                 continue
             record["items"] = inv.to_json()
+            self._save()
+            return True
+        return False
+
+    def set_accessories(self, chara_id: int, values: "dict[str, int]") -> bool:
+        """Rewrite accessory slots of one character's 容姿. True if any changed.
+
+        The 容姿 is the create block itself (``info``), which is what the select
+        screen's 0x0319 and every scene's 0x480F are built from -- so this is
+        the one write both of them see.
+        """
+        for record in self.records:
+            if int(record["charaId"]) != chara_id:
+                continue
+            before = bytes.fromhex(str(record["info"]))
+            after = with_accessories(before, values)
+            if after == before:
+                return False
+            record["info"] = after.hex()
             self._save()
             return True
         return False

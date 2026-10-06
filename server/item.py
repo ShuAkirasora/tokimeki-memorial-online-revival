@@ -1058,6 +1058,122 @@ def surrender_to_locker(
     return moved, dropped
 
 
+# The 容姿 slots an accessory chosen out of the ロッカー lands in, as
+# (create-block field, categoryId). "Nothing" in a slot is NO_ACCESSORY.
+#
+# ⭐⭐ Both measured, round 548, by putting one item of each 装飾 category in
+# the locker and opening the three drop-downs: the face one listed 3:4 and
+# nothing else, the hair one 2:0 and nothing else; 0:4 and 1:9 showed up in
+# none. And 容姿選択 sends faceAccessory 5 for 丸眼鏡, which is 3:5 -- the slot
+# carries the id within the category, the category is the slot's.
+# ⚠️ bodyAccessory, the third drop-down under 制服, has no 装飾 category left
+# to be: 0 and 1 are the uniform and its ribbon/tie, and those two are slots of
+# their own. A value there is kept in the 容姿 and not looked for in the locker.
+ACCESSORY_SLOTS: "tuple[tuple[str, int], ...]" = (
+    ("hairAccessory", 2),
+    ("faceAccessory", 3),
+)
+NO_ACCESSORY = 0xFFFF
+
+
+def creation_accessories(
+    fields: "dict[str, object]", locker: "Locker | None"
+) -> "tuple[list[tuple[str, int, int]], list[tuple[str, int, int]]]":
+    """What 容姿選択 put on a new character, which registering takes out of
+    the account's ロッカー.
+
+    ⭐⭐⭐ RESTORED, by three witnesses that only fit one reading:
+
+    - `manual/p03_03`: the accessories on offer 「ロッカーに入っているアイテム」,
+      a new account's being one 丸眼鏡.
+    - `manual/p02_06`: a deleted character's 装飾 items -- all but the uniform,
+      ribbon and tie it had on -- 「全てロッカーに入ります」. An accessory that
+      had stayed in the locker while being worn would come back as a second
+      copy, so the one a character wears is not in the locker.
+    - a player's count of what an account can hold of one item: 「３キャラ＋
+      ロッカー」 -- four places, each item in one of them.
+
+    ⭐⭐ AND THE CLIENT DOES NOT DO IT FOR US. Measured round 548: with 丸眼鏡
+    on character one (whose entry the client had just re-read, faceAccessory 5
+    and all), the second notebook's face drop-down still offered 丸眼鏡 -- the
+    screen lists exactly the locker it is sent. So if the server leaves the row
+    where it was, one 丸眼鏡 is worn by all three notebooks and can be carried
+    off in a bag on top. The client re-asks 0x0406 right after 0x030D, which is
+    what a screen does when it expects that list to have changed.
+
+    Returns ``(picks, missing)`` as (field, categoryId, id) and takes nothing:
+    the caller takes ``picks`` once the character exists, and refuses the
+    whole registration when ``missing`` is not empty -- a pick the locker does
+    not hold is reachable only with two clients on one account or a hand-made
+    request, and wearing something nobody owns is the one outcome to avoid.
+    """
+    picks: "list[tuple[str, int, int]]" = []
+    missing: "list[tuple[str, int, int]]" = []
+    for field, category in ACCESSORY_SLOTS:
+        item_id = int(fields.get(field, NO_ACCESSORY))  # type: ignore[arg-type]
+        if item_id == NO_ACCESSORY:
+            continue
+        if locker is not None and locker.held(category, item_id) >= 1:
+            picks.append((field, category, item_id))
+        else:
+            missing.append((field, category, item_id))
+    return picks, missing
+
+
+def worn_accessories(inv: "Inventory") -> "dict[str, int]":
+    """What each 容姿 accessory slot should say, off what is being worn.
+
+    ⚠️ INVENTED — that the 容姿 follows the アイテム window: putting an accessory on or taking it off in the game is written back into the character's looks, so the select screen's portrait and every other client's 0x480F show what is actually worn.
+    The original's select screen may have drawn the 容姿 as registered and
+    nothing more; nothing on record says either way. What forces the choice
+    here is that the looks are drawn too -- a 丸眼鏡 taken off in the window
+    would otherwise come back on at the next scene, worn by a character whose
+    bag says it is not.
+    """
+    out = {field: NO_ACCESSORY for field, _ in ACCESSORY_SLOTS}
+    by_category = {category: field for field, category in ACCESSORY_SLOTS}
+    for category, item_id in inv.worn:
+        field = by_category.get(category)
+        if field is not None:
+            out[field] = item_id
+    return out
+
+
+def adopt_registered_accessories(
+    fields: "dict[str, object]", inv: "Inventory", locker: "Locker | None"
+) -> "list[str]":
+    """Bring a character registered before the rule above into line with it.
+
+    ⚠️ INVENTED — what happens to an accessory a character was registered wearing before creation took it out of the ロッカー: it is put on from the locker if the locker still holds one, and from nowhere if it does not.
+    Such a character has the accessory in its 容姿 and not in its bag, so it
+    can never take it off, and the locker it came from may still offer it to
+    the next notebook. Taking the locker's copy is what creation does now;
+    when that copy has already gone to a second character, the one being
+    worn is left on rather than stripped off a player who did nothing wrong.
+
+    Returns one line per change for the log; empty when there was nothing to do,
+    which is every character registered under the rule.
+    """
+    done: "list[str]" = []
+    for field, category in ACCESSORY_SLOTS:
+        item_id = int(fields.get(field, NO_ACCESSORY))  # type: ignore[arg-type]
+        if item_id == NO_ACCESSORY or not exists(category, item_id):
+            continue
+        if any(pair[0] == category for pair in inv.worn):
+            continue  # the window's choice wins; worn_accessories says so
+        if not inv.held(category, item_id):
+            if not inv.receive(category, item_id, 1):
+                continue
+            source = "ロッカー"
+            if locker is None or locker.take(category, item_id, 1) is None:
+                source = "nowhere (the locker's copy is gone)"
+        else:
+            source = "the bag"
+        inv.wear(category, item_id)
+        done.append(f"{field} {category}:{item_id} put on from {source}")
+    return done
+
+
 def _refusal(msg_type: int, reason: int) -> "tuple[list[tuple[int, bytes]], bool]":
     """One refusal and nothing written. Every path out of the four operations
     below goes through this or through a success, because the one thing none of
