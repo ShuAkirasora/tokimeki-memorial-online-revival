@@ -15690,6 +15690,18 @@ class MpsServer:
                     trainingroom.NG_TEAM_BAD_TEAM,
                     f"team {team!r} is neither Ａ(0) nor Ｂ(1)",
                 )
+            if (member.team != team
+                    and len(room.team(team)) >= trainingroom.TEAM_MAX):
+                # ⚠️ INVENTED — a move into a team that already has ten is refused with 0x5816 reason 4, 「チーム移動に失敗しました。」.
+                # The cap is the client's (trainingroom.TEAM_MAX); the
+                # sentence is the choice. 0x5816 has no row about a full
+                # team, and of its live rows 4 is the one that says only
+                # what happened -- 3 would blame the team's information.
+                return ng(
+                    trainingroom.MSG_SV_NG_TEAM_SELECT,
+                    trainingroom.NG_TEAM_FAILED,
+                    f"team {team} already has {trainingroom.TEAM_MAX}",
+                )
             member.team = team
             out = self._answer(session, sequence, trainingroom.MSG_SV_OK_TEAM_SELECT, b"")
             # ⚠️ No 0x580C follows any more. There used to be one and it was
@@ -18092,24 +18104,30 @@ class MpsServer:
         half-answered window 2.93 warns about.
 
         ⭐ The request is empty -- no page number, no filter -- so everything the
-        list is allowed to show goes in one Notify. What 「allowed」 means is
-        groups.listing(): 公開 only, and the caveat about where that rule comes
-        from is written there rather than repeated here.
+        list is allowed to show goes out in answer to it. What 「allowed」 means
+        is groups.listing(): 公開 only, and the caveat about where that rule
+        comes from is written there rather than repeated here.
+
+        ⚠️ 「Everything」 is as many Notifies as it takes, not one: a 0x622D
+        holds GROUP_LIST_PAGE rows and the 33rd would land on its count. The
+        Result already carries the total, which is what lets the rest follow.
+        (No 公開 group still sends the one empty Notify it always did; whether
+        the client wants it, the way club.keyword_replies found it did not,
+        has not been measured.)
         """
         listed = self.accounts.groups.listing()
         print(f"[{self.tag}] グループ一覧 for charaId={session.chara_id}: "
               f"{len(listed)} 公開 group(s) of "
               f"{len(self.accounts.groups.groups)}")
-        return (
-            self._answer(
-                session, seen, groups.MSG_SV_RESULT_CHARA_GROUP_LIST,
-                struct.pack(">I", len(listed)),
-            )
-            + self._answer(
-                session, seen, groups.MSG_SV_NOTIFY_CHARA_GROUP_LIST,
-                groups.group_list_params(listed),
-            )
+        out = self._answer(
+            session, seen, groups.MSG_SV_RESULT_CHARA_GROUP_LIST,
+            struct.pack(">I", len(listed)),
         )
+        for page in groups.group_list_pages(listed):
+            out += self._answer(
+                session, seen, groups.MSG_SV_NOTIFY_CHARA_GROUP_LIST, page,
+            )
+        return out
 
     def _multipurpose(self, session: "_Session", seen: int,
                       msg_type: int, params: bytes) -> bytes:
@@ -18569,7 +18587,7 @@ class MpsServer:
         shown = catchcopy.split(b"\x00")[0].decode("cp932", "replace")
         print(f"[{self.tag}] group update by charaId={me} on {group.label()}: "
               f"public={public} catchcopy[{len(catchcopy)}]={shown!r}")
-        if len(catchcopy) > groups.MAX_CATCHCOPY:
+        if len(catchcopy.split(b"\x00")[0]) > groups.MAX_CATCHCOPY:
             print(f"[{self.tag}]   ⚠️ keeping only the first "
                   f"{groups.MAX_CATCHCOPY} bytes of it")
         book.update(group.id, public, catchcopy)
@@ -18705,7 +18723,7 @@ class MpsServer:
         self.accounts.multipurpose.forget_group(group.id)
         book.disband(group.id)
         self._forget_group_handshakes(session)
-        body = groups.counted(comment[:groups.MAX_COMMENT])
+        body = groups.counted_comment(comment)
         # Everybody who was in it is now 未所属, so every one of their 0x480F
         # entries is stale on every screen -- the leader's included.
         self._presence_refresh_onlookers(session)
@@ -18854,7 +18872,7 @@ class MpsServer:
             )
             self._push(other, self._answer(
                 other, 0, groups.MSG_SV_REQUEST_CHARA_GROUP_TRANSFER_RESPONSE,
-                struct.pack(">I", me) + groups.counted(comment[:groups.MAX_COMMENT]),
+                struct.pack(">I", me) + groups.counted_comment(comment),
             ))
             return reply
 
@@ -20286,6 +20304,16 @@ class MpsServer:
                                        friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
                                        struct.pack(">IB", target,
                                                    friends.NOTIFY_DECLINED)))
+            if book.full_for(me, target):
+                # Asked before the other side is: a yes that could not be kept
+                # is worse than a no (friends.NG_BOOK_FULL).
+                print(f"[{self.tag}] 友達登録 from charaId={me} to {target} "
+                      f"refused: an アドレス帳 already holds "
+                      f"{friends.BOOK_LIMIT} (reason={friends.NG_BOOK_FULL})")
+                return self._answer(
+                    session, seen, friends.MSG_SV_NG_FRIEND_ADD_REQUEST,
+                    struct.pack(">IB", target, friends.NG_BOOK_FULL),
+                )
             session.friends_asked.add(target)
             other.friends_asking.add(me)
             print(f"[{self.tag}] 友達登録: charaId={me} is asking {target}")
@@ -20324,6 +20352,19 @@ class MpsServer:
                 return b""
             session.friends_asking.discard(target)
             asker.friends_asked.discard(me)
+            if book.full_for(me, target):
+                # A book filled up while the box was open (friends.NOTIFY_FAILED).
+                print(f"[{self.tag}] 友達登録: charaId={me} accepted {target} "
+                      f"but an アドレス帳 is at {friends.BOOK_LIMIT} now; "
+                      f"neither book changes")
+                self._push(asker, self._answer(
+                    asker, 0, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
+                    struct.pack(">IB", me, friends.NOTIFY_FAILED),
+                ))
+                return self._answer(
+                    session, seen, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
+                    struct.pack(">IB", target, friends.NOTIFY_FAILED),
+                )
             book.link(me, target)
             print(f"[{self.tag}] 友達登録: charaId={me} accepted {target} "
                   f"(answer={tail}); {book.summary()}")

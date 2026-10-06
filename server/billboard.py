@@ -165,8 +165,12 @@ def info_params(headline: bytes) -> bytes:
     one character and gets one line back, so the reply is only ever about the
     request it is answering — which is also why this family can get away with
     having no id.
+
+    Clipped to the 66 bytes, NUL included, the reader (0x8D4960) copies it into
+    -- +0x04 .. +0x46, the same buffer 0x4B00 sends it from. See
+    trainingroom.counted_string for why the clip is this end's to make.
     """
-    return trainingroom.counted_string(headline)
+    return trainingroom.counted_string(headline, trainingroom.HEADLINE_MAX)
 
 
 def ng_params(reason: int) -> bytes:

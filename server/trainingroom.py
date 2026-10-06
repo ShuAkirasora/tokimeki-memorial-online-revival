@@ -284,6 +284,23 @@ PART_REASON_DISCONNECTED = 2
 MIN_MEMBERS = 2
 MAX_MEMBERS = 20
 
+# How many of those one team can hold: 0x580C and 0x5C06 both carry a team as a
+# counted list, and both of their readers (0x8D7B20, 0x8EF380) copy it into a
+# fixed array of ten rows with the count straight behind it -- (0x11C - 4) /
+# 0x1C and (0x350 - 8) / 0x54, both exactly 10. It is the manual's
+# 「最大１０人対１０人」 read off the client a second time. ⚠️ Joining cannot
+# pass it (a newcomer goes to the smaller team of at most twenty), but until
+# round 550 a 0x5814 team move could: the eleventh on one side would have
+# landed on that side's count in every later join and in the fight's 0x5C06.
+TEAM_MAX = 10
+
+# The client's buffers for the two strings this family echoes to other people,
+# read off the readers that fill them, NUL included: the 見出し in 0x5804 and
+# 0x5807 (+0x08 .. +0x4A) and the line in 0x580F (+0x1E .. +0x7C). The client's
+# own 0x5800 sends the 見出し out of a buffer of the same 66.
+HEADLINE_MAX = 66
+CHAT_TEXT_MAX = 94
+
 # tmn::MAX_CHARA_FAMILYNAME + 1, the fixed width both name halves travel at.
 NAME_LEN = 11
 
@@ -300,13 +317,24 @@ TEAM_B = 1
 TEAMS = (TEAM_A, TEAM_B)
 
 
-def counted_string(raw: bytes) -> bytes:
+def counted_string(raw: bytes, limit: "int | None" = None) -> bytes:
     """A counted string the way this protocol writes them: u16 length, then bytes.
 
     The count includes the NUL, matching chat.notify_params — the client's own
     casts carry their terminator and its copier writes exactly the counted bytes.
+
+    ``limit`` is the size of the client buffer it lands in, NUL included. ⚠️ The
+    copier (0xA49610) stops only where the stream ends, never where the buffer
+    does, so a longer string writes over whatever the message object keeps after
+    it. Every buffer here is as big as the one the client SENDS the same text
+    from, so a real client never reaches the limit -- it is what stops anything
+    else from reaching the screens this text is echoed to. Cut on a cp932
+    character boundary, so a two-byte pair is never halved.
     """
-    body = raw.split(b"\x00", 1)[0] + b"\x00"
+    text = raw.split(b"\x00", 1)[0]
+    if limit is not None and len(text) > limit - 1:
+        text = text[: max(0, limit - 1)].decode("cp932", "ignore").encode("cp932")
+    body = text + b"\x00"
     return struct.pack(">H", len(body)) + body
 
 
@@ -456,7 +484,7 @@ class Room:
         """0x5804: leaderId u32, headline, limit u8, team1 u8, team2 u8."""
         return (
             struct.pack(">I", self.leader_id)
-            + counted_string(self.headline)
+            + counted_string(self.headline, HEADLINE_MAX)
             + struct.pack(
                 ">BBB",
                 self.limit & 0xFF,
@@ -469,7 +497,7 @@ class Room:
         """0x5807: the same head, without the two counts."""
         return (
             struct.pack(">I", self.leader_id)
-            + counted_string(self.headline)
+            + counted_string(self.headline, HEADLINE_MAX)
             + struct.pack(">B", self.limit & 0xFF)
         )
 
@@ -617,7 +645,7 @@ def notify_chat_params(chara_id: int, family: bytes, first: bytes, text: bytes) 
         struct.pack(">I", chara_id)
         + family[:NAME_LEN].ljust(NAME_LEN, b"\x00")
         + first[:NAME_LEN].ljust(NAME_LEN, b"\x00")
-        + counted_string(text)
+        + counted_string(text, CHAT_TEXT_MAX)
     )
 
 

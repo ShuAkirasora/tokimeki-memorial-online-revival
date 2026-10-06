@@ -124,6 +124,21 @@ HANDLED = frozenset(
 #: 4 + 11 + 11 + 2, and the shape reader reads 28 off the client's own loop.
 ENTRY_SIZE = 4 + NAME_LEN + NAME_LEN + 2
 
+#: How many people one アドレス帳 holds. ⭐⭐ Two readings, independent of each
+#: other, and they agree:
+#:   * the client's: 0x6401's reader (0x8D35E0) copies the rows into a fixed
+#:     array from +0x04 at 0x1C each with the count at +0x34C, so
+#:     (0x34C - 4) / 0x1C == 30, the count straight behind row 30 (`sizeof`
+#:     0x350). A 31st row lands on the count -- the shape that hung the
+#:     部活デッキ window (club.DECK_CAPACITY) -- and 0x6401 is sent at login.
+#:   * the original's own words, in the list the image ships for this family
+#:     and never looks up (0xFF08, see the refusals below): row 12
+#:     「これ以上アドレス帳に登録できません。アドレス帳に登録できる人数は３０人
+#:     までです。」 and row 13 「相手のアドレス帳がいっぱいで登録できません。」
+#: ⚠️ Until round 550 nothing here counted, so a 31st 友達登録 went through and
+#: the next login would have hung on the way into the school.
+BOOK_LIMIT = 30
+
 # ---------------------------------------------------------------------------
 # The refusals. ⚠️⚠️ NOTHING BELOW IS MADE UP ANY MORE (round 323) -- every byte
 # is a row of error_message.bin, and which list a row comes out of was read off
@@ -158,6 +173,16 @@ NG_TARGET_BUSY = refusals.NG_TARGET_BUSY
 #: with nothing open. ⚠️ A judgement, and the same slot number トレード uses for
 #: the same case out of its own list (0xFF09's row 3, worded 受けていません).
 NG_NOTHING_OPEN = refusals.NG_TARGET_NOT_ACCEPTING
+#: ⚠️ INVENTED — a 友達登録 that would put either アドレス帳 past BOOK_LIMIT is refused with 0x6405 reason 18, 「これ以上メンバーを増やすことはできません。」.
+#: The limit is read (BOOK_LIMIT); the sentence is the choice. The two rows that
+#: say it outright, 0xFF08's 12 and 13, are in a list this build never shows
+#: (0x6405 is looked up in 0xFF07), and of 0xFF07's rows 18 is the one that is
+#: true of a full book without naming a group.
+NG_BOOK_FULL = refusals.NG_GROUP_FULL
+#: The same, found only when the answer comes back: the asker's book filled up
+#: while the other side was deciding. 0x640D's 「申し込みに失敗しました。」 to
+#: both, since neither book changed.
+NOTIFY_FAILED = refusals.NOTIFY_FAILED
 
 #: 0x640D's two, out of 0xFF04. Both exact: the family has no 「they said no」
 #: message of its own, so the sentence is what carries the difference between
@@ -201,7 +226,13 @@ def entry(chara_id: int, info: bytes) -> bytes:
 
 
 def list_params(rows: "list[bytes]") -> bytes:
-    """``u16 count`` then the rows. An empty book is two zero bytes."""
+    """``u16 count`` then the rows. An empty book is two zero bytes.
+
+    ⚠️ Never more than BOOK_LIMIT: past it the rows run onto the count inside
+    the client's own message (see BOOK_LIMIT). The cap on 友達登録 keeps a book
+    from getting there; this is the second line, for a book written before it.
+    """
+    rows = rows[:BOOK_LIMIT]
     return struct.pack(">H", len(rows)) + b"".join(rows)
 
 
@@ -273,6 +304,18 @@ class FriendBook:
 
     def linked(self, one: int, other: int) -> bool:
         return other in self.edges.get(one, ())
+
+    def full_for(self, one: int, other: int) -> bool:
+        """Would linking these two put either book past BOOK_LIMIT?
+
+        Only a side that would actually grow counts: after a one-way 消去 a
+        re-registration finds half the pair already there (see link).
+        """
+        for mine, theirs in ((one, other), (other, one)):
+            book = self.edges.get(mine, ())
+            if theirs not in book and len(book) >= BOOK_LIMIT:
+                return True
+        return False
 
     def link(self, one: int, other: int) -> bool:
         """友達登録: write both books. False if neither of them changed.

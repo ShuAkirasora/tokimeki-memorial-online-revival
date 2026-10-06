@@ -149,6 +149,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import gameclock
+import groups
 from characters import GROUP_NAME_LEN, NAME_LEN
 
 MSG_CL_QUERY_MULTIPURPOSE_ROOM_BOOKING = 0x0900
@@ -205,10 +206,14 @@ WINDOW_DAYS = 14
 #: the inputs to.
 HORIZON_DAYS = 30
 
-#: The longest comment 0x0906 is allowed to bring back out. The field is counted
-#: on the wire so nothing forces a width, but the store is a JSON file and an
-#: unbounded string in it is a way to make the server unreadable from a client.
-MAX_COMMENT = 64
+#: The longest comment 0x0906 is allowed to bring back out: 31 bytes and the
+#: NUL. ⭐ Read off the client since round 550 -- it was 64, on the reasoning
+#: that a counted field forces no width. The wire does not; the reader does:
+#: 0x0904's (0x8DBD30) copies the comment into +0x32 .. +0x52, 32 bytes, with
+#: nothing that stops at the end of them, and 0x0906 is typed into the same 32
+#: (0x8DBF30, +0x0A .. +0x2A). So a real client never sends more, and anything
+#: longer would have gone out over the rest of whoever opened the booking.
+MAX_COMMENT = 31
 
 # 0x0902 / 0x0905, the two 「取得に失敗」 answers.
 #
@@ -271,7 +276,7 @@ class Booking:
         self.day = day
         self.group_id = group_id
         self.chara_id = chara_id
-        self.comment = comment.split(b"\x00")[0][:MAX_COMMENT]
+        self.comment = groups.clip_text(comment, MAX_COMMENT)
         self.public = public & 0xFF
 
     def to_json(self) -> dict:

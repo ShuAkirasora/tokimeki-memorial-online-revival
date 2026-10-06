@@ -154,8 +154,26 @@ def entry(info: bytes) -> bytes:
     return out
 
 
+#: How many rows one 0x5E07 holds: its reader (0x907180) copies them into a
+#: fixed array from +0x04 at 0x16 each with the count at +0x298, so
+#: (0x298 - 4) / 0x16 == 30 and a 31st lands on the count. Unlike 0x6401 there
+#: is no notify to page into -- the Result IS the list.
+LIST_LIMIT = 30
+
+#: ⚠️ INVENTED — a 受信拒否 list longer than LIST_LIMIT shows its first thirty and keeps the rest in force.
+#: Nothing refuses a 31st: 0x5E02's four rows have no sentence about a full
+#: list, and this end reads a missing row as a missing rule (the module
+#: docstring). What cannot happen is the 31st row reaching the client, so the
+#: list is cut where it is sent -- a store query with a LIMIT, which is the
+#: likeliest thing the original's was. The rows past it still refuse; the
+#: window just cannot show them. Which thirty is IgnoreBook.of's charaId
+#: order, the order every row of this window has always gone out in.
+LIST_SHOWN = LIST_LIMIT
+
+
 def list_params(rows: "list[bytes]") -> bytes:
     """``u16 count`` then the rows. An empty list is two zero bytes."""
+    rows = rows[:LIST_SHOWN]
     return struct.pack(">H", len(rows)) + b"".join(rows)
 
 

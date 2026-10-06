@@ -284,6 +284,14 @@ MSG_SV_ERROR_CHARA_GROUP_LIST = 0x622C
 # an empty list rather than a refusal -- which is what this end already sends.
 # UNSENT 0x622C -- CharaGroupList: an empty request; the only 0xFF07 rows left for it are the two fetch failures.
 MSG_SV_NOTIFY_CHARA_GROUP_LIST = 0x622D
+#: How many rows one 0x622D holds. Read off its reader (0x8D2100): rows from
+#: +0x04 at 0x3C each, the count at +0x784, so (0x784 - 4) / 0x3C == 32 with the
+#: count straight behind the last row -- the 部活奥義 list's shape (club.py's
+#: CLUB_SKILL_LIST_PAGE), and its `sizeof` slot says 0x788. ⚠️ Until round 550
+#: every 公開 group went out in one notify, so a server with a 33rd would have
+#: hung 「グループ一覧を見る」 for everybody. The receiver (0x782A88) appends
+#: and finishes when it holds the total 0x622B announced, so the rest can follow.
+GROUP_LIST_PAGE = 32
 
 HANDLED = frozenset({
     MSG_CL_REQUEST_CHARA_GROUP_CREATE,
@@ -353,8 +361,8 @@ CLUBLIKE_TEST_LEVEL = 3
 #: family that is NOT a judgement call: 0xFF07 reason 20 spells it out --
 #: 「グループ名の入力は最大２０バイト（全角１０文字分）までです。」 ⇒ twenty
 #: bytes, which is also why the record's field is GROUP_NAME_LEN = 21: twenty
-#: and the NUL. ⭐ Contrast MAX_CATCHCOPY right below, which is invented because
-#: no sentence and no fixed-width field states it.
+#: and the NUL. ⭐ MAX_CATCHCOPY right below is the same kind of number, read
+#: off the client's buffers rather than out of a sentence.
 MAX_GROUP_NAME = 20
 
 #: The 30 days p05_05 §3 gives twice, once under each door, and this build's own
@@ -500,26 +508,52 @@ MEMBER_LIMIT = 15
 CLUBLIKE_MEMBER_LIMIT = 30
 
 
-#: ⚠️ INVENTED — how much キャッチコピー this end will keep. Deliberately larger
-#: than anything the client has been seen to send rather than fitted to it: the
-#: wire field is counted, so unlike friendGroupName nothing in the protocol caps
-#: it, and a cap that is too small does not fail loudly -- it silently shortens
-#: what the player typed and makes the 「type it, press ［更 新］, reopen the
-#: window」 round trip look like it half-worked.
+#: How much キャッチコピー a group can carry: 31 bytes and the NUL. ⭐ READ OFF
+#: THE CLIENT (round 550), and the earlier reading -- 「the wire field is counted,
+#: so nothing in the protocol caps it」 -- was looking at the wire rather than at
+#: where the client copies it. The counted-string reader (0xA49610) is bounded
+#: only by what is left in the stream, never by the field it writes into, and
+#: every field it writes this string into is a fixed buffer:
 #:
-#: ⭐ The one length that *is* measured is what arrives: _group_update logs it,
-#: so the client's own edit-box limit falls out of the first update anyone does
-#: instead of having to be read out of a dialog resource.
-MAX_CATCHCOPY = 64
+#:     0x6208 in   (0x8D1180)  +0x06 .. +0x26, the length at +0x26   32 bytes
+#:     0x622D in   (0x8D2100)  row +0x18 .. +0x38, length at +0x38   32 bytes
+#:     0x620A out  (0x8D14A0)  +0x05 .. +0x24, the length at +0x24   31 bytes
+#:     0x0800 out  (0x8DAB30)  +0x04 .. +0x24, the length at +0x24   32 bytes
+#:
+#: so a real client never sends more than 31 with its NUL, and a 32nd byte of
+#: text going back out would land on the length field after it -- in the 32nd
+#: row of a グループ一覧, on the row count itself (0x784), the shape that hung
+#: the 部活デッキ window (DECK_CAPACITY in club.py). The old 64 could only be
+#: reached by something other than the client, which is exactly what the cap
+#: is for.
+MAX_CATCHCOPY = 31
 
-#: ⚠️ INVENTED — how much of 解散's and 引継's comment this end will hand on.
-#: Invented for the same reason MAX_CATCHCOPY is, and it only ever caps what gets
-#: *echoed*: nothing here stores a comment, so a cap that is too small does not
-#: lose data, it truncates a sentence on somebody else's screen. Kept well above
-#: anything the client has been seen to send; _group_destroy logs what arrives,
-#: which is where the client's own limit can be read off when a real one types
-#: into it.
-MAX_COMMENT = 256
+
+def clip_text(raw: bytes, limit: int) -> bytes:
+    """``raw`` up to its NUL, cut to ``limit`` bytes on a cp932 character boundary.
+
+    A byte cut can split a two-byte character and leave its lead byte dangling
+    at the end, which the client draws as a stray glyph; decoding with
+    ``ignore`` drops exactly that byte and nothing else.
+    """
+    text = raw.split(b"\x00")[0]
+    if len(text) <= limit:
+        return text
+    return text[:limit].decode("cp932", "ignore").encode("cp932")
+
+
+def clip_catchcopy(raw: bytes) -> bytes:
+    """A キャッチコピー as it may be kept: see MAX_CATCHCOPY."""
+    return clip_text(raw, MAX_CATCHCOPY)
+
+#: How much of 解散's and 引継's comment this end will hand on: 91 bytes and the
+#: NUL. ⭐ Read rather than invented since round 550, the way MAX_CATCHCOPY is:
+#: both messages that carry it on, 0x6206 (0x8D10C0, +0x04 .. +0x60) and 0x6210
+#: (0x8D1720, +0x08 .. +0x64), copy it into 92 bytes, and so do the two the
+#: client types it into, 0x6203 and 0x620D. The old 256 could only be reached by
+#: something other than a client, and on the way out it would have written over
+#: the rest of every listener's message.
+MAX_COMMENT = 91
 
 
 def read_counted(params: bytes, at: int = 0) -> bytes:
@@ -545,6 +579,16 @@ def counted(raw: bytes) -> bytes:
     return struct.pack(">H", len(raw)) + raw
 
 
+def counted_comment(raw: bytes) -> bytes:
+    """解散's or 引継's comment as it goes on: at most MAX_COMMENT and its NUL.
+
+    What a real client sent comes back byte for byte -- its own buffer is no
+    bigger than the one it is going to (see MAX_COMMENT) -- so this only ever
+    changes what something else sent.
+    """
+    return counted(clip_text(raw, MAX_COMMENT) + b"\x00")
+
+
 def name_bytes(text: str) -> bytes:
     """A group name as the record wants it: cp932, NUL-padded to 21 bytes.
 
@@ -564,7 +608,7 @@ def catchcopy_bytes(text: str) -> bytes:
     travels as a counted string (0x620A in, 0x6208 out) and padding it would be
     inventing a width the protocol does not have.
     """
-    return text.encode("cp932", "replace").split(b"\x00")[0][:MAX_CATCHCOPY]
+    return clip_catchcopy(text.encode("cp932", "replace"))
 
 
 class Group:
@@ -586,7 +630,7 @@ class Group:
         self.members: list[int] = list(members if members is not None else [leader])
         self.public = public & 0xFF
         self.clublike = clublike
-        self.catchcopy = catchcopy.split(b"\x00")[0][:MAX_CATCHCOPY]
+        self.catchcopy = clip_catchcopy(catchcopy)
 
     @property
     def limit(self) -> int:
@@ -1017,7 +1061,7 @@ class GroupBook:
             return False
         group.clublike = 1
         group.public = 1
-        group.catchcopy = catchcopy.split(b"\x00")[0][:MAX_CATCHCOPY]
+        group.catchcopy = clip_catchcopy(catchcopy)
         self._save()
         return True
 
@@ -1051,7 +1095,7 @@ class GroupBook:
         if group is None:
             return False
         group.public = public & 0xFF
-        group.catchcopy = catchcopy.split(b"\x00")[0][:MAX_CATCHCOPY]
+        group.catchcopy = clip_catchcopy(catchcopy)
         self._save()
         return True
 
@@ -1227,6 +1271,12 @@ def group_list_params(listed: "list[Group]") -> bytes:
         out += struct.pack(">H", len(catchcopy)) + catchcopy
         out += struct.pack(">BB", min(len(group.members), 0xFF), group.clublike)
     return out
+
+
+def group_list_pages(listed: "list[Group]") -> "list[bytes]":
+    """group_list_params, cut into notifies the reader can hold (GROUP_LIST_PAGE)."""
+    return [group_list_params(listed[start:start + GROUP_LIST_PAGE])
+            for start in range(0, max(len(listed), 1), GROUP_LIST_PAGE)]
 
 
 def result_params(group: Group, roster: "list[tuple[int, bytes, bytes, int, int]]") -> bytes:

@@ -359,6 +359,15 @@ MSG_SV_NOTIFY_CLUB_SKILL_LIST = 0x4308
 # (Membership.club_skill_row_pages records how the limit was first measured.)
 CLUB_SKILL_LIST_PAGE = 32
 
+# The same for 0x4305, read the same way off its own deserializer (0x8CE170):
+# rows from +0x04 at six bytes each, the count at +0xC4, so (0xC4 - 4) / 6 == 32
+# again. ⚠️ Until round 550 the キーワード list went out as one notify however
+# long it was, so a character's 33rd キーワード would have hung the 部活デッキ
+# window exactly the way a 33rd 部活奥義 did. Its receiver (0x706753) appends
+# and compares against 0x4304's total like 0x4308's does, so paging is all the
+# protocol asks for.
+KEYWORD_LIST_PAGE = 32
+
 # The third query the same window makes, and the one that actually opens it.
 # Measured live: clicking the toolbar icon sends 0x4303 once, 0x4306 twice, then
 # 0x5B00 over and over until it is answered — the client retries this one.
@@ -1031,12 +1040,26 @@ class Membership:
         self.keywords = [row for row in self.keywords if row[0] != keyword_id]
         return len(self.keywords) != before
 
-    def keyword_rows(self) -> bytes:
+    def keyword_rows(self, rows: "list[list] | None" = None) -> bytes:
         """0x4305's body: count u16 then six bytes per row."""
-        out = struct.pack(">H", len(self.keywords))
-        for keyword_id, use_count, club_source in self.keywords:
+        rows = self.keywords if rows is None else rows
+        out = struct.pack(">H", len(rows))
+        for keyword_id, use_count, club_source in rows:
             out += struct.pack(">HHH", keyword_id, use_count, club_source)
         return out
+
+    def keyword_row_pages(self) -> "list[bytes]":
+        """The キーワード list split into messages the client's reader can hold.
+
+        The same shape, and the same reason, as club_skill_row_pages: one
+        0x4305 holds KEYWORD_LIST_PAGE rows, and the 0x4304 before it carries
+        the total, so the rest go out as further notifies.
+        """
+        pages = []
+        for start in range(0, max(len(self.keywords), 1), KEYWORD_LIST_PAGE):
+            pages.append(self.keyword_rows(
+                self.keywords[start:start + KEYWORD_LIST_PAGE]))
+        return pages
 
     # ------------------------------------------------------------ 部活奥義
 
@@ -1277,14 +1300,16 @@ def ng_part_params(reason: int) -> bytes:
 def keyword_replies(member: "Membership | None") -> "list[tuple[int, bytes]]":
     """The messages the キーワード inventory query is answered with.
 
-    The Result's count and the Notify's count are the same number said twice, so
+    The Result's count and the Notify's counts are the same number said twice, so
     both come off one list and cannot drift apart. None owned ⇒ the Result
-    only; see the block above.
+    only; see the block above. More than KEYWORD_LIST_PAGE ⇒ several notifies.
     """
-    rows = member.keyword_rows() if member is not None else struct.pack(">H", 0)
-    owned = struct.unpack_from(">H", rows, 0)[0]
+    pages = (member.keyword_row_pages() if member is not None
+             else [struct.pack(">H", 0)])
+    owned = sum(struct.unpack_from(">H", page, 0)[0] for page in pages)
     return ([(MSG_SV_RESULT_KEYWORD_LIST, struct.pack(">I", owned))]
-            + ([(MSG_SV_NOTIFY_KEYWORD_LIST, rows)] if owned else []))
+            + ([(MSG_SV_NOTIFY_KEYWORD_LIST, page) for page in pages]
+               if owned else []))
 
 
 def skill_replies(member: "Membership | None") -> "list[tuple[int, bytes]]":
