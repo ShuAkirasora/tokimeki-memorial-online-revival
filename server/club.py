@@ -700,8 +700,34 @@ NG_PART_FAILED = 2
 NG_PART_IN_EVENT = 6
 
 # 0x5B05, twelve sentences — the whole of the deck-update rulebook, restored the
-# same way. Only the two this server can reach are named; the rest are listed
-# here so the next round does not have to look them up again.
+# same way. Every one that names a rule is named below and checked by
+# Membership.deck_update_refusal; 5 and 11 are marked unused in the table
+# itself and 9 is the original server's own failure, which this one has no
+# counterpart to.
+#
+# ⭐⭐ EVERY RULE HERE IS ONE THE 部活デッキ WINDOW ALREADY ENFORCES, so an
+# unmodified client never hears any of them. Read off the client:
+#
+#     0x4a07db  ▷ on a キーワード: same keyword already in this deck ⇒
+#               silently nothing (1); a full deck ⇒ nothing.
+#     0x4a0951  ▷ on a 部活奥義: `clubskill.bin` +0x30 must be 2 or the
+#               character's own 性別 (3); if the deck has either use ticked,
+#               +0x2e must be the character's own club (4 / 0); already in
+#               this deck ⇒ nothing (2); full ⇒ nothing.
+#     0x49c3e4  ticking 部活用 or 行事用 on one deck clears that same box on
+#               the other two (8).
+#     0x49c5fc  a deck with either use ticked is redrawn without any 奥義 of
+#               another club, and 更新 sends it that way (round 547 saw six
+#               dropped on screen).
+#     6 / 7     the lists the window builds from are the 0x4305 / 0x4308
+#               this server sent, so only owned rows can be picked.
+#
+# So these are the second gate, the same standing as item.NO_USE and the
+# group-name reason 29: what reaches them is a modified client, and on an
+# instance other people fight in, a deck is what a 自主トレ opponent is hit
+# with. ⭐ The client's answer to a refusal is gentle -- 0x774588 shows the
+# sentence and tells the window the update failed (0x5B04 makes the same call
+# with 1), and a failed round is what stops ＯＫ from closing the window.
 #
 #     0  この用途では登録できない部活奥義がある
 #     1  そのキーワードは既に登録されている
@@ -715,8 +741,42 @@ NG_PART_IN_EVENT = 6
 #     9  部活デッキの登録内容を変更できなかった
 #    10  選択された部活デッキが見つからない
 #    11  未使用: 未定義のエラー
+NG_DECK_SKILL_NOT_FOR_USE = 0
+NG_DECK_KEYWORD_TWICE = 1
+NG_DECK_SKILL_TWICE = 2
+NG_DECK_SKILL_SEX = 3
+NG_DECK_SKILL_OTHER_CLUB = 4
 NG_DECK_KEYWORD_NOT_OWNED = 6
+NG_DECK_SKILL_NOT_OWNED = 7
+NG_DECK_USE_TWICE = 8
 NG_DECK_NOT_FOUND = 10
+
+#: The useType a deck is cleared with. ⭐ 更新 opens by sending all three decks
+#: empty with this byte before it sends any of them for real, and the window
+#: itself reads it back as 「no use, no cards」 (0x4a0951 resets it to 0 the
+#: moment a card goes in) -- so it is not both boxes ticked, and the reason-8
+#: check must not count it, or the second of those three clears would trip.
+USE_TYPE_CLEARED = 0xFF
+
+#: `clubskill.bin` +0x30, the 奥義's 性別 -- `chara_sex.bin`'s 0 男 / 1 女 /
+#: 2 不詳 -- for the only two of the 57 rows that are not 2. RESTORED: the
+#: column, its value set and both icons were put on screen in round 127, and
+#: 0x4a0951 is the window comparing it with the character's own 性別.
+#: ⚠️ Written out rather than fed, as item.MALE_ONLY is: the machine that runs
+#: this has no client to read it from.
+CLUB_SKILL_SEX = {
+    (4, 1): 1,  # シャボンストリーム, 水泳部
+    (7, 2): 0,  # 暗黒大団円, 総合演劇部
+}
+CLUB_SKILL_SEX_EITHER = 2
+
+#: ⚠️ INVENTED — a 行事用-only deck holding another club's 奥義 is refused with sentence 0, the general 「この用途では」 one; sentence 4 names 「部活用」 and is kept for decks with that box ticked.
+#: The rule itself is the client's (0x4a0951 and 0x49c5fc test 「either box
+#: ticked」, not the 部活用 bit alone); which sentence the original put to the
+#: 行事用 case is not known. 0 is the only one whose wording covers it, and it
+#: has no other case to belong to. What would overturn it: an operator-era
+#: account of that refusal's wording.
+OTHER_CLUB_EVENT_REASON = NG_DECK_SKILL_NOT_FOR_USE
 
 
 def name(club_id: int) -> str:
@@ -1150,6 +1210,67 @@ class Membership:
                     continue
             out.append([kind, payload])
         return out
+
+    def deck_update_refusal(self, deck_id: int,
+                            items: "list[tuple[int, bytes]]", use: int,
+                            sex: "int | None") -> "tuple[int, str] | None":
+        """``(reason, why)`` to refuse this 0x5B03 with, or None to store it.
+
+        The rulebook is the 0x5B05 block above, and every line of it is one
+        the window already keeps -- see there for where. Checked against what
+        this character holds now, never against the six bytes the client
+        echoed: a useCount or 完成度 in an entry is a snapshot and is left
+        alone (_battle_power reads the live row), only the key is judged.
+
+        ``sex`` is characters.sex(); None skips the 性別 rule rather than
+        failing it, since there is then nothing to compare with.
+        """
+        if not 0 <= deck_id < DECK_COUNT:
+            return (NG_DECK_NOT_FOUND, f"deck {deck_id} is not one of {DECK_COUNT}")
+        ticked = 0 if use == USE_TYPE_CLEARED else use & (USE_TYPE_PRACTICE | USE_TYPE_EVENT)
+        owned_keywords = {row[0] for row in self.keywords}
+        owned_skills = {(row[0], row[1]) for row in self.skills}
+        seen: "set[tuple[int, ...]]" = set()
+        for index, (kind, payload) in enumerate(items):
+            if len(payload) != DECK_ITEM_BYTES:
+                continue
+            if kind == DECK_ITEM_KEYWORD:
+                keyword_id = struct.unpack_from("<H", payload)[0]
+                if keyword_id not in owned_keywords:
+                    return (NG_DECK_KEYWORD_NOT_OWNED,
+                            f"entry {index}: keyword {keyword_id} is not owned")
+                if (kind, keyword_id) in seen:
+                    return (NG_DECK_KEYWORD_TWICE,
+                            f"entry {index}: keyword {keyword_id} is in twice")
+                seen.add((kind, keyword_id))
+            elif kind == DECK_ITEM_CLUB_SKILL:
+                key = struct.unpack_from("<HH", payload)
+                label = f"{key[0]}:{key[1]}"
+                if key not in owned_skills:
+                    return (NG_DECK_SKILL_NOT_OWNED,
+                            f"entry {index}: 奥義 {label} is not owned")
+                if (kind, *key) in seen:
+                    return (NG_DECK_SKILL_TWICE,
+                            f"entry {index}: 奥義 {label} is in twice")
+                seen.add((kind, *key))
+                only = CLUB_SKILL_SEX.get(key, CLUB_SKILL_SEX_EITHER)
+                if sex is not None and only not in (CLUB_SKILL_SEX_EITHER, sex):
+                    return (NG_DECK_SKILL_SEX,
+                            f"entry {index}: 奥義 {label} is for 性別 {only}, "
+                            f"the character is {sex}")
+                if ticked and key[0] != self.in_club:
+                    reason = (NG_DECK_SKILL_OTHER_CLUB if ticked & USE_TYPE_PRACTICE
+                              else OTHER_CLUB_EVENT_REASON)
+                    return (reason, f"entry {index}: 奥義 {label} is not "
+                                    f"{name(self.in_club)}'s and useType={use:#04x}")
+        for other in range(DECK_COUNT):
+            if other == deck_id:
+                continue
+            theirs = self.deck_use.get(other, USE_TYPE_NONE)
+            if theirs != USE_TYPE_CLEARED and ticked & theirs:
+                return (NG_DECK_USE_TWICE,
+                        f"useType={use:#04x} is already on deck {other} ({theirs:#04x})")
+        return None
 
     def keyword_deck_item(self, keyword_id: int) -> "tuple[int, bytes] | None":
         """Build the entry the client would have sent for an owned キーワード.

@@ -10692,6 +10692,24 @@ class MpsServer:
                 for kind, payload in items:
                     print(f"[{self.tag}] club deck update {deck_id} item: "
                           f"{club.describe_deck_item(kind, payload)}")
+                # ⭐ The window keeps every one of these rules itself, so this
+                # is the second gate -- see the 0x5B05 block in club.py. A
+                # refused deck keeps whatever it held before this message,
+                # which after 更新's opening clears is empty, as it would
+                # have been on the original.
+                refusal = member.deck_update_refusal(
+                    deck_id, items, use,
+                    self._chars(session).sex(session.chara_id))
+                if refusal is not None:
+                    reason, why = refusal
+                    print(f"[{self.tag}] club deck update {deck_id} refused: "
+                          f"reason={reason} — {why}")
+                    return self._answer(
+                        session,
+                        sequence,
+                        club.MSG_SV_NG_CLUB_DECK_UPDATE,
+                        struct.pack(">BH", reason, 0),
+                    )
                 member.deck_use[deck_id] = use
                 member.set_deck(deck_id, items)
                 self._chars(session).set_club(session.chara_id, member)
