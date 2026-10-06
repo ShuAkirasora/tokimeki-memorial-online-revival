@@ -232,9 +232,30 @@ NG_ADD_FORBIDDEN_AREA = 13  # not sent; see the module docstring
 NG_INFO_NOT_FOUND = 2
 
 NG_JOIN_ALREADY_IN_ROOM = 2
+NG_JOIN_NOT_NOW = 3
 NG_JOIN_NOT_FOUND = 4
 NG_JOIN_FULL = 9
 NG_JOIN_INJURED = 10
+
+#: ⚠️ INVENTED — a room whose fight has started takes nobody new: 0x5806 into it is refused with 0x5808 reason 3, 「今の状態では、自主トレルームに入ることはできません。」.
+# ⭐ What the room is for is not invented: p07_04 has a room gather 参加者
+# until its leader presses 開始, and the fight is built from the members it has
+# at that moment (all of them, since 開始 waits for every 準備ＯＫ). Nothing in
+# the manual or the 0x58xx family lets anybody watch a fight, and nothing tells
+# a member who joins late that the people on its roster are on a battle screen.
+# ⚠️ The door was still open here, through one window: the leader's icon turns
+# to クラブ活動中 the moment a fight starts and the client stops offering 参加, but
+# a player who had the room's window up before 開始 can still press ［参加する］
+# after it. That player sat in a window nobody else was looking at, and when
+# the fight ended its fighters left the room without a word (see
+# _battle_leave_rooms: no 0x580D reason means 「the fight is over」), so the
+# late joiner kept their rows. Refusing the join is the one place that needs no
+# new reason on 0x580D. ⚠️ Which sentence: reason 3 is the family's 「not in
+# this state」 one; the others name a missing room, a full room, an injury or a
+# failure, and none of those is what happened. Whether the original refused
+# here at all is not known.
+# What would overturn it: an operator-era account of joining a room mid-fight.
+JOIN_REFUSED_WHILE_FIGHTING = True
 
 NG_PART_NOT_IN_ROOM = 3
 NG_PART_FAILED = 4

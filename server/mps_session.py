@@ -15557,6 +15557,13 @@ class MpsServer:
             # The same rule at the other door; 0x5808 reason 10 is its sentence.
             reason = (trainingroom.NG_JOIN_INJURED if self._injured(session)
                       else board.join_refusal(chara_id, leader_id))
+            # A room whose fight is on is not taking people; see the knob.
+            # Asked of every member, not the leader alone: a leader who drops
+            # mid-fight hands the room to a fighter (p07_06's promotion).
+            if (reason is None and trainingroom.JOIN_REFUSED_WHILE_FIGHTING
+                    and any(self.battles.battle_of(m.chara_id) is not None
+                            for m in board.rooms[leader_id].members)):
+                reason = trainingroom.NG_JOIN_NOT_NOW
             if reason is not None:
                 return ng(
                     trainingroom.MSG_SV_NG_JOIN, reason, f"join leaderId={leader_id:#x}"
