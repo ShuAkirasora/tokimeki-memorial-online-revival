@@ -472,6 +472,9 @@ NG_LEADER_CANNOT_PART = refusals.NG_BAD_GROUP
 #: are told apart by the sentence rather than by the id.
 NOTIFY_DECLINED = refusals.NOTIFY_DECLINED
 NOTIFY_CANCELLED = refusals.NOTIFY_CANCELLED
+#: 0xFF04 row 14, for an application whose other end logged out before
+#: answering (mps_session._applications_gone, where what it draws is).
+NOTIFY_PARTNER_GONE = refusals.NOTIFY_PARTNER_GONE
 #: ⚠️ 16 (「…申し込み可能な範囲に存在しません」) is deliberately not among them:
 #: 0x6222 16 was watched drawing the same 「拒否されました」 box as 12, so a
 #: target on another map is refused with NG_TARGET_BUSY instead

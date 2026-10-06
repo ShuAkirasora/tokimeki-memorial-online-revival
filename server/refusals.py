@@ -29,10 +29,12 @@ on-screen witness, this time out of 0xFF07: a 0x621D with reason 8 puts
 Notify*Cancel side -- the 0xFF04 list below -- is NOT looked up in
 error_message.bin by the families that were watched doing it: a 0x6222 with
 reason 12 draws a box the client owns, worded 「仲良しグループへの登録を拒否され
-ました」, a sentence that appears nowhere in error_message.bin. The byte is still
-read, and it still decides what happens -- same box, same state, only the byte
-changed: 12 draws that box, 13 closes the waiting box silently -- so it is a
-BRANCH NUMBER there rather than a row index. The names and numbering below are
+ました」, a sentence that appears nowhere in error_message.bin. Round 323 also saw 13
+close the waiting box with nothing on screen; ⚠️ round 560 could not repeat
+that -- 12, 13, 14 and 16 all draw the same 「拒否されました」 box, on both
+ends, and the listener (0x77157a) returns without reading the body. So for
+0x6222, 0x500A and 0x6217 the byte reaches nobody, and for 0x640D it is only a
+branch (12 against the rest), never a row index. The names and numbering below are
 the ones to send either way (they are what the original's own list calls these
 endings), but do not promise that a particular sentence reaches the screen
 without watching it arrive.

@@ -9087,6 +9087,7 @@ class MpsServer:
             # a ウェストアップ screen INSTEAD of the map, with nobody left to talk
             # to and no message coming.
             self._twoshot_partner_gone(session)
+            self._applications_gone(session)
             self._gm_chat_gone(session)
             # Who was watching this character, worked out before the removal for
             # the same reason: after it, _peers can no longer see the session at
@@ -9829,6 +9830,7 @@ class MpsServer:
                 # reason: a partner left in front of a dead trade window.
                 self._trade_partner_gone(session)
                 self._twoshot_partner_gone(session)
+                self._applications_gone(session)
                 self._gm_chat_gone(session)
                 # Same treatment as the disconnect path: 「中断」 takes this
                 # player out of the fight, and the fight carries on for whoever
@@ -19241,8 +19243,9 @@ class MpsServer:
 
         Both kinds in one place because they have one rule: an application is
         open exactly while both ends are connected. Nothing in either family can
-        carry a question across a logout, so a stale id in a session is the only
-        trace one leaves.
+        carry a question across a logout. The end still connected is told when
+        the other leaves (_applications_gone); this is the backstop for any
+        path that ends a connection without passing through there.
         """
         if (session.group_invited is not None
                 and self._session_of(session.group_invited) is None):
@@ -19490,10 +19493,10 @@ class MpsServer:
         it when it is next looked at keeps the rule in one place instead of
         spreading it over every path that ends a connection.
 
-        ⚠️ An open trade is the one part of this that cannot be cleaned up
-        quietly. A player whose partner has gone is sitting in front of a trade
-        window that will never do anything, so the survivor is told -- see
-        _trade_partner_gone, which is what the disconnect path calls.
+        ⚠️ Neither an open trade nor a waiting application can be cleaned up
+        quietly: the survivor is sitting in front of a window or a box that will
+        never do anything, so it is told -- see _trade_partner_gone and
+        _applications_gone, which are what the disconnect path calls.
         """
         if session.trade_asked is not None:
             other = self._session_of(session.trade_asked)
@@ -20155,6 +20158,100 @@ class MpsServer:
         print(f"[{self.tag}] ＧＭチャット: 0x{me:x} left, closed "
               f"0x{player:x}'s {'window' if talking else 'box'}")
 
+    def _applications_gone(self, session: "_Session") -> None:
+        """Close every application still waiting on this session, at both ends.
+
+        Called from the disconnect and 下校 paths next to _trade_partner_gone
+        and _twoshot_partner_gone, which already cover an open table and every
+        twoshot. This is the rest: a トレード, 友達登録, 勧誘 or 引継 asked and
+        not yet answered, whose other end is still looking at a 「申し込み中」
+        box or a はい/いいえ box that nothing will ever close.
+
+        Each family's own Notify*Cancel, with 0xFF04 row 14 「相手がログアウト
+        もしくはキャラクター選択画面に戻ったため、申し込みをキャンセルしました」
+        -- the original's sentence for exactly this, and the same byte
+        _twoshot_partner_gone has always sent. Watched on screen, one family
+        and one end at a time, the other end's socket really closed:
+
+          トレード 0x510E   both ends: the box closes, row 14 word for word
+          友達登録 0x640D   both ends: 「友達登録申し込みがキャンセルされました。」
+          ツーショット 0x500A asker: 「ツーショットチャットは拒否されました」;
+                            asked: 「申し込みはキャンセルされました」
+          勧誘 0x6222      both ends: 「仲良しグループへの登録を拒否されました」
+          引継 0x6217      asker: 「引継ぎを拒否されました」
+
+        ⚠️ The 「拒否」 lines are the client's own wording, not the byte's: those
+        listeners never read the reason (12, 13 and 14 draw the same box). They
+        are still sent, because the Notify is the only thing that takes the box
+        down -- a hand-pushed Ng (0x5002) over a waiting box draws its sentence
+        beside it and leaves the box up -- and a box that names somebody who has
+        gone, with nobody left to answer it, is the worse of the two.
+        Before this, a トレード asker's box stayed up and its ［やめる］ drew
+        「まだアイテムトレードを開始していません。」, and the toolbar button the
+        application had greyed stayed grey.
+        """
+        me = session.chara_id
+        if not me:
+            return
+        # トレード, before anybody answered.
+        for who in (session.trade_asked, session.trade_asking):
+            other = self._session_of(who) if who is not None else None
+            if other is None or other.trade_with is not None:
+                continue
+            if other.trade_asked != me and other.trade_asking != me:
+                continue
+            other.trade_asked = None
+            other.trade_asking = None
+            print(f"[{self.tag}] トレード: charaId={me} went away with an "
+                  f"application open, telling {who}")
+            self._push(other, self._answer(
+                other, 0, trade.MSG_SV_NOTIFY_TRADE_CANCEL,
+                trade.reason(trade.NOTIFY_PARTNER_GONE),
+            ))
+        session.trade_asked = None
+        session.trade_asking = None
+        # 友達登録, both directions: the id in 0x640D is always the other end's.
+        for who in sorted(session.friends_asked | session.friends_asking):
+            other = self._session_of(who)
+            if other is None:
+                continue
+            if me not in other.friends_asking and me not in other.friends_asked:
+                continue
+            other.friends_asking.discard(me)
+            other.friends_asked.discard(me)
+            print(f"[{self.tag}] 友達登録: charaId={me} went away with an "
+                  f"application open, telling {who}")
+            self._push(other, self._answer(
+                other, 0, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
+                struct.pack(">IB", me, friends.NOTIFY_PARTNER_GONE),
+            ))
+        session.friends_asked.clear()
+        session.friends_asking.clear()
+        # 勧誘 and 引継.
+        for who, theirs, msg in (
+            (session.group_invited, "group_inviter",
+             groups.MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL),
+            (session.group_inviter, "group_invited",
+             groups.MSG_SV_NOTIFY_CHARA_GROUP_INVITE_CANCEL),
+            (session.group_handover_to, "group_handover_from",
+             groups.MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER_CANCEL),
+            (session.group_handover_from, "group_handover_to",
+             groups.MSG_SV_NOTIFY_CHARA_GROUP_TRANSFER_CANCEL),
+        ):
+            other = self._session_of(who) if who is not None else None
+            if other is None or getattr(other, theirs) != me:
+                continue
+            setattr(other, theirs, None)
+            print(f"[{self.tag}] グループ: charaId={me} went away with an "
+                  f"application open, telling {who} (0x{msg:04x})")
+            self._push(other, self._answer(
+                other, 0, msg, struct.pack(">B", groups.NOTIFY_PARTNER_GONE),
+            ))
+        session.group_invited = None
+        session.group_inviter = None
+        session.group_handover_to = None
+        session.group_handover_from = None
+
     def _twoshot_partner_gone(self, session: "_Session") -> None:
         """Tell whoever was in a twoshot with this session that it is over.
 
@@ -20748,10 +20845,11 @@ class MpsServer:
                 # no」 from 「they withdrew」, and the byte is what carries the
                 # difference. ⚠️ It used to forward the client's own byte from
                 # 0x6408, which is 0 in every capture. ⚠️⚠️ What the client
-                # draws for each value has been watched for the sibling message
-                # 0x6222 and NOT for this one: there, 12 draws a box the client
-                # owns and 13 closes the waiting box in silence -- see
-                # refusals.py for why that matters.
+                # draws has been read off its handler since (0x77564b, round
+                # 559): 12 「友達登録を拒否されました。」, anything else
+                # 「…申し込みがキャンセルされました。」 (that one watched on
+                # screen) -- see refusals.py for the families where the byte
+                # is not read at all.
                 self._push(asker, self._answer(
                     asker, 0, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
                     struct.pack(">IB", me, friends.NOTIFY_DECLINED),

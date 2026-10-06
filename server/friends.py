@@ -195,6 +195,9 @@ NOTIFY_FAILED = refusals.NOTIFY_FAILED
 #: 「断られました」 and 「キャンセルされました」.
 NOTIFY_DECLINED = refusals.NOTIFY_DECLINED
 NOTIFY_CANCELLED = refusals.NOTIFY_CANCELLED
+#: 0xFF04 row 14, for an application whose other end logged out before
+#: answering (mps_session._applications_gone, where what it draws is).
+NOTIFY_PARTNER_GONE = refusals.NOTIFY_PARTNER_GONE
 #: 0xFF04's 「…申し込み可能な範囲に存在しません」, for a target on another map
 #: (mps_session._beyond_reach). ⚠️ This family's Notify does not put that row on
 #: screen: the client's 0x640D handler (0x77564b) draws its own box and only
