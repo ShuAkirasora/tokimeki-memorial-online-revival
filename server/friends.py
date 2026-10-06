@@ -195,6 +195,13 @@ NOTIFY_FAILED = refusals.NOTIFY_FAILED
 #: 「断られました」 and 「キャンセルされました」.
 NOTIFY_DECLINED = refusals.NOTIFY_DECLINED
 NOTIFY_CANCELLED = refusals.NOTIFY_CANCELLED
+#: 0xFF04's 「…申し込み可能な範囲に存在しません」, for a target on another map
+#: (mps_session._beyond_reach). ⚠️ This family's Notify does not put that row on
+#: screen: the client's 0x640D handler (0x77564b) draws its own box and only
+#: tells 12 from everything else, so 16 reads as 「友達登録拒否通知／友達登録申し
+#: 込みがキャンセルされました。」 (watched, round 559) -- still true, which is
+#: why this family keeps 16 where ツーショット and 勧誘 do not.
+NOTIFY_OUT_OF_RANGE = refusals.NOTIFY_OUT_OF_RANGE
 
 # 0x6410 消去's own five rows. It is in no redirect, so these are read under the
 # message's own id.

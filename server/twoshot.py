@@ -208,6 +208,10 @@ NOTIFY_PARTNER_GONE = refusals.NOTIFY_PARTNER_GONE
 NOTIFY_END = refusals.NOTIFY_END
 NOTIFY_OUT_OF_RANGE = refusals.NOTIFY_OUT_OF_RANGE
 NOTIFY_OTHER_ACCEPTED = refusals.NOTIFY_OTHER_ACCEPTED
+# ⚠️ Whatever the byte, 0x500A puts 「ツーショットチャットは拒否されました」 on
+# the asker's screen (12 and 16 watched side by side, round 559; the listener at
+# 0x771129 never reads the body). So 16 is not sent here: a target on another
+# map is refused with REASON_TARGET_BUSY instead (mps_session._beyond_reach).
 
 # ---------------------------------------------------------------------------
 # 0xFF00 -- 0x5402 / 0x5405, shared with every other chat channel's Error.

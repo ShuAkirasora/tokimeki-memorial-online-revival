@@ -257,11 +257,12 @@ NOTIFY_PARTNER_GONE = refusals.NOTIFY_PARTNER_GONE
 NOTIFY_END = refusals.NOTIFY_END
 NOTIFY_OUT_OF_RANGE = refusals.NOTIFY_OUT_OF_RANGE
 NOTIFY_OTHER_ACCEPTED = refusals.NOTIFY_OTHER_ACCEPTED
-# ⭐ 16 goes to an asker whose target is on another map (round 554, see the
-# 0x5100 branch of the session's _trade). Measured on screen, it is the generic
-# branch of the client's 0x510E handler: the windows come down and the sentence
-# shows as a timed notice that closes itself after about five seconds -- a
-# screenshot taken later than that shows nothing, which is not the same thing.
+# ⭐ 16 goes to an asker whose target is on another map (round 554; see
+# mps_session._beyond_reach for why the other families answer it differently).
+# Measured on screen, it is the generic branch of the client's 0x510E handler:
+# the windows come down and the sentence shows as a timed notice that closes
+# itself after about five seconds -- a screenshot taken later than that shows
+# nothing, which is not the same thing.
 # ⚠️ 17 is not sent and has no road here: a target holds at most one
 # application, and a second asker is refused up front with 0xFF09 row 1.
 

@@ -472,6 +472,10 @@ NG_LEADER_CANNOT_PART = refusals.NG_BAD_GROUP
 #: are told apart by the sentence rather than by the id.
 NOTIFY_DECLINED = refusals.NOTIFY_DECLINED
 NOTIFY_CANCELLED = refusals.NOTIFY_CANCELLED
+#: ⚠️ 16 (「…申し込み可能な範囲に存在しません」) is deliberately not among them:
+#: 0x6222 16 was watched drawing the same 「拒否されました」 box as 12, so a
+#: target on another map is refused with NG_TARGET_BUSY instead
+#: (mps_session._beyond_reach).
 
 #: ⭐ 0x620C's sentences do not hang on its
 #: own id: the client looks them up under the pseudo id 0xFF07, the table the

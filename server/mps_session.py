@@ -3052,6 +3052,37 @@ class MpsServer:
             return "target"
         return None
 
+    @staticmethod
+    def _beyond_reach(session: "_Session", other: "_Session") -> bool:
+        """Is `other` out of 「申し込み可能な範囲」 for an application from `session`?
+
+        INVENTED — 「申し込み可能な範囲」 is read as 「on the same map」: this server draws everybody on a map and nobody off it, so the map is the only range a right-click can see across.
+        The sentence is the original's own, 0xFF04 row 16 「指定された
+        キャラクターが申し込み可能な範囲に存在しません」, and it lives in the
+        Notify list every 申し込み family shares, not in any family's Ng list.
+        ⚠️⚠️ But each family's Notify draws its own box, so whether 16 can be
+        said at all is per family, and it was watched on screen, one by one
+        (round 559, an application held open and the Notify pushed by hand):
+          トレード 0x510E 16  the row itself, as a timed notice      ⇒ Ok + 16
+          友達登録 0x640D 16  「友達登録申し込みがキャンセルされました。」 -- its
+                             handler (0x77564b) tells only 12 from the rest ⇒ Ok + 16
+          ツーショット 0x500A  「ツーショットチャットは拒否されました」 for 12 and 16
+                             alike: the listener (0x771129) never reads the body
+          勧誘 0x6222 16      「仲良しグループへの登録を拒否されました」, the same box
+                             12 draws (listener 0x77157a does not read it either)
+        A client whose only words for this Notify are 「they said no」 is not one
+        the original sent 16 to, so those two answer with their own Ng row 1
+        instead -- 「指定されたキャラクターは、現在申し込みを受けられる状態では
+        ありません。」 (0xFF05 / 0xFF07), true of a target the asker cannot reach,
+        and the row the ring's own gate already uses. Either way the target is
+        not asked.
+        ⭐ The four families that ask it (トレード, ツーショット, 友達登録, 勧誘)
+        are each only on the 交流メニュー (menu.bin 0:0), the ring on a character
+        the asker can see, so an honest client reaches this only by a race: the
+        target walked through a door while the ring was open.
+        """
+        return other.map_id != session.map_id
+
     def _presence_blocked(
         self, session: "_Session", also: "set[int] | None" = None
     ) -> "set[int]":
@@ -19309,6 +19340,10 @@ class MpsServer:
             elif session.group_invited is not None or other.group_inviter is not None:
                 why, code = ("an application is already open",
                              groups.NG_ALREADY_ASKED)
+            elif self._beyond_reach(session, other):
+                # 0xFF07 row 1, not 0x6222 16: see _beyond_reach.
+                why, code = (f"on map {other.map_id}, asker on {session.map_id}",
+                             groups.NG_TARGET_BUSY)
             else:
                 # The ring's own gate, asked again here; see _ring_greyed.
                 ring = self._ring_greyed(session, other, RING_GROUP)
@@ -19614,16 +19649,8 @@ class MpsServer:
                 why, code = "already trading", trade.REASON_ALREADY_TRADING
             elif session.trade_asked is not None:
                 why, code = "already asked somebody", trade.REASON_ALREADY_ASKED
-            elif other.map_id != session.map_id:
-                # INVENTED — 「申し込み可能な範囲」 is read as 「on the same map」: this server draws everybody on a map and nobody off it, so the map is the only range a right-click can see across.
-                # The sentence is the original's own, 0xFF04 row 16 「指定された
-                # キャラクターが申し込み可能な範囲に存在しません」, and it lives
-                # in the Notify list, not in 0xFF09 -- so it goes out the way
-                # 受信拒否 does below: Ok, then 0x510E to the asker alone. The
-                # target is not asked. ⭐ アイテムトレード is only on the 交流メ
-                # ニュー (menu.bin 0:0), the ring on a character the asker can
-                # see, so an honest client reaches this only by a race: the
-                # target walked through a door while the ring was open.
+            elif self._beyond_reach(session, other):
+                # Ok, then 0x510E 16 to the asker alone; see _beyond_reach.
                 print(f"[{self.tag}] トレード from charaId={me} to {target}: "
                       f"on map {other.map_id}, asker on {session.map_id} "
                       f"(reason={trade.NOTIFY_OUT_OF_RANGE})")
@@ -20264,6 +20291,10 @@ class MpsServer:
             why, code = "already in a twoshot", twoshot.REASON_REQUEST_FAILED
         elif session.twoshot_asked is not None:
             why, code = "already asked somebody", twoshot.REASON_ALREADY_ASKED
+        elif self._beyond_reach(session, other):
+            # 0xFF05 row 1, not 0x500A 16: see _beyond_reach.
+            why, code = (f"on map {other.map_id}, asker on {session.map_id}",
+                         twoshot.REASON_TARGET_BUSY)
         elif (other.twoshot_with is not None
               or other.twoshot_asking is not None
               or other.twoshot_asked is not None
@@ -20600,6 +20631,18 @@ class MpsServer:
                     session, seen, friends.MSG_SV_NG_FRIEND_ADD_REQUEST,
                     struct.pack(">IB", target, code),
                 )
+            if self._beyond_reach(session, other):
+                # Ok, then 0x640D 16 to the asker alone; see _beyond_reach.
+                print(f"[{self.tag}] 友達登録 from charaId={me} to {target}: "
+                      f"on map {other.map_id}, asker on {session.map_id} "
+                      f"(reason={friends.NOTIFY_OUT_OF_RANGE})")
+                return (self._answer(session, seen,
+                                     friends.MSG_SV_OK_FRIEND_ADD_REQUEST,
+                                     struct.pack(">I", target))
+                        + self._answer(session, 0,
+                                       friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
+                                       struct.pack(">IB", target,
+                                                   friends.NOTIFY_OUT_OF_RANGE)))
             if self.accounts.ignores.holds(target, me):
                 # INVENTED -- 受信拒否 refuses 「各種申込み」 (round 543, user's
                 # call): answered as the target's ［いいえ］ would be -- Ok, then
