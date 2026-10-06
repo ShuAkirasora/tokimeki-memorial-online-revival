@@ -3307,6 +3307,34 @@ class MpsServer:
                 f"charaId={session.chara_id}"
             )
 
+    def _presence_leave_map(self, session: "_Session", why: str) -> None:
+        """0x4810 to the people on the map this character is about to leave.
+
+        Called just before ``session.map_id`` changes, on every road that
+        changes it while the connection stays up: a door (0x4800), a chat or GM
+        warp (0x6808), and the 初登校 hand-off. The 0x4000 that follows only
+        *adds* on the new map, so without this the old map kept the leaver.
+
+        ⭐⭐ MEASURED, round 554, a real client in 食堂 watching another
+        character walk to the doorway (0x4809) and through it (0x4800 + 0x4000):
+        the sprite stayed on the door cell for good. Nothing on the wire ever
+        told that client otherwise -- it does not drop somebody for stepping on
+        a door -- and the ghost was live: right-clicking it opened the full
+        交流メニュー, and ［トレード申込み］ asked a character who was by then
+        in 屋外 and opened a trade across two maps. A later login of the same
+        character onto that map would also have handed the viewer a second
+        0x480F for an id it still held, which is round 148's dead ring.
+        ⚠️ 0x4810 alone, not the pair: it is the half that is survivable on a
+        結果画面 or in a lesson (round 95), and the logout and 下校 paths have
+        always sent it to every peer unfiltered for the same reason.
+        """
+        peers = self._peers(session)
+        if not peers:
+            return
+        print(f"[{self.tag}] presence: charaId={session.chara_id} leaves map "
+              f"{session.map_id} ({why})")
+        self._presence_withdraw(session, peers)
+
     def _presence_withdraw(self, session: "_Session", peers: "list[_Session]") -> None:
         """0x4810 to everybody who was told about this character.
 
@@ -4235,6 +4263,7 @@ class MpsServer:
             print(f"[{self.tag}] ⭐ 初登校 was played through (ip={local}): "
                   f"理事長室の廊下 stands — map {session.map_id} {session.pos}")
             return
+        self._presence_leave_map(session, "初登校")
         session.map_id, *cell = DEBUT_CELL_ALONE
         session.pos = (cell[0], cell[1])
         session.direction = DEBUT_FACING_ALONE
@@ -11190,6 +11219,7 @@ class MpsServer:
                             session.map_id, session.pos, values[0], (values[1], values[2])
                         )
                     )
+                    self._presence_leave_map(session, "door")
                     session.map_id, session.pos = values[0], (values[1], values[2])
                     session.direction = values[3]
                     # A door, not a walk: whatever the sprite was doing on the
@@ -17560,6 +17590,7 @@ class MpsServer:
             # out — the 0x4000 branch will re-add the character wherever
             # session says it is.
             map_id, pos_x, pos_y, direction = answer.warp
+            self._presence_leave_map(session, "chat warp")
             session.map_id, session.pos = map_id, (pos_x, pos_y)
             session.direction = direction
             session.walk = None  # carried, not walked; same as the door above
@@ -19379,6 +19410,24 @@ class MpsServer:
                 why, code = "already trading", trade.REASON_ALREADY_TRADING
             elif session.trade_asked is not None:
                 why, code = "already asked somebody", trade.REASON_ALREADY_ASKED
+            elif other.map_id != session.map_id:
+                # INVENTED — 「申し込み可能な範囲」 is read as 「on the same map」: this server draws everybody on a map and nobody off it, so the map is the only range a right-click can see across.
+                # The sentence is the original's own, 0xFF04 row 16 「指定された
+                # キャラクターが申し込み可能な範囲に存在しません」, and it lives
+                # in the Notify list, not in 0xFF09 -- so it goes out the way
+                # 受信拒否 does below: Ok, then 0x510E to the asker alone. The
+                # target is not asked. ⭐ アイテムトレード is only on the 交流メ
+                # ニュー (menu.bin 0:0), the ring on a character the asker can
+                # see, so an honest client reaches this only by a race: the
+                # target walked through a door while the ring was open.
+                print(f"[{self.tag}] トレード from charaId={me} to {target}: "
+                      f"on map {other.map_id}, asker on {session.map_id} "
+                      f"(reason={trade.NOTIFY_OUT_OF_RANGE})")
+                return (self._answer(session, seen,
+                                     trade.MSG_SV_OK_TRADE_REQUEST, b"")
+                        + self._answer(session, 0,
+                                       trade.MSG_SV_NOTIFY_TRADE_CANCEL,
+                                       trade.reason(trade.NOTIFY_OUT_OF_RANGE)))
             elif (other.trade_with is not None
                   or other.trade_asking is not None
                   or other.trade_asked is not None
