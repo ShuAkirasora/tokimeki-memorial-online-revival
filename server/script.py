@@ -2940,6 +2940,24 @@ def drama_events() -> list[dict]:
     return list(merged.values())
 
 
+def drama_teachers() -> "dict[int, int]":
+    """general_npc row -> the place that teacher stands at (see drama.py,
+    「Where a drama can be started」). Same two files, the operator's winning
+    on the row; empty if neither has the table, which turns the rule off."""
+    merged: "dict[int, int]" = {}
+    for path in DRAMA_EVENT_FILES:
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8"))["teachers"]
+        except (OSError, ValueError, KeyError):
+            continue
+        for row, place in rows.items():
+            try:
+                merged[int(row)] = int(place)
+            except (TypeError, ValueError):
+                continue
+    return merged
+
+
 def drama_event_key(file_name: str) -> "tuple[int, int] | None":
     """The `(genre, index)` a .ssb is the script of, or None if it is no drama.
 

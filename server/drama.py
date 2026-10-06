@@ -230,6 +230,91 @@ NG_DUPLICATE_NAME = 26      # 同名のパーティが存在しています。
 #: row 29 already use (ngwords.py), on create and on 0xE021's rename alike.
 NG_NAME_FORBIDDEN = 6
 
+#: 選択されたドラマイベントの情報が不正です。（ジャンル不一致） -- a drama that
+#: exists but is not one the teacher the screen was opened at offers. See
+#: `offered`.
+NG_WRONG_GENRE = 21
+#: 選択条件を満たしたドラマイベントがありません。 -- 0xE000 at a teacher whose
+#: place offers nothing. ⚠️ INVENTED — which sentence that second gate uses: an
+#: honest client never gets this far, because 0x4201 has already said reason 3
+#: (`MATCHING_NO_EVENT_HERE`) at the right-click, and this is the one row of the
+#: 27 that is about the list coming out empty.
+NG_NO_EVENT_SELECTED = 8
+
+# ── Where a drama can be started ─────────────────────────────────────────────
+#
+# ⭐⭐ Not every teacher offers every drama. `drama_event.bin` carries ten bytes
+# at +0x70 per drama, one per place, and `general_npc.bin` carries the place a
+# teacher stands at in +0x48 (classroom 0, 運動場 2, 体育館 3, the three
+# special rooms 4). The client reads neither column -- they are the original
+# server's -- and they fit without exception: the baseball and sports-day dramas
+# are flagged for place 2, the volleyball, swimming and stage-club ones for
+# place 3, the cookery-room, library and special-room ones for place 4. The six
+# numbers are also the six rows of `drama_event_genre.bin` (the indoor-sports-
+# and-stage row is 3, the culture-club row 4), which is why the refusal for a
+# mismatch says ジャンル.
+#
+# The exporter writes both columns into drama_events.json: `places` per drama,
+# `teachers` (general_npc row -> place) at the top.
+
+#: 0x4201's two refusals this end has a rule for, out of seven. The other five
+#: are a back end failing to look something up.
+MATCHING_NOT_A_TEACHER = 1  # ドラマイベントマッチングを起動できるＮＰＣではありません。
+MATCHING_NO_EVENT_HERE = 3  # 現在、この場所で起動できるドラマイベントはありません。
+
+#: The table the teachers are in: charaId 0x0003xxxx is general_npc row xxxx.
+TEACHER_CATEGORY = 3
+
+#: ⚠️ INVENTED — the place each of the five dramas that `drama_event.bin` flags
+#: for no place at all is offered at (round 555, user's call). Read off each
+#: one's synopsis: 0:9 (a night in the school building) and 0:10 (no club in
+#: it) go to the classroom, 1:10 (track and field) to the 運動場, 5:8 (a stage
+#: club) to the 体育館, where the other stage-club drama is, and 6:9 (the
+#: science club's show) to the special rooms. Left unplaced they could not be
+#: started anywhere, and two of them are where the keywords 150, 625, 35 and
+#: 316 are needed.
+UNPLACED_DRAMA_PLACES = {(0, 9): 0, (0, 10): 0, (1, 10): 2, (5, 8): 3, (6, 9): 4}
+
+
+def teacher_place(chara_id: int, teachers: "dict[int, int]") -> int | None:
+    """The place the teacher with this charaId stands at, or None if it is no
+    teacher -- the only NPCs whose menu carries ドラママッチング."""
+    if chara_id >> 16 != TEACHER_CATEGORY:
+        return None
+    return teachers.get(chara_id & 0xFFFF)
+
+
+def places_of(event: dict) -> "tuple[int, ...] | None":
+    """The places a drama can be started at; None if the data says nothing
+    (an operator's file older than the column), which means everywhere."""
+    places = event.get("places")
+    if places is None:
+        return None
+    if not places:
+        key = (int(event["genre"]), int(event["index"]))
+        return (UNPLACED_DRAMA_PLACES[key],) if key in UNPLACED_DRAMA_PLACES else ()
+    return tuple(int(p) for p in places)
+
+
+def offered(event: dict, place: int | None) -> bool:
+    """Whether a teacher at `place` offers this drama. An unknown place (no
+    teacher table, or a screen opened without one) offers everything, which is
+    what this server did before the rule."""
+    if place is None:
+        return True
+    places = places_of(event)
+    return places is None or place in places
+
+
+def teacher_for(event: dict, teachers: "dict[int, int]") -> int | None:
+    """A charaId of some teacher who offers this drama -- for the tools that
+    open the screen by hand and need to stand in front of the right one."""
+    for row, place in sorted(teachers.items()):
+        if offered(event, place):
+            return (TEACHER_CATEGORY << 16) | row
+    return None
+
+
 # 0xE00A's reason, from the client's own three sentences at 0xBD75D8:
 # 自分自身の要求による / リーダーに排除された / 切断による.
 PART_SELF = 0

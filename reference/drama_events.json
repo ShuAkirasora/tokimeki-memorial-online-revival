@@ -15,6 +15,9 @@
    ],
    "genre": 0,
    "index": 7,
+   "places": [
+    3
+   ],
    "ssb": "un007.ssb"
   },
   {
@@ -32,6 +35,7 @@
    ],
    "genre": 0,
    "index": 9,
+   "places": [],
    "ssb": "un009.ssb"
   },
   {
@@ -49,6 +53,7 @@
    ],
    "genre": 0,
    "index": 10,
+   "places": [],
    "ssb": "un010.ssb"
   },
   {
@@ -66,6 +71,7 @@
    ],
    "genre": 1,
    "index": 10,
+   "places": [],
    "ssb": "un030.ssb"
   },
   {
@@ -83,6 +89,9 @@
    ],
    "genre": 1,
    "index": 12,
+   "places": [
+    2
+   ],
    "ssb": "un032.ssb"
   },
   {
@@ -100,6 +109,9 @@
    ],
    "genre": 2,
    "index": 3,
+   "places": [
+    4
+   ],
    "ssb": "un043.ssb"
   },
   {
@@ -117,6 +129,9 @@
    ],
    "genre": 2,
    "index": 8,
+   "places": [
+    3
+   ],
    "ssb": "un048.ssb"
   },
   {
@@ -134,6 +149,9 @@
    ],
    "genre": 3,
    "index": 6,
+   "places": [
+    0
+   ],
    "ssb": "un066.ssb"
   },
   {
@@ -151,6 +169,10 @@
    ],
    "genre": 4,
    "index": 1,
+   "places": [
+    0,
+    4
+   ],
    "ssb": "un081.ssb"
   },
   {
@@ -168,6 +190,9 @@
    ],
    "genre": 4,
    "index": 15,
+   "places": [
+    3
+   ],
    "ssb": "un095.ssb"
   },
   {
@@ -185,6 +210,7 @@
    ],
    "genre": 5,
    "index": 8,
+   "places": [],
    "ssb": "un108.ssb"
   },
   {
@@ -202,6 +228,9 @@
    ],
    "genre": 5,
    "index": 11,
+   "places": [
+    2
+   ],
    "ssb": "un111.ssb"
   },
   {
@@ -219,6 +248,9 @@
    ],
    "genre": 5,
    "index": 17,
+   "places": [
+    4
+   ],
    "ssb": "un117.ssb"
   },
   {
@@ -236,6 +268,9 @@
    ],
    "genre": 6,
    "index": 7,
+   "places": [
+    3
+   ],
    "ssb": "un127.ssb"
   },
   {
@@ -253,6 +288,9 @@
    ],
    "genre": 6,
    "index": 8,
+   "places": [
+    4
+   ],
    "ssb": "un128.ssb"
   },
   {
@@ -270,6 +308,7 @@
    ],
    "genre": 6,
    "index": 9,
+   "places": [],
    "ssb": "un129.ssb"
   },
   {
@@ -287,6 +326,9 @@
    ],
    "genre": 6,
    "index": 10,
+   "places": [
+    3
+   ],
    "ssb": "un130.ssb"
   },
   {
@@ -304,6 +346,9 @@
    ],
    "genre": 7,
    "index": 6,
+   "places": [
+    4
+   ],
    "ssb": "un146.ssb"
   },
   {
@@ -321,6 +366,9 @@
    ],
    "genre": 7,
    "index": 11,
+   "places": [
+    0
+   ],
    "ssb": "un151.ssb"
   },
   {
@@ -338,6 +386,9 @@
    ],
    "genre": 9,
    "index": 1,
+   "places": [
+    3
+   ],
    "ssb": "un181.ssb"
   },
   {
@@ -355,6 +406,9 @@
    ],
    "genre": 9,
    "index": 4,
+   "places": [
+    3
+   ],
    "ssb": "un184.ssb"
   },
   {
@@ -372,8 +426,44 @@
    ],
    "genre": 9,
    "index": 5,
+   "places": [
+    4
+   ],
    "ssb": "un185.ssb"
   }
  ],
- "note": "Which (genre, index) keys MsgSvNotifyDramaEventList may carry, which .ssb each one names, and the cast slots each drama has. Per slot: its sex gate and the keyword it requires, which is all flgSelectActor is computed from -- see drama.selectable_actors. Keys, file stems and integers only: no titles, no synopses, no instructions. An operator may put a file of the same shape at runtime/drama_events.json; entries there win on the key and new keys are added."
+ "note": "Which (genre, index) keys MsgSvNotifyDramaEventList may carry, which .ssb each one names, and the cast slots each drama has. Per slot: its sex gate and the keyword it requires, which is all flgSelectActor is computed from -- see drama.selectable_actors. Per drama, the places it can be started at; `teachers` gives the place each general_npc row stands at, so a teacher offers the dramas listed for their place -- see drama.offered. Keys, file stems and integers only: no titles, no synopses, no instructions. An operator may put a file of the same shape at runtime/drama_events.json; entries there win on the key and new keys are added.",
+ "teachers": {
+  "0": 0,
+  "1": 0,
+  "10": 0,
+  "11": 0,
+  "12": 0,
+  "13": 0,
+  "14": 0,
+  "15": 0,
+  "16": 0,
+  "17": 0,
+  "18": 0,
+  "19": 0,
+  "2": 0,
+  "20": 0,
+  "21": 0,
+  "22": 0,
+  "23": 0,
+  "24": 0,
+  "25": 0,
+  "27": 2,
+  "28": 3,
+  "29": 4,
+  "3": 0,
+  "30": 4,
+  "31": 4,
+  "4": 0,
+  "5": 0,
+  "6": 0,
+  "7": 0,
+  "8": 0,
+  "9": 0
+ }
 }

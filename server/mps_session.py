@@ -1881,6 +1881,11 @@ class _Session:
         # itself replaces the screen (0x7200, round 231), and the client sends
         # 0xE000 again by itself when the play is over (round 262's capture).
         self.drama_matching = False
+        # The place of the teacher the screen was opened at (drama.py, 「Where a
+        # drama can be started」): which dramas the list offers, which parties
+        # it shows, and what 0xE00B / 0xE011 may pick. Set by 0x4200 and again
+        # by 0xE000, whose body names the same teacher; None ⇒ no rule.
+        self.drama_place: int | None = None
         # The step before that bracket opens: 0x4201 has said yes, and the
         # client is tearing the map down (0x4003) on its way to asking for the
         # list with 0xE000. Nothing on the wire marks this stretch, so it is
@@ -4852,6 +4857,28 @@ class MpsServer:
             # The body the query carries is the charaId of the NPC that was
             # right-clicked (0x0003001b = general_npc 3:27), not an npcId.
             #
+            # ⭐⭐ Round 555: and it is not a yes for everybody. Only a teacher
+            # has ドラママッチング on their menu, and a teacher offers the
+            # dramas of their place -- the two rules 0x4201's reasons 1 and 3
+            # are the sentences of (drama.py, 「Where a drama can be started」).
+            # The client only asks from that menu item, so for it these are a
+            # second gate; a table that is missing turns them off.
+            teachers = script.drama_teachers()
+            chara_id = struct.unpack_from(">I", params, 0)[0] if len(params) >= 4 else 0
+            place = drama.teacher_place(chara_id, teachers) if teachers else None
+            reason = None
+            if teachers and place is None:
+                reason = drama.MATCHING_NOT_A_TEACHER
+            elif not any(drama.offered(e, place) for e in events):
+                reason = drama.MATCHING_NO_EVENT_HERE
+            if reason is not None:
+                print(f"[{self.tag}] drama matching refused at {chara_id:#010x}: "
+                      f"0x4201 reason {reason}")
+                return self._answer(
+                    session, seen, script.MSG_SV_RESULT_DRAMAEVENT_MATCHING_POSSIBLE,
+                    bytes((1, reason)),
+                )
+            session.drama_place = place
             # A yes sends the client off the map; see _Session.drama_entering.
             session.drama_entering = True
             return self._answer(
@@ -5246,13 +5273,41 @@ class MpsServer:
                     session, seen, script.MSG_SV_NG_DRAMA_EVENT_MATCHING_START,
                     struct.pack(">B", drama.NG_ALREADY_MATCHING),
                 )
-            kept = keys[: script.DRAMA_EVENT_MAX]
+            # ⭐⭐ Round 555: the body is the charaId of the teacher (the same
+            # one 0x4200 asked about), and the list is that teacher's place's
+            # dramas, not all 22. A body naming no teacher is reason 1, a place
+            # with nothing on it reason 8; neither reaches an honest client,
+            # which 0x4201 has already stopped.
+            teachers = script.drama_teachers()
+            if teachers and len(params) >= 4:
+                (teacher,) = struct.unpack_from(">I", params, 0)
+                place = drama.teacher_place(teacher, teachers)
+                reason = None
+                if place is None:
+                    reason = drama.NG_BAD_NPC
+                elif not any(drama.offered(e, place) for e in events):
+                    reason = drama.NG_NO_EVENT_SELECTED
+                if reason is not None:
+                    print(f"[{self.tag}] drama matching at {teacher:#010x} "
+                          f"refused (0xE001, reason={reason})")
+                    return self._answer(
+                        session, seen, script.MSG_SV_NG_DRAMA_EVENT_MATCHING_START,
+                        struct.pack(">B", reason),
+                    )
+                session.drama_place = place
+            place = session.drama_place
+            kept = [(e["genre"], e["index"]) for e in events
+                    if drama.offered(e, place)][: script.DRAMA_EVENT_MAX]
             # ⭐ The party list used to go out empty on the grounds that an
             # invented party is a second thing that can be wrong. It is not
             # invented any more: whatever is on the board is what goes out, and
             # on a one-player server that is exactly the parties this player
-            # made and has not left.
-            parties = list(self.dramaparties.parties.values())[: drama.PARTY_MAX]
+            # made and has not left. ⭐ Round 555: the ones whose drama this
+            # place offers -- the board is per place (「この場所では、これ以上
+            # パーティを登録することはできません」).
+            parties = self._drama_parties_here(place, events)[: drama.PARTY_MAX]
+            print(f"[{self.tag}] drama matching at place {place}: "
+                  f"{len(kept)} dramas, {len(parties)} parties")
             # ⭐ The screen is open from here until 0xE005 takes it down, and
             # the list below is the last thing this connection would hear about
             # it without that bracket being written down. See
@@ -5404,6 +5459,24 @@ class MpsServer:
         # round 332, and 代行ＮＰＣ in round 333.
         return None
 
+    @staticmethod
+    def _drama_event_of(party: "drama.Party") -> "dict | None":
+        """The drama a party books, as drama_events.json has it."""
+        return next((e for e in script.drama_events()
+                     if (int(e["genre"]), int(e["index"])) == (party.genre, party.index)),
+                    None)
+
+    def _drama_parties_here(self, place: "int | None",
+                            events: "list[dict]") -> "list[drama.Party]":
+        """The parties on the board at `place`: those whose drama it offers.
+        ⚠️ A drama two places offer (4:1) puts its parties
+        on both boards -- the party is about the drama, not where it was made."""
+        here = {(int(e["genre"]), int(e["index"])) for e in events
+                if drama.offered(e, place)}
+        known = {(int(e["genre"]), int(e["index"])) for e in events}
+        return [p for p in self.dramaparties.parties.values()
+                if (p.genre, p.index) in here or (p.genre, p.index) not in known]
+
     def _drama_select_actor(self, session: "_Session", events: list[dict]):
         """``flgSelectActor`` per event for whoever is on this connection.
 
@@ -5479,6 +5552,8 @@ class MpsServer:
         reason = None
         if event is None:
             reason = drama.NG_BAD_EVENT
+        elif not drama.offered(event, session.drama_place):
+            reason = drama.NG_WRONG_GENRE
         elif full is None:
             reason = drama.NG_BAD_CHARACTER
         elif actor_id >= drama.CAST_MAX or actor_id not in [
@@ -5487,7 +5562,9 @@ class MpsServer:
             reason = drama.NG_BAD_ACTOR
         elif self.dramaparties.party_of(session.chara_id) is not None:
             reason = drama.NG_ALREADY_IN_PARTY
-        elif len(self.dramaparties.parties) >= drama.PARTY_MAX:
+        elif len(self._drama_parties_here(session.drama_place, events)) >= drama.PARTY_MAX:
+            # Per place since round 555, which is what the sentence says and
+            # what the list the client can hold (PARTY_MAX rows) is a list of.
             reason = drama.NG_NO_ROOM
         elif self.accounts.ngwords.hit(name) is not None:
             reason = drama.NG_NAME_FORBIDDEN
@@ -6693,10 +6770,14 @@ class MpsServer:
         left in it and the only skip that matters is the leaver, who is `skip`.
         """
         members = {a.chara_id for a in party.actors} if party is not None else set()
+        event = self._drama_event_of(party) if party is not None else None
         for other in self.live:
             if not other.drama_matching or not other.chara_id:
                 continue
             if other.chara_id == skip or other.chara_id in members:
+                continue
+            # Round 555: a row only reaches the screens whose list it is on.
+            if event is not None and not drama.offered(event, other.drama_place):
                 continue
             if other.writer is None or other.writer.is_closing():
                 continue
@@ -6835,8 +6916,14 @@ class MpsServer:
         # Ordered the way the player meets them, as in create: the first
         # sentence on screen is about the thing they just did.
         reason = None
+        event = self._drama_event_of(party) if party is not None else None
         if party is None:
             reason = drama.NG_BAD_PARTY
+        elif event is not None and not drama.offered(event, session.drama_place):
+            # Round 555: a party is joined from the teacher whose list it is
+            # on. The list never shows another place's, so this is the second
+            # gate behind it, with create's sentence for the same mismatch.
+            reason = drama.NG_WRONG_GENRE
         elif full is None:
             reason = drama.NG_BAD_CHARACTER
         elif self.dramaparties.party_of(session.chara_id) is not None:
