@@ -1783,13 +1783,41 @@ class Romance:
         ⚠️ Deliberately complete rather than lazy: `gs3vm` raises on a cell it
         was not given, and a missing cell should surface as a log line and a
         fallback, not as a branch quietly taken the wrong way.
+
+        ⭐ While a confession waits on 再入学 (``captured``) the two locker
+        scripts are shown the stage `on_stage` already shows the map: nobody
+        has debuted and no letter is waiting. p09_02 says what 「再入学しない」
+        costs -- 「告白してこなかった恋愛候補生も含め、全ての恋愛イベントを
+        見ることはできなくなります」 -- and the letter is the one 恋愛 door that
+        does not go through a map character. Left open, both ways it misbehaves
+        were measured off the scripts themselves (round 551): `lck_s103` checks
+        春日・弥生・天宮 and 桜井・犬飼 in that order and stops at the first
+        letter already there, so 弥生's or 犬飼's leaves the one checked before
+        her free to get one -- and `lck_s102` reads 天宮 first, so that letter is
+        the one read and a second `_e011` takes the capture; in every other
+        pairing the confessor's own letter never leaves the locker and her
+        `_e011` replays as often as 読む is picked. ⚠️ Nothing in the save is
+        touched: the scripts simply write no letter while the stage is empty,
+        and after `reenroll` the next visit finds the others' gates as they
+        were.
+        INVENTED — while a confession waits on 再入学 the locker offers no letter and writes none (p09_02 says no 恋愛イベント; where the gate stands is this end's).
         """
+        cells = self._engine_cells(menu_item)
+        if self.captured is not None:
+            for i in range(len(CANDIDATES)):
+                cells[("PC", PC_DEBUT_BASE + i)] = 0
+                cells[("PC", PC_LETTER_BASE + i)] = 0
+        return cells
+
+    def _engine_cells(self, menu_item: int) -> dict:
+        """`data_cells` plus the menu item, which the engine supplies."""
         return {**self.data_cells(), ("CTX", (CTX_MENU_ITEM, 0)): menu_item}
 
     def talk_cells(self, menu_item: int, levels: "list[int] | None",
                    today: "date | None" = None) -> dict:
-        """Everything `<name>_s102` / `_s104` read: `locker_cells` plus the 会話
-        slots of all five, today's date, and the 能力 レベル.
+        """Everything `<name>_s102` / `_s104` read: the save's cells and the
+        menu item, the 会話 slots of all five, today's date, and the 能力 レベル.
+        (Not `locker_cells`: that one empties the stage during 再入学待ち.)
 
         ⭐ The date is the server's real one, the same clock `talk` keeps its
         daily rule on -- the script wants year, month and day as three SYSTEM
@@ -1801,7 +1829,7 @@ class Romance:
         told every レベル is 0 -- a fallback and a log line, not a gate
         quietly failed.
         """
-        cells = self.locker_cells(menu_item)
+        cells = self._engine_cells(menu_item)
         cells.update(date_cells(today))
         for name, row in self.state.items():
             i = candidate_index(name)

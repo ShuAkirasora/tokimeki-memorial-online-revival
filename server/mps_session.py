@@ -4854,6 +4854,18 @@ class MpsServer:
             if result is not None and result.event is not None:
                 event = result.event
                 print(f"[{self.tag}] lck_s102 → event {event[0]}:{event[1]}")
+            # ⭐ And when it names nobody -- no letter waits, or 再入学 is pending
+            # (`Romance.locker_cells`) -- 読む is refused the way a 会話 chooser's
+            # 「none」 is, instead of falling through to DEFAULT_NPC_EVENT, which
+            # is one of the candidates' own conversations.
+            if result is not None and result.no_event:
+                session.talk_key = None
+                print(f"[{self.tag}] lck_s102: 0xffff → 0x6306 reason "
+                      f"{script.NPC_EVENT_NONE_REASON}")
+                return self._answer(
+                    session, seen, script.MSG_SV_NG_NPC_MAP_OBJECT_EVENT,
+                    bytes((script.NPC_EVENT_NONE_REASON,)),
+                )
             # ⭐⭐⭐ And for the five 恋愛候補生 the game has a script for this
             # question too: her `_s102` reads 親密さ, 進行度, the date and its
             # own bookkeeping and names the segment -- メイン on a new day
