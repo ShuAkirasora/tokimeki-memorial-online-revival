@@ -2984,6 +2984,24 @@ class MpsServer:
             return ACTION_READING_PAPER
         return ACTION_LOCKER_OPEN if other.locker_open else ACTION_NONE
 
+    def _board_busy(self, session: "_Session") -> bool:
+        """看板作成's own gate, asked at this end: is there an icon over my head?
+
+        ⭐ RESTORED, the condition and nothing else. The client's ［作 成］
+        (0x47a7bd) does this before anything else, for all three kinds the
+        window makes: it looks its own charaId up in the scene, reads the action
+        byte off it (0x6def7d) and, when that is anything but zero, says 「他の
+        行動中は看板を作成できません」 and sends nothing. The byte it reads is
+        the one _presence_icon hands the subject, which is this function's
+        answer -- so asking it here is the same question with the same data,
+        put to a client that did not ask it of itself.
+
+        What each door then says is the sentence its own table has for it:
+        0x4B02 3, 0x4C82 5 and 0x5802 5 are all 「今の状態では、…を作成するこ
+        とはできません」.
+        """
+        return self._presence_action(session) != ACTION_NONE
+
     def _presence_blocked(
         self, session: "_Session", also: "set[int] | None" = None
     ) -> "set[int]":
@@ -15664,6 +15682,12 @@ class MpsServer:
             # sent the byte that draws it. See stress.barred_from_club.
             reason = (trainingroom.NG_ADD_INJURED if self._injured(session)
                       else board.add_refusal(chara_id, headline, limit))
+            # 0x5802 reason 5, 「今の状態では、自主トレルームを作成することは
+            # できません」: the client's own gate, asked again here. See
+            # _board_busy -- the other two kinds of 看板 ask it too.
+            if reason is None and self._board_busy(session):
+                return ng(trainingroom.MSG_SV_NG_ADD, trainingroom.NG_ADD_CANNOT_NOW,
+                          f"add under icon {self._presence_action(session)}")
             if reason is not None:
                 return ng(trainingroom.MSG_SV_NG_ADD, reason, f"add {params.hex()}")
             family, first = self._tr_names(chara_id)
@@ -15978,10 +16002,18 @@ class MpsServer:
             # sentence to say it with (see busy_elsewhere in _chatroom). What
             # would overturn it: a capture of the real client sending 0x4B00
             # from inside a room, or a manual line putting two up at once.
+            # ⭐ Since round 557 most of this is the client's own gate and not
+            # a guess (_board_busy, right below): a room's leader, a チャット
+            # ルーム's owner and anybody seated in one all wear an icon. What
+            # is left INVENTED is a 自主トレ member who is not its leader --
+            # the one person in a room with nothing over their head.
             if reason is None and (
                 self.trainingrooms.room_of(chara_id) is not None
                 or self.chatrooms.room_of(chara_id) is not None
             ):
+                reason = billboard.NG_ADD_CANNOT_NOW
+            # The client's own gate, asked again here; see _board_busy.
+            if reason is None and self._board_busy(session):
                 reason = billboard.NG_ADD_CANNOT_NOW
             if reason is not None:
                 return ng(billboard.MSG_SV_NG_ADD, reason, f"add {params.hex()}")
@@ -16164,7 +16196,7 @@ class MpsServer:
             parsed = chatroom.parse_add(params)
             headline, limit = parsed if parsed else (None, 0)
             reason = board.add_refusal(chara_id, headline, limit)
-            if reason is None and busy_elsewhere():
+            if reason is None and (busy_elsewhere() or self._board_busy(session)):
                 reason = chatroom.NG_ADD_CANNOT_NOW
             if reason is not None:
                 return ng(chatroom.MSG_SV_NG_ADD, reason, f"add {params.hex()}")

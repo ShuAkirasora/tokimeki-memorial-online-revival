@@ -214,6 +214,15 @@ NG_CANCEL_BAD_PLAYER = 0  # プレイヤー情報が不正です。
 NG_CANCEL_NOT_CALLING = 4  # GMコールをしていません。
 NG_CANCEL_IN_HAND = 6      # 現在、ＧＭが対応中ですので、…取り消すことはできません。
 
+#: UNSENT-REASON 0x6902 3 -- 「今の状態では、GMコールを行うことはできません」 is a
+#: state gate of the original's own that nothing here can read back. The client
+#: gates nothing before sending: the GMコール window's one button (0x524b3e)
+#: sends 0x6900 when no call is open and 0x6903 when one is, and that is all it
+#: asks. No line of the manual or the operating policy names a state in which a
+#: player may not call, and refusing one on a guess would take the only way to
+#: ask for help away from somebody who may be stuck.
+#: UNSENT-REASON 0x6905 3 -- the cancel side of the same window, same reading.
+
 #: The pull-down's ids minus 「非選択」. Read off `gm_call_type`; the private
 #: tree re-derives this from the table and says so if the two
 #: ever part company.

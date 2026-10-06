@@ -138,6 +138,15 @@ NG_DEL_CANNOT_NOW = 3
 NG_DEL_SEND_FAILED = 4  # not sent, same reason as NG_ADD_SEND_FAILED
 
 NG_INFO_BAD_CHARACTER = 2
+#: UNSENT-REASON 0x4B08 3 -- 「今の状態では、看板の内容を参照することはできませ
+#: ん」 belongs to a GM sanction this end never imposes. The client's own gate on
+#: the icon a reader right-clicks (0x6df407) is a flag that only the 0x6808
+#: GMWarp handler (0x774617) sets, and only when the warp lands on map 89, the
+#: 特殊教室校舎２Ｆ宿直室 -- a room with no doorway out. The same flag shuts the
+#: map's own click handling and is read again by the ＧＭチャット handlers, so
+#: it is 「held in the 宿直室 by a GM」. Nothing here warps anybody there (the
+#: GM side of the protocol is not served at all; see gmcall.py), so there is no
+#: such state to refuse from.
 NG_INFO_CANNOT_NOW = 3
 
 
