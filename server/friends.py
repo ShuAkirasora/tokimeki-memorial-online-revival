@@ -168,7 +168,13 @@ NG_BAD_CHARA = refusals.NG_BAD_CHARA
 #: ⚠️ A judgement, for 「they are already in your アドレス帳」: 0xFF07 has no row
 #: for that, and a real client greys the menu entry out (measured round 214), so
 #: this branch is a guard rather than something a player can reach.
+#: ⭐ Exact, on the other hand, for a target whose icon greys 「友達登録」 in the
+#: PC 交流メニュー (mps_session.RING_GREYED_BY), round 558.
 NG_TARGET_BUSY = refusals.NG_TARGET_BUSY
+#: 「…メンバー登録の申し込みに失敗しました。」 for an asker whose own icon greys
+#: the whole ring -- the group wording is the list's, see refusals.py's 0xFF07
+#: note; mps_session._ring_greyed says why the row is a choice.
+NG_REQUEST_FAILED = refusals.NG_REQUEST_FAILED
 #: 「指定されたキャラクターは、現在申し込みを受け付けていません。」 for 取り下げ
 #: with nothing open. ⚠️ A judgement, and the same slot number トレード uses for
 #: the same case out of its own list (0xFF09's row 3, worded 受けていません).

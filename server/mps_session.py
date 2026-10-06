@@ -1197,6 +1197,30 @@ ACTION_TRAINING_ROOM = 10    # 自主トレ募集中 (jishutore_boshu)
 # and 14 is byte-identical artwork to 4. The hearts belong to 恋愛 / p05_12
 # カップル; nothing here sends any of them.
 
+# ⭐⭐ RESTORED, round 558: which icons of the PC 交流メニュー the client greys
+# out, read off the client rather than chosen. The ring's per-icon test
+# (0x6a6e4f) refuses everything when the asker's OWN icon byte is non-zero
+# (+0x11e, set in the constructor 0x6a6ae8 from the same 0x6def7d read
+# 看板作成 makes), and otherwise asks 0x6a6aa3 with the TARGET's icon byte
+# (+0x120): menu_item.bin id -> column (+0xc of a 16-byte row in the table at
+# 0xd85500), then column + icon * 8 into the int table at 0xd85320; a 1 there
+# greys the icon. Ids 7 and up carry column -1 and are never greyed this way.
+# Laid out by icon, the fifteen rows say only three things:
+RING_TWOSHOT, RING_DATE, RING_SCORECARD, RING_CAREER = 0, 1, 2, 3
+RING_GROUP, RING_FRIEND, RING_TRADE = 4, 5, 6          # menu_item.bin ids
+_RING_TALK = frozenset((RING_TWOSHOT, RING_DATE, RING_TRADE))
+_RING_ALL = frozenset(range(7))
+RING_GREYED_BY = {
+    ACTION_TALKING: _RING_TALK, ACTION_TRADING: _RING_TALK,
+    ACTION_LESSON: _RING_ALL, ACTION_CLUB_ACTIVITY: _RING_ALL,
+    ACTION_DRAMA_EVENT: _RING_ALL,
+    ACTION_READING_PAPER: _RING_TALK, ACTION_LOCKER_OPEN: _RING_TALK,
+    # ACTION_SIGNBOARD (8): row of 0s and 2s, nothing greyed -- a 看板 is a
+    # door, and the people looking at it can still ask its owner anything.
+    ACTION_CHAT_ROOM: _RING_TALK, ACTION_TRAINING_ROOM: _RING_TALK,
+    11: _RING_ALL, 12: _RING_ALL, 13: _RING_ALL, 14: _RING_TALK,
+}
+
 # What the client sends while the player moves around, decoded rather than left
 # as a hex blob because these carry the only coordinates the client ever states
 # itself. Shapes are the shape reader's read widths:
@@ -3001,6 +3025,32 @@ class MpsServer:
         とはできません」.
         """
         return self._presence_action(session) != ACTION_NONE
+
+    def _ring_greyed(self, session: "_Session", other: "_Session | None",
+                     item: int) -> "str | None":
+        """Would the client's PC 交流メニュー have greyed `item` on `other`?
+
+        ⭐ RESTORED, the condition: the two bytes the ring reads (RING_GREYED_BY
+        has the addresses), asked again here of the same data -- the icon each
+        of the two is wearing is the byte _presence_icon sends. Answers "self"
+        when the asker's own icon greys the whole ring, "target" when the
+        target's icon greys this item, None when the ring would have offered it.
+
+        ⚠️ Only a target standing on the asker's map is the ring's: the ring
+        hangs off a character drawn on screen, and this server draws nobody
+        off the map. A request about anybody else did not come out of the ring
+        (or came out of a race the caller already answers), so it is left to
+        whatever the caller does with it rather than greyed on a guess.
+
+        INVENTED — the "self" case's sentence: no family has one for 「you are busy」, so each answers with its own 「…の申し込みに失敗しました」 row (0xFF05 2, 0xFF09 2, 0xFF07 2); 通知表 and 経歴 are not inventions, their row 2 says the ring is closed.
+        """
+        if other is None or other is session or other.map_id != session.map_id:
+            return None
+        if self._presence_action(session) != ACTION_NONE:
+            return "self"
+        if item in RING_GREYED_BY.get(self._presence_action(other), ()):
+            return "target"
+        return None
 
     def _presence_blocked(
         self, session: "_Session", also: "set[int] | None" = None
@@ -10264,6 +10314,19 @@ class MpsServer:
                 chara_id = struct.unpack_from(">I", params, 0)[0]
                 store = self._chars(session)
                 if chara_id != session.chara_id:
+                    # The ring's own gate first, the way the client asks it
+                    # before it sends anything; see _ring_greyed.
+                    ring = self._ring_greyed(
+                        session, self._session_of(chara_id), RING_SCORECARD)
+                    if ring is not None:
+                        print(f"[{self.tag}] scorecard for charaId={chara_id}: "
+                              f"refused, the 交流メニュー greys it ({ring}'s icon)")
+                        return self._answer(
+                            session, sequence, curriculum.MSG_SV_ERROR_SCORE_CARD,
+                            refusals.byte(curriculum.SCORE_CARD_TARGET_BUSY
+                                          if ring == "target"
+                                          else curriculum.SCORE_CARD_RING_CLOSED),
+                        )
                     store = self.accounts.owner_of(chara_id) or store
                     opts = store.options(chara_id)
                     if opts is None or not opts["scorecard"]:
@@ -10479,6 +10542,20 @@ class MpsServer:
                 chara_id = struct.unpack_from(">I", params, 0)[0]
                 own = chara_id == session.chara_id
                 store = self._chars(session)
+                if not own and msg_type == career.MSG_CL_QUERY_CHARA_CAREER:
+                    # The ring's own gate; 0x4318 is not asked it, since it
+                    # only follows a card that was already let through.
+                    ring = self._ring_greyed(
+                        session, self._session_of(chara_id), RING_CAREER)
+                    if ring is not None:
+                        print(f"[{self.tag}] career for charaId={chara_id}: "
+                              f"refused, the 交流メニュー greys it ({ring}'s icon)")
+                        return self._answer(
+                            session, sequence, career.MSG_SV_ERROR_CHARA_CAREER,
+                            refusals.byte(career.CAREER_TARGET_BUSY
+                                          if ring == "target"
+                                          else career.CAREER_RING_CLOSED),
+                        )
                 if not own:
                     store = self.accounts.owner_of(chara_id) or store
                     opts = store.options(chara_id)
@@ -19232,6 +19309,13 @@ class MpsServer:
             elif session.group_invited is not None or other.group_inviter is not None:
                 why, code = ("an application is already open",
                              groups.NG_ALREADY_ASKED)
+            else:
+                # The ring's own gate, asked again here; see _ring_greyed.
+                ring = self._ring_greyed(session, other, RING_GROUP)
+                if ring is not None:
+                    why, code = (f"the 交流メニュー greys グループ登録 ({ring}'s icon)",
+                                 groups.NG_TARGET_BUSY if ring == "target"
+                                 else groups.NG_REQUEST_FAILED)
             if why is not None:
                 print(f"[{self.tag}] 勧誘 from charaId={me} to {target} "
                       f"refused: {why} (reason={code})")
@@ -19521,6 +19605,7 @@ class MpsServer:
                 self._forget_stale_trade(other)
             why = None
             code = trade.REASON_REQUEST_FAILED
+            ring = self._ring_greyed(session, other, RING_TRADE)
             if target == me and me:
                 why, code = "oneself", trade.REASON_SELF
             elif target == 0 or other is None:
@@ -19560,6 +19645,11 @@ class MpsServer:
                 # the smoke caught it. reason 1 is true of the target either
                 # way: 「現在申し込みを受けられる状態ではありません」.
                 why, code = "the target is busy", trade.REASON_TARGET_BUSY
+            elif ring is not None:
+                # The ring's own gate, asked again here; see _ring_greyed.
+                why, code = (f"the 交流メニュー greys トレード ({ring}'s icon)",
+                             trade.REASON_TARGET_BUSY if ring == "target"
+                             else trade.REASON_REQUEST_FAILED)
             if why is not None:
                 print(f"[{self.tag}] トレード from charaId={me} to {target} "
                       f"refused: {why} (reason={code})")
@@ -20165,6 +20255,7 @@ class MpsServer:
         why = None
         code = twoshot.REASON_REQUEST_FAILED
         place = None
+        ring = self._ring_greyed(session, other, RING_TWOSHOT)
         if target == me and me:
             why, code = "oneself", twoshot.REASON_SELF
         elif target == 0 or other is None:
@@ -20182,6 +20273,11 @@ class MpsServer:
             # an asker without leaving the client two open questions and one
             # answer, because 0x5004/0x5005 carry no charaId.
             why, code = "the target is busy", twoshot.REASON_TARGET_BUSY
+        elif ring is not None:
+            # The ring's own gate, asked again here; see _ring_greyed.
+            why, code = (f"the 交流メニュー greys ツーショット ({ring}'s icon)",
+                         twoshot.REASON_TARGET_BUSY if ring == "target"
+                         else twoshot.REASON_REQUEST_FAILED)
         else:
             place = self._twoshot_place(other)
             if place is None:
@@ -20481,8 +20577,16 @@ class MpsServer:
 
         if msg_type == friends.MSG_CL_REQUEST_FRIEND_ADD_REQUEST:
             other = self._session_of(target) if target else None
-            if target in (0, me) or book.linked(me, target) or other is None:
-                if target == me:
+            # The ring's own gate, asked again here; see _ring_greyed.
+            ring = (None if target in (0, me) or book.linked(me, target)
+                    else self._ring_greyed(session, other, RING_FRIEND))
+            if (target in (0, me) or book.linked(me, target) or other is None
+                    or ring is not None):
+                if ring is not None:
+                    why = f"the 交流メニュー greys 友達登録 ({ring}'s icon)"
+                    code = (friends.NG_TARGET_BUSY if ring == "target"
+                            else friends.NG_REQUEST_FAILED)
+                elif target == me:
                     why, code = "oneself", friends.NG_SELF
                 elif target == 0:
                     why, code = "no target", friends.NG_BAD_CHARA

@@ -453,6 +453,13 @@ NG_BAD_CHARA = refusals.NG_BAD_CHARA
 #: 「指定されたキャラクターは、現在申し込みを受け付けていません。」 for 取り下げ
 #: with nothing open. ⚠️ Judgement; same slot number トレード uses for that case.
 NG_NOTHING_OPEN = refusals.NG_TARGET_NOT_ACCEPTING
+#: 「指定されたキャラクターは、現在申し込みを受けられる状態ではありません。」 --
+#: exact, for a target whose icon greys 「グループ登録申込み」 in the PC 交流メ
+#: ニュー (授業中, クラブ活動中, ドラマイベント中: mps_session.RING_GREYED_BY).
+NG_TARGET_BUSY = refusals.NG_TARGET_BUSY
+#: 「…メンバー登録の申し込みに失敗しました。」 for an asker whose own icon greys
+#: the whole ring; mps_session._ring_greyed says why that row is a choice.
+NG_REQUEST_FAILED = refusals.NG_REQUEST_FAILED
 #: 「仲良しグループもしくは同好会の情報が不正です。」 for a leader pressing 脱退.
 #: ⚠️⚠️ Judgement, and the weakest one here: what is wrong is not the group's
 #: information, it is that a leader leaves through 解散 or 引継. 0xFF07 has no row

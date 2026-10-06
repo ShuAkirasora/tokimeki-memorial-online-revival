@@ -65,10 +65,17 @@ MSG_SV_ERROR_SCORE_CARD = 0x430E
 #: ⚠️ Rows 1 and 6 read alike; which of the two goes with "somebody else's id is
 #: unknown" and which with "my own record is gone" is this end's reading of
 #: 指定された (the one you named) against the bare 6.
-#: UNSENT-REASON 0x430E 2,3,4 -- 交流メニュー off and the two 申込み states are the
-#: PC menu's gates; this end has no state that closes the menu or the target.
+#:  2 現在、交流メニューは使用できません。                  -- the asker's own icon greys the ring
+#:  3 選択したキャラクターは、現在、申込みを受けられない状態です。 -- the target's icon greys 通知表
+#: ⭐ 2 and 3 are the PC 交流メニュー's two gates (mps_session._ring_greyed),
+#: and were declared unsent until round 558 for want of the state behind them:
+#: it is the icon over each head, which this end has been drawing all along.
+#: UNSENT-REASON 0x430E 4 -- 「申込みを受け付けていません」 is a refusal to
+#: accept, and 受信拒否 here refuses applications, which a card is not.
 SCORE_CARD_BAD_BODY = 0
 SCORE_CARD_NO_SUCH_CHARACTER = 1
+SCORE_CARD_RING_CLOSED = 2
+SCORE_CARD_TARGET_BUSY = 3
 SCORE_CARD_PRIVATE = 5
 SCORE_CARD_OWN_MISSING = 6
 

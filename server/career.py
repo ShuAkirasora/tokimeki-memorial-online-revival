@@ -91,10 +91,15 @@ MSG_SV_ERROR_CHARA_CAREER = 0x4317
 #:  1 選択されたキャラクターの情報取得に失敗しました。      -- the id names no character
 #:  5 選択したキャラクターは、現在、経歴を公開していません。
 #:  6 キャラクター情報が取得できませんでした。              -- the asker's own record is missing
-#: UNSENT-REASON 0x4317 2,3,4 -- 「この機能は、現在、使用することができません」 and
-#: the two 申込み states are gates this end has no state for.
+#:  2 この機能は、現在、使用することができません。        -- the asker's own icon greys the ring
+#:  3 選択したキャラクターは、現在、申込みを受けられない状態です。 -- the target's icon greys 経歴
+#: ⭐ The same two gates as 0x430E's 2 and 3 (mps_session._ring_greyed), round 558.
+#: UNSENT-REASON 0x4317 4 -- the same reading as 0x430E's 4: a card is not an
+#: application, so 受信拒否 does not close it.
 CAREER_BAD_BODY = 0
 CAREER_NO_SUCH_CHARACTER = 1
+CAREER_RING_CLOSED = 2
+CAREER_TARGET_BUSY = 3
 CAREER_PRIVATE = 5
 CAREER_OWN_MISSING = 6
 MSG_CL_QUERY_CHARA_CAREER_LIST = 0x4318
