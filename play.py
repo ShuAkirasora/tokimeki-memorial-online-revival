@@ -263,22 +263,31 @@ def resolve_game_folder(given: str | None, remembered: str | None) -> Path | Non
 # ---------------------------------------------------------------- the address
 
 
-def resolve_server(given: str | None, remembered: str | None) -> str | None:
+def resolve_server(given: str | None, remembered: str | None) -> tuple[str, str] | None:
+    """What was asked for, and the IPv4 address everything is pointed at.
+
+    A name is remembered as a name and looked up afresh on every run, so a
+    server that moves to another address is followed by running this again.
+    """
     chosen = given or remembered
     if not chosen:
         say("  Which machine runs the server?")
         say("    - the same one as the game (including the game under Wine): 127.0.0.1")
         say("    - a different machine from the game: that machine's local")
         say("      address, usually starting 192.168. or 10.")
-        chosen = ask("  server address", "127.0.0.1")
+        say("    - a server somewhere else: its domain name or its address")
+        chosen = ask("  server address or name", "127.0.0.1")
     try:
-        auth.parse_ipv4(chosen)
+        address, found = auth.resolve_server(chosen)
     except ValueError as exc:
         say(f"  {exc}")
-        say("  It has to be an address rather than a name: the client's")
-        say("  authentication step never performs a lookup.")
         return None
-    return chosen
+    if address != chosen:
+        say(f"  {chosen} -> {address}")
+        if len(found) > 1:
+            say(f"  (it also answers {', '.join(found[1:])}; the client can hold")
+            say("  only one, so it gets the first)")
+    return chosen, address
 
 
 # ------------------------------------------------------------------ the hosts
@@ -596,7 +605,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Point your copy of the client at a server and start it.",
     )
-    parser.add_argument("--server", help="address of the machine running the server")
+    parser.add_argument(
+        "--server", help="address or domain name of the machine running the server"
+    )
     parser.add_argument("--game-dir", help=f"the folder holding {LAUNCHER_EXE}")
     parser.add_argument(
         "--launch-with",
@@ -628,16 +639,22 @@ def main() -> int:
     folder = resolve_game_folder(args.game_dir, remembered.get("game_dir"))
     if folder is None:
         return hold(1)
-    server = None
+    # `name` is what was typed and is what gets remembered; `server` is the
+    # address it stands for today, and is what the client is pointed at.
+    name = server = None
     if not args.revert:
-        server = resolve_server(args.server, remembered.get("server"))
-        if server is None:
+        chosen = resolve_server(args.server, remembered.get("server"))
+        if chosen is None:
             return hold(1)
+        name, server = chosen
     launch_with = args.launch_with or remembered.get("launch_with")
 
     say()
     say(f"  game    {folder}")
-    say(f"  server  {server or 'putting everything back'}")
+    if server is None:
+        say("  server  putting everything back")
+    else:
+        say(f"  server  {server}" + ("" if name == server else f"  ({name})"))
 
     launching = not (args.revert or args.no_launch or args.dry_run)
     if WINDOWS and not is_privileged() and not args.dry_run:
@@ -683,7 +700,7 @@ def main() -> int:
         say("Dry run. Nothing was written and nothing was started -- including")
         say("the answers above, which are not remembered either.")
         return hold(0)
-    save_config(game_dir=str(folder), server=server, launch_with=launch_with)
+    save_config(game_dir=str(folder), server=name, launch_with=launch_with)
 
     if args.no_launch:
         say()
@@ -704,7 +721,7 @@ def main() -> int:
 
     say()
     say("The login screen wants a KONAMI ID, a personal key and a registration")
-    say(f"code. Get all three at  http://{server}:12013/  in a browser.")
+    say(f"code. Get all three at  http://{name}:12013/  in a browser.")
     say("The server's log has a line for every step: runtime/run_all.log")
     return hold(0)
 

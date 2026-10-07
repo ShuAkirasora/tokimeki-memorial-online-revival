@@ -50,8 +50,16 @@ This script changes that address, and nothing else.  It writes four bytes.
   -----
       set_auth_address.py <tmo.exe>              print the address it currently uses
       set_auth_address.py <tmo.exe> 192.168.1.5  point it at that address
+      set_auth_address.py <tmo.exe> tmo.example.org
+                                                 point it at whatever that name
+                                                 resolves to right now
       set_auth_address.py <tmo.exe> --revert     put the original address back
       set_auth_address.py <tmo.exe> ... -n       say what would change, write nothing
+
+  A name is accepted for convenience and looked up once, here, as the bytes are
+  written; the client itself still holds only the four octets.  So if the name
+  is later moved to another address, run this again -- the copy you patched
+  keeps pointing where the name led on the day you patched it.
 
   The original file is copied to <tmo.exe>.orig before the first write, and an
   existing .orig is never overwritten.  --revert restores the address the client
@@ -65,6 +73,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import ipaddress
 import shutil
 import socket
 import sys
@@ -80,6 +89,11 @@ ORIGINAL_ADDRESS = "133.221.34.229"
 # The two names the client resolves for itself.  Nothing in this script writes
 # them; they are listed so it can tell you where they currently lead.
 CLIENT_NAMES = ("tmollb.tokimekionline.com", "tmoupd.tokimekionline.com")
+
+# Reserved for benchmarking, and answered by proxy tools in fake-IP mode in place
+# of a name's real address.  Written into the client it reaches nothing once the
+# proxy stops, or from any other machine, so a name that resolves here is refused.
+SYNTHETIC_RANGE = ipaddress.ip_network("198.18.0.0/15")
 
 STORE_IMM = b"\xc6\x44\x24"  # mov byte [esp+disp8], imm8
 STORE_BL = b"\x88\x5c\x24"  # mov byte [esp+disp8], bl
@@ -98,6 +112,49 @@ def parse_ipv4(text: str) -> bytes:
             raise ValueError(f"{text!r} has an octet outside 0-255")
         out.append(value)
     return bytes(out)
+
+
+def resolve_server(text: str) -> tuple[str, list[str]]:
+    """The IPv4 address `text` stands for, and every one it resolved to.
+
+    An address is returned as it is, with no lookup.  Anything else is taken as
+    a name and resolved here, once: the client has nowhere to keep a name for
+    this step, so what gets written is wherever the name leads right now.
+
+    Raises ValueError with a sentence fit to show the person who typed it.
+    """
+    text = text.strip()
+    try:
+        parse_ipv4(text)
+        return text, [text]
+    except ValueError:
+        pass
+    if all(part.isdigit() for part in text.split(".")):
+        # Digits and dots only: a mistyped address, not a name.
+        raise ValueError(f"{text!r} is not an IPv4 address")
+    if text.lower().rstrip(".") in CLIENT_NAMES:
+        raise ValueError(
+            f"{text} is one of the names the client resolves for itself; "
+            "give the name or address of the machine running the server"
+        )
+    try:
+        answers = socket.getaddrinfo(text, None, socket.AF_INET, socket.SOCK_STREAM)
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"cannot resolve {text!r} to an IPv4 address: {exc}") from None
+    found: list[str] = []
+    for *_, sockaddr in answers:
+        if sockaddr[0] not in found:
+            found.append(sockaddr[0])
+    if not found:
+        raise ValueError(f"{text!r} has no IPv4 address")
+    if ipaddress.ip_address(found[0]) in SYNTHETIC_RANGE:
+        raise ValueError(
+            f"{text} resolved to {found[0]}, which is not a real address: "
+            "198.18.0.0/15 is what proxy tools in fake-IP mode answer with, and "
+            "it only leads anywhere while that proxy is running on this machine.  "
+            "Give the server's real address instead"
+        )
+    return found[0], found
 
 
 def find_site(data: bytes) -> int:
@@ -187,7 +244,8 @@ def main() -> int:
     ap.add_argument(
         "address",
         nargs="?",
-        help="IPv4 address of the machine running the server, e.g. 192.168.1.5",
+        help="IPv4 address or domain name of the machine running the server, "
+        "e.g. 192.168.1.5 or tmo.example.org",
     )
     ap.add_argument(
         "--revert",
@@ -214,10 +272,16 @@ def main() -> int:
     octets = b""
     if target is not None:
         try:
-            octets = parse_ipv4(target)
+            target, found = resolve_server(target)
         except ValueError as exc:
             print(exc, file=sys.stderr)
             return 1
+        if target != args.address and not args.revert:
+            print(f"{args.address} -> {target}")
+            if len(found) > 1:
+                print(f"  (it also answers {', '.join(found[1:])}; the client can hold")
+                print("  only one, so it gets the first)")
+        octets = parse_ipv4(target)
 
     try:
         data = bytearray(args.exe.read_bytes())

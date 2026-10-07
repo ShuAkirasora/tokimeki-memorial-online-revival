@@ -308,6 +308,7 @@ Everywhere else the same thing is `python3 play.py`. This folder has to be on th
 
 ```sh
 python3 play.py --server 192.168.1.5   # say it outright instead of being asked
+python3 play.py --server tmo.example.org   # a domain name works too
 python3 play.py --dry-run              # what it would change, writing nothing
 python3 play.py --revert               # put the hosts file and the four bytes back
 python3 play.py --no-launch            # set everything up, start nothing
@@ -322,7 +323,8 @@ that runs Windows programs (`wine` by default).
 
 **1. The address.** Server and game on one machine, Wine included: `127.0.0.1`. Two machines:
 the server machine's local address — `ipconfig` on Windows, `ipconfig getifaddr en0` on macOS,
-`hostname -I` on Linux. The examples use `192.168.1.5`.
+`hostname -I` on Linux. A server elsewhere with a domain name of its own can be given by that
+name, and the scripts look it up for you. The examples use `192.168.1.5`.
 
 **2. The two hostnames**, in the `hosts` file of the machine the *game* runs on — under Wine
 that is the Mac's or Linux box's `/etc/hosts`, not anything inside the prefix:
@@ -340,7 +342,11 @@ numeric address that was KONAMI's, which no name resolution can redirect:
 
 ```sh
 python3 set_auth_address.py /path/to/tmo.exe 192.168.1.5
+python3 set_auth_address.py /path/to/tmo.exe tmo.example.org   # or the server's name
 ```
+
+A name is looked up once, when the bytes are written: the client can only hold the address.
+If the name later moves to another address, run it again (`play.py` does that on every run).
 
 Run it wherever `tmo.exe` is. It keeps a copy as `tmo.exe.orig` before writing, then reports
 where the two hostnames currently lead — two `ok` lines mean step 2 is done as well, and an old
