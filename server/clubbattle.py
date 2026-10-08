@@ -723,22 +723,41 @@ EFFECT_CURE_ALL = 17
 # ── INVENTED — design: what a ステータス異常 stops (round 543, user's call) ─────
 # The four afflictions are restored as names, lamps and lines (clubstatus.bin,
 # clubmsg_template.bin, 0x5C11 types 0-3), and `p07_02` says only 「眠り・混乱な
-# どのステータス異常攻撃」. What each one PREVENTS, and for how long, is written
-# nowhere; up to round 542 they lit a lamp and stopped nothing. The user chose
-# to give them the meanings their names carry, every number below a knob:
+# どのステータス異常攻撃」. Round 543 gave each the meaning its name carries;
+# rounds 570 and 571 then replaced three of those meanings with the client's own:
 #
-#   眠り  the fighter does not act; being hit wakes them
-#   しびれ  each turn, a share of the time the action fails
-#   沈黙  no 部活奥義, and no 攻撃 -- ⭐ RESTORED since round 570, see
-#         `silence_holds`; a キーワード still goes as 防御
-#   混乱  a share of the time the attack lands on somebody else, self included
+#   眠り  the fighter does not act; being hit wakes them (SLEEP_WAKES_ON_HIT)
+#   しびれ  the fighter does not act -- ⭐ RESTORED (round 571), `SKIPS_TURN`
+#   沈黙  no 部活奥義, and no 攻撃 -- ⭐ RESTORED (round 570), `silence_holds`;
+#         a キーワード still goes as 防御
+#   混乱  the fighter does not act -- ⭐ RESTORED (round 571), `SKIPS_TURN`
 #
-# A fighter carries ONE affliction at a time: a second one does not take. ⭐
-# That is what lets one 0x5C11 type 17 say exactly which line to print when it
-# wears off -- type 17 cures everything at once (above), so two afflictions
-# with different clocks could not be ended one by one.
+# What is still invented is how long each lasts (the four knobs below), that a
+# hit wakes a sleeper, and the shared clock under AILMENT_STACK.
 # ⭐ 「Does not act」 needs no line of ours: a fighter left out of 0x5C0D while
 # afflicted gets the client's own 「…は動けない！」 (template row 19, round 123).
+
+AILMENT_SLEEP, AILMENT_NUMB, AILMENT_SILENCE, AILMENT_CONFUSE = 1, 2, 3, 4
+#: clubstatus.bin's own names for them, for the log.
+AILMENT_NAMES = {AILMENT_SLEEP: "眠り", AILMENT_NUMB: "しびれ",
+                 AILMENT_SILENCE: "沈黙", AILMENT_CONFUSE: "混乱"}
+
+#: ⭐⭐ RESTORED (round 571): the afflictions that take a fighter's whole turn.
+#: The client itself does it for 眠り, しびれ and 混乱 alike: its コマンド window
+#: never opens, it shows 「眠っている……」／「体がしびれて動けない！」／「混乱
+#: している！」 and the turn goes by (round 121, three for three) -- so a player
+#: who carries one never gets to choose anything. Round 543 had しびれ fail on a
+#: coin and 混乱 swing at a random fighter, which no client could ever play into:
+#: a numbed player sent no command, the turn waited out its 制限時間 for it, and
+#: only an NPC (whose turn is composed here) ever rolled either coin. 沈黙 is not
+#: one of them: its window opens and keeps 防御 (silence_holds).
+SKIPS_TURN = frozenset({AILMENT_SLEEP, AILMENT_NUMB, AILMENT_CONFUSE})
+
+
+def skips_turn(ailments: "set[int] | frozenset[int]") -> "int | None":
+    """The affliction, if any, that keeps a fighter carrying these from acting."""
+    return next((a for a in sorted(ailments) if a in SKIPS_TURN), None)
+
 
 #: ⚠️ INVENTED — how many turns 眠り keeps a fighter from acting. 2 because it is
 #: the shortest stretch that still costs a whole turn after the one it lands in,
@@ -747,23 +766,37 @@ SLEEP_TURNS = int(os.environ.get("TMO_CLUB_SLEEP_TURNS") or 2)
 #: ⚠️ INVENTED — whether taking damage wakes a sleeping fighter. On, the
 #: genre's convention and the one that keeps 眠り from being a free win: the side
 #: that put you to sleep can hold you there only by not hitting you.
+#: ⚠️ Waking ends every affliction the sleeper carries, not 眠り alone: the one
+#: end the client can be told is type 17, which clears them all (AILMENT_STACK).
 #: Knob: TMO_CLUB_SLEEP_WAKES_ON_HIT (1 / 0).
 SLEEP_WAKES_ON_HIT = (os.environ.get("TMO_CLUB_SLEEP_WAKES_ON_HIT") or "1") != "0"
-#: ⚠️ INVENTED — how many turns しびれ lasts. Knob: TMO_CLUB_NUMB_TURNS.
-NUMB_TURNS = int(os.environ.get("TMO_CLUB_NUMB_TURNS") or 3)
-#: ⚠️ INVENTED — the chance a numbed fighter's action fails that turn. A coin,
-#: so that しびれ is half a 眠り spread over longer. Knob: TMO_CLUB_NUMB_FAIL.
-NUMB_FAIL_CHANCE = float(os.environ.get("TMO_CLUB_NUMB_FAIL") or 0.5)
+#: ⚠️ INVENTED — how many turns しびれ lasts. 2, the same as 眠り: since round
+#: 571 it takes the whole turn as 眠り does, and 3 (the number it had while it
+#: only failed on a coin) would make it a 眠り that no hit can end, half again as
+#: long. Knob: TMO_CLUB_NUMB_TURNS.
+NUMB_TURNS = int(os.environ.get("TMO_CLUB_NUMB_TURNS") or 2)
 #: ⚠️ INVENTED — how many turns 沈黙 lasts. Knob: TMO_CLUB_SILENCE_TURNS.
 SILENCE_TURNS = int(os.environ.get("TMO_CLUB_SILENCE_TURNS") or 3)
 #: ⚠️ INVENTED — how many turns 混乱 lasts. Knob: TMO_CLUB_CONFUSE_TURNS.
 CONFUSE_TURNS = int(os.environ.get("TMO_CLUB_CONFUSE_TURNS") or 2)
-#: ⚠️ INVENTED — the chance a confused fighter's キーワード attack goes to a
-#: fighter drawn at random from everybody still standing, the attacker included,
-#: instead of the one they chose. Knob: TMO_CLUB_CONFUSE_CHANCE.
-CONFUSE_CHANCE = float(os.environ.get("TMO_CLUB_CONFUSE_CHANCE") or 0.5)
 
-AILMENT_SLEEP, AILMENT_NUMB, AILMENT_SILENCE, AILMENT_CONFUSE = 1, 2, 3, 4
+#: ⚠️ INVENTED — how afflictions that stack share one clock: a newcomer pushes
+#: the whole stack's end out to the later of the two ends.
+#: ⭐⭐ RESTORED (round 571) that they stack at all. The official notice of
+#: 2006-04-19 (ann_view000000087): 「「眠り」「痺れ」「混乱」「沈黙」の効果が重
+#: なると、サーバーエラーと表示されることがある不具合を修正」 -- overlapping was
+#: the game working, the error was the bug; and the client lights its four status
+#: lamps side by side (round 123 put all four on one fighter). Round 543 refused
+#: a second one.
+#: ⚠️ The shared clock is less a choice of taste than the only shape the client
+#: leaves: the one end this server can send is type 17, which clears every lamp
+#: at once and prints a recovery line for each affliction the fighter had (round
+#: 123). Afflictions ending on separate turns would have to be cleared together
+#: and the survivors inflicted again, printing 「…は眠ってしまった！」 for a sleep
+#: that never stopped. Off (0) puts back round 543's one-at-a-time.
+#: Knob: TMO_CLUB_AILMENT_STACK (1 / 0).
+AILMENT_STACK = (os.environ.get("TMO_CLUB_AILMENT_STACK") or "1") != "0"
+
 
 #: 0x5C11 ``value`` for a timed affliction: how many turns the CLIENT keeps it
 #: on its own clock. ⭐ MEASURED (round 90): 1 ends it at the end of the stream
@@ -2108,10 +2141,10 @@ class Fighter:
         #: here can reach a screen. ``/cb states`` is the one writer, and it is
         #: a probe.
         self.states = [0] * NUM_OF_CLUB_STATUS
-        #: ⭐ The one timed ステータス異常 this fighter carries (clubstatus 1-4)
-        #: and how many more turns of it are left. See the design block next to
-        #: SLEEP_TURNS: one at a time, worn off by Battle.tick_ailments.
-        self.ailment: "int | None" = None
+        #: ⭐ The timed ステータス異常 this fighter carries (clubstatus 1-4) and
+        #: how many more turns the lot of them has left: one clock for the whole
+        #: stack (AILMENT_STACK), worn off by MpsServer._battle_ailments_wear_off.
+        self.ailments: "set[int]" = set()
         self.ailment_turns = 0
         #: Set by 0x5C07 — 「my battle scene is up」, not 「I am ready to play」.
         self.ready = False
@@ -2219,10 +2252,10 @@ class Fighter:
     def afflict(self, ailment: int) -> bool:
         """Set (or, for clubstatus 0, clear) this fighter's ステータス異常.
 
-        Returns whether it took. ⭐ One timed affliction at a time (see the
-        ステータス異常 design block): a second 眠り／しびれ／沈黙／混乱 on a
-        fighter who already carries one does not take, so the type 17 that ends
-        it later prints exactly one recovery line.
+        Returns whether it took. ⭐ Afflictions stack (AILMENT_STACK): a second
+        one joins the first and the stack's one clock runs to whichever end is
+        later, so the single type 17 that ends them prints a line for each.
+        With the knob off, a fighter who already carries one takes no other.
 
         ⚠️ The counters in ``states`` are what 0x5C09 carries, and the client
         does not read them: it keeps its own copy from 0x5C11, and its handler
@@ -2232,28 +2265,35 @@ class Fighter:
         one that reaches the screen is the 0x5C11 the caller sends.
         """
         if ailment == AILMENT_CURE:
+            self.cure()
             self.states = [0] * NUM_OF_CLUB_STATUS
-            self.ailment, self.ailment_turns = None, 0
             return True
-        if ailment_turns(ailment) and self.ailment is not None:
+        turns = ailment_turns(ailment)
+        if turns and self.ailments and not AILMENT_STACK:
             return False
         if 0 <= ailment < NUM_OF_CLUB_STATUS:
             self.states[ailment] = 1
-        if ailment_turns(ailment):
-            self.ailment, self.ailment_turns = ailment, ailment_turns(ailment)
+        if turns:
+            self.ailments.add(ailment)
+            self.ailment_turns = max(self.ailment_turns, turns)
         if ailment == 5:  # 練習不能 — the client sets 体力 to 0 on its own.
             self.vitality = 0
         return True
 
     def has(self, ailment: int) -> bool:
-        return self.ailment == ailment
+        return ailment in self.ailments
 
-    def cure(self) -> "int | None":
-        """End the timed affliction, if any. Returns which one it was."""
-        was = self.ailment
-        if was is not None:
-            self.states[was] = 0
-        self.ailment, self.ailment_turns = None, 0
+    def cure(self) -> "frozenset[int]":
+        """End every timed affliction at once. Returns the ones there were.
+
+        ⚠️ All of them, never one: type 17 is the only end the client can be
+        sent, and it clears every lamp (AILMENT_STACK).
+        """
+        was = frozenset(self.ailments)
+        for ailment in was:
+            self.states[ailment] = 0
+        self.ailments.clear()
+        self.ailment_turns = 0
         return was
 
     @property
@@ -2709,10 +2749,11 @@ class Battle:
         finish in time」 case the same paragraph describes, permanently.
         """
         active = self.active()
-        # ⭐ Round 543: a fighter asleep has nothing to send (the client takes
-        # their command window away itself), so the turn does not wait for them.
+        # ⭐ Round 543 (眠り), 571 (しびれ, 混乱): a fighter whose affliction
+        # takes the turn has nothing to send -- the client takes their command
+        # window away itself (SKIPS_TURN) -- so the turn does not wait for them.
         return bool(active) and all(
-            f.command is not None or f.has(AILMENT_SLEEP) for f in active)
+            f.command is not None or skips_turn(f.ailments) for f in active)
 
     def all_turn_done(self) -> bool:
         """Has every fighter reported 0x5C16 「my turn animation is over」?

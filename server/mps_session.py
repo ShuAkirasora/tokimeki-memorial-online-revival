@@ -12833,10 +12833,11 @@ class MpsServer:
         for fighter in battle.fighters:
             if not clubdata.is_npc(fighter.chara_id) or fighter.retired:
                 continue
-            if fighter.has(clubbattle.AILMENT_SLEEP):
-                # 眠り (round 543): no choice at all, so no command -- the same
-                # 「did not choose」 a human asleep is in, and _battle_resolve
-                # leaves them out of the order.
+            if clubbattle.skips_turn(fighter.ailments):
+                # 眠り／しびれ／混乱 (rounds 543, 571): no choice at all, so no
+                # command -- the same 「did not choose」 a human in one is in,
+                # whose client never opens the window (clubbattle.SKIPS_TURN),
+                # and _battle_resolve leaves them out of the order.
                 continue
             row = clubdata.npc(clubdata.npc_key(fighter.chara_id))
             deck = clubdata.npc_deck(row["deck"]) if row else None
@@ -13018,7 +13019,6 @@ class MpsServer:
         self, session: "_Session", battle: "clubbattle.Battle",
         attacker: "clubbattle.Fighter", kind: int, payload: bytes,
         targets: "list[clubbattle.Fighter | None]", everyone: "list[int]",
-        self_hit: bool = False,
     ) -> bytes:
         """One attack landing on each of ``targets``: damage, take it off, narrate.
 
@@ -13042,8 +13042,7 @@ class MpsServer:
         user chose to have them anyway, with both numbers knobs. A キーワード
         attack on a defender holding a 回避／反射／反撃 card may be dodged,
         bounced back at the attacker, or answered; a 部活奥義's damage on a
-        defender holding a 奥義耐性 card is scaled down. ⭐ ``self_hit`` lets a
-        confused attacker's own card land on themselves.
+        defender holding a 奥義耐性 card is scaled down.
 
         ⚠️ The DEFENDER's card is the one they chose THIS turn, whether or not
         they have acted yet: 「全員のコマンド入力終了後、全員の行動が実行され
@@ -13059,7 +13058,7 @@ class MpsServer:
             return b""
         out = b""
         for target in targets:
-            if target is None or (target is attacker and not self_hit):
+            if target is None or target is attacker:
                 continue
             if target.retired:
                 print(f"[{self.tag}] battle damage: target "
@@ -13206,13 +13205,18 @@ class MpsServer:
         self, session: "_Session", fighter: "clubbattle.Fighter",
         everyone: "list[int]",
     ) -> bytes:
-        """眠り ends the moment its sleeper takes damage (SLEEP_WAKES_ON_HIT)."""
+        """眠り ends the moment its sleeper takes damage (SLEEP_WAKES_ON_HIT).
+
+        ⚠️ Along with anything stacked on it: type 17 clears every lamp, and it
+        is the one end the client can be sent (clubbattle.AILMENT_STACK).
+        """
         if (not clubbattle.SLEEP_WAKES_ON_HIT or fighter.retired
                 or not fighter.has(clubbattle.AILMENT_SLEEP)):
             return b""
-        fighter.cure()
+        was = fighter.cure()
         print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
-              f"眠り ends — hit (0x5C11 type={clubbattle.EFFECT_CURE_ALL})")
+              f"clubstatus {sorted(was)} end — hit while asleep "
+              f"(0x5C11 type={clubbattle.EFFECT_CURE_ALL})")
         return self._tr_cast(
             session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
             clubbattle.effect_params(
@@ -13413,7 +13417,8 @@ class MpsServer:
             if not target.afflict(ailment):
                 print(f"[{self.tag}] battle skill: {label} ステータス異常 "
                       f"{ailment} → charaId={target.chara_id:#x} does not take — "
-                      f"already carries {target.ailment} (one at a time)")
+                      f"already carries {sorted(target.ailments)} "
+                      f"(TMO_CLUB_AILMENT_STACK off: one at a time)")
                 continue
             effect_type = (clubbattle.EFFECT_CURE_ALL
                            if ailment == clubbattle.AILMENT_CURE
@@ -13422,7 +13427,8 @@ class MpsServer:
                   f"{ailment} → charaId={target.chara_id:#x}"
                   + (f" (0x5C11 type={effect_type})" if effect_type is not None
                      else "")
-                  + (f" for {target.ailment_turns} turn(s)"
+                  + (f" — carries {sorted(target.ailments)} for "
+                     f"{target.ailment_turns} turn(s)"
                      if target.ailment_turns else "")
                   + (" ⇒ リタイヤ" if target.retired else ""))
             if effect_type is not None:
@@ -13702,9 +13708,9 @@ class MpsServer:
         # LAST action's stream -- a 0x5C11 reaches a client only from inside an
         # action (round 90), and the end of the turn is where 「…は目をさました」
         # reads right.
-        afflicted_before = [(f, f.ailment) for f in battle.fighters
-                            if f.ailment is not None]
-        expiring = [f for f, _a in afflicted_before if f.ailment_turns <= 1]
+        afflicted_before = [(f, (frozenset(f.ailments), f.ailment_turns))
+                            for f in battle.fighters if f.ailments]
+        expiring = [f for f, (_a, turns) in afflicted_before if turns <= 1]
         everyone = [f.chara_id for f in battle.fighters]
 
         def demo_start() -> bytes:
@@ -13742,19 +13748,6 @@ class MpsServer:
         for play_index, (fighter, kind, payload) in enumerate(plays):
             assert fighter.command is not None
             _item_num, is_attck, target_id = fighter.command
-            # ⭐ 混乱 (round 543, INVENTED chance): a キーワード swung while
-            # confused may go to anybody still standing, the swinger included.
-            self_hit = False
-            if (fighter.has(clubbattle.AILMENT_CONFUSE) and is_attck
-                    and kind == club.DECK_ITEM_KEYWORD
-                    and random.random() < clubbattle.CONFUSE_CHANCE):
-                standing = [f for f in battle.fighters if not f.retired]
-                chosen = random.choice(standing)
-                print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
-                      f"混乱 — swings at {chosen.chara_id:#x} instead of "
-                      f"{target_id:#x}")
-                target_id = chosen.chara_id
-                self_hit = chosen is fighter
             # ⭐ Ahead of the probe, because this is about the card that was
             # actually played rather than the one /cb card swapped in — see
             # _battle_mastery. ⚠️⚠️ This one WRITES THE SAVE.
@@ -13829,7 +13822,6 @@ class MpsServer:
             if is_attck and landed and battle.card_probe is None:
                 out += self._battle_strike(
                     session, battle, fighter, kind, payload, targets, everyone,
-                    self_hit=self_hit,
                 )
             if skill is not None and landed and battle.card_probe is None:
                 out += self._battle_skill_effects(
@@ -13960,15 +13952,13 @@ class MpsServer:
     ) -> "str | None":
         """Why this fighter's ステータス異常 keeps them from acting, or None.
 
-        See the design block next to clubbattle.SLEEP_TURNS (INVENTED, round
-        543): 眠り always, しびれ on a coin, 沈黙 when the card is a 部活奥義
-        or is played as 攻撃 (`clubbattle.silence_holds`).
+        See the design block next to clubbattle.SLEEP_TURNS: 眠り, しびれ and
+        混乱 always (clubbattle.SKIPS_TURN, round 571), 沈黙 when the card is a
+        部活奥義 or is played as 攻撃 (`clubbattle.silence_holds`).
         """
-        if fighter.has(clubbattle.AILMENT_SLEEP):
-            return "眠り"
-        if (fighter.has(clubbattle.AILMENT_NUMB)
-                and random.random() < clubbattle.NUMB_FAIL_CHANCE):
-            return "しびれ"
+        skip = clubbattle.skips_turn(fighter.ailments)
+        if skip is not None:
+            return clubbattle.AILMENT_NAMES[skip]
         attacking = fighter.command is None or bool(fighter.command[1])
         if (fighter.has(clubbattle.AILMENT_SILENCE)
                 and clubbattle.silence_holds(kind == club.DECK_ITEM_CLUB_SKILL,
@@ -13978,24 +13968,25 @@ class MpsServer:
 
     def _battle_ailments_wear_off(
         self, session: "_Session",
-        afflicted_before: "list[tuple[clubbattle.Fighter, int | None]]",
+        afflicted_before: "list[tuple[clubbattle.Fighter, tuple[frozenset[int], int]]]",
         expiring: "list[clubbattle.Fighter]", everyone: "list[int]",
     ) -> bytes:
         """End the afflictions on their last turn and tick the rest down.
 
         Called once per played turn, inside the last action's stream. A
-        fighter cured or re-afflicted during the turn is left alone: what they
-        carry now is not what was counted. ⚠️ A turn in which nobody acts never
-        calls this, so nothing ticks -- the affliction simply runs a turn longer.
+        fighter cured or afflicted again during the turn is left alone: what
+        they carry now is not what was counted, and a newcomer's clock starts
+        with the turn after the one it landed in. ⚠️ A turn in which nobody acts
+        never calls this, so nothing ticks -- the stack simply runs a turn longer.
         """
         out = b""
         for fighter, was in afflicted_before:
-            if fighter.ailment != was or fighter.ailment is None:
+            if (frozenset(fighter.ailments), fighter.ailment_turns) != was:
                 continue
             if fighter in expiring:
                 fighter.cure()
                 print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
-                      f"clubstatus {was} wears off (0x5C11 type="
+                      f"clubstatus {sorted(was[0])} wear off (0x5C11 type="
                       f"{clubbattle.EFFECT_CURE_ALL})")
                 out += self._tr_cast(
                     session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
@@ -15685,17 +15676,18 @@ class MpsServer:
             body,
             [f.chara_id for f in battle.fighters],
         )
-        # ⭐ Round 543: when everybody the fight would wait for is asleep, the
-        # turn is played now instead of after the 制限時間 -- a sleeper's client
-        # takes its own command window away (round 123) and has nothing to
-        # send. The path is the timeout's own: 0x5C0C reason 2 for each of them
-        # (which a real client takes without a box, round 87) and the resolve.
+        # ⭐ Round 543 (眠り), 571 (しびれ, 混乱): when everybody the fight would
+        # wait for is held by one of them, the turn is played now instead of
+        # after the 制限時間 -- their client takes its own command window away
+        # (round 121, clubbattle.SKIPS_TURN) and has nothing to send. The path
+        # is the timeout's own: 0x5C0C reason 2 for each of them (which a real
+        # client takes without a box, round 87) and the resolve.
         sleepers = [f for f in battle.active()
-                    if f.command is None and f.has(clubbattle.AILMENT_SLEEP)]
+                    if f.command is None and clubbattle.skips_turn(f.ailments)]
         if sleepers and battle.all_chosen():
             print(f"[{self.tag}] battle turn {battle.turn}: "
                   + ", ".join(f"0x{f.chara_id:08x}" for f in sleepers)
-                  + " asleep — played without waiting")
+                  + " cannot act — played without waiting")
             everyone = [f.chara_id for f in battle.fighters]
             for fighter in sleepers:
                 out += self._tr_cast(
