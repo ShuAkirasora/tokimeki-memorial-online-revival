@@ -4097,13 +4097,22 @@ class MpsServer:
             return None, False
         sheet = self._chars(session).ability(session.chara_id)
         cells = love.talk_cells(menu_item, sheet.levels() if sheet else None)
-        machine = gs3vm.Machine(found, cells)
-        machine.roll = self._script_roll
-        try:
-            result = machine.run()
-        except (gs3vm.UnknownCell, gs3vm.UnsupportedOp, gs3vm.Runaway) as exc:
-            print(f"[{self.tag}] {script_name}: {exc} — 台本を回せず、従来の答えに戻ります")
-            return None, False
+        # A 会話 the shipped client has no file for is drawn again (see
+        # romance.TALK_REDRAWS); every other answer is taken as it comes.
+        redraws = romance.TALK_REDRAWS if suffix == romance.TALK_SCRIPT else 0
+        while True:
+            machine = gs3vm.Machine(found, cells)
+            machine.roll = self._script_roll
+            try:
+                result = machine.run()
+            except (gs3vm.UnknownCell, gs3vm.UnsupportedOp, gs3vm.Runaway) as exc:
+                print(f"[{self.tag}] {script_name}: {exc} — 台本を回せず、従来の答えに戻ります")
+                return None, False
+            if result.event not in romance.UNSHIPPED_TALKS or redraws <= 0:
+                break
+            redraws -= 1
+            print(f"[{self.tag}] {script_name} → {result.event[0]}:{result.event[1]} "
+                  f"はクライアントに台本が無い — 引き直し")
         return result, love.absorb_talk(result.writes)
 
     def _run_talk(self, session: "_Session", npc_id: int, menu_item: int):

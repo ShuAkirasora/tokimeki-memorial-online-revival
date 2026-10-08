@@ -47,6 +47,7 @@ the scripts.
 from __future__ import annotations
 
 import json
+import os
 from datetime import date
 from pathlib import Path
 from typing import NamedTuple
@@ -944,6 +945,23 @@ TALK_SLOT_DEFAULTS = {**dict.fromkeys(CTX_TALK_SLOTS, 0), "mainSeen": 0}
 SCRIPT_STEMS = {"天宮": "amm", "春日": "ksg", "弥生": "yyi", "桜井": "skr", "犬飼": "ink"}
 TALK_SCRIPT = "s102"       # right-click 会話: which segment, if any
 MAIN_SEEN_SCRIPT = "s104"  # after a メイン played: the bookkeeping
+#: The 会話 her `_s102` can name whose script the shipped client does not have.
+#: 春日's 日常 pool at 進行度 4 is `rand(8) + 1` over 17:41-17:49, and the
+#: event table files 17:43 as `ksg_c053` (scriptId 8308) -- but the archive has
+#: no such file. Started anyway, the client shows 「スクリプトエラー：ファイル
+#: 読み込みに失敗しました ID:8308」 and, on 確認, drops the connection (round
+#: 565, on screen). Of all the conversations the five `_s102` can call, this is
+#: the only one missing.
+UNSHIPPED_TALKS = frozenset({(17, 43)})
+#: ⚠️ INVENTED — how many more times a right-click 会話 is drawn when her
+#: `_s102` names one of UNSHIPPED_TALKS. The draw is run again from the same
+#: cells with a fresh roll, so her own pool, her 「not the same as last time」
+#: rule and every gate stay the script's; only the one outcome no client can
+#: play is skipped, and the writes kept are the final run's. ⛔️ What the
+#: original did here is unknown: this build cannot play the file whatever the
+#: server says, and a later client may have carried it. 0 plays the draw as it
+#: comes (and so the disconnect). Knob: TMO_TALK_REDRAWS.
+TALK_REDRAWS = int(os.environ.get("TMO_TALK_REDRAWS") or 8)
 #: PC[0x3100+j]: the five 能力 as レベル. 天宮's and 桜井's `_s102` read them at
 #: 進行度 0, and ABILITY_GATES below is the same thresholds read off those scripts.
 PC_ABILITY_BASE = 0x3100
