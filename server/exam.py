@@ -114,6 +114,9 @@ Restored, each traceable to a quoted sentence or to the binary above:
     is a NUL-padded buffer and therefore self-evidently blank or not, the class
     because the 組 box is a letter box: A..Z reach the wire as 0..25 and an
     empty one as 26, which is not a 組. See CLASS_BLANK and `unclassed`.
+  * that a name which is not the character's own, to the byte, scores zero
+    too — the β test's notice of 2006-02-20, width and all. See SHEET, which
+    also carries the 組 half of it and why that half is partly invented.
   * that the result appears on the 通知表 and nowhere else, which is why there
     is no MsgSvResultExam in the block: nothing is shown when the paper ends
   * that exams are solitary, which costs this server nothing — it has one player
@@ -409,18 +412,63 @@ def unclassed(in_class: int) -> bool:
     return not 0 <= in_class < len(curriculum.CLASSROOM)
 
 
-def voided(sheet: dict) -> str:
-    """Which half of `p06_03`'s zero rule threw this paper away, for the log.
+# ⚠️ INVENTED — how far the sheet's 組 and 氏名 are checked against the one
+# sitting the paper: "exact" (氏名 byte for byte as the character was created,
+# 組 the one the character is in), "name" (氏名 exact, 組 only filled in) or
+# "filled" (both only filled in, which is all this server asked up to round 573).
+#
+# ⭐ What the original most likely did: "exact". The 氏名 half is not a guess.
+# The β test's notice of 2006-02-20 — this client's own month, five weeks after
+# its build — says a name that is not 全く同じ as the character's scores 0, and
+# gives the width as the example: ＫＯＮＡＭＩ written as KONAMI is 0, and so is
+# the reverse, and so is カナ in the other width. So it is a byte comparison of
+# the Shift_JIS the character was made with, which is what the client sends.
+# The 組 half is read off four sentences that only make sense together: the
+# answer sheet's own footer, drawn by the client under the twenty rows,
+# 「機械が読み取りますので、組・氏名は正確に記入してください。」; the same notice
+# board's 2006-02-16 「試験における『クラス』の記入について」 (title kept, body
+# lost); the manual's 「クラスは、全角大文字/全角小文字/半角大文字/半角小文字の
+# いずれで入力しても構いません」 — a reassurance that is pointless unless the
+# letter is compared; and the operated game's own exam pages,
+# 「回答用紙には、試験当日に所属しているクラスを記入してください」. What none of
+# them says is what a wrong 組 costs; 0 点 is taken from the 氏名 notice beside it,
+# and that is the invented part.
+# ⚠️ Why it is a knob at all: it is harsh, and on a shared server a player who
+# never read a notice from 2006 loses a whole paper to a 全角 letter. Nothing is
+# shown when the paper ends (the 通知表 is the only place a score appears), so
+# the first sign is a 0 three days later.
+# ⭐ What would overturn it: the 2006-02-16 notice's body, or a paper of the
+# operated game that scored with a different 組 written on it.
+# Knob: TMO_EXAM_SHEET (exact / name / filled).
+SHEET = os.environ.get("TMO_EXAM_SHEET") or "exact"
 
-    Empty when the paper was marked on its answers. It says nothing the player
+
+def _written(name: bytes) -> bytes:
+    """The name as written: the bytes before the first NUL, nothing stripped —
+    「全く同じ名前」 leaves no room for trimming a space."""
+    return bytes(name).split(b"\x00")[0]
+
+
+def voided(sheet: dict, own: "tuple[int, bytes, bytes] | None" = None) -> str:
+    """Which half of the zero rule threw this paper away, for the log.
+
+    Empty when the paper was marked on its answers. ``own`` is the sitter's
+    ``(inClass, familyName, firstName)``; without it only the blanks of
+    `p06_03` are tested, as SHEET "filled" would. It says nothing the player
     is shown — 「自分の結果は、試験期間終了後に通知表で確認することができます」 — and exists
     so that a 0 点 in the log can be told from a paper that was simply bad.
     """
     missing = []
     if unclassed(sheet["inClass"]):
-        missing.append("組")
+        missing.append("組 未記入")
+    elif own is not None and SHEET == "exact" and sheet["inClass"] != own[0]:
+        missing.append("組 違い")
     if blank(sheet["familyName"]) or blank(sheet["firstName"]):
-        missing.append("氏名")
+        missing.append("氏名 未記入")
+    elif own is not None and SHEET in ("exact", "name") and (
+            _written(sheet["familyName"]) != _written(own[1])
+            or _written(sheet["firstName"]) != _written(own[2])):
+        missing.append("氏名 違い")
     return "・".join(missing)
 
 
@@ -518,7 +566,8 @@ def draw(subject: int, level: int, rng: "random.Random | None" = None
     return out
 
 
-def score(questions: "list[quiz.Question]", sheet: dict) -> "tuple[int, int]":
+def score(questions: "list[quiz.Question]", sheet: dict,
+          own: "tuple[int, bytes, bytes] | None" = None) -> "tuple[int, int]":
     """Mark the paper. Returns ``(score, right)``.
 
     ⭐ The zero rule is `p06_03`'s, word for word: 「クラスもしくは氏名を記入し
@@ -529,6 +578,11 @@ def score(questions: "list[quiz.Question]", sheet: dict) -> "tuple[int, int]":
     ⭐ Both halves are enforced. `inClass` is not tested against a sentinel but
     against the twenty-six 組 there are — see `unclassed`, and CLASS_BLANK above
     it for what a live client actually sends for an empty box.
+
+    ⭐ And past the blanks, against ``own`` — the sitter's ``(inClass,
+    familyName, firstName)`` — as far as SHEET says: a 氏名 that is not the
+    character's own to the byte, or a 組 that is not the one it is in, is 0 too.
+    Without ``own`` only the blanks are tested.
 
     An unanswered question is one the sheet has no entry for, or one whose entry
     is UNANSWERED. The client always sends twenty rows and marks the empty ones
@@ -543,8 +597,7 @@ def score(questions: "list[quiz.Question]", sheet: dict) -> "tuple[int, int]":
             continue
         if question.judge(sheet["choiceId"][index]):
             right += 1
-    unnamed = blank(sheet["familyName"]) or blank(sheet["firstName"])
-    if unnamed or unclassed(sheet["inClass"]):
+    if voided(sheet, own):
         return 0, right
     return min(100, right * POINTS_PER_QUESTION), right
 

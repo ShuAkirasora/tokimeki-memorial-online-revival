@@ -21888,10 +21888,15 @@ class MpsServer:
             marked, right = 0, 0
             print(f"[{self.tag}] exam end: {name}, no sheet was ever sent — 0 点")
         else:
-            marked, right = exam.score(paper.questions, paper.sheet)
-            # 「クラスもしくは氏名を記入し忘れると０点」. Say which, or a paper thrown
-            # away for the rule and one that simply scored nothing read alike.
-            void = exam.voided(paper.sheet)
+            # Whose paper it is: the 組 the character is in on the day and the
+            # 氏名 it was created with, for exam.SHEET to hold the sheet to.
+            names = self._chars(session).full_name(session.chara_id)
+            own = None if names is None else (session.in_class, *names)
+            marked, right = exam.score(paper.questions, paper.sheet, own)
+            # 「クラスもしくは氏名を記入し忘れると０点」, and a 氏名 that is not the
+            # character's own. Say which, or a paper thrown away for the rule
+            # and one that simply scored nothing read alike.
+            void = exam.voided(paper.sheet, own)
             card = self._chars(session).scorecard(session.chara_id)
             if card is not None:
                 # ⭐ Held, not filed: 「自分の結果は、試験期間終了後に通知表で
@@ -21903,7 +21908,7 @@ class MpsServer:
                 self._chars(session).set_scorecard(session.chara_id, card)
                 print(f"[{self.tag}] exam end: {name} 段階{paper.course + 1} "
                       f"{right}/{len(paper.questions)}問正解 → {marked} 点"
-                      f"{f' ({void} 未記入 → 0 点)' if void else ''} "
+                      f"{f' ({void} → 0 点)' if void else ''} "
                       f"(held for the 通知表 until period {period} closes)")
                 after = self._chars(session).scorecard(session.chara_id)
                 if after is not None and not after.exam_held:
