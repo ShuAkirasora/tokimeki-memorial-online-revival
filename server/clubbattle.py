@@ -729,7 +729,8 @@ EFFECT_CURE_ALL = 17
 #
 #   眠り  the fighter does not act; being hit wakes them
 #   しびれ  each turn, a share of the time the action fails
-#   沈黙  no 部活奥義 (a キーワード still goes)
+#   沈黙  no 部活奥義, and no 攻撃 -- ⭐ RESTORED since round 570, see
+#         `silence_holds`; a キーワード still goes as 防御
 #   混乱  a share of the time the attack lands on somebody else, self included
 #
 # A fighter carries ONE affliction at a time: a second one does not take. ⭐
@@ -763,6 +764,34 @@ CONFUSE_TURNS = int(os.environ.get("TMO_CLUB_CONFUSE_TURNS") or 2)
 CONFUSE_CHANCE = float(os.environ.get("TMO_CLUB_CONFUSE_CHANCE") or 0.5)
 
 AILMENT_SLEEP, AILMENT_NUMB, AILMENT_SILENCE, AILMENT_CONFUSE = 1, 2, 3, 4
+
+#: 0x5C11 ``value`` for a timed affliction: how many turns the CLIENT keeps it
+#: on its own clock. ⭐ MEASURED (round 90): 1 ends it at the end of the stream
+#: that set it, 2 holds it through the next whole turn, 999 never ends it.
+#: ⭐⭐ 999, so that this end's clock is the only one: the affliction ends when
+#: _battle_ailments_wear_off sends type 17, which prints the recovery line
+#: (round 123). Round 543 sent 0 and the client ended it in the same stream;
+#: sending the turn count instead (round 570, on screen) let the client end a
+#: 沈黙 one turn before this end did -- its count includes the afflicted
+#: fighter's own action later in the turn it landed -- and for that turn the
+#: client offers 攻撃 to a fighter this end still holds.
+AILMENT_CLIENT_HOLD = 999
+
+
+def silence_holds(is_skill: bool, attacking: bool) -> bool:
+    """Whether 沈黙 stops this play: a 部活奥義, or any card played as 攻撃.
+
+    ⭐⭐⭐ RESTORED (round 570) for 攻撃, from two sources that agree. The
+    client: a silenced fighter's card menu loses 攻撃 altogether and keeps
+    防御, beside its own 「声を出すことができない！」. The official notice of
+    2006-04-05 (ann_view000000058): 「対戦時、ステータス異常の「沈黙」が発生
+    した後でも攻撃できてしまうことがある不具合を修正」, and in the same
+    list 「「沈黙」状態にさせられると、防御が解かれてしまうことがある不具合を
+    修正」 -- so 防御 goes on. ⚠️ The 部活奥義 half is still the round-543
+    design block above, already booked there: nothing says whether a
+    奥義 is spoken.
+    """
+    return is_skill or attacking
 
 
 def ailment_turns(ailment: int) -> int:

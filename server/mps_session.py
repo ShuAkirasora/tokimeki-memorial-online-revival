@@ -12875,7 +12875,12 @@ class MpsServer:
                       f"to play from — sits this turn out")
                 continue
             kind, payload = random.choice(cards)
-            if clubbattle.NPC_STANCE == "share":
+            if fighter.has(clubbattle.AILMENT_SILENCE):
+                # ⭐ RESTORED (round 570): 沈黙 takes 攻撃 off the menu (the
+                # client's own card menu shows only 防御 then), so a silenced
+                # opponent plays its キーワード as 防御 rather than sitting out.
+                attack = 0
+            elif clubbattle.NPC_STANCE == "share":
                 attack = 0 if random.random() < clubbattle.NPC_DEFEND_SHARE else 1
             elif kind == club.DECK_ITEM_KEYWORD:
                 shown = clubdata.keyword(struct.unpack_from("<H", payload)[0]) or {}
@@ -13421,9 +13426,15 @@ class MpsServer:
                      if target.ailment_turns else "")
                   + (" ⇒ リタイヤ" if target.retired else ""))
             if effect_type is not None:
+                # ⭐⭐ ``value`` is how long the CLIENT keeps the affliction on
+                # its own clock -- see clubbattle.AILMENT_CLIENT_HOLD for why it
+                # is told to keep it until this end's type 17 says otherwise.
+                value = (clubbattle.AILMENT_CLIENT_HOLD
+                         if target.ailment_turns else 0)
                 out += self._tr_cast(
                     session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
-                    clubbattle.effect_params(target.chara_id, effect_type, 0, 0),
+                    clubbattle.effect_params(
+                        target.chara_id, effect_type, value, 0),
                     everyone,
                 )
         return out
@@ -13793,12 +13804,26 @@ class MpsServer:
             # did for both kinds.
             skill = self._battle_skill_row(kind, payload)
             landed = True
+            # ⭐⭐⭐ RESTORED (round 570): silenced after this turn's order went
+            # out -- by an earlier action in the same turn -- and the 攻撃 or the
+            # 奥義 does not come off. The order cannot be taken back (see the
+            # ailment roll above), so the action still begins and simply does
+            # nothing: the official notice of 2006-04-05 (ann_view000000058)
+            # fixed 「ステータス異常の「沈黙」が発生した後でも攻撃できてしまう
+            # ことがある不具合」. A 防御 is untouched -- the same notice fixed
+            # 「沈黙」状態にさせられると、防御が解かれてしまう」.
+            if (fighter.has(clubbattle.AILMENT_SILENCE) and battle.card_probe is None
+                    and clubbattle.silence_holds(skill is not None, bool(is_attck))):
+                landed = False
+                print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
+                      f"沈黙 mid-turn — {'奥義' if skill is not None else '攻撃'} "
+                      f"does not come off")
             # ⭐ A 奥義 aims itself (its own 対象 columns); a キーワード has no
             # such column and lands on the one target 0x5C0A named.
             targets = ([battle.find(target_id)] if skill is None else
                        self._battle_skill_targets(
                            battle, fighter, skill, target_id))
-            if skill is not None and battle.card_probe is None:
+            if skill is not None and landed and battle.card_probe is None:
                 landed = self._battle_skill_cast(
                     fighter, skill, club.describe_deck_item(kind, payload))
             if is_attck and landed and battle.card_probe is None:
@@ -13936,16 +13961,19 @@ class MpsServer:
         """Why this fighter's ステータス異常 keeps them from acting, or None.
 
         See the design block next to clubbattle.SLEEP_TURNS (INVENTED, round
-        543): 眠り always, しびれ on a coin, 沈黙 when the card is a 部活奥義.
+        543): 眠り always, しびれ on a coin, 沈黙 when the card is a 部活奥義
+        or is played as 攻撃 (`clubbattle.silence_holds`).
         """
         if fighter.has(clubbattle.AILMENT_SLEEP):
             return "眠り"
         if (fighter.has(clubbattle.AILMENT_NUMB)
                 and random.random() < clubbattle.NUMB_FAIL_CHANCE):
             return "しびれ"
+        attacking = fighter.command is None or bool(fighter.command[1])
         if (fighter.has(clubbattle.AILMENT_SILENCE)
-                and kind == club.DECK_ITEM_CLUB_SKILL):
-            return "沈黙 (a 部活奥義)"
+                and clubbattle.silence_holds(kind == club.DECK_ITEM_CLUB_SKILL,
+                                             attacking)):
+            return "沈黙 (a 部活奥義)" if kind == club.DECK_ITEM_CLUB_SKILL else "沈黙 (攻撃)"
         return None
 
     def _battle_ailments_wear_off(
