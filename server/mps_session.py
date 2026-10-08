@@ -4202,7 +4202,8 @@ class MpsServer:
         print(f"[{self.tag}] script rand at ip={ip}: {drawn} of 0..{bound}{note}")
         return drawn
 
-    def _script_keywords(self, session: "_Session", result) -> None:
+    def _script_keywords(self, session: "_Session", result,
+                         actor: int) -> None:
         """Hand over the キーワード a finished script granted, if any.
 
         ⭐⭐ This is the original's own grant path, and finding it retires an
@@ -4220,13 +4221,28 @@ class MpsServer:
         「how many `UPDATE`s a script carries」 is not 「how many the player ends
         up with」: the tutorial's twelve pay out six.
 
-        ⚠️ Only the local player's actor slot is applied. In a two-player
+        ⚠️ Only this session's own 役柄 is applied. In a two-player
         ドラマイベント both PCs are named and each client runs the script for
         itself, so taking the other one here would grant it twice -- once from
         each side -- to somebody this session does not own.
+
+        ⚠️⚠️ ``actor`` is the 役柄 this session's cursor walks the play as
+        (`gs3vm.Follower.actor`) -- 0 for every solo script -- and *not*
+        `script.CAST_LOCAL_PLAYER`. Until round 569 it was that constant, which
+        is 0 for everyone, so the member playing 役柄 1 was handed 役柄 0's
+        キーワード and their own went to nobody: the grants sit on the main line
+        in pairs (`80 80 …` then `81 80 …`) and *both* cursors walk them.
+        Harmless where both 役柄 are granted the same card; wrong in the five
+        of the 22 plays `drama_event.bin` offers that grant different ones
+        (`un030` `un032` `un066` `un130` `un181`).
+        ⭐ The operand's 役柄 is absolute, not 「me / the other one」: the two
+        grants in the corpus that sit inside an `OP_BA` bracket name the very
+        役柄 the bracket admits (`un066` grants 役柄 1 inside `OP_BA 02`,
+        `un130` grants 役柄 0 inside `OP_BA 01`), and no grant anywhere names
+        a 役柄 its bracket shuts out.
         """
-        wanted = [keyword_id for actor, keyword_id in result.keywords
-                  if actor == script.CAST_LOCAL_PLAYER]
+        wanted = [keyword_id for who, keyword_id in result.keywords
+                  if who == actor]
         if not wanted:
             return
         state = self._chars(session).club(session.chara_id)
@@ -7779,7 +7795,7 @@ class MpsServer:
                     # there, the register file only exists here, and there is no
                     # observable difference to reproduce. ⛔️ 「when did the
                     # original server flush」 has never been observed here.
-                    self._script_keywords(session, shadow.result)
+                    self._script_keywords(session, shadow.result, shadow.actor)
                     self._script_debut(session, shadow.result)
                     self._script_letter_event(session, shadow.result)
                     self._script_record(session, shadow.result)
