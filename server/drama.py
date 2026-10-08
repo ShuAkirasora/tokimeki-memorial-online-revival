@@ -266,14 +266,15 @@ MATCHING_NO_EVENT_HERE = 3  # 現在、この場所で起動できるドラマ�
 TEACHER_CATEGORY = 3
 
 #: ⚠️ INVENTED — the place each of the five dramas that `drama_event.bin` flags
-#: for no place at all is offered at (round 555, user's call). Read off each
+#: for no place at all is offered at, one (genre, index, place) row each
+#: (round 555, user's call). Read off each
 #: one's synopsis: 0:9 (a night in the school building) and 0:10 (no club in
 #: it) go to the classroom, 1:10 (track and field) to the 運動場, 5:8 (a stage
 #: club) to the 体育館, where the other stage-club drama is, and 6:9 (the
 #: science club's show) to the special rooms. Left unplaced they could not be
 #: started anywhere, and two of them are where the keywords 150, 625, 35 and
 #: 316 are needed.
-UNPLACED_DRAMA_PLACES = {(0, 9): 0, (0, 10): 0, (1, 10): 2, (5, 8): 3, (6, 9): 4}
+UNPLACED_DRAMA_PLACES = ((0, 9, 0), (0, 10, 0), (1, 10, 2), (5, 8, 3), (6, 9, 4))
 
 
 def teacher_place(chara_id: int, teachers: "dict[int, int]") -> int | None:
@@ -292,7 +293,8 @@ def places_of(event: dict) -> "tuple[int, ...] | None":
         return None
     if not places:
         key = (int(event["genre"]), int(event["index"]))
-        return (UNPLACED_DRAMA_PLACES[key],) if key in UNPLACED_DRAMA_PLACES else ()
+        return tuple(place for genre, index, place in UNPLACED_DRAMA_PLACES
+                     if (genre, index) == key)
     return tuple(int(p) for p in places)
 
 
