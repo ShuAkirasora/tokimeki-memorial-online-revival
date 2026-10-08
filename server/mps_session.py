@@ -13780,6 +13780,12 @@ class MpsServer:
                 ),
                 everyone,
             )
+            # ⭐ AILMENT_IDLE_TICK: a stack that ran out on an earlier turn nobody
+            # acted in is said here, at the head of the first action stream
+            # since -- ahead of this action's own hit, so that a fighter whose
+            # sleep was already over on this side is not shown waking after it.
+            if play_index == 0:
+                out += self._battle_ailments_said(session, battle, everyone)
             # ⭐⭐⭐ THE HIT ITSELF, between 0x5C0E and 0x5C0F — inside the one
             # action's own stream, which is the only place a 0x5C11 reaches a
             # client at all (round 90: a second stream sent into an
@@ -13810,6 +13816,20 @@ class MpsServer:
                 landed = False
                 print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
                       f"沈黙 mid-turn — {'奥義' if skill is not None else '攻撃'} "
+                      f"does not come off")
+            # ⚠️ INVENTED (AILMENT_MIDTURN) — the same for 眠り／しびれ／混乱
+            # landing after the order went out: anyone who carried one when the
+            # turn began was left out of the order above, so one found here was
+            # put on by an earlier action of this very turn. The action begins
+            # and nothing comes off. A 防御 stance stays up: it belongs to the
+            # command for the whole turn (Fighter.defending), not to the
+            # action, exactly as for 沈黙.
+            mid = clubbattle.skips_turn(fighter.ailments)
+            if (clubbattle.AILMENT_MIDTURN and mid is not None and landed
+                    and battle.card_probe is None):
+                landed = False
+                print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
+                      f"{clubbattle.AILMENT_NAMES[mid]} mid-turn — the action "
                       f"does not come off")
             # ⭐ A 奥義 aims itself (its own 対象 columns); a キーワード has no
             # such column and lands on the one target 0x5C0A named.
@@ -13903,6 +13923,8 @@ class MpsServer:
         # told, rather than playing each as it arrives.
         # ⭐ ``demo_first`` is the probe that finally asks the other half. It
         # never fires on a live path — only /cb replay first sets it.
+        if not plays and clubbattle.AILMENT_IDLE_TICK:
+            self._battle_ailments_idle_tick(afflicted_before, expiring)
         battle.fx_probe = None  # one shot: the next turn is a normal one again
         battle.card_probe = None  # same, and for the same reason
         if not demo_first:
@@ -13966,6 +13988,50 @@ class MpsServer:
             return "沈黙 (a 部活奥義)" if kind == club.DECK_ITEM_CLUB_SKILL else "沈黙 (攻撃)"
         return None
 
+    def _battle_ailments_idle_tick(
+        self,
+        afflicted_before: "list[tuple[clubbattle.Fighter, tuple[frozenset[int], int]]]",
+        expiring: "list[clubbattle.Fighter]",
+    ) -> None:
+        """The clock on a turn in which nobody acted (AILMENT_IDLE_TICK).
+
+        It ticks as _battle_ailments_wear_off does, and a stack on its last
+        turn ends -- but only on this side: there is no action stream to carry
+        the type 17 (round 90), so it is owed (Fighter.unsaid) and said by
+        _battle_ailments_said in the next stream there is. Meanwhile the fighter
+        is free on this side, which is what breaks the stand-off: an NPC chooses
+        and acts again, and its own stream is the one that says it.
+        """
+        for fighter, (was, _turns) in afflicted_before:
+            if fighter in expiring:
+                fighter.unsaid = fighter.unsaid | fighter.cure()
+                print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
+                      f"clubstatus {sorted(was)} wear off on an idle turn — "
+                      f"type {clubbattle.EFFECT_CURE_ALL} owed to the next stream")
+            else:
+                fighter.ailment_turns = max(1, fighter.ailment_turns - 1)
+
+    def _battle_ailments_said(
+        self, session: "_Session", battle: "clubbattle.Battle",
+        everyone: "list[int]",
+    ) -> bytes:
+        """The type 17 owed for every stack that ended on an idle turn."""
+        out = b""
+        for fighter in battle.fighters:
+            if not fighter.unsaid:
+                continue
+            print(f"[{self.tag}] battle ailment: charaId={fighter.chara_id:#x} "
+                  f"clubstatus {sorted(fighter.unsaid)} wear off, said late "
+                  f"(0x5C11 type={clubbattle.EFFECT_CURE_ALL})")
+            fighter.unsaid = frozenset()
+            out += self._tr_cast(
+                session, 0, clubbattle.MSG_SV_NOTIFY_BATTLE_EFFECT,
+                clubbattle.effect_params(
+                    fighter.chara_id, clubbattle.EFFECT_CURE_ALL, 0, 0),
+                everyone,
+            )
+        return out
+
     def _battle_ailments_wear_off(
         self, session: "_Session",
         afflicted_before: "list[tuple[clubbattle.Fighter, tuple[frozenset[int], int]]]",
@@ -13976,8 +14042,8 @@ class MpsServer:
         Called once per played turn, inside the last action's stream. A
         fighter cured or afflicted again during the turn is left alone: what
         they carry now is not what was counted, and a newcomer's clock starts
-        with the turn after the one it landed in. ⚠️ A turn in which nobody acts
-        never calls this, so nothing ticks -- the stack simply runs a turn longer.
+        with the turn after the one it landed in. A turn in which nobody acts
+        never calls this: _battle_ailments_idle_tick is that turn's clock.
         """
         out = b""
         for fighter, was in afflicted_before:
@@ -15683,7 +15749,7 @@ class MpsServer:
         # is the timeout's own: 0x5C0C reason 2 for each of them (which a real
         # client takes without a box, round 87) and the resolve.
         sleepers = [f for f in battle.active()
-                    if f.command is None and clubbattle.skips_turn(f.ailments)]
+                    if f.command is None and f.window_shut]
         if sleepers and battle.all_chosen():
             print(f"[{self.tag}] battle turn {battle.turn}: "
                   + ", ".join(f"0x{f.chara_id:08x}" for f in sleepers)

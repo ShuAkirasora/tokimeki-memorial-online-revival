@@ -733,7 +733,9 @@ EFFECT_CURE_ALL = 17
 #   混乱  the fighter does not act -- ⭐ RESTORED (round 571), `SKIPS_TURN`
 #
 # What is still invented is how long each lasts (the four knobs below), that a
-# hit wakes a sleeper, and the shared clock under AILMENT_STACK.
+# hit wakes a sleeper, the shared clock under AILMENT_STACK, that the clock runs
+# on a turn nobody acts in (AILMENT_IDLE_TICK), and that one landing mid-turn
+# takes the action still to come (AILMENT_MIDTURN).
 # ⭐ 「Does not act」 needs no line of ours: a fighter left out of 0x5C0D while
 # afflicted gets the client's own 「…は動けない！」 (template row 19, round 123).
 
@@ -796,6 +798,27 @@ CONFUSE_TURNS = int(os.environ.get("TMO_CLUB_CONFUSE_TURNS") or 2)
 #: that never stopped. Off (0) puts back round 543's one-at-a-time.
 #: Knob: TMO_CLUB_AILMENT_STACK (1 / 0).
 AILMENT_STACK = (os.environ.get("TMO_CLUB_AILMENT_STACK") or "1") != "0"
+
+#: ⚠️ INVENTED — whether the stack's clock also runs on a turn in which nobody
+#: acts. On: such a turn counts like any other, and a stack whose last turn it
+#: was ends on this side at once -- the fighter acts again from the next turn --
+#: while its type 17 waits for the next action stream there is (Fighter.unsaid),
+#: because a 0x5C11 reaches a client only from inside one (round 90).
+#: Off is rounds 543-571: an idle turn ticks nothing, and two fighters who are
+#: both down (or one down and the other out of cards) stay that way to the end
+#: of the fight -- round 571 watched five idle turns in a row with the lamps on.
+#: Knob: TMO_CLUB_AILMENT_IDLE_TICK (1 / 0).
+AILMENT_IDLE_TICK = (os.environ.get("TMO_CLUB_AILMENT_IDLE_TICK") or "1") != "0"
+
+#: ⚠️ INVENTED — whether 眠り／しびれ／混乱 landing on a fighter AFTER this turn's
+#: order went out (an earlier action in the same turn) costs that fighter the
+#: action still to come. On, the same treatment round 570 restored for 沈黙: the
+#: action begins, as the order already promised, and nothing comes off. It is
+#: what the client does with all three at the next turn (SKIPS_TURN) brought
+#: forward to the rest of this one; no source says which the original did. Off
+#: is round 571: the afflicted fighter's action this turn goes ahead.
+#: Knob: TMO_CLUB_AILMENT_MIDTURN (1 / 0).
+AILMENT_MIDTURN = (os.environ.get("TMO_CLUB_AILMENT_MIDTURN") or "1") != "0"
 
 
 #: 0x5C11 ``value`` for a timed affliction: how many turns the CLIENT keeps it
@@ -2146,6 +2169,11 @@ class Fighter:
         #: stack (AILMENT_STACK), worn off by MpsServer._battle_ailments_wear_off.
         self.ailments: "set[int]" = set()
         self.ailment_turns = 0
+        #: A stack this end already ended on a turn nobody acted in
+        #: (AILMENT_IDLE_TICK) and the client has not been told about: its
+        #: lamps are still on there, and its type 17 goes out inside the next
+        #: action stream there is. Empty when there is nothing owed.
+        self.unsaid: "frozenset[int]" = frozenset()
         #: Set by 0x5C07 — 「my battle scene is up」, not 「I am ready to play」.
         self.ready = False
         self.deck_id = 0
@@ -2282,6 +2310,17 @@ class Fighter:
 
     def has(self, ailment: int) -> bool:
         return ailment in self.ailments
+
+    @property
+    def window_shut(self) -> bool:
+        """Does this fighter's client keep its コマンド window shut this turn?
+
+        For 眠り／しびれ／混乱 (SKIPS_TURN) -- and for one of them this end has
+        already ended but not yet said so (``unsaid``): the client still holds
+        it, on its own copy, until the type 17 arrives.
+        """
+        return (skips_turn(self.ailments) is not None
+                or skips_turn(self.unsaid) is not None)
 
     def cure(self) -> "frozenset[int]":
         """End every timed affliction at once. Returns the ones there were.
@@ -2753,7 +2792,7 @@ class Battle:
         # takes the turn has nothing to send -- the client takes their command
         # window away itself (SKIPS_TURN) -- so the turn does not wait for them.
         return bool(active) and all(
-            f.command is not None or skips_turn(f.ailments) for f in active)
+            f.command is not None or f.window_shut for f in active)
 
     def all_turn_done(self) -> bool:
         """Has every fighter reported 0x5C16 「my turn animation is over」?
