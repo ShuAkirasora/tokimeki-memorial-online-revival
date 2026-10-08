@@ -1243,6 +1243,15 @@ class Romance:
         # migration.
         captured = (saved or {}).get("captured")
         self.captured: "str | None" = captured if captured in CANDIDATES else None
+        # ⭐⭐⭐ RESTORED (round 567): the original's 2006-04-26 「状態復帰処理」
+        # for a save `reenroll` wrote before it kept the tutorial's 登場 (see
+        # there). Her confession is on record and she has no 登場 -- a state
+        # nothing else reaches, since every way to a confession passes through
+        # her 登場 and only that old `reenroll` took it away again.
+        for name, who in CANDIDATES.items():
+            row = self.state[name]
+            if who.debut is not None and row["ending"] and not row["debut"]:
+                row["debut"] = True
         # ⭐⭐⭐ Round 469: the day each scenario last played, by the cell the
         # scenario stamps it into (`scene_day_cells`) and as a date the same
         # way ``lastTalk`` is one. ⚠️ Kept here rather than per candidate on
@@ -1418,12 +1427,28 @@ class Romance:
         ある恋愛候補生」, and re-enrolling does not unhappen a confession.
         ⚠️ A letter event of hers still armed is disarmed with her; anyone
         else's stays, like everything else outside her row.
+
+        ⭐⭐⭐ RESTORED (round 567) -- except 登場, for the two whose 出会い is
+        the 初登校 tutorial. The original shipped this method's earlier shape
+        and fixed it: the official notice of 2006-04-19 (ann_view000000089)
+        「桜井・天宮から告白を受けて再入学した場合、桜井または天宮が登場しない
+        状態でゲームが始まっていることが確認されております」, fixed in that
+        day's maintenance, and the 04-26 one (ann_view000000094) 「再入学後に
+        天宮もしくは桜井が登場していないプレイヤーキャラクターの状態復帰処理を
+        行います」 -- the repair in `__init__`. The tutorial never plays
+        again (it is 初登校's, and 再入学 is not one), so a 登場 written only by
+        it, cleared here, could never come back. The other three meet the
+        player in a ドラマイベント that can be played again, so theirs is
+        cleared. ⭐ And 進行 0 with 登場 is the state the tutorial itself leaves
+        (`progress_cell`); 2006-04-26's ann_view000000096 shows the original
+        there too -- right after 桜井's 再入学 her 日常会話 already plays, and
+        「その後桜井との最初のメインイベントを見ると」 it is fixed.
         """
         name = self.captured
         if name is None:
             return None
         self.state[name] = {
-            "debut": False,
+            "debut": CANDIDATES[name].debut is not None,
             "intimacy": 0,
             "progress": 0,
             "lastTalk": "",
