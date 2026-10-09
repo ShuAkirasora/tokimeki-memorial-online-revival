@@ -123,6 +123,8 @@ import time
 from urllib.parse import parse_qs
 
 import codes
+import curriculum
+import examrank
 import konami_id
 from common import ServiceConfig
 from throttle import FUSE_MESSAGE, Throttle
@@ -159,16 +161,27 @@ code { font-family: ui-monospace, monospace; }
 .code input[readonly] { font-size: 1.25rem; width: 5.5rem; padding: .5rem .3rem; }
 .warn { border: 1px solid #c93; background: #c931; border-radius: .5rem;
         padding: .75rem 1rem; }
+table { border-collapse: collapse; margin: .5rem 0 1.25rem; width: 100%; }
+th, td { text-align: left; padding: .25rem .6rem .25rem 0;
+         border-bottom: 1px solid #8883; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+h3 { font-size: 1rem; margin: 1.5rem 0 .25rem; }
 """
 
 # Two ledes because there are two audiences, and the difference between them is
 # the first thing either one needs to know: one has no code and is here to be
 # given one, the other is holding a code somebody handed them.
 LEDE_SIGNUP = """Local revival server. Make an account here, then sign in with
-the client using what this page gives you."""
+the client using what this page gives you. The <a href="/ranking">試験ランキング</a>
+is here too."""
 
 LEDE_REGISTER = """Local revival server. For a registration code somebody gave
 you. If you do not have one, <a href="/">start here</a> instead."""
+
+LEDE_RANKING = """The 試験ランキング of every exam period that is over, by the
+rules the β test announced on 2006-02-15: score first, then attendance at that
+subject's lessons, then the lesson 正解率. A 組 is ranked once five of its
+students have sat every subject. <a href="/">Back to registration</a>."""
 
 
 def page(
@@ -176,6 +189,7 @@ def page(
     message: tuple[str, str] | None = None,
     *,
     lede: str = LEDE_SIGNUP,
+    title: str = "Registration",
 ) -> bytes:
     banner = ""
     if message is not None:
@@ -189,9 +203,9 @@ def page(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Registration</title>
+<title>{title}</title>
 <style>{STYLE}</style>
-<h1>Registration</h1>
+<h1>{title}</h1>
 <p class="lede">{lede}</p>
 {banner}
 {body}
@@ -355,6 +369,61 @@ REASON_TEXT = {
 }
 
 
+def ranking(book: "examrank.ResultBook | None") -> str:
+    """Every shown period's tables, newest first. See examrank.py.
+
+    Read-only and the same for everybody: it prints what the 校内新聞 would
+    have printed, which every player could read, and nothing else -- no
+    account, no KONAMI ID, no charaId.
+    """
+    keys = book.shown() if book is not None else []
+    if not keys:
+        return ('<p class="note">No results yet. A period\'s rankings appear here '
+                "once it is over, together with the scores on the 通知表.</p>")
+    out = []
+    for key in keys:
+        heading = book.name(key)
+        if key != book.name(key):
+            heading += f" <span class=\"note\">({html.escape(key)})</span>"
+        out.append(f"<h2>{heading}</h2>")
+        classes = book.class_ranking(key)
+        out.append("<h3>クラス平均点</h3>")
+        if classes:
+            rows = "".join(
+                f'<tr><td class="n">{rank}</td>'
+                f"<td>{examrank.class_name(row['class'])}</td>"
+                f'<td class="n">{row["average"]:.1f}</td>'
+                f'<td class="n">{row["sitters"]}</td></tr>'
+                for rank, row in classes
+            )
+            out.append('<table><tr><th class="n">順位</th><th>組</th>'
+                       '<th class="n">平均点</th><th class="n">全科目受験</th></tr>'
+                       f"{rows}</table>")
+        else:
+            out.append(f'<p class="note">No 組 had {examrank.CLASS_MIN_SITTERS} '
+                       "students who sat every subject.</p>")
+        for subject, name in enumerate(curriculum.SUBJECTS):
+            ranked = book.subject_ranking(key, subject)
+            if not ranked:
+                continue
+            rows = "".join(
+                f'<tr><td class="n">{rank}</td>'
+                f"<td>{html.escape(paper['name']) or '—'}</td>"
+                f"<td>{examrank.class_name(int(paper['class']))}</td>"
+                f'<td class="n">{int(paper["score"])}</td>'
+                f'<td class="n">{int(paper["attendance"])}</td>'
+                f'<td class="n">{float(paper["rate"]) * 100:.0f}%</td></tr>'
+                for rank, paper in ranked[: max(0, examrank.TOP)]
+            )
+            out.append(
+                f"<h3>{name} <span class=\"note\">{len(ranked)} sat</span></h3>"
+                '<table><tr><th class="n">順位</th><th>氏名</th><th>組</th>'
+                '<th class="n">得点</th><th class="n">出席</th>'
+                f'<th class="n">正解率</th></tr>{rows}</table>'
+            )
+    return "".join(out)
+
+
 class RegistrationSite:
     """The 登録 form, on a port a browser can reach.
 
@@ -395,8 +464,11 @@ class RegistrationSite:
         throttle: Throttle | None = None,
         tls_cert: Path | None = None,
         tls_key: Path | None = None,
+        results: "examrank.ResultBook | None" = None,
     ) -> None:
         self.root = root
+        # The 試験ランキング's papers, for /ranking. None draws an empty page.
+        self.results = results
         self.config = config
         self.directory = directory
         self.codes = table
@@ -666,6 +738,9 @@ class RegistrationSite:
             # of HTML -- the one file whose whole job is to not be that.
             if path == "/robots.txt":
                 return self._respond(ROBOTS, content_type=b"text/plain; charset=utf-8")
+            if path == "/ranking":
+                return self._respond(page(ranking(self.results), lede=LEDE_RANKING,
+                                          title="試験ランキング"))
             if path == "/done":
                 shown = self._read(query.get("t", ""))
                 if shown is None:

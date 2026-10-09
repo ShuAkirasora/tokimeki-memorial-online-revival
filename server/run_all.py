@@ -324,6 +324,7 @@ async def main(
         throttle=limits,
         tls_cert=Path(registration_cert) if registration_cert else None,
         tls_key=Path(registration_key) if registration_key else None,
+        results=accountstore.exams,
     )
 
     servers = [

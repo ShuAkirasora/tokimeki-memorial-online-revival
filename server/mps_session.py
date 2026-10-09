@@ -96,6 +96,7 @@ import couple
 import curriculum
 import drama
 import exam
+import examrank
 import facing
 import friends
 import gmcall
@@ -9794,6 +9795,17 @@ class MpsServer:
                 state = self._chars(session).career(chara_id)
                 if state is not None:
                     visits = state.arrive()
+                    # 「試験ランキング１位」 for a 1位 in a period now shown --
+                    # here because 登校 is the first moment there is somebody
+                    # to give it to. See examrank.py.
+                    firsts = self.accounts.exams.firsts(chara_id)
+                    if firsts and examrank.CAREER_FIRST not in state.achievements:
+                        state.grant(examrank.CAREER_FIRST)
+                        print(f"[{self.tag}] 経歴: 試験ランキング１位 for "
+                              f"charaId={chara_id:#x} ("
+                              + ", ".join(f"{self.accounts.exams.name(k)} "
+                                          f"{curriculum.SUBJECTS[s]}"
+                                          for k, s in firsts) + ")")
                     self._chars(session).set_career(chara_id, state)
                     print(f"[{self.tag}] 登校 #{visits} for "
                           f"charaId={chara_id}: {state.summary()}")
@@ -21906,6 +21918,14 @@ class MpsServer:
                 period = session.exam.key or exam.Period.MANUAL
                 card.hold_exam(paper.subject, paper.course, marked, period)
                 self._chars(session).set_scorecard(session.chara_id, card)
+                # And into the server's book for the 試験ランキング, with the
+                # two tie-breaks as they stand on the day. See examrank.py.
+                family, first = names if names is not None else (b"", b"")
+                self.accounts.exams.file(
+                    period, session.chara_id, paper.subject, marked, right,
+                    card.attendance[paper.subject], card.rate(paper.subject),
+                    session.in_class, family, first,
+                )
                 print(f"[{self.tag}] exam end: {name} 段階{paper.course + 1} "
                       f"{right}/{len(paper.questions)}問正解 → {marked} 点"
                       f"{f' ({void} → 0 点)' if void else ''} "

@@ -98,6 +98,7 @@ import secrets
 
 import charaids
 import codes
+import examrank
 import friends
 import gmcall
 import groups
@@ -279,6 +280,9 @@ class AccountStore:
         # And beside those two: a ＧＭコール queue is the server's, and the
         # count that rides in MsgSvOkGMCall counts across every account.
         self.gmcalls = gmcall.CallBook(self.dir)
+        # And beside those: a 試験ランキング ranks across every account, so the
+        # papers it ranks are one book for the server. See examrank.py.
+        self.exams = examrank.ResultBook(self.dir)
         self.codes = codes.CodeTable(self.dir)
         # The three tables in runtime/accounts are built here so that everything
         # holding one holds the same one; run_all.py reaches the other two
