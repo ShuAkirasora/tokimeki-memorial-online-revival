@@ -15758,8 +15758,12 @@ class MpsServer:
         # wait for is held by one of them, the turn is played now instead of
         # after the 制限時間 -- their client takes its own command window away
         # (round 121, clubbattle.SKIPS_TURN) and has nothing to send. The path
-        # is the timeout's own: 0x5C0C reason 2 for each of them (which a real
-        # client takes without a box, round 87) and the resolve.
+        # is the timeout's own: 0x5C0C reason 2 for each of them and the
+        # resolve. ⚠️ Reason 2 does draw a box -- the システムメッセージ
+        # 「選択できませんでした。」, which closes itself after a few seconds
+        # (round 88) -- and a held player sees it too: round 575 put 混乱 on a
+        # real client and the box came up on the turn it skipped, over the
+        # lit lamp, exactly as on a plain timeout. Nothing hangs on it.
         sleepers = [f for f in battle.active()
                     if f.command is None and f.window_shut]
         if sleepers and battle.all_chosen():
@@ -18204,9 +18208,19 @@ class MpsServer:
         if battle is None or battle.resolved:
             return b""
         missing = [f for f in battle.fighters if f.command is None]
-        print(f"[{self.tag}] battle turn {battle.turn} timed out with "
-              f"{len(missing)} of {len(battle.fighters)} still choosing: "
-              + ", ".join(f"0x{f.chara_id:08x}" for f in missing))
+        # Two kinds of nobody-sent-a-command, told apart in the log only: a
+        # fighter held by 眠り／しびれ／混乱 was never going to choose (its
+        # client keeps the window shut, Fighter.window_shut), so calling it
+        # "still choosing" misreads the turn. Both get the same reason 2 below.
+        held = [f for f in missing if f.window_shut]
+        choosing = [f for f in missing if not f.window_shut]
+        print(f"[{self.tag}] battle turn {battle.turn} timed out: "
+              f"{len(choosing)} of {len(battle.fighters)} still choosing"
+              + (": " + ", ".join(f"0x{f.chara_id:08x}" for f in choosing)
+                 if choosing else "")
+              + (f"; {len(held)} held by an ailment: "
+                 + ", ".join(f"0x{f.chara_id:08x}" for f in held)
+                 if held else ""))
         # ⭐⭐ Tell them so, and this is the one thing reason 2 can mean:
         # 「コマンド選択がゲームサーバ側の制限時間内に間に合いませんでした」
         # names the SERVER's time limit, so it is a sentence the server says on
