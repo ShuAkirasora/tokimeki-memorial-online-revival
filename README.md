@@ -157,7 +157,8 @@ do *not* add up to is the first bullet of the next section.
 - **Not a service.** This repository is the software, and nothing here is or will be sold. It
   hands out no server to join: running one is something you do on your own machine.
 - **Not a source of game files.** No client, no assets, no patched executable. You supply
-  your own copy.
+  your own copy — and the confession fix is made from it too: this repository holds the
+  recipe, never the files.
 
 Not every number here is a fact. The wire format — message ids, layouts, offsets — was read
 off the protocol and is verifiable. Some values exist only because the client needs
@@ -440,11 +441,15 @@ leaves the file byte-for-byte as it was. The client's small trust store is not e
 locally generated certificate is accepted, and nothing has to be disabled to get through
 authentication.
 
+**And, on a server that offers it, four script files** — the confession scenes, fixed and handed
+out through the game's own updater. Nothing is installed by hand and nothing else is touched;
+see [Fixing the confession scenes](#fixing-the-confession-scenes).
+
 ## Ports
 
 | Port | Service | Reached by |
 |---|---|---|
-| 12000 | the update check | the game |
+| 12000 | the update check, and the files it offers | the game |
 | 35573 | login-server lookup | the game |
 | 25573 / 25574 / 25575 | login / game / school | the game |
 | 443 | account auth, TLS | the game |
@@ -620,6 +625,50 @@ string. If that search comes out ambiguous on a differently built copy the expor
 says so, and `--key` and `--iv` are the way past it. Nothing that comes out belongs to this
 repository and none of it is redistributed here.
 
+## Fixing the confession scenes
+
+```
+python3 confession_fix.py
+```
+
+**Why it exists.** Four of the five confession scenes — Amamiya, Yayoi, Sakurai, Inukai — play
+out in front of an empty background: the heroine is not drawn. The art is all in the client.
+Each of those backgrounds has a fixed list of figure parts the client lays over it, and the
+staff-roll card each scene ends on is a drawing of the same shot with her in it. What is missing
+is in the scripts: a background only gets its figure layer when the script declares scene
+effects for it, registers the parts and switches them on, and these four scripts never do. The
+fifth, Kasuga's, does all three, and is the pattern the fix follows. It is a defect in this
+build's data — not this server's doing, and nothing a server can say on the wire reaches inside
+a script the client is running — so the fix is to the four script files.
+
+**What it changes.** `amm_e011`, `yyi_e011`, `skr_e011` and `ink_e011`, and only by adding:
+the missing scene-effect counts, and a detour at a few instructions that jumps to new code at the
+end of the script — register the parts, switch them on, change the heroine's expression before a
+line — and back. No instruction moves and nothing is removed, so the addresses the server knows
+each script by stay the same. Two instructions are changed in place at the same length, each
+explained in the script. Which parts belong to which background is read from the client; which
+expression goes with which line, and the moment Yayoi's rain clears, are choices made here,
+because the original never played these scenes. The recipes are the readable part of
+`confession_fix.py`, and they are the whole of what it does: it is not a general script editor.
+
+**How to use it.** Run it on the server's machine, against a copy of the game (found the way the
+exporter finds it; `--game-dir` overrides, `--check` writes nothing). It writes two halves, and
+both are needed:
+
+| Half | Where | What it is for |
+|---|---|---|
+| the four fixed archives | `runtime/update/data/script/` | every client that starts through BootFirst asks for updates first; the server offers what is in `runtime/update/`, and the client fetches each file that differs from its own and puts it in place |
+| the four scripts, exported again from the fixed archives | `runtime/scripts/` | the server follows each scene alongside the client; following the old script, it loses track of the fixed one, and the ending that follows the confession is not played |
+
+Players do nothing: the next start fetches the files, about 36 KB in all, and every start after
+that only compares them. The archives are enciphered; like the exporter, this works the key out
+of your own `tmo.exe` and writes it nowhere, and the archives it writes stay in `runtime/`, which
+is not part of this repository.
+
+**To take it back,** remove `runtime/update/` and export the four scripts again with
+`export_scripts.py`. Clients that already fetched the fixed files keep them until they are put
+back by hand, so a server that has once offered the fix should keep offering it.
+
 ## Repository layout
 
 | Path | |
@@ -628,11 +677,12 @@ repository and none of it is redistributed here.
 | `Play.cmd`, `play.py` | the client half in one run: hosts, the four bytes, the game started |
 | `set_auth_address.py` | the four-byte address change |
 | `export_scripts.py` | the script exports, out of your own copy of the game |
+| `confession_fix.py` | the four confession scenes, fixed for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |
 | `config/` | yours, if you make it: `knobs.toml`, the invented numbers this server runs differently from stock |
-| `runtime/` | created on the first run: the log, the certificate, your characters, your script exports, `console.txt` if you write one, and any tables you override |
+| `runtime/` | created on the first run: the log, the certificate, your characters, your script exports, `update/` if you offer files, `console.txt` if you write one, and any tables you override |
 | `screenshots/` | the six pictures above — captures of a running client, not game files |
 | `.github/workflows/ci.yml` | on every push: compile, start, check the ports answer, stop — on Python 3.11 and 3.14 |
 | `LICENSE`, `NOTICE` | Apache 2.0, and the attribution redistribution has to carry |

@@ -218,6 +218,18 @@ class Blowfish:
             prev = block
         return bytes(out)
 
+    def cbc_encrypt(self, data: bytes, iv: bytes) -> bytes:
+        """C[i] = E(P[i] XOR C[i-1]) -- the way back, for a script put back in."""
+        if len(data) % 8:
+            raise ValueError(f"plain text is {len(data)}B, not a multiple of 8")
+        out = bytearray(len(data))
+        prev = struct.unpack(">II", iv)
+        for off in range(0, len(data), 8):
+            left, right = struct.unpack_from(">II", data, off)
+            prev = self._encrypt_block(left ^ prev[0], right ^ prev[1])
+            struct.pack_into(">II", out, off, *prev)
+        return bytes(out)
+
 
 TMOC = b"TMOC"
 #: `mov byte [esp+disp8], imm8`, six or more in a row. Long enough that a run
@@ -1138,6 +1150,41 @@ def read_script(archive: Path, cipher: Blowfish, iv: bytes) -> bytes | None:
     return None
 
 
+def container_cipher(folder: Path, archives: dict[str, Path],
+                     key_hex: str | None = None,
+                     iv_hex: str | None = None) -> tuple[bytes, bytes]:
+    """The key and IV, as given or as worked out from your copy (see the top)."""
+    if key_hex and iv_hex:
+        return bytes.fromhex(key_hex), bytes.fromhex(iv_hex)
+    exe = (folder / GAME_EXE).read_bytes()
+    # One sample per archive, two archives, so that the IV has to agree
+    # across files rather than across two entries of the same one.
+    samples = []
+    for path in sorted(archives.values()):
+        for _name, payload in arc_entries(path.read_bytes()):
+            head = unwrap_header(payload)
+            if head is not None and len(head[1]) >= 16:
+                samples.append(head[1])
+                break
+        if len(samples) >= 2:
+            break
+    if len(samples) < 2:
+        raise SystemExit("no enciphered scripts to work the key out from")
+    return find_cipher(exe, samples)
+
+
+def write_exports(out_dir: Path, script: Script, script_id: int | None) -> None:
+    """The one or two files a script becomes in `out_dir`."""
+    (out_dir / f"{script.name}.gs3.json").write_text(
+        json.dumps(vm_doc(script, script_id), separators=(",", ":")),
+        encoding="utf-8")
+    if not script.gsc:
+        (out_dir / f"{script.name}.json").write_text(
+            json.dumps(script_doc(script, script_id),
+                       ensure_ascii=False, indent=1),
+            encoding="utf-8")
+
+
 # ------------------------------------------------------------------- the run
 
 
@@ -1168,24 +1215,7 @@ def main(argv: list[str] | None = None) -> int:
             say(f"  {name}")
         return 0
 
-    if args.key and args.iv:
-        key, iv = bytes.fromhex(args.key), bytes.fromhex(args.iv)
-    else:
-        exe = (folder / GAME_EXE).read_bytes()
-        # One sample per archive, two archives, so that the IV has to agree
-        # across files rather than across two entries of the same one.
-        samples = []
-        for path in sorted(archives.values()):
-            for _name, payload in arc_entries(path.read_bytes()):
-                head = unwrap_header(payload)
-                if head is not None and len(head[1]) >= 16:
-                    samples.append(head[1])
-                    break
-            if len(samples) >= 2:
-                break
-        if len(samples) < 2:
-            raise SystemExit("no enciphered scripts to work the key out from")
-        key, iv = find_cipher(exe, samples)
+    key, iv = container_cipher(folder, archives, args.key, args.iv)
     cipher = Blowfish(key)
 
     ids = script_ids(idlist_dir, cipher, iv)
@@ -1214,14 +1244,7 @@ def main(argv: list[str] | None = None) -> int:
             failed += 1
             continue
         script_id = ids.get(f"{script.name}.ssb")
-        (out_dir / f"{script.name}.gs3.json").write_text(
-            json.dumps(vm_doc(script, script_id), separators=(",", ":")),
-            encoding="utf-8")
-        if not script.gsc:
-            (out_dir / f"{script.name}.json").write_text(
-                json.dumps(script_doc(script, script_id),
-                           ensure_ascii=False, indent=1),
-                encoding="utf-8")
+        write_exports(out_dir, script, script_id)
         written += 1
         if len(wanted) <= 20:
             say(f"  {script.name}  {'GSC' if script.gsc else 'SSC'} "
