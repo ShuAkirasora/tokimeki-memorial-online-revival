@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Put the confession close-ups back into five of your copy's script files.
+"""Put the confession close-ups back into eleven of your copy's script files.
 
 What is wrong
 -------------
@@ -23,6 +23,16 @@ view (1065) that every other epilogue declares as well and none of them shows,
 loads the overlay and never switches it on. The rehearsal of the play is
 spoken over the sea.
 
+Six of her ordinary events, the fifth to the tenth, have the same hole. Every
+other heroine's events show her own picture at the high point of the scene --
+each script writes the same pair of player-data values and then puts the
+picture up. Amamiya's six scripts write that pair too, and then put up the
+same underwater view; her pictures for those events (2004-2009) are in the
+client and no script names them. For the seventh to the tenth the client also
+has a face overlay drawn for each picture and the expressions for it, as the
+other heroines' events use theirs; none of the six scripts even declares the
+overlay.
+
 This build's own data is the defect, not the server and not the renderer, and
 nothing on the wire can carry an instruction into a script the client is
 already running. The fix has to be in the script files.
@@ -30,25 +40,35 @@ already running. The fix has to be in the script files.
 What this changes
 -----------------
 Only the four confession scripts `amm_e011`, `yyi_e011`, `skr_e011` and
-`ink_e011` and the epilogue `amm_e012`, and in each only by adding:
+`ink_e011`, the epilogue `amm_e012`, and Amamiya's events `amm_e005` to
+`amm_e010`, and in each only by adding:
 
   * the scene-effect count on the background that needs one (it was 0);
   * a detour at a handful of instructions: the instruction is replaced by a
     jump to new code at the end of the script, which does what it did and then
     the additions -- register the parts, switch them on, change the heroine's
-    expression before a line -- and jumps back.
+    expression before a line -- and jumps back;
+  * in `amm_e007` to `amm_e010`, one cast entry: the face overlay for that
+    event's picture, which the script's header did not declare.
 
-No instruction moves, no label is added and nothing is removed, so every
-address the server already knows a script by stays the same. Three edits change
-an instruction in place instead, at the same length: Yayoi's scene loads a
+No instruction moves within the code, no label is added and nothing is
+removed, so every instruction keeps its number, and every jump and label its
+target. The one thing that does shift is where the code starts in the file:
+the cast entry is 56 bytes, so in those four scripts the code section sits 56
+bytes further on, and the addresses the client reports for it change with it.
+The server reads that offset from the export, which is one more reason the
+exports below go with the archives. Some edits change an instruction in place
+instead, at the same length: Yayoi's scene loads a
 background the parts list does not cover, and is pointed at its twin (the same
 picture, byte for byte) that it does; Sakurai's first shot is of her back, so
 the face overlay that would land on it is replaced by switching on her body.
 Amamiya's epilogue declares the stage in place of the underwater view, and
-declares the pastel as a second background after it.
+declares the pastel as a second background after it; her six events declare
+their own picture in place of it.
 
-Which parts go with which background is read from the client. Which expression
-goes with which line, the moment Yayoi's rain clears, and the line Amamiya's
+Which parts go with which background, and which picture and overlay go with
+which of Amamiya's events, are read from the client. Which expression goes
+with which line, the moment Yayoi's rain clears, and the line Amamiya's
 epilogue turns pastel on, are choices made
 here -- the original never played these scenes, so there is nothing to recover
 them from. The choices are the recipes below, and are meant to be read.
@@ -62,17 +82,17 @@ copy of the game:
     python3 confession_fix.py --check           # only says what it would do
     python3 confession_fix.py --game-dir PATH   # when the guess is wrong
 
-  1. The five fixed archives go into `runtime/update/data/script/`. Every
+  1. The eleven fixed archives go into `runtime/update/data/script/`. Every
      client that starts through BootFirst asks the server for updates first;
      this server offers whatever is in `runtime/update/`, and the client fetches
      the files that differ from its own and puts them in place.
-  2. The five scripts are exported again, from the fixed archives, into
+  2. The eleven scripts are exported again, from the fixed archives, into
      `runtime/scripts/`. The server follows each scene alongside the client and
      has to be following the same script, or the scene still plays but the
      server loses track of it -- and with it the ending.
 
 Both halves together, always. Nothing here is a general script editor: the
-five recipes are the whole of what it does.
+eleven recipes are the whole of what it does.
 
 The archives are encrypted. Like `export_scripts.py`, this works the key out of
 your own `tmo.exe` and writes it nowhere.
@@ -201,15 +221,69 @@ def face_hide(actor: int) -> bytes:
 def expression(actor: int, emotion: int, first: bool = False) -> bytes:
     """WAISTUP_EXPRESSION_CHANGE. `emotion` keys the client's emotion table.
 
-    The second byte is 0x40 on a scene's first change and 0 after, as in
-    Kasuga's script; what it means is not known.
+    The second byte, 0x40, makes the script wait until the change has finished
+    (the client's own debug text calls the flag "end detection"). Kasuga's
+    script sets it on a scene's first change only, and so do these.
     """
     return op(0x5280, actor, 0x40 if first else 0, emotion & 0xFF, emotion >> 8)
 
 
 #: A hook whose original is given as an opcode takes the whole instruction from
-#: the file, after checking the opcode. Used for the spoken lines.
+#: the file, after checking the opcode. Used for the spoken lines, and for the
+#: background switches of Amamiya's events.
 TALK = 0x5380
+BG_SHOW = 0x5101
+
+
+# ------------------------------------------------------------ the cast entry
+#
+# A script's header starts at 0x80 with a short stream of the same commands:
+# the scenario, then one entry per player role and per cast member, then the
+# variable declarations. A face overlay is a cast entry of its own (opcode
+# 0x83, 56 bytes) naming the client's event-character record; the script's
+# first one is actor 0x60. The lengths of the header's parts are kept at 0x68
+# (all of them) and 0x6c (the command stream), in 4-byte words.
+CAST_START = 0x80
+CAST_LENGTHS = {0x0000: 12, 0x0080: 64, 0x0081: 52, 0x0082: 68, 0x0083: 56}
+OVERLAY_CAST = 0x0083
+OVERLAY_KIND = 0x15                 # the low four bits: an event character
+HEROINE_KIND = 1
+NAME_FIELD = slice(6, 0x2A)         # family name, given name, nickname
+
+
+def overlay_entry(header: bytes, character: int) -> bytes:
+    """A cast entry for event character `character`, named after the script's
+    own entry for the heroine (the cast member whose kind is a heroine)."""
+    entry = bytearray(CAST_LENGTHS[OVERLAY_CAST])
+    struct.pack_into("<HH", entry, 0, OVERLAY_CAST, 0)
+    entry[4] = character << 1
+    at = CAST_START
+    while not (struct.unpack_from("<H", header, at)[0] == 0x0081
+               and struct.unpack_from("<I", header, at + 0x2C)[0] & 0xF == HEROINE_KIND):
+        code = struct.unpack_from("<H", header, at)[0]
+        if code not in CAST_LENGTHS:
+            raise NotThisScript("no heroine in the cast")
+        at += CAST_LENGTHS[code]
+    entry[NAME_FIELD] = header[at + NAME_FIELD.start:at + NAME_FIELD.stop]
+    struct.pack_into("<I", entry, 0x2C, OVERLAY_KIND)
+    return bytes(entry)
+
+
+def add_cast(ssc: bytes, entry: bytes) -> bytes:
+    """`ssc` with `entry` after its last cast entry."""
+    at = CAST_START
+    while True:
+        code = struct.unpack_from("<H", ssc, at)[0]
+        if code not in CAST_LENGTHS:
+            break
+        if code == OVERLAY_CAST:
+            raise NotThisScript("the script already declares a face overlay")
+        at += CAST_LENGTHS[code]
+    out = bytearray(ssc[:at] + entry + ssc[at:])
+    words = len(entry) // 4
+    for field in (0x68, 0x6C):
+        struct.pack_into("<I", out, field, struct.unpack_from("<I", out, field)[0] + words)
+    return bytes(out)
 
 
 # -------------------------------------------------------------- the recipes
@@ -275,6 +349,51 @@ AMAMIYA_SEA, AMAMIYA_STAGE, AMAMIYA_PASTEL = 1065, 2012, 2013
 # 24 sad, 25 smile -- the overlay's only two.
 AMAMIYA_PLAY_LINES = {72: 25, 136: 24}
 AMAMIYA_LAUGH = 173
+
+# Amamiya's events 5 to 10. Each script's underwater view is declared under its
+# own place name; the event's picture takes its place. Events 7 to 10 also get
+# the picture's face overlay (event character 5 to 8): on where the picture
+# goes up, off where the scene leaves it.
+AMAMIYA_EVENT_SEA = {               # script: (ip, place name, picture)
+    "amm_e005": (56, 0x14004, 2004),
+    "amm_e006": (88, 0x26004, 2005),
+    "amm_e007": (68, 0x17004, 2006),
+    "amm_e008": (26, 0x06004, 2007),
+    "amm_e009": (88, 0x21004, 2008),
+    "amm_e010": (78, 0x21004, 2009),
+}
+# script: (event character, ip the picture goes up at, ip it is left at,
+#          first expression or None, {line ip: expression}).
+# 7: one expression only, the picture's own -- the overlay just blinks.
+# 8: 6 neutral, 7 exasperated, 8 exasperated (2), 9 smile.
+# 9: 10 shy (the picture's own face), 11 startled. Called twice; the overlay
+#    goes up and down with the picture each time.
+# 10: 12 neutral, 13 smile.
+AMAMIYA_EVENT_FACES = {
+    "amm_e007": (5, 430, 474, None, {}),
+    "amm_e008": (6, 1900, 1974, 6, {1908: 7, 1924: 6, 1956: 9}),
+    "amm_e009": (7, 4982, 4996, 10, {4870: 10, 4902: 10, 4934: 11, 5094: 10, 5126: 11}),
+    "amm_e010": (8, 4967, 5012, 12, {4978: 13, 4994: 12}),
+}
+
+
+def amamiya_event(name: str) -> dict:
+    ip, place, picture = AMAMIYA_EVENT_SEA[name]
+    recipe = dict(effects={}, swap=[(ip, background(place, AMAMIYA_SEA),
+                                     background(place, picture))], hooks=[])
+    if name in AMAMIYA_EVENT_FACES:
+        character, up, down, first, lines = AMAMIYA_EVENT_FACES[name]
+        on = face_load(0x60) + face_show(0x60)
+        if first is not None:
+            on += expression(0x60, first, first=True)
+        recipe["overlay"] = character
+        recipe["hooks"] = [
+            (up, BG_SHOW, b"", on),
+            *[(line, TALK, expression(0x60, e), b"") for line, e in lines.items()],
+            (down, BG_SHOW, face_hide(0x60), b""),
+        ]
+    return recipe
+
 
 RECIPES = {
     "amm_e011": dict(
@@ -343,6 +462,7 @@ RECIPES = {
             (AMAMIYA_LAUGH, TALK, face_hide(0x60) + bg_load(1) + crossfade(1), b""),
         ],
     ),
+    **{name: amamiya_event(name) for name in AMAMIYA_EVENT_SEA},
 }
 
 BG_INFO = 0x5000
@@ -358,9 +478,13 @@ class NotThisScript(Exception):
 
 def already_fixed(ssc: bytes, recipe: dict) -> bool:
     """True when every background the recipe gives effects to already has them,
-    or, for a recipe that gives none, when its first detour is already there."""
+    or, for a recipe that gives none, when its first detour -- or, with no
+    detours, its first in-place edit -- is already there."""
     sec = ssc_sections(ssc)
     code = ssc[sec["code"]:sec["aux"]]
+    if not recipe["effects"] and not recipe["hooks"]:
+        ip, _original, replacement = recipe["swap"][0]
+        return code[2 * ip:2 * ip + len(replacement)] == replacement
     if not recipe["effects"]:
         return struct.unpack_from("<H", code, 2 * recipe["hooks"][0][0])[0] == JUMP
     counts = [struct.unpack_from("<I", code, 2 * ip + 8)[0] & EFFECT_COUNT_MASK
@@ -415,6 +539,11 @@ def apply_recipe(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
     fixed = ssc[:sec["hdr"]] + bytes(header) + bytes(code) + ssc[sec["aux"]:]
     if ssc_sections(fixed)["code"] != sec["code"]:
         raise NotThisScript("the code would move")              # pragma: no cover
+    if "overlay" in recipe:
+        entry = overlay_entry(ssc, recipe["overlay"])
+        fixed = add_cast(fixed, entry)
+        if ssc_sections(fixed)["code"] != sec["code"] + len(entry):
+            raise NotThisScript("the cast entry did not land")  # pragma: no cover
     return fixed
 
 
