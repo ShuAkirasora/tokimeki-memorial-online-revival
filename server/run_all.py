@@ -238,7 +238,7 @@ async def main(
             " Pass --advertise-ip <this machine's address> for that, which opens"
             " these too."
         )
-    updater = UpdaterServer(root, ServiceConfig(host=open_host, port=12000))
+    updater = UpdaterServer(root, ServiceConfig(host=open_host, port=12000), advertise_ip=advertise_ip)
     llb = LlbServer(
         root,
         ServiceConfig(host=open_host, port=LLB_QUERY_PORT),
