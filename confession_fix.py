@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Put the confession close-ups back into four of your copy's script files.
+"""Put the confession close-ups back into five of your copy's script files.
 
 What is wrong
 -------------
@@ -13,14 +13,24 @@ script says how many scene effects it has, registers each part, and switches
 them on; Kasuga's script does all three, and these four do none of them. So the
 parts are never loaded, and the scene plays out around nobody.
 
+Amamiya's epilogue, the scene the client plays straight after her staff roll,
+is the same kind of gap at its widest. The other four epilogues each show the
+heroine's own two pictures -- the scene, then a pastel copy of it for the last
+line. Hers are in the client too (2012, her on the school stage, and 2013, the
+pastel), along with a face overlay drawn for 2012 and two expressions for it.
+Her script names neither picture: it declares one background, an underwater
+view (1065) that every other epilogue declares as well and none of them shows,
+loads the overlay and never switches it on. The rehearsal of the play is
+spoken over the sea.
+
 This build's own data is the defect, not the server and not the renderer, and
 nothing on the wire can carry an instruction into a script the client is
 already running. The fix has to be in the script files.
 
 What this changes
 -----------------
-Only the four scripts `amm_e011`, `yyi_e011`, `skr_e011` and `ink_e011`, and in
-each only by adding:
+Only the four confession scripts `amm_e011`, `yyi_e011`, `skr_e011` and
+`ink_e011` and the epilogue `amm_e012`, and in each only by adding:
 
   * the scene-effect count on the background that needs one (it was 0);
   * a detour at a handful of instructions: the instruction is replaced by a
@@ -29,14 +39,17 @@ each only by adding:
     expression before a line -- and jumps back.
 
 No instruction moves, no label is added and nothing is removed, so every
-address the server already knows a script by stays the same. Two edits change
+address the server already knows a script by stays the same. Three edits change
 an instruction in place instead, at the same length: Yayoi's scene loads a
 background the parts list does not cover, and is pointed at its twin (the same
 picture, byte for byte) that it does; Sakurai's first shot is of her back, so
 the face overlay that would land on it is replaced by switching on her body.
+Amamiya's epilogue declares the stage in place of the underwater view, and
+declares the pastel as a second background after it.
 
 Which parts go with which background is read from the client. Which expression
-goes with which line, and the moment Yayoi's rain clears, are choices made
+goes with which line, the moment Yayoi's rain clears, and the line Amamiya's
+epilogue turns pastel on, are choices made
 here -- the original never played these scenes, so there is nothing to recover
 them from. The choices are the recipes below, and are meant to be read.
 
@@ -49,17 +62,17 @@ copy of the game:
     python3 confession_fix.py --check           # only says what it would do
     python3 confession_fix.py --game-dir PATH   # when the guess is wrong
 
-  1. The four fixed archives go into `runtime/update/data/script/`. Every
+  1. The five fixed archives go into `runtime/update/data/script/`. Every
      client that starts through BootFirst asks the server for updates first;
      this server offers whatever is in `runtime/update/`, and the client fetches
      the files that differ from its own and puts them in place.
-  2. The four scripts are exported again, from the fixed archives, into
+  2. The five scripts are exported again, from the fixed archives, into
      `runtime/scripts/`. The server follows each scene alongside the client and
      has to be following the same script, or the scene still plays but the
      server loses track of it -- and with it the ending.
 
 Both halves together, always. Nothing here is a general script editor: the
-four recipes are the whole of what it does.
+five recipes are the whole of what it does.
 
 The archives are encrypted. Like `export_scripts.py`, this works the key out of
 your own `tmo.exe` and writes it nowhere.
@@ -106,9 +119,12 @@ def op(code: int, *operand: int) -> bytes:
     return struct.pack("<H", code) + bytes(operand)
 
 
+JUMP = 0x9080
+
+
 def jump(ip: int) -> bytes:
     """OP_JP. The target is in 16-bit words from the start of the code."""
-    return struct.pack("<HHI", 0x9080, 0, ip << 12)
+    return struct.pack("<HHI", JUMP, 0, ip << 12)
 
 
 def call(label: int) -> bytes:
@@ -139,6 +155,26 @@ def hide(index: int) -> bytes:
 def animate(index: int) -> bytes:
     """EVENT_BGEFF_ANIM_ENABLE: start a registered part's animation, no wait."""
     return op(0x5105, index, 0)
+
+
+def background(name: int, bg: int) -> bytes:
+    """EVENT_BG_INFO: declare the next background slot.
+
+    `name` is the place-name word as the script has it (the string's position
+    in the script's pool); `bg` the picture. No weather, no scene effects.
+    Slots are numbered in the order their declarations run.
+    """
+    return op(0x5000, 0, 0, *struct.pack("<II", name, 0), *struct.pack("<H", bg),
+              0xFF, 0xFF, 0xFF, 0xFF, 0, 0)
+
+
+def crossfade(slot: int) -> bytes:
+    """SCREEN_CROSSFADE to a loaded background slot, no wait.
+
+    The slot is bits 3-7 of the first operand byte: the other epilogues write
+    0x10 and 0x18 to fade to their pastel in slot 2 and slot 3.
+    """
+    return op(0x3002, slot << 3, 0, 0, 0, 0, 0)
 
 
 def bg_load(slot: int) -> bytes:
@@ -229,6 +265,17 @@ INUKAI_PARTS = [0x22, 0x23, 0x24]
 # 131 neutral, 132 smile.
 INUKAI_LINES = {699: 132, 734: 131, 838: 132, 873: 131, 905: 132}
 
+# Amamiya's epilogue: she and the hero rehearse the school play. The stage (2012)
+# comes up where the underwater view did, with its overlay (the script's own
+# 0x60, which it loads and never shows) on her face; for her laugh at the end
+# the scene crossfades to the pastel (2013), where she laughs with her eyes
+# closed. The overlay is drawn for 2012 alone, so it goes off first.
+AMAMIYA_PLAY_NAME = 4               # the place-name word slot 0 already has
+AMAMIYA_SEA, AMAMIYA_STAGE, AMAMIYA_PASTEL = 1065, 2012, 2013
+# 24 sad, 25 smile -- the overlay's only two.
+AMAMIYA_PLAY_LINES = {72: 25, 136: 24}
+AMAMIYA_LAUGH = 173
+
 RECIPES = {
     "amm_e011": dict(
         effects={24: 7, 34: 6},
@@ -282,6 +329,20 @@ RECIPES = {
               for k, (ip, e) in enumerate(INUKAI_LINES.items())],
         ],
     ),
+    "amm_e012": dict(
+        effects={},
+        swap=[(4, background(AMAMIYA_PLAY_NAME, AMAMIYA_SEA),
+               background(AMAMIYA_PLAY_NAME, AMAMIYA_STAGE))],
+        hooks=[
+            # Right after slot 0 is declared, so the pastel is slot 1.
+            (4, background(AMAMIYA_PLAY_NAME, AMAMIYA_STAGE), b"",
+             background(AMAMIYA_PLAY_NAME, AMAMIYA_PASTEL)),
+            (48, bg_show(0x20, 0, 0, 0, 0, 0, 0, 0x40, 0, 0), b"",
+             face_show(0x60) + expression(0x60, 24, first=True)),
+            *[(ip, TALK, expression(0x60, e), b"") for ip, e in AMAMIYA_PLAY_LINES.items()],
+            (AMAMIYA_LAUGH, TALK, face_hide(0x60) + bg_load(1) + crossfade(1), b""),
+        ],
+    ),
 }
 
 BG_INFO = 0x5000
@@ -296,9 +357,12 @@ class NotThisScript(Exception):
 
 
 def already_fixed(ssc: bytes, recipe: dict) -> bool:
-    """True when every background the recipe gives effects to already has them."""
+    """True when every background the recipe gives effects to already has them,
+    or, for a recipe that gives none, when its first detour is already there."""
     sec = ssc_sections(ssc)
     code = ssc[sec["code"]:sec["aux"]]
+    if not recipe["effects"]:
+        return struct.unpack_from("<H", code, 2 * recipe["hooks"][0][0])[0] == JUMP
     counts = [struct.unpack_from("<I", code, 2 * ip + 8)[0] & EFFECT_COUNT_MASK
               for ip in recipe["effects"]]
     return all(counts)
@@ -387,7 +451,7 @@ def seal_archive(blob: bytes, table: int, data_at: int, ssc: bytes, padding: byt
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fix the four confession scenes, for handing out through the updater.")
+        description="Fix the confession scenes, for handing out through the updater.")
     parser.add_argument("--game-dir", help="the folder that holds tmo.exe")
     parser.add_argument("--check", action="store_true",
                         help="say what would be written, write nothing")
