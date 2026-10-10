@@ -915,24 +915,46 @@ def stop_name(op: int) -> str:
     }.get(op, f"stop 0x{op:04x}")
 
 
-# ⭐⭐ Where the season of a background comes from. `"clock"` is the factory
-# answer here: the school clock's own quarter (`curriculum.season`). `"script"`
-# leaves the scripts' own constant standing, which is what a server that only
-# evaluates the bytecode does and why the tutorial used to snow in August; an
-# int 0..3 forces one arm, which is how all four get looked at without waiting
-# a year.
+# ⚠️ INVENTED — where the season of a background comes from: "0".."3" pins one
+# season (0=春 1=夏 2=秋 3=冬), "clock" follows the school clock's own quarter
+# (`curriculum.season`), "script" leaves each scenario's own constant standing
+# (two tutorials pin 冬, three daily conversations pin 春 -- which is why the
+# tutorial used to snow in August and why that is not a season either). Always
+# a string, so that the knob keeps one type.
 #
-# ⚠️ **Booked carefully** (the smallest-invention rule): that the switch
-# moves with the calendar is *restored* -- the manual, the beta-2 report and
-# the client's own `SeasonName` property all say the original had a live
-# season (`gs3vm.SEASONS` has the citations). **The inventions are the
-# mechanism and the boundaries**: the original server overrode that register
-# from code nobody has, and where it cut the year is in no table on this disk.
-#
-# ⚠️ It reaches the client through `gs3vm.Follower.season` and therefore only
-# where the shadow already decides -- a four-armed switch whose every arm is
-# scenery. ⛔️ Nothing else in a script moves because of this.
-SEASON_SOURCE: str | int = "clock"
+# ⭐ Factory "3" (冬) because this build's client is winter and only winter: it
+# takes the season from the one `season.bin` row that carries the current-season
+# flag, and the launch data flags 冬 -- so the title screen, the ツーショット
+# backgrounds and the map outside are winter whatever this server says, and
+# every 春 background in the build is the blank placeholder picture. A season
+# from here reaches exactly five scenario switches (`gs3vm.Follower.season`, a
+# four-armed switch whose every arm is scenery); following the clock made those
+# five disagree with everything around them (a green tutorial with snow on the
+# map outside). The most likely original for *this* build: it shipped in
+# January, and the original moved its seasons on -- the manual, the beta-2
+# report and the client's `SeasonName` property say it was live
+# (`gs3vm.SEASONS`) -- most plausibly with client updates carrying a new flag
+# and the art, which this build does not have.
+# "clock" is kept as a setting, not removed: it is the live-season behaviour,
+# and its quarter boundaries (3-5, 6-8, 9-11, 12-2) are themselves invented.
+# What would overturn the factory value: a sign that the original server
+# rather than the client data moved the season this build displays.
+SEASON_SOURCE = os.environ.get("TMO_SEASON_SOURCE") or "3"
+
+
+def resolve_season(source: "str | int", clock: int) -> int | None:
+    """`SEASON_SOURCE` as a season: an int 0..3, or None for "script".
+
+    ``clock`` is the school clock's quarter, used only for "clock". A source
+    that is none of the documented words reads as "script" -- the scenario's
+    own constant -- rather than raising in the middle of a script run.
+    """
+    text = str(source).strip()
+    if text == "clock":
+        return clock
+    if text.isdigit() and int(text) < 4:
+        return int(text)
+    return None
 
 # ⚠️ INVENTED — whether a season whose arm would open on the game's blank
 # placeholder picture borrows another season's arm instead (`season_for`). The
@@ -940,8 +962,9 @@ SEASON_SOURCE: str | int = "clock"
 # loads wubg 779, which in this build is byte for byte the black picture the
 # background table files under 欠番 -- every 春 background of the launch build
 # is (754 765 777 778 779 785 871). The scripts pin 冬, so the shipped constant
-# never reaches it; `SEASON_SOURCE = "clock"` does, every March to May, and a
-# new player's first scene is a black screen. The stand-in is read off the data
+# never reaches it, nor does the factory `SEASON_SOURCE` (冬); `"clock"` does,
+# every March to May, and so does a pinned "0" -- a new player's first scene
+# is then a black screen. The stand-in is read off the data
 # rather than chosen (`reference/season_switch.json` "standIn"): in both
 # tutorials the other three switches give 春 and 夏 byte-identical arms, so the
 # authors had 春 borrow the plain picture everywhere they had no 春 art, and

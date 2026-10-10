@@ -523,7 +523,7 @@ HELP = (
     "/pwt [on|off] PLAYER_WAIT_TIME に 0x721d を返すか (既定 off)",
     "/pcinfo [0|1|off] pcInfo[] に自分をどの役柄で載せるか (既定 0)",
     "/tutorial on|off 初登校フラグ (0x0319 の tutorialFlag) を張り直す",
-    "/season [clock|script|0-3] 立ち絵背景の季節 (既定 clock)",
+    "/season [clock|script|0-3] 立ち絵背景の季節 (既定 3 冬)",
 )
 
 # MsgSvNotifyNpcControl — the message that puts a chibi NPC on the map.
@@ -2585,30 +2585,27 @@ def respond(
                       + ("解除する" if script.RELEASE_PLAYER_WAIT else "待たせたまま")])
 
     if word == "season":
-        # `script` leaves the shipped constant standing (the tutorial's is 冬),
-        # `clock` is this server's own answer, and a number forces one arm --
-        # the only way to look at 春 in August. ⚠️ The season itself is
-        # restored, not invented; only the mechanism and the quarter boundaries
-        # are ours. See `script.SEASON_SOURCE`.
+        # A number pins one season (the factory pins 3 冬, the only season this
+        # build's client shows), `clock` follows the school clock, `script`
+        # leaves each scenario's own constant standing. See
+        # `script.SEASON_SOURCE`.
         names = ("春", "夏", "秋", "冬")
         words = rest.split()
-        if words and words[0] in ("clock", "script"):
+        if words and (words[0] in ("clock", "script")
+                      or words[0].isdigit() and int(words[0]) < len(names)):
             script.SEASON_SOURCE = words[0]
-        elif words and words[0].isdigit() and int(words[0]) < len(names):
-            script.SEASON_SOURCE = int(words[0])
         elif words:
             return Reply([f"clock / script / 0..{len(names) - 1}"])
-        source = script.SEASON_SOURCE
-        now = curriculum.season()
+        source = str(script.SEASON_SOURCE)
+        season = script.resolve_season(source, curriculum.season())
         lines = [
             "季節: "
-            + ("台本の定数のまま" if source == "script"
-               else f"{now} {names[now]} (校内時計)" if source == "clock"
-               else f"{source} {names[source]} に固定")
+            + ("台本の定数のまま" if season is None
+               else f"{season} {names[season]} (校内時計)" if source == "clock"
+               else f"{season} {names[season]} に固定")
         ]
         # The scenarios whose arm for this season is the blank placeholder
         # picture, and the season they are asked about instead (`season_for`).
-        season = None if source == "script" else now if source == "clock" else source
         swapped = sorted((script_id, script.season_for(script_id, season))
                          for script_id in script.SEASON_SWITCH
                          if script.season_for(script_id, season) != season)

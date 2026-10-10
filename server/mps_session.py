@@ -1532,17 +1532,13 @@ def _season(script_id: int | None) -> int | None:
     """`script.SEASON_SOURCE` resolved to a season for one scenario, or None to
     leave it alone.
 
-    ⚠️ None is the shipped behaviour and it is not the same as 冬: it means the
-    shadow never touches the register, so whichever constant the script writes
-    into itself is the one the switch sees. ⚠️ Per scenario because of
+    ⚠️ None ("script") is not the same as 冬: it means the shadow never
+    touches the register, so whichever constant the script writes into itself
+    is the one the switch sees. ⚠️ Per scenario because of
     `script.season_for`: a season whose arm there is the blank placeholder
     picture is asked about as the season standing in for it.
     """
-    source = script.SEASON_SOURCE
-    if isinstance(source, int):
-        season = source
-    else:
-        season = curriculum.season() if source == "clock" else None
+    season = script.resolve_season(script.SEASON_SOURCE, curriculum.season())
     return script.season_for(script_id, season)
 
 
