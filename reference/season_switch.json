@@ -1,5 +1,5 @@
 {
- "note": "Which OP_BR of a four-armed spring/summer/autumn/winter switch tests which season, and where it goes when it holds. Integers only: no instructions, no text, no cast. The season itself is decided on this side (script.SEASON_SOURCE); this table only says which branch that decision answers. 'pin' is the constant the scenario writes into the register itself, used when the season source is 'script'. ip counts u16 words from codeBase, the same unit branches.json uses.",
+ "note": "Which OP_BR of a four-armed spring/summer/autumn/winter switch tests which season, and where it goes when it holds. Integers only: no instructions, no text, no cast. The season itself is decided on this side (script.SEASON_SOURCE); this table only says which branch that decision answers. 'pin' is the constant the scenario writes into the register itself, used when the season source is 'script'. ip counts u16 words from codeBase, the same unit branches.json uses. 'standIn', where present, maps a season whose arm would open on the game's blank placeholder picture to the season whose arms show that scenario's pictures otherwise; script.SEASON_BLANK_STAND_IN decides whether it is used.",
  "scripts": {
   "16385": {
    "arms": {
@@ -135,7 +135,10 @@
     ]
    },
    "codeBase": 1572,
-   "pin": 3
+   "pin": 3,
+   "standIn": {
+    "0": 1
+   }
   },
   "8435": {
    "arms": {
@@ -205,7 +208,10 @@
     ]
    },
    "codeBase": 1636,
-   "pin": 3
+   "pin": 3,
+   "standIn": {
+    "0": 1
+   }
   }
  }
 }

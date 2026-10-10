@@ -2600,12 +2600,22 @@ def respond(
             return Reply([f"clock / script / 0..{len(names) - 1}"])
         source = script.SEASON_SOURCE
         now = curriculum.season()
-        return Reply([
+        lines = [
             "季節: "
             + ("台本の定数のまま" if source == "script"
                else f"{now} {names[now]} (校内時計)" if source == "clock"
                else f"{source} {names[source]} に固定")
-        ])
+        ]
+        # The scenarios whose arm for this season is the blank placeholder
+        # picture, and the season they are asked about instead (`season_for`).
+        season = None if source == "script" else now if source == "clock" else source
+        swapped = sorted((script_id, script.season_for(script_id, season))
+                         for script_id in script.SEASON_SWITCH
+                         if script.season_for(script_id, season) != season)
+        if swapped:
+            lines.append("空白の絵を避けて: " + " ".join(
+                f"id={script_id}→{names[other]}" for script_id, other in swapped))
+        return Reply(lines)
 
     if word == "tutorial":
         # ⭐⭐ 初登校 の再武装. The flag this sets rides in the character list

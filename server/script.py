@@ -187,12 +187,31 @@ def _load_season_switch() -> dict[int, dict]:
             "pin": entry["pin"],
             "arms": {int(ip): (arm[0], arm[1])
                      for ip, arm in entry["arms"].items()},
+            "standIn": {int(season): other
+                        for season, other in entry.get("standIn", {}).items()},
         }
         for script_id, entry in raw.items()
     }
 
 
 SEASON_SWITCH = _load_season_switch()
+
+
+def season_for(script_id: int | None, season: int | None) -> int | None:
+    """The season this scenario's switches should be asked about.
+
+    ``season`` unchanged, except where the table's ``standIn`` says that
+    season's arm opens on the game's blank placeholder picture and
+    `SEASON_BLANK_STAND_IN` is on: then the season whose arms show this
+    scenario's pictures everywhere else. None (the scenario's own constant)
+    passes through -- that constant never lands on a blank arm.
+    """
+    if season is None or not SEASON_BLANK_STAND_IN:
+        return season
+    entry = SEASON_SWITCH.get(script_id if script_id is not None else -1)
+    if entry is None:
+        return season
+    return entry["standIn"].get(season, season)
 
 
 def season_arm(script_id: int | None, local_ip: int,
@@ -914,6 +933,23 @@ def stop_name(op: int) -> str:
 # where the shadow already decides -- a four-armed switch whose every arm is
 # scenery. ⛔️ Nothing else in a script moves because of this.
 SEASON_SOURCE: str | int = "clock"
+
+# ⚠️ INVENTED — whether a season whose arm would open on the game's blank
+# placeholder picture borrows another season's arm instead (`season_for`). The
+# two tutorials (`amm_e001`, `skr_e001`) open on 噴水の並木道, and their 春 arm
+# loads wubg 779, which in this build is byte for byte the black picture the
+# background table files under 欠番 -- every 春 background of the launch build
+# is (754 765 777 778 779 785 871). The scripts pin 冬, so the shipped constant
+# never reaches it; `SEASON_SOURCE = "clock"` does, every March to May, and a
+# new player's first scene is a black screen. The stand-in is read off the data
+# rather than chosen (`reference/season_switch.json` "standIn"): in both
+# tutorials the other three switches give 春 and 夏 byte-identical arms, so the
+# authors had 春 borrow the plain picture everywhere they had no 春 art, and
+# 夏 is the one season that does so here too. The most likely original: a
+# server in spring ran a client that had the 春 art, which this build does not;
+# showing the picture the authors used for 春 wherever it was missing is the
+# nearest this build can come. Off (0) puts the blank picture back.
+SEASON_BLANK_STAND_IN = (os.environ.get("TMO_SEASON_BLANK_STAND_IN") or "1") != "0"
 
 # How far past an OP_BR its fall-through lies. OP_BR is 8 bytes wide, and the
 # client counts ip in file bytes, so "condition not taken" is br + 8. Verified

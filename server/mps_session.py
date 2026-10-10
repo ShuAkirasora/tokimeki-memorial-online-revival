@@ -1528,17 +1528,22 @@ def _is_loopback(host: str | None) -> bool:
     return bool(host) and (host.startswith("127.") or host in ("::1", "localhost"))
 
 
-def _season() -> int | None:
-    """`script.SEASON_SOURCE` resolved to a season, or None to leave it alone.
+def _season(script_id: int | None) -> int | None:
+    """`script.SEASON_SOURCE` resolved to a season for one scenario, or None to
+    leave it alone.
 
     ⚠️ None is the shipped behaviour and it is not the same as 冬: it means the
     shadow never touches the register, so whichever constant the script writes
-    into itself is the one the switch sees.
+    into itself is the one the switch sees. ⚠️ Per scenario because of
+    `script.season_for`: a season whose arm there is the blank placeholder
+    picture is asked about as the season standing in for it.
     """
     source = script.SEASON_SOURCE
     if isinstance(source, int):
-        return source
-    return curriculum.season() if source == "clock" else None
+        season = source
+    else:
+        season = curriculum.season() if source == "clock" else None
+    return script.season_for(script_id, season)
 
 
 # ⚠️ INVENTED — the u16 in front of the relay ticket. Both login answers carry
@@ -3818,7 +3823,7 @@ class MpsServer:
         # them settled -- and a client stopped on the branch is the one caller
         # that has to have the number rather than a coin over it.
         runner.shadow.roll = self._script_roll
-        runner.shadow.season = _season()
+        runner.shadow.season = _season(script_id)
         # ⭐⭐ Round 541: an arm this member's client skipped may open on
         # somebody else's box (`un184` ip=221 / ip=245) -- the same walk-past
         # `_script_select_others` books, into the same two books.
@@ -6661,7 +6666,7 @@ class MpsServer:
                 found.script_id, cells, party_registers, actor.actor_id)
             if stand_in is not None:
                 stand_in.roll = self._script_roll
-                stand_in.season = _season()
+                stand_in.season = _season(found.script_id)
                 stand_in.fence = (lambda cursor, party=party:
                                   self._stand_in_fence(party, cursor))
                 shadows[actor.actor_id] = stand_in
@@ -8077,7 +8082,8 @@ class MpsServer:
                 # ⭐ `shadow is None` here is the right test rather than "no
                 # export": a follower that has lost its place is None too, and
                 # a table lookup is still better than falling through.
-                arm = script.season_arm(found.script_id, local, _season())
+                arm = script.season_arm(found.script_id, local,
+                                        _season(found.script_id))
                 if arm is not None:
                     goes_to, season = arm
                     target = found.wire_ip(goes_to)
