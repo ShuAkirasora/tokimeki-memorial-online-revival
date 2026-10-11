@@ -631,6 +631,20 @@ string. If that search comes out ambiguous on a differently built copy the expor
 says so, and `--key` and `--iv` are the way past it. Nothing that comes out belongs to this
 repository and none of it is redistributed here.
 
+## Making every fix at once
+
+```
+python3 apply_fixes.py --address <your server's address>
+```
+
+The two fixes below each have their own tool, and each still runs on its own. `apply_fixes.py`
+runs both against the same copy of the game — found the way the exporter finds it, or
+`--game-dir` — and ends by saying which went through; `--check` writes nothing. `--address` is
+the address your players' clients are pointed at, and it is asked for rather than guessed: the
+fixed `tmo.exe` is the client every player then runs, and the address your own copy carries is
+often not the one players connect to. Left out, the run stops before writing anything and shows
+what your copy carries. To take a fix back, see its own section.
+
 ## Fixing the confession scenes
 
 ```
@@ -735,6 +749,7 @@ client still started against a server that offers the fix fetches it again.
 | `Play.cmd`, `play.py` | the client half in one run: hosts, the four bytes, the game started |
 | `set_auth_address.py` | the four-byte address change |
 | `export_scripts.py` | the script exports, out of your own copy of the game |
+| `apply_fixes.py` | the two fixes next to it, `confession_fix.py` and `ranking_fix.py`, in one run |
 | `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, fixed for the updater to hand out |
 | `ranking_fix.py` | the exam-ranking page's twenty score loads, fixed in a copy of your client for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
