@@ -260,6 +260,9 @@ async def main(
     # answer the same client, so a streak counted per port would be six streaks.
     limits = Throttle(accountstore.codes.dir / "registrations.json")
     print(f"[system] accounts: {accountstore.summary()}")
+    # The updater hands out the 校内新聞's ranking files, made from the same
+    # book the exams file into (newspaper.py).
+    updater.results = accountstore.exams
     mps_login = MpsServer(
         root,
         ServiceConfig(host=open_host, port=MPS_LOGIN_PORT),

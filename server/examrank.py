@@ -42,14 +42,14 @@ game's 2007 exam pages say 「試験成績（個人）が上位の生徒の経�
 sitter's 経歴 -- at the next 登校 after the period is over, since a character
 not playing has nobody to tell. Key 2 is one 実績: two firsts are one entry.
 
-⚠️ WHERE IT IS READ is the invented part (round 574, user's call). The
-original printed both tables in the 校内新聞 (`p05_07`
-「試験のランキングなどが掲載されます」) -- but every page of that paper is the
-client's own `Data/news`, and the four messages that open and close it carry
-not one byte, so there is nothing this end can put on it. The original also
-published results on its website; this server has a website, the registration
-page, so the tables are a read-only page on it (registration_site.py,
-/ranking). No client change and no new message.
+⭐ WHERE IT IS READ. The original printed the tables in the 校内新聞 (`p05_07`
+「試験のランキングなどが掲載されます」), and so does this server: the paper's
+試験結果 page is filled from six files the client reads and the shipped game
+lacks, which newspaper.py writes from this book and the updater hands out
+(round 591; round 574 had read the paper as all pictures and put the tables on
+the registration site's /ranking instead, which stays). That page is laid out
+by 試験レベル and lists each sitter once, with all eight subjects and the total
+-- so it ranks by total, where /ranking ranks each subject on its own.
 
 ⚠️ A period run from the console (``exam.Period.MANUAL``, `/exam on`) is filed
 too, under its own key, because it is over at once and that makes it the way
@@ -109,11 +109,29 @@ CLASS_AVERAGE = "full"
 RELEASE_HOURS = 0
 
 
+def _text(raw: bytes) -> str:
+    return raw.split(b"\x00", 1)[0].decode("cp932", "replace")
+
+
 def _name(family: bytes, first: bytes) -> str:
     """氏名 as text, from the two NUL-padded Shift_JIS fields."""
-    parts = [raw.split(b"\x00", 1)[0].decode("cp932", "replace")
-             for raw in (family, first)]
-    return " ".join(part for part in parts if part)
+    return " ".join(part for part in (_text(family), _text(first)) if part)
+
+
+def name_parts(paper: dict) -> tuple[str, str]:
+    """``(姓, 名)`` of a filed paper. Papers filed before round 591 kept only
+    the joined 氏名; a character name has no space in it, so the first space
+    is the join."""
+    if "family" in paper:
+        return str(paper["family"]), str(paper.get("first", ""))
+    family, _, first = str(paper.get("name", "")).partition(" ")
+    return family, first
+
+
+def course_of_paper(paper: dict) -> int:
+    """The 試験レベル (0-based 課程) a paper was sat at. Papers filed before
+    round 591 did not record it; they count as the first."""
+    return int(paper.get("course", 0))
 
 
 def class_name(in_class: int) -> str:
@@ -187,7 +205,8 @@ class ResultBook:
 
     def file(self, period: str, chara_id: int, subject: int, score: int,
              right: int, attendance: int, rate: float, in_class: int,
-             family: bytes, first: bytes, when: "datetime | None" = None) -> None:
+             family: bytes, first: bytes, when: "datetime | None" = None,
+             course: int = 0) -> None:
         """One marked paper. A second paper in the same subject replaces it.
 
         In a calendar period that cannot happen (one sitting per subject); in a
@@ -210,6 +229,7 @@ class ResultBook:
             "score": max(0, min(100, score)), "right": right,
             "attendance": attendance, "rate": round(rate, 6),
             "class": in_class, "name": _name(family, first),
+            "family": _text(family), "first": _text(first), "course": course,
             "sat": (when or datetime.now()).isoformat(timespec="seconds"),
         })
         self._save()
@@ -229,6 +249,19 @@ class ResultBook:
         return (gameclock.school_now(now)
                 >= friday + exam.CLOSES + timedelta(hours=RELEASE_HOURS))
 
+    def release_time(self, key: str) -> datetime:
+        """When a period's rankings came out: its close plus RELEASE_HOURS, or,
+        for the console's period, its last paper."""
+        try:
+            friday = datetime.fromisoformat(key)
+        except ValueError:
+            sat = [p.get("sat", "") for p in self.periods.get(key, {}).get("papers", [])]
+            try:
+                return datetime.fromisoformat(max(sat))
+            except ValueError:
+                return datetime(2006, 1, 23)
+        return friday + exam.CLOSES + timedelta(hours=RELEASE_HOURS)
+
     def shown(self, now: "datetime | None" = None) -> list[str]:
         """Released period keys, newest first, the console's last."""
         keys = [k for k in self.periods if self.released(k, now)]
@@ -243,9 +276,13 @@ class ResultBook:
                   if int(p["subject"]) == subject]
         return _ranked(papers, _order)
 
-    def class_ranking(self, key: str) -> list[tuple[int, dict]]:
-        """``[(rank, {"class", "average", "sitters"})]``, classes that qualify."""
-        papers = self.periods.get(key, {}).get("papers", [])
+    def class_ranking(self, key: str, level: "int | None" = None) -> list[tuple[int, dict]]:
+        """``[(rank, {"class", "average", "sitters", "subjects"})]``, classes that
+        qualify; ``subjects`` is the eight per-subject means the same average is
+        made of. ``level`` keeps only the papers sat at that 試験レベル (the
+        校内新聞 has a table per level); None takes them all (/ranking)."""
+        papers = [p for p in self.periods.get(key, {}).get("papers", [])
+                  if level is None or course_of_paper(p) == level]
         by_chara: dict[int, dict[int, dict]] = {}
         for paper in papers:
             by_chara.setdefault(int(paper["chara"]), {})[int(paper["subject"])] = paper
@@ -261,13 +298,20 @@ class ResultBook:
             if CLASS_AVERAGE == "papers":
                 marks = [int(p["score"]) for sat in members.values() for p in sat.values()]
                 average = sum(marks) / len(marks)
+                pool = list(members.values())
             else:
                 if CLASS_AVERAGE != "full":
                     print(f"[examrank] CLASS_AVERAGE={CLASS_AVERAGE!r} is not one of "
                           f"full/papers; using full")
                 totals = [sum(int(p["score"]) for p in sat.values()) for sat in full.values()]
                 average = sum(totals) / len(totals)
-            rows.append({"class": in_class, "average": average, "sitters": len(full)})
+                pool = list(full.values())
+            subjects = []
+            for subject in range(everyone):
+                marks = [int(sat[subject]["score"]) for sat in pool if subject in sat]
+                subjects.append(sum(marks) / len(marks) if marks else None)
+            rows.append({"class": in_class, "average": average, "sitters": len(full),
+                         "subjects": subjects})
         return _ranked(rows, lambda row: -row["average"])
 
     def firsts(self, chara_id: int, now: "datetime | None" = None) -> list[tuple[str, int]]:

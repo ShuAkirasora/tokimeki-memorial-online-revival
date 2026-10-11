@@ -21940,7 +21940,7 @@ class MpsServer:
                 self.accounts.exams.file(
                     period, session.chara_id, paper.subject, marked, right,
                     card.attendance[paper.subject], card.rate(paper.subject),
-                    session.in_class, family, first,
+                    session.in_class, family, first, course=paper.course,
                 )
                 print(f"[{self.tag}] exam end: {name} 段階{paper.course + 1} "
                       f"{right}/{len(paper.questions)}問正解 → {marked} 点"

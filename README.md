@@ -445,6 +445,12 @@ authentication.
 out through the game's own updater. Nothing is installed by hand and nothing else is touched;
 see [Fixing the confession scenes](#fixing-the-confession-scenes).
 
+**And, on a server that offers it, twenty bytes of code** — the one exception to "nothing about
+how it behaves". The school paper's exam-ranking page reads its scores as signed bytes, so half
+the totals come out negative; the operator makes a fixed copy of the client from their own and
+the updater replaces `tmo.exe` with it, the way the operated game shipped its client fixes. See
+[Fixing the exam rankings page](#fixing-the-exam-rankings-page).
+
 ## Ports
 
 | Port | Service | Reached by |
@@ -692,6 +698,35 @@ is not part of this repository.
 `export_scripts.py`. Clients that already fetched the fixed files keep them until they are put
 back by hand, so a server that has once offered the fix should keep offering it.
 
+## Fixing the exam rankings page
+
+```
+python3 ranking_fix.py --game-dir <folder with tmo.exe> --address <your server's address>
+```
+
+**What it is for.** After each exam period this server publishes the rankings to the school
+paper — the 試験結果 tab of the board outside, tables by level for 個人 and クラス — as six small
+files the updater hands out with no setup (`server/newspaper.py`). The client that shipped draws
+them wrongly: every score on that page is loaded as a *signed* byte, so a total such as 200 or
+480 is drawn as a negative number, and a subject not sat shows `-1` instead of the dash the page
+has for it. Twenty loads change from `movsx` to `movzx` — one byte each — and the page reads
+right.
+
+**How it reaches players.** As the operated game shipped client fixes: its updater runs before
+the client on every start and replaces whole files, so a fix to the client's code was a new
+`tmo.exe`, in effect from the next start. This writes that file into `runtime/update/`, made
+from **your own copy**: it refuses a `tmo.exe` that is not the build it was written for, give or
+take the four address bytes, so a copy carrying anything else is never handed out. The file
+holds the address bytes too — the copy players fetch is the one they then run — so `--address`
+must be the address your players' clients are pointed at (what they gave `Play.cmd`); written
+the way `set_auth_address.py` writes it, so a client already set up for your server fetches the
+file once and finds nothing to change after.
+
+**To take it back,** `python3 ranking_fix.py --remove`. Clients that already fetched it keep it:
+`play.py --revert` only puts the four address bytes back, so a player who wants the shipped
+client restores the `tmo.exe.orig` that `set_auth_address.py` kept before its first write — and a
+client still started against a server that offers the fix fetches it again.
+
 ## Repository layout
 
 | Path | |
@@ -701,6 +736,7 @@ back by hand, so a server that has once offered the fix should keep offering it.
 | `set_auth_address.py` | the four-byte address change |
 | `export_scripts.py` | the script exports, out of your own copy of the game |
 | `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, fixed for the updater to hand out |
+| `ranking_fix.py` | the exam-ranking page's twenty score loads, fixed in a copy of your client for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |

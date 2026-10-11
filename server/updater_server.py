@@ -6,6 +6,7 @@ import zlib
 from pathlib import Path, PurePosixPath
 
 from common import ServiceConfig, ensure_runtime_dirs, write_packet_log
+import newspaper
 
 
 def mps_packet(msg_type: int, payload: bytes = b"") -> bytes:
@@ -90,15 +91,22 @@ def checksum(data: bytes) -> int:
 
 
 class UpdateFile:
-    """One file to bring up to date: where it goes, what it must end up being."""
+    """One file to bring up to date: where it goes, what it must end up being.
 
-    def __init__(self, path: Path, rel: PurePosixPath) -> None:
-        data = path.read_bytes()
+    Either a file under runtime/update/ (``path``) or one this server makes
+    (``data``, with its own time) -- the 校内新聞's ranking files, newspaper.py.
+    """
+
+    def __init__(self, path: "Path | None", rel: PurePosixPath,
+                 data: "bytes | None" = None, mtime: "int | None" = None) -> None:
+        if data is None:
+            data = path.read_bytes()
         self.path = path
+        self.data = data
         self.url_path = rel.as_posix()
         # The client joins this onto BASE_DIR (".\\") with no translation.
         self.name = str(rel).replace("/", "\\")
-        self.mtime = int(path.stat().st_mtime)
+        self.mtime = int(path.stat().st_mtime) if mtime is None else mtime
         self.size = len(data)
         self.crc = checksum(data)
 
@@ -111,16 +119,24 @@ class UpdateFile:
         )
 
 
-def load_release(update_dir: Path) -> list[UpdateFile]:
-    """Every file under the update folder, in a stable order."""
-    if not update_dir.is_dir():
-        return []
+def load_release(update_dir: Path, results=None) -> list[UpdateFile]:
+    """Every file under the update folder, in a stable order, then the
+    校内新聞's ranking files for the latest released 試験期間 (newspaper.py).
+
+    A file put under runtime/update/ by hand wins over a made one of the same
+    path: the folder is the operator's word on what players get.
+    """
     files = []
-    for path in sorted(p for p in update_dir.rglob("*") if p.is_file()):
-        rel = PurePosixPath(path.relative_to(update_dir).as_posix())
-        if any(part.startswith(".") for part in rel.parts):
-            continue
-        files.append(UpdateFile(path, rel))
+    if update_dir.is_dir():
+        for path in sorted(p for p in update_dir.rglob("*") if p.is_file()):
+            rel = PurePosixPath(path.relative_to(update_dir).as_posix())
+            if any(part.startswith(".") for part in rel.parts):
+                continue
+            files.append(UpdateFile(path, rel))
+    taken = {f.url_path for f in files}
+    for rel, data, when in newspaper.files(results):
+        if rel not in taken:
+            files.append(UpdateFile(None, PurePosixPath(rel), data, int(when.timestamp())))
     return files
 
 
@@ -154,8 +170,12 @@ class UpdaterServer:
     MSG_UPDATE_INFO_OK = 0x6831
     MSG_UPDATE_SET = 0x6832
 
-    def __init__(self, root: Path, config: ServiceConfig, advertise_ip: str = "127.0.0.1") -> None:
+    def __init__(self, root: Path, config: ServiceConfig, advertise_ip: str = "127.0.0.1",
+                 results=None) -> None:
         self.root = root
+        # The server's examrank.ResultBook, for the 校内新聞's ranking files;
+        # None hands out runtime/update/ alone.
+        self.results = results
         self.config = config
         self.advertise_ip = advertise_ip
         runtime, self.packet_dir = ensure_runtime_dirs(root)
@@ -219,7 +239,7 @@ class UpdaterServer:
                            writer: asyncio.StreamWriter) -> None:
         # Read once per session, so a file dropped in mid-session cannot make
         # the list the client was promised disagree with the one it walks.
-        release = load_release(self.update_dir)
+        release = load_release(self.update_dir, self.results)
         records = [f.record() for f in release]
         sent = 0
         version = 0
@@ -303,14 +323,15 @@ class UpdaterServer:
                     offset = int(spec[6:-1])
 
         wanted = target.split("?", 1)[0].lstrip("/")
-        found = next((f for f in load_release(self.update_dir) if f.url_path == wanted), None)
+        found = next((f for f in load_release(self.update_dir, self.results)
+                      if f.url_path == wanted), None)
         if found is None:
             print(f"[updater] {peer} http {method} {target} -> 404")
             writer.write(b"HTTP/1.0 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
             await writer.drain()
             return
 
-        body = found.path.read_bytes()
+        body = found.data
         if 0 < offset < len(body):
             status = "206 Partial Content"
             extra = f"Content-Range: bytes {offset}-{len(body) - 1}/{len(body)}\r\n"
