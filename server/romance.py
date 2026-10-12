@@ -878,22 +878,25 @@ def talk_day_writes(writes: dict) -> dict:
             if "day" in wrote or "best" in wrote}
 
 
-def main_event_writes(writes: dict) -> dict:
-    """``{candidate index: 親密さ}`` a finished メインイベント computed.
+def main_event_writes(writes: dict, script) -> dict:
+    """``{candidate index: 親密さ}`` a メインイベント run computed.
 
-    Empty unless the run also wrote that candidate's `PCEV[0x6020+i]` -- see
+    Empty unless `script`'s code writes that candidate's `PCEV[0x6020+i]`
+    somewhere -- whether or not this run went that way; see
     `Romance.absorb_main_event` for why that is the fence. ⚠️ Non-integer
     values are dropped, as in `talk_day_writes`.
     """
-    progress, intimacy = set(), {}
+    if script is None:
+        return {}
+    intimacy = {}
     for (family, address), value in writes.items():
         if isinstance(address, tuple) or not isinstance(value, int):
             continue
-        if family == "PCEV" and 0 <= address - PCEV_PROGRESS_BASE < len(CANDIDATES):
-            progress.add(address - PCEV_PROGRESS_BASE)
-        elif family == "PC" and 0 <= address - PC_INTIMACY_BASE < len(CANDIDATES):
+        if family == "PC" and 0 <= address - PC_INTIMACY_BASE < len(CANDIDATES):
             intimacy[address - PC_INTIMACY_BASE] = value
-    return {index: value for index, value in intimacy.items() if index in progress}
+    return {index: value for index, value in intimacy.items()
+            if script.writes_any(frozenset(
+                [("PCEV", PCEV_PROGRESS_BASE + index)]))}
 
 
 def _saved_day(text: str) -> "date | None":
@@ -2004,7 +2007,7 @@ class Romance:
                 row["intimacy"] = wrote["intimacy"]
         return changed
 
-    def absorb_main_event(self, writes: dict) -> bool:
+    def absorb_main_event(self, writes: dict, script) -> bool:
         """Take a メインイベント's own 親密さ grant back. True if it moved.
 
         ⭐⭐⭐ Round 491, the other half of `absorb_talk_day`. 43 of the 57
@@ -2019,17 +2022,31 @@ class Romance:
         ⚠️⚠️ **Fenced by `PCEV[0x6020+i]`, not by script id**, the same
         argument `absorb_talk_day` makes. 進行度 is written by the 57 main
         events and by nothing else in either script set, each writing its own
-        candidate's cell, right after the 親密さ write. So a run that wrote it
-        is a main event that reached its tail, and only then is the 親密さ
-        write next to it that event's grant. ⛔️ The 進行度 write itself is
-        still refused -- `_s104` owns that count (see PCEV_PROGRESS_BASE).
+        candidate's cell, right after the 親密さ write. So a scenario whose
+        code writes it is a main event, and a 親密さ write of the same
+        candidate in its run is that event's grant. ⛔️ The 進行度 write itself
+        is still refused -- `_s104` owns that count (see PCEV_PROGRESS_BASE).
+
+        ⭐⭐ RESTORED (round 602): the fence is asked of the **bytecode**, not
+        of the run. Until now it asked the run -- 「did this pass also write
+        進行度」 -- and one arm in the whole corpus answers no: 桜井 その２
+        (`skr_e002`), 「今日はもう下校する」, writes her 親密さ (+12 / +6 / +0,
+        by an earlier answer) and then, instead of 進行度, the scene flag
+        `PCEV[0x0023]` that `skr_e003` reads back for two lines of narration.
+        The original client wrote that 親密さ like any other; this end dropped
+        it. ⛔️ Not 「親密さ without the 日常会話 marks」 instead: `sys_s000`,
+        the new-game reset, writes all five 親密さ cells too, and would zero
+        them. Writers of `PC[0x3920+i]` across every export are exactly the
+        304 日常会話, the 43 main events and `sys_s000`, and the smoke test
+        re-counts them rather than trusting this line.
 
         ⚠️ No double credit with the 日常会話 routine: that one's fence is the
-        two PCEV families no main event writes, and the reverse holds too.
+        two PCEV families no main event writes, and the reverse holds too --
+        no 日常会話 writes `PCEV[0x6020+i]` anywhere in its code.
         """
         names = list(CANDIDATES)
         changed = False
-        for index, value in sorted(main_event_writes(writes).items()):
+        for index, value in sorted(main_event_writes(writes, script).items()):
             row = self.state[names[index]]
             changed |= row["intimacy"] != value
             row["intimacy"] = value

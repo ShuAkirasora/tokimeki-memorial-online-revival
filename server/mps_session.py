@@ -4716,14 +4716,14 @@ class MpsServer:
         メイン, and a scenario started some other way books none. The grant is
         the scenario's and needs telling nothing, like its siblings here.
 
-        ⚠️ Silence means no 親密さ write next to a 進行度 write -- a 日常会話,
-        or one of the 14 main events that write no 親密さ at all.
+        ⚠️ Silence means no 親密さ write from a scenario that writes 進行度 --
+        a 日常会話, or one of the 14 main events that write no 親密さ at all.
         """
         runner = session.script
         shadow = runner.shadow if runner is not None else None
         if shadow is None or shadow.lost:
             return
-        wrote = romance.main_event_writes(result.writes)
+        wrote = romance.main_event_writes(result.writes, shadow.script)
         if not wrote:
             return
         love = self._chars(session).romance(session.chara_id)
@@ -4731,7 +4731,7 @@ class MpsServer:
             return
         names = list(romance.CANDIDATES)
         before = {index: love.state[names[index]]["intimacy"] for index in wrote}
-        changed = love.absorb_main_event(result.writes)
+        changed = love.absorb_main_event(result.writes, shadow.script)
         if changed and not self._chars(session).set_romance(session.chara_id, love):
             print(f"[{self.tag}] 親密さ: 書き戻せませんでした")
             return
