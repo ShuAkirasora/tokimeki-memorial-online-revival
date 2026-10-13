@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Put the confession close-ups back into twenty-one of your copy's script files.
+"""Put the confession close-ups back into twenty-two of your copy's script files.
 
 What is wrong
 -------------
@@ -12,6 +12,14 @@ is missing is in the scripts. A background only gets its figure layer when the
 script says how many scene effects it has, registers each part, and switches
 them on; Kasuga's script does all three, and these four do none of them. So the
 parts are never loaded, and the scene plays out around nobody.
+
+Kasuga's close-up does get its figure, and shows it wrong. This client draws
+every part a script registers until the script switches it off, and her script
+switches on only the parts it wants: so all three of her poses are up at once,
+and over them seven frames of her with her eyes shut that the script means
+only for the moments it animates them. Her face, with its expressions, is
+under those frames; the scene plays with her eyes shut and two heads of hair.
+Her staff-roll card has her looking out of the same picture.
 
 Amamiya's epilogue, the scene the client plays straight after her staff roll,
 is the same kind of gap at its widest. The other four epilogues each show the
@@ -39,9 +47,9 @@ the same lines with the letter and the choice cut out. The copies carry the
 same holes and some of their own: where the heroine's picture should be,
 they mostly declare the underwater view, Sakurai's confession declares
 nothing else and never puts up a picture or opens the window, and Yayoi's
-puts her scene and the place before it under the sea. Kasuga's is the
-nearest to whole: every part of her close-up is registered and switched on,
-and the one count that lets the client load them is 0.
+puts her scene and the place before it under the sea. Kasuga's has her
+confession's parts and its fault, and also leaves the count that lets the
+client load the parts at 0, and never loads the face overlay it shows.
 
 This build's own data is the defect, not the server and not the renderer, and
 nothing on the wire can carry an instruction into a script the client is
@@ -59,16 +67,16 @@ six empty entries per heroine get the CG of that event, which the client has.
 
 What this changes
 -----------------
-Only the four confession scripts `amm_e011`, `yyi_e011`, `skr_e011` and
-`ink_e011`, the epilogue `amm_e012`, Amamiya's events `amm_e005` to
-`amm_e010`, and the ten replay copies `<name>_o011` and `<name>_o012`, and in
-each only by adding:
+Only the five confession scripts `amm_e011`, `ksg_e011`, `yyi_e011`,
+`skr_e011` and `ink_e011`, the epilogue `amm_e012`, Amamiya's events
+`amm_e005` to `amm_e010`, and the ten replay copies `<name>_o011` and
+`<name>_o012`, and in each only by adding:
 
   * the scene-effect count on the background that needs one (it was 0);
   * a detour at a handful of instructions: the instruction is replaced by a
     jump to new code at the end of the script, which does what it did and then
-    the additions -- register the parts, switch them on, change the heroine's
-    expression before a line -- and jumps back;
+    the additions -- register the parts, switch them on or off, change the
+    heroine's expression before a line -- and jumps back;
   * in `amm_e007` to `amm_e010`, one cast entry: the face overlay for that
     event's picture, which the script's header did not declare.
 
@@ -119,11 +127,11 @@ copy of the game:
     python3 confession_fix.py --check           # only says what it would do
     python3 confession_fix.py --game-dir PATH   # when the guess is wrong
 
-  1. The twenty-one fixed archives go into `runtime/update/data/script/`. Every
+  1. The twenty-two fixed archives go into `runtime/update/data/script/`. Every
      client that starts through BootFirst asks the server for updates first;
      this server offers whatever is in `runtime/update/`, and the client fetches
      the files that differ from its own and puts them in place.
-  2. The twenty-one scripts are exported again, from the fixed archives, into
+  2. The twenty-two scripts are exported again, from the fixed archives, into
      `runtime/scripts/`. The server follows each scene alongside the client and
      has to be following the same script, or the scene still plays but the
      server loses track of it -- and with it the ending.
@@ -131,7 +139,7 @@ copy of the game:
      reads nothing from it, so there is no export to go with it.
 
 Both halves together, always. Nothing here is a general script or table
-editor: the twenty-one recipes and the thirty pictures are the whole of what it
+editor: the twenty-two recipes and the thirty pictures are the whole of what it
 does.
 
 The archives are encrypted. Like `export_scripts.py`, this works the key out of
@@ -176,7 +184,7 @@ IDLIST_SUBDIR = Path("data") / "idlist"
 #
 # Fixed-length commands: a little-endian u16 opcode and its operand bytes. The
 # lengths agree with reference/ssc_ops.tsv; operands are written the way
-# Kasuga's confession, the one that works, writes the same commands.
+# Kasuga's confession, whose figure loads, writes the same commands.
 
 
 def op(code: int, *operand: int) -> bytes:
@@ -561,6 +569,58 @@ def plate_off(ip: int, operands: tuple) -> tuple:
     return (ip, bg_show(slot, *rest), bg_show(slot | PLATE_OFF, *rest))
 
 
+# Kasuga's close-up on the sunflowers (2073) has twenty-one parts, and both
+# her confession and its replay register them all and switch them line by
+# line. (The replay alone leaves the sunflowers' count at 0.) Two things still
+# keep her face from showing, in both:
+#
+#   * This client draws every registered part until it is switched off, and
+#     the scripts switch on only what they want. So the whole set stays up at
+#     once: the three poses of hair and body, and on top of them the seven
+#     frames of her eyes-shut figure, which the scripts mean only for the
+#     moments their animations play. The face overlay is under that figure.
+#     When the sunflowers go up, everything but the first pose (without its
+#     blush, as the scripts first show it) is switched off.
+#     In registration order the parts are 0-2 the first pose, 3-5 the second,
+#     6-8 the third, 9-10 the ribbon and collar, 11-17 the eyes-shut frames and
+#     18-20 a blush for each pose; her confession registers one part for the
+#     picture before first, so there each number is one more.
+#   * Between two poses the script switches the old one off, changes the
+#     expression -- which waits for the overlay -- and only then switches the
+#     new one on, so for a moment there is a face and no head. The change goes
+#     in after the line before it instead, with the old pose off and the new
+#     on straight after; the script's own switches then find it done.
+#
+# And the replay shows the face overlay without ever loading it; her
+# confession loads it right after putting up the sunflowers, and so does this.
+KASUGA_PARTS = 21
+KASUGA_POSES = ((0, 1, 2, 18), (3, 4, 5, 19), (6, 7, 8, 20))
+KASUGA_POSE_CHANGES = (             # emotion, from, to; the first has no blush
+    (52, 0, 1), (51, 1, 0), (53, 0, 1), (56, 1, 2), (48, 2, 0),
+    (54, 0, 1), (50, 1, 0), (54, 0, 1), (48, 1, 0),
+)
+#: script: (the sunflowers go up, the line before each change, the first part)
+KASUGA_CLOSE_UP = {
+    "ksg_e011": (575, (718, 834, 994, 1029, 1064, 1153, 1204, 1255, 1306), 1),
+    "ksg_o011": (191, (339, 455, 615, 650, 685, 774, 825, 876, 927), 0),
+}
+
+
+def kasuga_close_up(name: str, load: bytes = b"") -> list:
+    """The detours for one of the two scripts; `load` goes in first."""
+    up, lines, first = KASUGA_CLOSE_UP[name]
+    hidden = [i for i in range(KASUGA_PARTS) if i not in KASUGA_POSES[0][:3]]
+    hooks = [(up, BG_SHOW, b"", load + b"".join(hide(first + i) for i in hidden))]
+    for k, (ip, (emotion, old, new)) in enumerate(zip(lines, KASUGA_POSE_CHANGES)):
+        off, on = KASUGA_POSES[old], KASUGA_POSES[new]
+        if k == 0:
+            off, on = off[:3], on[:3]
+        hooks.append((ip, TALK, b"", expression(0x60, emotion)
+                      + b"".join(hide(first + i) for i in off)
+                      + b"".join(show(first + i) for i in on)))
+    return hooks
+
+
 # Amamiya's epilogue: the same as hers, at its own instruction numbers. The
 # script already shows the overlay; her first expression goes in after it.
 AMAMIYA_REPLAY_PLAY_LINES = {66: 25, 130: 24}
@@ -627,6 +687,7 @@ RECIPES = {
               for k, (ip, e) in enumerate(INUKAI_LINES.items())],
         ],
     ),
+    "ksg_e011": dict(effects={}, hooks=kasuga_close_up("ksg_e011")),
     "amm_e012": dict(
         effects={},
         swap=[(4, background(AMAMIYA_PLAY_NAME, AMAMIYA_SEA),
@@ -663,12 +724,7 @@ RECIPES = {
             *[(ip, TALK, expression(0x61, e), b"") for ip, e in AMAMIYA_REPLAY_LIGHT_LINES.items()],
         ],
     ),
-    "ksg_o011": dict(
-        # Kasuga's replay registers all twenty-one parts and switches them as
-        # her confession does; only the count on the sunflowers (2073) is 0.
-        effects={14: 21},
-        hooks=[],
-    ),
+    "ksg_o011": dict(effects={14: 21}, hooks=kasuga_close_up("ksg_o011", face_load(0x60))),
     "yyi_o011": dict(
         effects={},
         swap=[(4, background(0x0004, UNDERWATER), background(0x0004, YAYOI_BOARD)),
@@ -787,19 +843,19 @@ class NotThisScript(Exception):
 
 
 def already_fixed(ssc: bytes, recipe: dict) -> bool:
-    """True when every background the recipe gives effects to already has them,
-    or, for a recipe that gives none, when its first detour -- or, with no
-    detours, its first in-place edit -- is already there."""
+    """True when every background the recipe gives effects to already has them
+    and its first detour is already there; with no detours, when its first
+    in-place edit is."""
     sec = ssc_sections(ssc)
     code = ssc[sec["code"]:sec["aux"]]
     if not recipe["effects"] and not recipe["hooks"]:
         ip, _original, replacement = recipe["swap"][0]
         return code[2 * ip:2 * ip + len(replacement)] == replacement
-    if not recipe["effects"]:
-        return struct.unpack_from("<H", code, 2 * recipe["hooks"][0][0])[0] == JUMP
     counts = [struct.unpack_from("<I", code, 2 * ip + 8)[0] & EFFECT_COUNT_MASK
               for ip in recipe["effects"]]
-    return all(counts)
+    detoured = (not recipe["hooks"]
+                or struct.unpack_from("<H", code, 2 * recipe["hooks"][0][0])[0] == JUMP)
+    return all(counts) and detoured
 
 
 def apply_recipe(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
@@ -818,6 +874,8 @@ def apply_recipe(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
         if struct.unpack_from("<H", code, 2 * ip)[0] != BG_INFO:
             raise NotThisScript(f"ip {ip} is not a background declaration")
         value = struct.unpack_from("<I", code, 2 * ip + 8)[0]
+        if value & EFFECT_COUNT_MASK == count:
+            continue            # a copy an earlier version of this tool fixed
         if value & EFFECT_COUNT_MASK:
             raise NotThisScript(f"ip {ip} already declares scene effects")
         struct.pack_into("<I", code, 2 * ip + 8, (value & ~EFFECT_COUNT_MASK) | count)

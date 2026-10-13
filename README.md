@@ -441,7 +441,7 @@ leaves the file byte-for-byte as it was. The client's small trust store is not e
 locally generated certificate is accepted, and nothing has to be disabled to get through
 authentication.
 
-**And, on a server that offers it, twenty-one script files and one table** — the confession scenes, one epilogue and six of Amamiya's events, the おまけ menu's replays of the confessions and epilogues, and the おまけ gallery's pictures, fixed and handed
+**And, on a server that offers it, twenty-two script files and one table** — the confession scenes, one epilogue and six of Amamiya's events, the おまけ menu's replays of the confessions and epilogues, and the おまけ gallery's pictures, fixed and handed
 out through the game's own updater. Nothing is installed by hand and nothing else is touched;
 see [Fixing the confession scenes](#fixing-the-confession-scenes).
 
@@ -664,12 +664,21 @@ fifth, Kasuga's, does all three, and is the pattern the fix follows. It is a def
 build's data — not this server's doing, and nothing a server can say on the wire reaches inside
 a script the client is running — so the fix is to the four script files.
 
+Kasuga's own scene gets its figure and shows it wrong. This client draws every part a script
+registers until the script switches it off, and her script only ever switches on the parts it
+wants: so her three poses are all up at once, and over them seven frames of her with her eyes
+shut, meant only for the moments the script animates them. Her face and its expressions are
+underneath; she confesses with her eyes shut and two heads of hair, while her staff-roll card
+has her looking out of the same picture. Her script is the fifth file: everything but her first
+pose is switched off when the picture goes up, and each change of pose is made in one step, so
+that no moment shows her face without her head.
+
 Amamiya's epilogue, the scene the client plays straight after her staff roll, has the same kind
 of gap. The other four epilogues each show the heroine's own picture and then a pastel copy of it
 for the last line; hers are in the client too (her on the school stage, and its pastel), with a
 face overlay drawn for the stage picture. Her script names neither: it shows an underwater view
 that every other epilogue declares and none of them shows, and loads the overlay without
-switching it on — so the rehearsal of the play is spoken over the sea. That is the fifth file.
+switching it on — so the rehearsal of the play is spoken over the sea. That is the sixth file.
 
 Six of her ordinary events, the fifth to the tenth, have the same hole. Every other heroine's
 events put her own picture up at the high point of the scene, straight after the script writes
@@ -693,14 +702,15 @@ The おまけ menu's ending replay plays each heroine's confession and epilogue 
 copies of the two scripts, cut down — the same lines without the letter and the choice. The
 copies carry the same holes, and some of their own: where the heroine's picture should be they
 mostly declare the underwater view, so Yayoi confesses at the bottom of the sea and Kasuga's
-epilogue lunch is served there; Sakurai's confession has nothing but its lines — no picture, no
+epilogue lunch is served there; Kasuga's has her confession's fault, and never loads her face
+at all; Sakurai's confession has nothing but its lines — no picture, no
 window, no fade — and plays on black; Amamiya's shows only her eyes and mouth by the window. Those
 are the last ten files.
 
-**What it changes.** `amm_e011`, `yyi_e011`, `skr_e011`, `ink_e011`, `amm_e012`, `amm_e005` to
+**What it changes.** `amm_e011`, `ksg_e011`, `yyi_e011`, `skr_e011`, `ink_e011`, `amm_e012`, `amm_e005` to
 `amm_e010`, and the ten replay copies `<name>_o011` and `<name>_o012`, and only by adding: the
 missing scene-effect counts; a detour at a few instructions that jumps to new code at the end of
-the script — register the parts, switch them on, change the heroine's expression before a line —
+the script — register the parts, switch them on or off, change the heroine's expression before a line —
 and back; and, in `amm_e007` to `amm_e010`, one cast entry for the face overlay. No instruction
 moves within the code and nothing is removed, so every instruction keeps its number and every
 jump its target. The cast entry is 56 bytes in the header, so in those four scripts the code
@@ -727,16 +737,16 @@ both are needed:
 
 | Half | Where | What it is for |
 |---|---|---|
-| the twenty-one fixed archives | `runtime/update/data/script/` | every client that starts through BootFirst asks for updates first; the server offers what is in `runtime/update/`, and the client fetches each file that differs from its own and puts it in place |
+| the twenty-two fixed archives | `runtime/update/data/script/` | every client that starts through BootFirst asks for updates first; the server offers what is in `runtime/update/`, and the client fetches each file that differs from its own and puts it in place |
 | the fixed `idlist.arc` | `runtime/update/data/idlist/` | the same way; the server reads nothing from it, so it has no export |
-| the twenty-one scripts, exported again from the fixed archives | `runtime/scripts/` | the server follows each scene alongside the client; following the old script, it loses track of the fixed one, and the ending that follows the confession is not played |
+| the twenty-two scripts, exported again from the fixed archives | `runtime/scripts/` | the server follows each scene alongside the client; following the old script, it loses track of the fixed one, and the ending that follows the confession is not played |
 
 Players do nothing: the next start fetches the files, about 2 MB in all, and every start after
 that only compares them. The archives are enciphered; like the exporter, this works the key out
 of your own `tmo.exe` and writes it nowhere, and the archives it writes stay in `runtime/`, which
 is not part of this repository.
 
-**To take it back,** remove `runtime/update/data/` and export the twenty-one scripts again with
+**To take it back,** remove `runtime/update/data/` and export the twenty-two scripts again with
 `export_scripts.py`. Clients that already fetched the fixed files keep them until they are put
 back by hand, so a server that has once offered the fix should keep offering it.
 
