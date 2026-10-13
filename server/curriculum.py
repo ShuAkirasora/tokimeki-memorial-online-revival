@@ -145,9 +145,11 @@ SUBJECT_ABILITY = (
 #      家庭科's abilities are 雑学 (which would give 知性) yet its value is 感情,
 #      and 外国語's second is 芸術 (which would give 感情) yet its value is 知性.
 #
-# ⚠️ Nothing here uses it: this server has no biorhythm, and the manual never
-# mentions one. It is recorded because the field is decoded, not because it is
-# wired to anything.
+# ⚠️ Nothing here uses it: the manual never mentions a biorhythm, and the one
+# the client draws (the キャラメニュー graph, ability.BIORHYTHM_COUNTS) only
+# turns a day count into three curves -- nothing on either side links those
+# curves to a lesson. It is recorded because the field is decoded, not because
+# it is wired to anything.
 # ⚠️ And it is still an inference from value patterns across two tables plus a
 # name that fits — no code was found reading it, on either side. The client
 # reads none of these fields at all; 能力増減 is the server's arithmetic.

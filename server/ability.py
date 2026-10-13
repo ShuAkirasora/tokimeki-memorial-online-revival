@@ -71,6 +71,12 @@ measured pixel by pixel rather than inferred:
                    range draws nothing, which is why -3 once looked like a
                    field the client ignores.
     elapsedDays    no text of its own; it sets the バイオリズム graph's phase.
+                   Read off the client (round 607): 0x4310's handler hands it
+                   to the graph (0x467d29), which takes it modulo 23, 28 and
+                   33 (the table at 0xb676d8) and draws 「today」 at day 10,
+                   13 px a day. Nothing else: no date, no birthday. So the
+                   only thing the server owes it is a number that goes up by
+                   one each day -- see BIORHYTHM_COUNTS for where it starts.
     clubParamInfo  the 「部　活」 tab, and only eight of the sixteen: keys 1-8,
                    野球部 through 家庭科部. 無所属, 未定部１…６ and 番長 are
                    never drawn whatever they hold. level is 0-based the way
@@ -100,6 +106,7 @@ second answer to the same question.
 from __future__ import annotations
 
 import struct
+from datetime import date
 
 MSG_CL_QUERY_CHARA_MENU_ABILITY = 0x430F
 MSG_SV_RESULT_CHARA_MENU_ABILITY = 0x4310
@@ -115,6 +122,17 @@ ABILITIES = ("文系", "理系", "芸術", "雑学", "運動", "スタミナ")
 # the eleven real clubs, six of which are 未定部１…６ placeholders, and 番長
 # last. Two parallel arrays, so a club has both a level and a gauge.
 CLUBS = 16
+
+# ⚠️ INVENTED — where a character's バイオリズム starts counting. The client
+# only wants a day count that grows by one a day (the graph is that count modulo
+# 23/28/33, see elapsedDays above); what day the original counted from is not
+# known -- a character's creation is the likeliest, but the save keeps no such
+# date, and its 誕生日 has no year. So the count starts on the day the sheet is
+# first asked for (stamped then as ``daysFrom``) and goes on with the school
+# calendar (gameclock.today(), so a compressed day moves it too). Before round
+# 607 it never moved: the three curves sat at the same phase for ever, which is
+# what False brings back.
+BIORHYTHM_COUNTS = True
 
 
 class AbilitySheet:
@@ -133,7 +151,39 @@ class AbilitySheet:
         self.virtue = int(saved.get("virtue", 0))
         self.stress = int(saved.get("stress", 0))
         self.condition = int(saved.get("condition", 0))
-        self.elapsed_days = int(saved.get("elapsedDays", 0))
+        self._elapsed_days = int(saved.get("elapsedDays", 0))
+        #: The school-calendar day ``elapsed_days`` was true on (ISO date), or
+        #: None until the sheet is first sent. See BIORHYTHM_COUNTS.
+        self.days_from: "str | None" = saved.get("daysFrom") or None
+
+    @property
+    def elapsed_days(self) -> int:
+        """経過日数 as it stood on ``days_from`` (or as set, when never sent)."""
+        return self._elapsed_days
+
+    @elapsed_days.setter
+    def elapsed_days(self, value: int) -> None:
+        # A value put here by hand (`/ab 日数`, the ruler) is the number to draw
+        # *today*: it restarts the count rather than being added to it.
+        self._elapsed_days = int(value)
+        self.days_from = None
+
+    def stamp(self, today: date) -> bool:
+        """Start the バイオリズム count today, if it has not started. True if it did."""
+        if self.days_from is not None or not BIORHYTHM_COUNTS:
+            return False
+        self.days_from = today.isoformat()
+        return True
+
+    def days_on(self, today: date) -> int:
+        """経過日数 as sent on ``today``: the stored count plus the days since."""
+        if not BIORHYTHM_COUNTS or self.days_from is None:
+            return self._elapsed_days
+        try:
+            since = (today - date.fromisoformat(self.days_from)).days
+        except ValueError:
+            return self._elapsed_days
+        return self._elapsed_days + max(0, since)
 
     @staticmethod
     def _row(values: object, size: int) -> "list[int]":
@@ -149,6 +199,7 @@ class AbilitySheet:
             "stress": self.stress,
             "condition": self.condition,
             "elapsedDays": self.elapsed_days,
+            **({"daysFrom": self.days_from} if self.days_from else {}),
         }
 
     def levels(self) -> "list[int]":
@@ -166,7 +217,8 @@ class AbilitySheet:
         """
         return [(value >> 8) + 1 for value in self.params[: len(ABILITIES)]]
 
-    def result_params(self, test_level: int = 0) -> bytes:
+    def result_params(self, test_level: int = 0,
+                      today: "date | None" = None) -> bytes:
         """MsgSvResultCharaMenuAbility, field by field in wire order.
 
         ``test_level`` comes from the caller's ScoreCard rather than from here;
@@ -179,7 +231,8 @@ class AbilitySheet:
             out += struct.pack(">H", value & 0xFFFF)
         out += struct.pack(">HH", self.virtue & 0xFFFF, self.stress & 0xFFFF)
         out += struct.pack(">b", max(-128, min(127, self.condition)))
-        out += struct.pack(">I", self.elapsed_days & 0xFFFFFFFF)
+        days = self.elapsed_days if today is None else self.days_on(today)
+        out += struct.pack(">I", days & 0xFFFFFFFF)
         return bytes(out)
 
     def summary(self) -> str:

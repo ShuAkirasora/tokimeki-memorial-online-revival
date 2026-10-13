@@ -99,6 +99,7 @@ import exam
 import examrank
 import facing
 import friends
+import gameclock
 import gmcall
 import gmchat
 import gmnotice
@@ -10475,12 +10476,17 @@ class MpsServer:
                     return self._answer(
                         session, sequence, ability.MSG_SV_ERROR_CHARA_MENU_ABILITY, bytes(1)
                     )
-                print(f"[{self.tag}] ability for charaId={chara_id}: {sheet.summary()}")
+                today = gameclock.today()
+                if sheet.stamp(today):
+                    # The バイオリズム count starts here (ability.BIORHYTHM_COUNTS).
+                    self._chars(session).set_ability(chara_id, sheet)
+                print(f"[{self.tag}] ability for charaId={chara_id}: {sheet.summary()}"
+                      f" (sent 経過日数 {sheet.days_on(today)})")
                 return self._answer(
                     session,
                     sequence,
                     ability.MSG_SV_RESULT_CHARA_MENU_ABILITY,
-                    sheet.result_params(card.test_level() - 1),
+                    sheet.result_params(card.test_level() - 1, today),
                 )
             if msg_type == couple.MSG_CL_QUERY_COUPLE_LIST:
                 # 「カップル一覧」. 0x4500 carries no body, so it asks for the
@@ -21018,7 +21024,22 @@ class MpsServer:
                 ))
             print(f"[{self.tag}] 友達登録: charaId={me} declined {target} "
                   f"(reason={tail})")
-            return b""
+            # ⭐ Round 607: the one who said no is told too, about the asker. Read
+            # off the client, not guessed: 0x6406 puts the asker on a list of
+            # applications received (0x6ffc48), and the menu's 友達登録 slot stays
+            # dark while that list has anybody on it (0x6fc59a) -- for every
+            # player, not only this one. Neither button of the box takes the
+            # asker off it; only the handlers of 0x640B, 0x640D and 0x6409 do.
+            # And ［いいえ］ (0x6af1d4) sets the flag that makes 0x640D draw
+            # 「友達登録申し込みをキャンセルしました。」 before it sends 0x6407 --
+            # the same pair as withdrawing (0x640B sets it, 0x640D draws it), so
+            # the box expects this message back. Without it the slot stayed dark
+            # until the next login (seen on screen); the byte is not read when
+            # that flag is up.
+            return self._answer(
+                session, seen, friends.MSG_SV_NOTIFY_FRIEND_ADD_CANCEL,
+                struct.pack(">IB", target, friends.NOTIFY_DECLINED),
+            )
 
         if msg_type == friends.MSG_CL_REQUEST_FRIEND_ADD_CANCEL:
             if target not in session.friends_asked:
