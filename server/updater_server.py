@@ -34,6 +34,11 @@ def parse_mps_packets(data: bytes) -> list[tuple[int, bytes]]:
     return packets
 
 
+def _framed_length(data: bytes) -> int:
+    """How many leading bytes of ``data`` are whole MPS packets."""
+    return sum(4 + len(payload) for _, payload in parse_mps_packets(data))
+
+
 # ---------------------------------------------------------------------------
 # What the updater can be told, read out of UpdateClient.exe itself.
 #
@@ -78,6 +83,14 @@ SOURCE_DOWNLOAD = 2
 # Empty or absent -- the shipped state -- and the session is the one this server
 # has always answered: nothing to do.
 UPDATE_DIRNAME = "update"
+
+# How long a session waits for the client's next message before hanging up.
+# The client asks for the list one record per round trip and gives up with
+# "error : 1" the moment this connection drops before 0x6832, so a server
+# that hangs up early turns a slow link into a failed update. 30 s is the
+# client's own timeout for a download; 4 s was too short over a long-haul
+# link that stalls now and then.
+WAIT_SECONDS = 30.0
 
 # ⚠️ INVENTED — the name of the one download server announced in 0x6821. The
 # client keeps it next to the URL prefix and never puts it on the wire again;
@@ -184,7 +197,11 @@ class UpdaterServer:
     def mirror_url(self) -> str:
         return f"http://{self.advertise_ip}:{self.config.port}/"
 
-    async def _read_available(self, reader: asyncio.StreamReader, first_wait: float = 8.0) -> bytes:
+    async def _read_available(self, reader: asyncio.StreamReader, first_wait: float = WAIT_SECONDS,
+                              whole_frames: bool = False) -> bytes:
+        """Read what the peer sent. With ``whole_frames`` (mid-session), return
+        as soon as the bytes are whole MPS packets instead of lingering for
+        more, and keep waiting while one is only half here."""
         chunks: list[bytes] = []
         try:
             first = await asyncio.wait_for(reader.read(65536), timeout=first_wait)
@@ -194,8 +211,13 @@ class UpdaterServer:
             return b""
         chunks.append(first)
         while True:
+            if whole_frames:
+                data = b"".join(chunks)
+                if _framed_length(data) == len(data):
+                    return data
             try:
-                more = await asyncio.wait_for(reader.read(65536), timeout=0.4)
+                more = await asyncio.wait_for(reader.read(65536),
+                                              timeout=first_wait if whole_frames else 0.4)
             except asyncio.TimeoutError:
                 break
             if not more:
@@ -222,7 +244,7 @@ class UpdaterServer:
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
         try:
-            data = await self._read_available(reader, first_wait=8.0)
+            data = await self._read_available(reader, first_wait=WAIT_SECONDS)
             if data.startswith((b"GET ", b"HEAD ")):
                 await self._serve_http(peer, data, reader, writer)
                 return
@@ -247,7 +269,7 @@ class UpdaterServer:
         # that is not this client.
         for round_idx in range(8 + len(records)):
             if round_idx:
-                data = await self._read_available(reader, first_wait=4.0)
+                data = await self._read_available(reader, whole_frames=True)
             write_packet_log(self.packet_dir, "updater", "in", data)
             if not data:
                 print(f"[updater] {peer} round={round_idx} empty/timeout")
