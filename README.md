@@ -445,11 +445,12 @@ authentication.
 out through the game's own updater. Nothing is installed by hand and nothing else is touched;
 see [Fixing the confession scenes](#fixing-the-confession-scenes).
 
-**And, on a server that offers it, twenty-nine bytes of code** — the one exception to "nothing
+**And, on a server that offers it, thirty-two bytes of code** — the one exception to "nothing
 about how it behaves". The school paper's exam-ranking page reads its scores as signed bytes, so
 half the totals come out negative, the title screen takes its own おまけ button away again
-four bytes after building it, and the おまけ gallery looks its expression photos up under the
-wrong condition, so none past the first can be shown; the operator makes a fixed copy of the client from their own and
+four bytes after building it, the おまけ gallery looks its expression photos up under the
+wrong condition, so none past the first can be shown, and its viewer asks the wrong question
+about endings, so the Epilogue opens black; the operator makes a fixed copy of the client from their own and
 the updater replaces `tmo.exe` with it, the way the operated game shipped its client fixes. See
 [Fixing the client](#fixing-the-client).
 
@@ -769,6 +770,13 @@ expression number equals the route number, where route 0 was meant, so only the 
 of a scene can ever be reached and the button stays grey. Five one-byte compares become
 compares with 0.
 
+And a fourth, next to it. The last picture of a heroine's gallery page is her Epilogue, lit
+once she is in the account's ending list. The page and the viewer each work out "is she in the
+list" with their own copy of the same function, and the viewer's copy compares with no one and
+keeps the opposite answer: it opens the Epilogue only when nobody but Amamiya has an ending —
+then for every candidate, ending or not — and otherwise opens it black and steps over it. Three
+bytes make the viewer's copy the page's.
+
 **How it reaches players.** As the operated game shipped client fixes: its updater runs before
 the client on every start and replaces whole files, so a fix to the client's code was a new
 `tmo.exe`, in effect from the next start. This writes that file into `runtime/update/`, made
@@ -794,7 +802,7 @@ client still started against a server that offers the fix fetches it again.
 | `export_scripts.py` | the script exports, out of your own copy of the game |
 | `apply_fixes.py` | the two fixes next to it, `confession_fix.py` and `ranking_fix.py`, in one run |
 | `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, the おまけ replays, and the おまけ gallery's pictures, fixed for the updater to hand out |
-| `ranking_fix.py` | the exam-ranking page's twenty score loads, the おまけ button and the gallery's expression photos, fixed in a copy of your client for the updater to hand out |
+| `ranking_fix.py` | the exam-ranking page's twenty score loads, the おまけ button, the gallery's expression photos and its Epilogue, fixed in a copy of your client for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |

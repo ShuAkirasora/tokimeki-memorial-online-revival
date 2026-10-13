@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Fix the client's own bugs, for handing out through the updater.
 
-Three fixes, one file -- the client is a single tmo.exe, so whatever is fixed
+Four fixes, one file -- the client is a single tmo.exe, so whatever is fixed
 in it goes out together:
 
   * the 試験結果 page of the school paper (twenty bytes, below);
   * the title screen's おまけ button, which this build never draws (four
     bytes, after that);
   * the おまけ gallery's 表情 photos, which this build can never show past
-    the first (five bytes, after that).
+    the first (five bytes, after that);
+  * the おまけ gallery's Epilogue, which opens onto a black screen for anyone
+    but an account whose only ending is Amamiya's (three bytes, after that).
 
 The paper's 試験結果 tab draws the exam rankings from six files this server
 publishes (server/newspaper.py). The client that shipped reads every score in
@@ -60,6 +62,25 @@ marker, and the fix keeps it rather than invent another.)
   expression lands in the route-1 group, which is empty, and the button
   either stays grey or opens onto a black screen. The immediates of the five
   compares with k = 1..5 become 0; nothing else moves.
+
+  The Epilogue
+  ------------
+  The tenth picture of a heroine's gallery page is her Epilogue, the group
+  photo her row of the client's own candidate table names (+0x1C0). Whether
+  it opens is one byte of the gallery record, "this candidate is in the
+  ending list" -- and the client works that byte out twice, once for the
+  page (0x688367) and once for the viewer (0x688553), in two copies of the
+  same function. The page's copy is right: it looks the candidate's npcId up
+  in the ending list (0x68566A, comparing each entry with it) and keeps
+  "found" (setne). The viewer's copy pushes an empty comparand, calls a
+  lookup that compares with no one (0x685691: the first entry whose id is
+  not 0) and keeps "not found" (sete). So the viewer reads "nobody but
+  Amamiya has an ending", whoever's page it was opened from: on an account
+  with any other ending every Epilogue opens black and 次へ steps over it,
+  and on one with Amamiya's alone every candidate's viewer reaches the
+  photo, ending or not. Three bytes make the viewer's copy the page's: push
+  the npcId the function has just stored (disp 0x10 -> 0x12), call 0x68566A
+  instead (the low byte of the rel32), and keep "found" (sete -> setne).
 
   How it reaches players, and why that way
   ----------------------------------------
@@ -123,6 +144,14 @@ NOP = 0x90
 PHOTO_ROUTE_TESTS = {0x68BCE3: 5, 0x68BCF5: 4, 0x68BD07: 3, 0x68BD19: 2, 0x68BD2B: 1}
 PHOTO_ROUTE_TEST = "807d10"
 
+#: The gallery viewer's ending test (0x688553), made the album page's
+#: (0x688367): address -> (byte as shipped, byte fixed).
+EPILOGUE_FIX = {
+    0x6885E2: (0x10, 0x12),   # push dword [ebp+0x10] -> [ebp+0x12]: the npcId as comparand
+    0x6885EC: (0xA1, 0x7A),   # call 0x685691 -> call 0x68566A: the lookup that compares it
+    0x6885FC: (0x94, 0x95),   # sete -> setne: keep "found"
+}
+
 #: The twenty loads, by address, with the instruction as shipped. The paper's
 #: ranking drawer (0x60CA11) reads a クラス row's eight averages and 合 first,
 #: then a 個人 row's eight scores and 合.
@@ -145,8 +174,8 @@ def as_shipped(data: bytes) -> bytes:
     """The file with the authentication address and every fix put back.
 
     So a copy already fixed -- by an earlier run of this tool, with or without
-    the おまけ button or the 表情 photos -- is recognised as the build it was
-    made from.
+    the おまけ button, the 表情 photos or the Epilogue -- is recognised as the
+    build it was made from.
     """
     out = bytearray(data)
     site = auth.find_site(bytes(out))
@@ -161,6 +190,9 @@ def as_shipped(data: bytes) -> bytes:
         at = offset(va)
         if out[at - 3:at] == bytes.fromhex(PHOTO_ROUTE_TEST) and out[at] == 0:
             out[at] = k
+    for va, (shipped, fix) in EPILOGUE_FIX.items():
+        if out[offset(va)] == fix:
+            out[offset(va)] = shipped
     return bytes(out)
 
 
@@ -185,6 +217,10 @@ def fixed(data: bytes, address: bytes) -> bytes:
         if out[at - 3:at + 1] != bytes.fromhex(PHOTO_ROUTE_TEST) + bytes([k]):  # pragma: no cover - hash covers it
             raise ValueError(f"unexpected instruction at {va - 3:#x}")
         out[at] = 0
+    for va, (shipped, fix) in EPILOGUE_FIX.items():
+        if out[offset(va)] != shipped:  # pragma: no cover - hash covers it
+            raise ValueError(f"unexpected byte at {va:#x}")
+        out[offset(va)] = fix
     site = auth.find_site(bytes(out))
     for k, octet in enumerate(address):
         out[site + 4 + 5 * k] = octet
@@ -202,7 +238,7 @@ def find_exe(game_dir: str) -> Path:
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos), for handing out through the updater.")
+        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos, Epilogue), for handing out through the updater.")
     parser.add_argument("--game-dir", help="the folder that holds tmo.exe (or tmo.exe itself)")
     parser.add_argument("--address", help="the server address players' clients are pointed at")
     parser.add_argument("--update-dir", default=str(UPDATE_DIR),
@@ -231,7 +267,7 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"{source}: {exc}", file=sys.stderr)
         return 1
     print(f"{source}: the shipped build; authentication address {shown}, "
-          f"{len(SITES)} score loads, the おまけ button and the 表情 photos fixed")
+          f"{len(SITES)} score loads, the おまけ button, the 表情 photos and the Epilogue fixed")
     if args.check:
         print(f"would write {dest} ({len(out)} bytes, sha256 {hashlib.sha256(out).hexdigest()[:16]}…)")
         return 0
