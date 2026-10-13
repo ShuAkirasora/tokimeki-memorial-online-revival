@@ -441,7 +441,7 @@ leaves the file byte-for-byte as it was. The client's small trust store is not e
 locally generated certificate is accepted, and nothing has to be disabled to get through
 authentication.
 
-**And, on a server that offers it, eleven script files and one table** — the confession scenes, one epilogue and six of Amamiya's events, and the おまけ gallery's pictures, fixed and handed
+**And, on a server that offers it, twenty-one script files and one table** — the confession scenes, one epilogue and six of Amamiya's events, the おまけ menu's replays of the confessions and epilogues, and the おまけ gallery's pictures, fixed and handed
 out through the game's own updater. Nothing is installed by hand and nothing else is touched;
 see [Fixing the confession scenes](#fixing-the-confession-scenes).
 
@@ -685,26 +685,37 @@ picture. The three that are filled are each that event's own CG, or a copy of it
 redrawn — one of them names the event CG outright — so the empty six get the event CG of their
 scene, which the client has. That is the table.
 
-**What it changes.** `amm_e011`, `yyi_e011`, `skr_e011`, `ink_e011`, `amm_e012` and `amm_e005`
-to `amm_e010`, and only by adding: the missing scene-effect counts; a detour at a few
-instructions that jumps to new code at the end of the script — register the parts, switch them
-on, change the heroine's expression before a line — and back; and, in `amm_e007` to `amm_e010`,
-one cast entry for the face overlay. No instruction moves within the code and nothing is
-removed, so every instruction keeps its number and every jump its target. The cast entry is 56
-bytes in the header, so in those four scripts the code starts 56 bytes later in the file; the
-server takes that offset from the export. A few instructions are changed in place at the same
-length, each explained in the script: one points the epilogue's background at the stage, with
-the pastel declared after it, and in each of the six events the underwater view is replaced by
-that event's own picture. Which parts belong to which background, and which picture and overlay
-belong to which event, are read from the client; which
-expression goes with which line, the moment Yayoi's rain clears, and the line on which
-Amamiya's epilogue turns pastel, are choices made here, because the original never played these
-scenes. In `idlist.arc`, thirty empty picture entries of `gallery.bin` — five heroines, scenes 5
-to 10 — get that scene's event CG, each checked against the name the client's own background
-table gives it; every other byte of the archive stays as it was, including the table that says
-which version of the game this is. The recipes are the readable part of
-`confession_fix.py`, and they are the whole of what it does: it is not a general script or table
-editor.
+The おまけ menu's ending replay plays each heroine's confession and epilogue again from its own
+copies of the two scripts, cut down — the same lines without the letter and the choice. The
+copies carry the same holes, and some of their own: where the heroine's picture should be they
+mostly declare the underwater view, so Yayoi confesses at the bottom of the sea and Kasuga's
+epilogue lunch is served there; Sakurai's confession has nothing but its lines — no picture, no
+window, no fade — and plays on black; Amamiya's shows only her eyes and mouth by the window. Those
+are the last ten files.
+
+**What it changes.** `amm_e011`, `yyi_e011`, `skr_e011`, `ink_e011`, `amm_e012`, `amm_e005` to
+`amm_e010`, and the ten replay copies `<name>_o011` and `<name>_o012`, and only by adding: the
+missing scene-effect counts; a detour at a few instructions that jumps to new code at the end of
+the script — register the parts, switch them on, change the heroine's expression before a line —
+and back; and, in `amm_e007` to `amm_e010`, one cast entry for the face overlay. No instruction
+moves within the code and nothing is removed, so every instruction keeps its number and every
+jump its target. The cast entry is 56 bytes in the header, so in those four scripts the code
+starts 56 bytes later in the file; the server takes that offset from the export. A few
+instructions are changed in place at the same length, each explained in the script: one points
+the epilogue's background at the stage, with the pastel declared after it, and in each of the
+six events the underwater view is replaced by that event's own picture, and the replays name the
+pictures their full scripts show — with the place-name plate switched off where the old
+declaration's name, 「海の中」, would otherwise come up over them. Which parts belong to which
+background, and which picture and overlay belong to which event, are read from the client; which
+expression goes with which line, the moment Yayoi's rain clears, and the line on which Amamiya's
+epilogue turns pastel, are choices made here, because the original never played these scenes;
+the replays make the same choices for the same lines, and where a replay has lost a cut its full
+script makes, the cut is put back as the full script has it. In `idlist.arc`, thirty empty
+picture entries of `gallery.bin` — five heroines, scenes 5 to 10 — get that scene's event CG,
+each checked against the name the client's own background table gives it; every other byte of
+the archive stays as it was, including the table that says which version of the game this is.
+The recipes are the readable part of `confession_fix.py`, and they are the whole of what it
+does: it is not a general script or table editor.
 
 **How to use it.** Run it on the server's machine, against a copy of the game (found the way the
 exporter finds it; `--game-dir` overrides, `--check` writes nothing). It writes two halves, and
@@ -712,16 +723,16 @@ both are needed:
 
 | Half | Where | What it is for |
 |---|---|---|
-| the eleven fixed archives | `runtime/update/data/script/` | every client that starts through BootFirst asks for updates first; the server offers what is in `runtime/update/`, and the client fetches each file that differs from its own and puts it in place |
+| the twenty-one fixed archives | `runtime/update/data/script/` | every client that starts through BootFirst asks for updates first; the server offers what is in `runtime/update/`, and the client fetches each file that differs from its own and puts it in place |
 | the fixed `idlist.arc` | `runtime/update/data/idlist/` | the same way; the server reads nothing from it, so it has no export |
-| the eleven scripts, exported again from the fixed archives | `runtime/scripts/` | the server follows each scene alongside the client; following the old script, it loses track of the fixed one, and the ending that follows the confession is not played |
+| the twenty-one scripts, exported again from the fixed archives | `runtime/scripts/` | the server follows each scene alongside the client; following the old script, it loses track of the fixed one, and the ending that follows the confession is not played |
 
 Players do nothing: the next start fetches the files, about 2 MB in all, and every start after
 that only compares them. The archives are enciphered; like the exporter, this works the key out
 of your own `tmo.exe` and writes it nowhere, and the archives it writes stay in `runtime/`, which
 is not part of this repository.
 
-**To take it back,** remove `runtime/update/data/` and export the eleven scripts again with
+**To take it back,** remove `runtime/update/data/` and export the twenty-one scripts again with
 `export_scripts.py`. Clients that already fetched the fixed files keep them until they are put
 back by hand, so a server that has once offered the fix should keep offering it.
 
@@ -772,7 +783,7 @@ client still started against a server that offers the fix fetches it again.
 | `set_auth_address.py` | the four-byte address change |
 | `export_scripts.py` | the script exports, out of your own copy of the game |
 | `apply_fixes.py` | the two fixes next to it, `confession_fix.py` and `ranking_fix.py`, in one run |
-| `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, and the おまけ gallery's pictures, fixed for the updater to hand out |
+| `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, the おまけ replays, and the おまけ gallery's pictures, fixed for the updater to hand out |
 | `ranking_fix.py` | the exam-ranking page's twenty score loads and the おまけ button, fixed in a copy of your client for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Put the confession close-ups back into eleven of your copy's script files.
+"""Put the confession close-ups back into twenty-one of your copy's script files.
 
 What is wrong
 -------------
@@ -33,6 +33,16 @@ has a face overlay drawn for each picture and the expressions for it, as the
 other heroines' events use theirs; none of the six scripts even declares the
 overlay.
 
+The title screen's おまけ menu replays each heroine's confession and epilogue
+from its own copies of the two scripts, `<name>_o011` and `<name>_o012` --
+the same lines with the letter and the choice cut out. The copies carry the
+same holes and some of their own: where the heroine's picture should be,
+they mostly declare the underwater view, Sakurai's confession declares
+nothing else and never puts up a picture or opens the window, and Yayoi's
+puts her scene and the place before it under the sea. Kasuga's is the
+nearest to whole: every part of her close-up is registered and switched on,
+and the one count that lets the client load them is 0.
+
 This build's own data is the defect, not the server and not the renderer, and
 nothing on the wire can carry an instruction into a script the client is
 already running. The fix has to be in the script files.
@@ -50,8 +60,9 @@ six empty entries per heroine get the CG of that event, which the client has.
 What this changes
 -----------------
 Only the four confession scripts `amm_e011`, `yyi_e011`, `skr_e011` and
-`ink_e011`, the epilogue `amm_e012`, and Amamiya's events `amm_e005` to
-`amm_e010`, and in each only by adding:
+`ink_e011`, the epilogue `amm_e012`, Amamiya's events `amm_e005` to
+`amm_e010`, and the ten replay copies `<name>_o011` and `<name>_o012`, and in
+each only by adding:
 
   * the scene-effect count on the background that needs one (it was 0);
   * a detour at a handful of instructions: the instruction is replaced by a
@@ -77,18 +88,24 @@ The server reads that offset from the export, which is one more reason the
 exports below go with the archives. Some edits change an instruction in place
 instead, at the same length: Yayoi's scene loads a
 background the parts list does not cover, and is pointed at its twin (the same
-picture, byte for byte) that it does; Sakurai's first shot is of her back, so
-the face overlay that would land on it is replaced by switching on her body.
+picture, byte for byte) that it does; Sakurai's first shot is of his back, so
+the face overlay that would land on it is replaced by switching on his body.
 Amamiya's epilogue declares the stage in place of the underwater view, and
 declares the pastel as a second background after it; her six events declare
-their own picture in place of it.
+their own picture in place of it, and so do the replays, each with the
+picture its scene shows in the full script. Sakurai's and Yayoi's replays
+declare one more background after their last, as her epilogue does.
 
 Which parts go with which background, and which picture and overlay go with
 which of Amamiya's events, are read from the client. Which expression goes
 with which line, the moment Yayoi's rain clears, and the line Amamiya's
 epilogue turns pastel on, are choices made
 here -- the original never played these scenes, so there is nothing to recover
-them from. The choices are the recipes below, and are meant to be read.
+them from. The replays make the same choices for the same lines, and where a
+replay has lost a cut its full script makes (Amamiya's close-up, every shot
+of Sakurai's, Yayoi's shelter from the rain), the cut is put back the way the
+full script has it. The choices are the recipes below, and are meant to be
+read.
 
 How it reaches players
 ----------------------
@@ -99,11 +116,11 @@ copy of the game:
     python3 confession_fix.py --check           # only says what it would do
     python3 confession_fix.py --game-dir PATH   # when the guess is wrong
 
-  1. The eleven fixed archives go into `runtime/update/data/script/`. Every
+  1. The twenty-one fixed archives go into `runtime/update/data/script/`. Every
      client that starts through BootFirst asks the server for updates first;
      this server offers whatever is in `runtime/update/`, and the client fetches
      the files that differ from its own and puts them in place.
-  2. The eleven scripts are exported again, from the fixed archives, into
+  2. The twenty-one scripts are exported again, from the fixed archives, into
      `runtime/scripts/`. The server follows each scene alongside the client and
      has to be following the same script, or the scene still plays but the
      server loses track of it -- and with it the ending.
@@ -111,7 +128,7 @@ copy of the game:
      reads nothing from it, so there is no export to go with it.
 
 Both halves together, always. Nothing here is a general script or table
-editor: the eleven recipes and the thirty pictures are the whole of what it
+editor: the twenty-one recipes and the thirty pictures are the whole of what it
 does.
 
 The archives are encrypted. Like `export_scripts.py`, this works the key out of
@@ -201,14 +218,14 @@ def animate(index: int) -> bytes:
     return op(0x5105, index, 0)
 
 
-def background(name: int, bg: int) -> bytes:
+def background(name: int, bg: int, effects: int = 0) -> bytes:
     """EVENT_BG_INFO: declare the next background slot.
 
     `name` is the place-name word as the script has it (the string's position
-    in the script's pool); `bg` the picture. No weather, no scene effects.
-    Slots are numbered in the order their declarations run.
+    in the script's pool); `bg` the picture; `effects` the scene-effect count.
+    No weather. Slots are numbered in the order their declarations run.
     """
-    return op(0x5000, 0, 0, *struct.pack("<II", name, 0), *struct.pack("<H", bg),
+    return op(0x5000, 0, 0, *struct.pack("<II", name, effects), *struct.pack("<H", bg),
               0xFF, 0xFF, 0xFF, 0xFF, 0, 0)
 
 
@@ -226,8 +243,51 @@ def bg_load(slot: int) -> bytes:
 
 
 def bg_show(slot: int, *rest: int) -> bytes:
-    """EVENT_BG_DISP_ON, operands after the slot copied from the script."""
+    """EVENT_BG_DISP_ON, operands after the slot copied from the script.
+
+    With none given, the slot byte has 0x20 set and the rest is zero: no
+    place-name plate, and nothing else read from the script's tables.
+    """
+    if not rest:
+        return op(0x5101, slot | 0x20, *bytes(9))
     return op(0x5101, slot, *rest)
+
+
+def bg_off() -> bytes:
+    """EVENT_BG_DISP_OFF."""
+    return op(0x5141)
+
+
+def black_out(speed: int = 2) -> bytes:
+    """SCREEN_BLACK_OUT, waiting until it is done -- the scripts' 0x40."""
+    return op(0x3040, speed, 0x40)
+
+
+def black_in(speed: int = 2) -> bytes:
+    return op(0x3000, speed, 0x40)
+
+
+def white_out(speed: int = 2) -> bytes:
+    return op(0x3041, speed, 0x40)
+
+
+def white_in(speed: int = 2) -> bytes:
+    return op(0x3001, speed, 0x40)
+
+
+def window_open() -> bytes:
+    """EVENT_WINDOW_OPEN, as every script writes it."""
+    return op(0x2000, 2, 0, 0, 0, 0, 0)
+
+
+def window_close() -> bytes:
+    return op(0x2001, 0, 0)
+
+
+def event_screen() -> bytes:
+    """BG_PAGE_RANGE and SCREEN_CHANGE_WAISTUP: what every scene's first
+    subroutine does before it puts anything up."""
+    return op(0x1180, 0x10, 0) + op(0x3081)
 
 
 def face_load(actor: int) -> bytes:
@@ -316,8 +376,9 @@ def add_cast(ssc: bytes, entry: bytes) -> bytes:
 # scene-effect count to give it; `swap` -- (ip, original, replacement) of the
 # same length; `hooks` -- (ip, original, before, after): the original
 # instructions at ip are moved to the end, with `before` ahead of them and
-# `after` behind. Actor 0x60 and 0x61 are the script's first and second
-# face overlays.
+# `after` behind. A hook with a fifth element moves that instead of the
+# original: the original with something put in the middle of it. Actor 0x60
+# and 0x61 are the script's first and second face overlays.
 
 # Amamiya. Two shots: by the window in full (background 2010; parts 4-6 in
 # front, 7-10 behind) and the close-up in white light (2011; 0xb-0xc in front,
@@ -419,6 +480,97 @@ def amamiya_event(name: str) -> dict:
     return recipe
 
 
+# The おまけ ending replay. It plays its own copies of each confession and
+# epilogue, `<name>_o011` and `<name>_o012`: the same lines, cut down -- no
+# letter, no choice, no player data -- so the instruction numbers are not the
+# ones above, and each recipe is written again against its own script. The
+# expressions are the ones chosen for the same lines in the scenes above.
+#
+# Where a replay puts up a picture of the heroine, its script mostly declares
+# the underwater view (1065) in its place -- in some scripts for every slot.
+# Those declarations name the right picture instead; the face overlays these
+# scripts load and show were drawn for those pictures (the client's event-
+# character table says which picture each is for), so they land where they
+# should once the picture is there.
+UNDERWATER = AMAMIYA_SEA
+
+# Amamiya's confession. Both shots are declared, without scene effects; the
+# window shot is shown with its overlay switched on and nothing else, and the
+# script never cuts to the close-up: the blackout before her last answer is
+# gone, with the close-up's slot left declared and unused. It comes back as in
+# her confession, before the same line.
+AMAMIYA_REPLAY_WINDOW_LINES = {91: 14, 107: 15, 123: 14, 139: 16, 155: 14, 171: 16, 219: 17}
+AMAMIYA_REPLAY_LIGHT_LINES = {283: 20, 299: 23, 331: 22}
+AMAMIYA_REPLAY_CUT = 251            # 「……いいえっ！」
+
+# Yayoi's confession. Both slots are the underwater view. The first is the
+# notice board where the hero waits (85); the cut to the bicycle shed where he
+# shelters from the rain (78) is a blackout with no new picture in it, and
+# gets one, in a third slot. The second slot is her scene: 2134, the twin of
+# the confession's first picture that has a parts list (see YAYOI_PARTS).
+# The board and her scene go up with the place-name plate off, as the
+# epilogues below do, for the same reason.
+YAYOI_BOARD, YAYOI_SHED, YAYOI_RAIN = 85, 78, 2134
+YAYOI_REPLAY_LINES = {221: 77, 253: 74, 285: 78, 301: 74, 333: 77, 365: 75, 397: 74, 413: 82,
+                      429: 80, 461: 74, 493: 77, 525: 79, 573: 74, 605: 75, 669: 74, 733: 76,
+                      797: 80, 829: 81, 861: 79, 893: 82, 925: 77, 957: 79, 989: 78, 1021: 77}
+YAYOI_REPLAY_RAIN_STOPS = 685
+
+# Sakurai's confession has nothing but its lines: one slot, the underwater
+# view, never loaded or shown; no window, no fade. The staging is his
+# confession's: his back at the blackboard (2192), then a white flash to the
+# close-up (2193) for「$m00さん、オレと一緒にいてください」, and a blackout at
+# the end.
+SAKURAI_REPLAY_LINES = {148: 109, 180: 108, 212: 104, 244: 106, 276: 107, 308: 106, 340: 111,
+                        372: 105, 404: 107, 436: 109, 468: 110}
+SAKURAI_REPLAY_OPEN, SAKURAI_REPLAY_CUT, SAKURAI_REPLAY_LAST = 20, 116, 484
+
+# Inukai's confession is staged as his is, with the same gap.
+INUKAI_REPLAY_LINES = {337: 132, 372: 131, 476: 132, 511: 131, 543: 132}
+
+# The epilogues each declare the underwater view for the heroine's picture.
+# Each takes the picture its own epilogue shows (Kasuga 2074, Yayoi 2136,
+# Sakurai 2194, Inukai 2254); they end on a sepia of it rather than on the
+# pastel, which is these scripts' own way of ending and stays. Amamiya's is
+# fixed as her epilogue is.
+#
+# The declarations keep the place name they had, 「海の中」, and these scripts
+# put their pictures up with the place-name plate on: so the plate goes off
+# where the picture goes up (0x20 in the slot byte, as Amamiya's scenes have
+# it). The full scripts name these slots with an empty string, which none of
+# the replays has to hand.
+REPLAY_EPILOGUES = {                # script: (ip, place name, picture,
+    "ksg_o012": (14, 0x3004, 2074,  #          ip it goes up at, its operands)
+                 271, (0x01, 0, 0, 0, 0, 0, 0, 0x00, 0x14, 0)),
+    "yyi_o012": (26, 0x7004, 2136,
+                 230, (0x02, 0, 0, 0, 0, 0, 0, 0x50, 0x11, 0)),
+    "skr_o012": (14, 0x8004, 2194,
+                 457, (0x01, 0, 0, 0, 0, 0, 0, 0xF0, 0x27, 0)),
+    "ink_o012": (4, 0x0004, 2254,
+                 37, (0x00, 0, 0, 0, 0, 0, 0, 0x40, 0x00, 0)),
+}
+PLATE_OFF = 0x20
+
+
+def plate_off(ip: int, operands: tuple) -> tuple:
+    """A swap: the same EVENT_BG_DISP_ON without its place-name plate."""
+    slot, *rest = operands
+    return (ip, bg_show(slot, *rest), bg_show(slot | PLATE_OFF, *rest))
+
+
+# Amamiya's epilogue: the same as hers, at its own instruction numbers. The
+# script already shows the overlay; her first expression goes in after it.
+AMAMIYA_REPLAY_PLAY_LINES = {66: 25, 130: 24}
+AMAMIYA_REPLAY_LAUGH = 167
+
+
+def replay_epilogue(name: str) -> dict:
+    ip, place, picture, up, operands = REPLAY_EPILOGUES[name]
+    return dict(effects={}, swap=[(ip, background(place, UNDERWATER),
+                                   background(place, picture)),
+                                  plate_off(up, operands)], hooks=[])
+
+
 RECIPES = {
     "amm_e011": dict(
         effects={24: 7, 34: 6},
@@ -487,6 +639,97 @@ RECIPES = {
         ],
     ),
     **{name: amamiya_event(name) for name in AMAMIYA_EVENT_SEA},
+    "amm_o011": dict(
+        effects={4: 7, 14: 6},
+        hooks=[
+            # The window shot's slot is loaded here; the close-up's is not
+            # loaded anywhere, so it is loaded here too.
+            (40, call(4) + bg_load(0), b"",
+             b"".join(register(p) for p in AMAMIYA_PARTS) + face_load(0x61) + bg_load(1)),
+            (49, bg_show(0x20, 0, 0, 0, 0, 0, 0, 0x20, 0, 0), b"",
+             b"".join(show(i) for i in AMAMIYA_WINDOW)),
+            # The script shows the overlay itself; her first expression goes
+            # between that and the fade-in.
+            (55, face_show(0x60) + call(7), b"", b"",
+             face_show(0x60) + expression(0x60, 15, first=True) + call(7)),
+            (AMAMIYA_REPLAY_CUT, TALK,
+             black_out(3) + bg_show(1) + face_hide(0x60)
+             + b"".join(show(i) for i in AMAMIYA_LIGHT) + face_show(0x61)
+             + expression(0x61, 19, first=True) + black_in(3), b""),
+            *[(ip, TALK, expression(0x60, e), b"") for ip, e in AMAMIYA_REPLAY_WINDOW_LINES.items()],
+            *[(ip, TALK, expression(0x61, e), b"") for ip, e in AMAMIYA_REPLAY_LIGHT_LINES.items()],
+        ],
+    ),
+    "ksg_o011": dict(
+        # Kasuga's replay registers all twenty-one parts and switches them as
+        # her confession does; only the count on the sunflowers (2073) is 0.
+        effects={14: 21},
+        hooks=[],
+    ),
+    "yyi_o011": dict(
+        effects={},
+        swap=[(4, background(0x0004, UNDERWATER), background(0x0004, YAYOI_BOARD)),
+              (14, background(0x4004, UNDERWATER),
+               background(0x4004, YAYOI_RAIN, effects=len(YAYOI_PARTS) + 1)),
+              plate_off(38, (0x00, 0, 0, 0, 0, 0, 0, 0x80, 0x00, 0)),
+              plate_off(161, (0x01, 0, 0, 0, 0, 0, 0, 0x50, 0x0A, 0))],
+        hooks=[
+            # The shed, as slot 2.
+            (14, background(0x4004, YAYOI_RAIN, effects=len(YAYOI_PARTS) + 1), b"",
+             background(0x4004, YAYOI_SHED)),
+            (84, black_out() + black_in(), b"", b"",
+             black_out() + bg_off() + bg_load(2) + bg_show(2) + black_in()),
+            (161, bg_show(0x21, 0, 0, 0, 0, 0, 0, 0x50, 0x0A, 0), b"",
+             b"".join(register(p) for p in YAYOI_PARTS)
+             + b"".join(show(i) for i in range(len(YAYOI_PARTS)))
+             + register(YAYOI_SHADOW) + face_load(0x60) + face_show(0x60)
+             + expression(0x60, 74, first=True)),
+            *[(ip, TALK, expression(0x60, e), b"") for ip, e in YAYOI_REPLAY_LINES.items()],
+            (YAYOI_REPLAY_RAIN_STOPS, TALK, hide(2) + animate(0), b""),
+        ],
+    ),
+    "skr_o011": dict(
+        effects={},
+        swap=[(4, background(0x0004, UNDERWATER), background(0x0004, 2192, effects=2))],
+        hooks=[
+            (4, background(0x0004, 2192, effects=2), b"", background(0x0004, 2193, effects=1)),
+            (SAKURAI_REPLAY_OPEN, TALK,
+             event_screen() + black_out() + bg_load(0) + bg_show(0)
+             + b"".join(register(p) for p in SAKURAI_PARTS) + show(0) + show(1)
+             + black_in() + window_open(), b""),
+            (SAKURAI_REPLAY_CUT, TALK,
+             window_close() + white_out() + bg_off() + bg_load(1) + bg_show(1) + show(2)
+             + face_load(0x61) + face_show(0x61) + expression(0x61, 104, first=True)
+             + white_in() + window_open(), b""),
+            *[(ip, TALK, expression(0x61, e), b"") for ip, e in SAKURAI_REPLAY_LINES.items()],
+            (SAKURAI_REPLAY_LAST, TALK, b"",
+             window_close() + black_out(0) + bg_off() + face_hide(0x61)),
+        ],
+    ),
+    "ink_o011": dict(
+        effects={24: 2, 34: 1},
+        hooks=[
+            (183, face_show(0x60) + call(8),
+             b"".join(register(p) for p in INUKAI_PARTS) + show(0) + show(1), b""),
+            (264, face_show(0x61) + call(8), show(2), b""),
+            *[(ip, TALK, expression(0x61, e, first=(k == 0)), b"")
+              for k, (ip, e) in enumerate(INUKAI_REPLAY_LINES.items())],
+        ],
+    ),
+    "amm_o012": dict(
+        effects={},
+        swap=[(4, background(AMAMIYA_PLAY_NAME, UNDERWATER),
+               background(AMAMIYA_PLAY_NAME, AMAMIYA_STAGE))],
+        hooks=[
+            (4, background(AMAMIYA_PLAY_NAME, AMAMIYA_STAGE), b"",
+             background(AMAMIYA_PLAY_NAME, AMAMIYA_PASTEL)),
+            (46, face_show(0x60) + call(4), b"", b"",
+             face_show(0x60) + expression(0x60, 24, first=True) + call(4)),
+            *[(ip, TALK, expression(0x60, e), b"") for ip, e in AMAMIYA_REPLAY_PLAY_LINES.items()],
+            (AMAMIYA_REPLAY_LAUGH, TALK, face_hide(0x60) + bg_load(1) + crossfade(1), b""),
+        ],
+    ),
+    **{name: replay_epilogue(name) for name in REPLAY_EPILOGUES},
 }
 
 BG_INFO = 0x5000
@@ -575,7 +818,7 @@ def apply_recipe(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
         expect(ip, original)
         code[2 * ip:2 * ip + len(original)] = replacement
 
-    for ip, original, before, after in recipe["hooks"]:
+    for ip, original, before, after, *moved in recipe["hooks"]:
         if isinstance(original, int):
             if struct.unpack_from("<H", code, 2 * ip)[0] != original:
                 raise NotThisScript(f"ip {ip} is not opcode {original:#06x}")
@@ -588,7 +831,7 @@ def apply_recipe(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
             raise NotThisScript(f"ip {ip}: {n} bytes cannot hold the jump")
         code += bytes(-len(code) % 4)
         start = len(code) // 2
-        code += before + original + after + jump(ip + n // 2)
+        code += before + (moved[0] if moved else original) + after + jump(ip + n // 2)
         code[2 * ip:2 * ip + n] = jump(start) + ret() * ((n - 8) // 4)
     code += bytes(-len(code) % 4)
 
