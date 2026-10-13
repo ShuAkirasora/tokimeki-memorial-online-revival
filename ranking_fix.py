@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fix the client's own bugs, for handing out through the updater.
 
-Four fixes, one file -- the client is a single tmo.exe, so whatever is fixed
+Five fixes, one file -- the client is a single tmo.exe, so whatever is fixed
 in it goes out together:
 
   * the 試験結果 page of the school paper (twenty bytes, below);
@@ -10,7 +10,9 @@ in it goes out together:
   * the おまけ gallery's 表情 photos, which this build can never show past
     the first (five bytes, after that);
   * the おまけ gallery's Epilogue, which opens onto a black screen for anyone
-    but an account whose only ending is Amamiya's (three bytes, after that).
+    but an account whose only ending is Amamiya's (three bytes, after that);
+  * 「イベント中断」 in a one-player event, which this build draws grey and
+    wires to nothing (nine bytes, last).
 
 The paper's 試験結果 tab draws the exam rankings from six files this server
 publishes (server/newspaper.py). The client that shipped reads every score in
@@ -82,6 +84,26 @@ marker, and the fix keeps it rather than invent another.)
   the npcId the function has just stored (disp 0x10 -> 0x12), call 0x68566A
   instead (the low byte of the rel32), and keep "found" (sete -> setne).
 
+  イベント中断 in a one-player event
+  ---------------------------------
+  Right-clicking an event puts up three items: ポーズ, 鑑賞モード and
+  イベント中断 (interrupt). The event screen comes in two builds, one for a
+  ドラマイベント played by a party and one for everything a player watches
+  alone -- a campus event, the tutorial, an おまけ ending -- and the client
+  finished the item in the first only. The party build fills the menu's three
+  "can be picked" bytes with (pause allowed, 1, 1) and opens the
+  「イベントを中断しますか？」 box when the third is picked; the one-player
+  build fills them with (0, 1, 0) at 0x73CEBB, its slot for that pick is a
+  ``return 1`` and its dialog factory's slot for the box returns nothing. So
+  one byte lights the item (0x73CF09, the immediate of
+  ``mov byte [esi+0xe], 0``), and two vtable entries of the one-player build
+  are pointed at the party build's own code: the pick (0x73E45C, which asks
+  the build's dialog factory for the box) and the box itself (0x73F781). From
+  there the client's own path takes over: はい sends the same 0x7205 a party
+  member's does, and the server decides what the interrupt means.
+  ⚠️ ポーズ stays grey: a pause tells the others in the party to wait, and
+  the client's own sentence for it says a one-player event has no one to tell.
+
   How it reaches players, and why that way
   ----------------------------------------
   The way the operated game shipped client fixes. Its updater runs before the
@@ -152,6 +174,15 @@ EPILOGUE_FIX = {
     0x6885FC: (0x94, 0x95),   # sete -> setne: keep "found"
 }
 
+#: イベント中断 in the one-player event screen: address -> (as shipped, fixed).
+#: One immediate byte, then two vtable entries (little-endian dwords).
+RETIRE_ITEM = 0x73CF09                     # mov byte [esi+0xe], 0 -> 1
+RETIRE_ITEM_INSTRUCTION = "c6460e"
+RETIRE_SLOTS = {
+    0xBD5EE8: (0x464585, 0x73E45C),        # the pick: return 1 -> open the box
+    0xBD60D4: (0x5F88DC, 0x73F781),        # the box: nothing -> 「イベントを中断しますか？」
+}
+
 #: The twenty loads, by address, with the instruction as shipped. The paper's
 #: ranking drawer (0x60CA11) reads a クラス row's eight averages and 合 first,
 #: then a 個人 row's eight scores and 合.
@@ -193,6 +224,12 @@ def as_shipped(data: bytes) -> bytes:
     for va, (shipped, fix) in EPILOGUE_FIX.items():
         if out[offset(va)] == fix:
             out[offset(va)] = shipped
+    at = offset(RETIRE_ITEM)
+    if out[at - 3:at] == bytes.fromhex(RETIRE_ITEM_INSTRUCTION) and out[at] == 1:
+        out[at] = 0
+    for va, (shipped, fix) in RETIRE_SLOTS.items():
+        if out[offset(va):offset(va) + 4] == fix.to_bytes(4, "little"):
+            out[offset(va):offset(va) + 4] = shipped.to_bytes(4, "little")
     return bytes(out)
 
 
@@ -221,6 +258,14 @@ def fixed(data: bytes, address: bytes) -> bytes:
         if out[offset(va)] != shipped:  # pragma: no cover - hash covers it
             raise ValueError(f"unexpected byte at {va:#x}")
         out[offset(va)] = fix
+    at = offset(RETIRE_ITEM)
+    if out[at - 3:at + 1] != bytes.fromhex(RETIRE_ITEM_INSTRUCTION) + b"\x00":  # pragma: no cover - hash covers it
+        raise ValueError(f"unexpected instruction at {RETIRE_ITEM - 3:#x}")
+    out[at] = 1
+    for va, (shipped, fix) in RETIRE_SLOTS.items():
+        if out[offset(va):offset(va) + 4] != shipped.to_bytes(4, "little"):  # pragma: no cover - hash covers it
+            raise ValueError(f"unexpected entry at {va:#x}")
+        out[offset(va):offset(va) + 4] = fix.to_bytes(4, "little")
     site = auth.find_site(bytes(out))
     for k, octet in enumerate(address):
         out[site + 4 + 5 * k] = octet
@@ -238,7 +283,7 @@ def find_exe(game_dir: str) -> Path:
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos, Epilogue), for handing out through the updater.")
+        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos, Epilogue, イベント中断), for handing out through the updater.")
     parser.add_argument("--game-dir", help="the folder that holds tmo.exe (or tmo.exe itself)")
     parser.add_argument("--address", help="the server address players' clients are pointed at")
     parser.add_argument("--update-dir", default=str(UPDATE_DIR),
@@ -267,7 +312,8 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"{source}: {exc}", file=sys.stderr)
         return 1
     print(f"{source}: the shipped build; authentication address {shown}, "
-          f"{len(SITES)} score loads, the おまけ button, the 表情 photos and the Epilogue fixed")
+          f"{len(SITES)} score loads, the おまけ button, the 表情 photos, the Epilogue "
+          f"and イベント中断 fixed")
     if args.check:
         print(f"would write {dest} ({len(out)} bytes, sha256 {hashlib.sha256(out).hexdigest()[:16]}…)")
         return 0

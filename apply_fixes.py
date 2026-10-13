@@ -9,8 +9,8 @@ There are two, each with its own tool and its own section in the README:
     gallery's pictures: idlist.arc, into runtime/update/;
   * ranking_fix.py -- the client's own bugs: a tmo.exe with the 試験結果 page's
     twenty score loads fixed, the おまけ button let through, the gallery's
-    expression photos reachable and its Epilogue opening, into
-    runtime/update/.
+    expression photos reachable, its Epilogue opening and イベント中断
+    working in a one-player event, into runtime/update/.
 
 This runs the first and then the second against the same copy of the game, and
 says at the end which of them went through. Each tool still runs on its own,
@@ -77,7 +77,7 @@ def main(argv: "list[str] | None" = None) -> int:
     print("== confession scenes and gallery (confession_fix.py)")
     results.append(("confession scenes and gallery",
                     confession_fix.main([*common, "--scripts-dir", args.scripts_dir])))
-    print("\n== the client: exam rankings page, おまけ button, 表情 photos, Epilogue (ranking_fix.py)")
+    print("\n== the client: exam rankings page, おまけ button, 表情 photos, Epilogue, イベント中断 (ranking_fix.py)")
     results.append(("the client",
                     ranking_fix.main([*common, "--address", args.address])))
 

@@ -2121,6 +2121,10 @@ class _Session:
         # The file of the タイトルイベント running now (0x6C00), so its 0x6C03
         # knows whether it was an おまけ replay of somebody's confession.
         self.title_event: "str | None" = None
+        # Set when an おまけ replay was interrupted (イベント中断), so the
+        # 0x6C03 that follows takes the player back to the page instead of on
+        # to the credits.
+        self.title_interrupted = False
         # MsgSvNotifyNpcControl bodies /npc has pushed, so that a map reload can
         # put the same chibis back. Bodies rather than parsed pairs: nothing
         # here needs to read them, only to send them again.
@@ -5243,6 +5247,7 @@ class MpsServer:
                 found = script.stub(script_id)
             print(f"[{self.tag}] ⭐ title event {script_id:#06x} -> {found.file}")
             session.title_event = found.file
+            session.title_interrupted = False
             # ⛔️ Not the scenario's NPC cast. `npcInfo[]` names the 役柄 a
             # 代行ＮＰＣ plays (`script.ready_params`); a title event has one
             # 役柄 and a person in it, and its NPCs are declared by the file.
@@ -5263,6 +5268,19 @@ class MpsServer:
             print(f"[{self.tag}] title event end")
             reply = self._answer(session, seen, script.MSG_SV_OK_TITLE_EVENT_END, b"")
             finished, session.title_event = session.title_event, None
+            if session.title_interrupted:
+                # イベント中断 in her `_o011` (`_script_interrupt`): not on to
+                # the credits, back to the menus. Three answers were tried on a
+                # real client: the Ok alone leaves the black screen 0x6C04
+                # always leaves; 0x5606 with the 0xffff sentinel sends it to
+                # the campus map, which a title-screen connection has none of
+                # (black, then 0x4000); 0x030A, the Ok of leaving the school,
+                # puts up the same あとがき blackboard a finished replay ends
+                # on and its ＯＫ lands on the ゲームメニュー.
+                # INVENTED — after イベント中断 in an おまけ confession replay the server answers 0x6C03 with 0x6C04 and then 0x030A (OkSchoolLogout); the shipped client could not send it there, so there is no original answer, and of the three the client takes this is the one that reaches a menu.
+                session.title_interrupted = False
+                print(f"[{self.tag}] おまけ: {finished} 中断 -> ゲームメニュー (0x030a)")
+                return reply + self._answer(session, 0, MSG_SV_OK_SCHOOL_LOGOUT, b"")
             whose = romance.omake_confession_of(finished)
             if whose is None:
                 return reply
@@ -7419,6 +7437,59 @@ class MpsServer:
         self._stand_in_walk(party, "選択")
         self._release_held_branches(party)
 
+    def _script_interrupt(self, session: "_Session", seen: int) -> bytes:
+        """イベント中断 in an event the player is watching alone.
+
+        ⭐ The client finished this item for a party's ドラマイベント only
+        (ranking_fix.py, 「イベント中断 in a one-player event」); here it is
+        finished for the rest the way the party's own road ends a scene for
+        the one who leaves it: 0x7204, the one message that closes a running
+        scenario whatever the reason. What the client does next is its own
+        call by the kind of event -- a campus event asks for the map, an
+        おまけ replay sends 0x6C03 -- and both doors already answer.
+
+        ⭐ Nothing is credited, and nothing has to be taken back: everything an
+        event books (キーワード, 登場, the letter, records, 進行度) is read off
+        the shadow run at OP_END, and this one never got there. The event is
+        unseen and comes round again.
+        """
+        if session.title_event and not romance.is_omake_replay(session.title_event):
+            # The 初登校 tutorial. It is where the first candidate makes her
+            # 登場 (`_script_debut`), and it is the opening of the game, not
+            # something a player starts by mistake -- leave it as it shipped.
+            print(f"[{self.tag}] script retire refused: {session.title_event} "
+                  f"is the 初登校 event")
+            return self._answer(
+                session, seen, script.MSG_SV_ERROR_SCRIPT_RETIRE,
+                struct.pack(">B", script.ERROR_RETIRE_NOT_NOW),
+            )
+        # INVENTED — イベント中断 in a one-player event ends it with 0x7204 and books nothing, so the event counts as unseen and comes round again; the shipped client never sent 0x7205 from one, so the rule is ours, read off how the party's road treats the one who leaves (nothing credited there either).
+        what = (Path(session.script.script.file).stem
+                if session.script is not None else "?")
+        print(f"[{self.tag}] イベント中断: {what} -- nothing credited")
+        session.script = None
+        session.script_idle_at = 0.0
+        session.script_idle_warned = False
+        # What `_romance_credit` reads and clears at every other end, cleared
+        # here without the reading: the conversation is over and books nothing.
+        session.talking_about = None
+        session.talking_choice = None
+        session.talk_menu_item = script.MENU_ITEM_TALK
+        session.talk_credited = False
+        # ⭐ And the 会話中 icon comes down, for the reason it does there: left
+        # up, it outlives the conversation on every screen that can see it
+        # (the first interrupt on a real client walked back onto the map
+        # still wearing it).
+        if session.npc_talking:
+            session.npc_talking = False
+            self._presence_icon_onlookers(session)
+        # Only her `_o011` is followed by a 0x6C03 to steer; `_o012` ends on
+        # 0x7204 alone (kind 3: the あとがき, then the エンディング page),
+        # exactly as when it is watched to the end.
+        session.title_interrupted = (
+            romance.omake_confession_of(session.title_event) is not None)
+        return self._answer(session, seen, script.MSG_SV_NOTIFY_SCRIPT_END, b"")
+
     def _script_retire(
         self, session: "_Session", seen: int,
         party: "drama.Party", actor: "drama.Actor",
@@ -7740,14 +7811,12 @@ class MpsServer:
             # the client puts 「イベントを中断しますか？」 (`msg_text` 566) up
             # before it sends this, so what arrives here is already confirmed.
             if actor is None or party is None:
-                # In a script but not in a play: /sc on a solo scenario, or a
-                # 会話. There is no 役柄 to empty and no room to tell, and
-                # 0x7206 has nothing to put in its `actorId`.
-                print(f"[{self.tag}] script retire refused: not in a party")
-                return self._answer(
-                    session, seen, script.MSG_SV_ERROR_SCRIPT_RETIRE,
-                    struct.pack(">B", script.ERROR_RETIRE_NOT_NOW),
-                )
+                # In a script but not in a play: a campus event, a 会話, an
+                # おまけ replay. The client that shipped never sent this from
+                # one -- its one-player event screen drew the item grey and
+                # wired it to nothing -- and ranking_fix.py finishes that
+                # screen, so this is where the item now lands.
+                return self._script_interrupt(session, seen)
             return self._script_retire(session, seen, party, actor)
         if msg_type == script.MSG_CL_OK_SCRIPT_CONTINUE:
             # 「続けますか？」 -> はい. Nothing to do and nothing to answer:

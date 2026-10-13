@@ -1069,6 +1069,13 @@ def omake_confession_of(file: "str | None") -> "int | None":
     return None
 
 
+def is_omake_replay(file: "str | None") -> bool:
+    """Whether ``file`` is one of the おまけ ending replays (`_o011`/`_o012`)."""
+    stem = Path(file).stem if file else ""
+    return any(stem in (f"{SCRIPT_STEMS[name]}_o011", f"{SCRIPT_STEMS[name]}_o012")
+               for name in CANDIDATES)
+
+
 def candidate_of_npc(npc_id: int) -> str | None:
     """Her name for the four bytes a spawn or a 0x6304 carries, or None.
 
