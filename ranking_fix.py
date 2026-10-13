@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Fix the client's own bugs, for handing out through the updater.
 
-Two fixes, one file -- the client is a single tmo.exe, so whatever is fixed in
-it goes out together:
+Three fixes, one file -- the client is a single tmo.exe, so whatever is fixed
+in it goes out together:
 
   * the 試験結果 page of the school paper (twenty bytes, below);
   * the title screen's おまけ button, which this build never draws (four
-    bytes, after that).
+    bytes, after that);
+  * the おまけ gallery's 表情 photos, which this build can never show past
+    the first (five bytes, after that).
 
 The paper's 試験結果 tab draws the exam rankings from six files this server
 publishes (server/newspaper.py). The client that shipped reads every score in
@@ -42,6 +44,22 @@ marker, and the fix keeps it rather than invent another.)
   ⚠️ Why not raise nVersion instead: the same property also opens 転校 (moving
   to another school), which the manual never mentions and this build shipped
   closed. Changing the client's test changes only the button.
+
+  The 表情 photos
+  ---------------
+  A scene of the gallery can hold up to six photos of the heroine, one per
+  expression, and the client's own gallery table carries them: a row is
+  ``photo[route][expression]``, and the photos are filed in the background
+  table as 「<name>表情<scene><route + 1><expression + 1>」 -- route 0 for all
+  of them. The server says which ones the player has seen, and the viewer's
+  表情 button steps through those. But the function that turns (route,
+  expression) into a photo (0x68BBE6) picks the route-0 photo when
+  ``route == expression`` instead of when ``route == 0``: six
+  ``cmp byte [ebp+0x10], k`` for k = 0..5, where every k should have been 0.
+  So route 0 reaches its first photo and nothing else, every further
+  expression lands in the route-1 group, which is empty, and the button
+  either stays grey or opens onto a black screen. The immediates of the five
+  compares with k = 1..5 become 0; nothing else moves.
 
   How it reaches players, and why that way
   ----------------------------------------
@@ -100,6 +118,11 @@ OMAKE_GATE = 0x6895DD
 OMAKE_GATE_SHIPPED = "c6451300"
 NOP = 0x90
 
+#: The 表情 photo lookup (0x68BBE6): the immediate byte of each
+#: ``cmp byte [ebp+0x10], k`` for k = 1..5, which becomes 0 (k = 0 is right).
+PHOTO_ROUTE_TESTS = {0x68BCE3: 5, 0x68BCF5: 4, 0x68BD07: 3, 0x68BD19: 2, 0x68BD2B: 1}
+PHOTO_ROUTE_TEST = "807d10"
+
 #: The twenty loads, by address, with the instruction as shipped. The paper's
 #: ranking drawer (0x60CA11) reads a クラス row's eight averages and 合 first,
 #: then a 個人 row's eight scores and 合.
@@ -119,10 +142,11 @@ def offset(va: int) -> int:
 
 
 def as_shipped(data: bytes) -> bytes:
-    """The file with the authentication address and both fixes put back.
+    """The file with the authentication address and every fix put back.
 
     So a copy already fixed -- by an earlier run of this tool, with or without
-    the おまけ button -- is recognised as the build it was made from.
+    the おまけ button or the 表情 photos -- is recognised as the build it was
+    made from.
     """
     out = bytearray(data)
     site = auth.find_site(bytes(out))
@@ -133,11 +157,15 @@ def as_shipped(data: bytes) -> bytes:
     at = offset(OMAKE_GATE)
     if out[at:at + 4] == bytes([NOP] * 4):
         out[at:at + 4] = bytes.fromhex(OMAKE_GATE_SHIPPED)
+    for va, k in PHOTO_ROUTE_TESTS.items():
+        at = offset(va)
+        if out[at - 3:at] == bytes.fromhex(PHOTO_ROUTE_TEST) and out[at] == 0:
+            out[at] = k
     return bytes(out)
 
 
 def fixed(data: bytes, address: bytes) -> bytes:
-    """The build as shipped, pointed at ``address``, with both fixes made."""
+    """The build as shipped, pointed at ``address``, with every fix made."""
     if hashlib.sha256(as_shipped(data)).hexdigest() != RETAIL_SHA256:
         raise ValueError(
             "this tmo.exe is not the build this fix was written for, or carries "
@@ -152,6 +180,11 @@ def fixed(data: bytes, address: bytes) -> bytes:
     if out[at:at + 4] != bytes.fromhex(OMAKE_GATE_SHIPPED):  # pragma: no cover - hash covers it
         raise ValueError(f"unexpected instruction at {OMAKE_GATE:#x}")
     out[at:at + 4] = bytes([NOP] * 4)
+    for va, k in PHOTO_ROUTE_TESTS.items():
+        at = offset(va)
+        if out[at - 3:at + 1] != bytes.fromhex(PHOTO_ROUTE_TEST) + bytes([k]):  # pragma: no cover - hash covers it
+            raise ValueError(f"unexpected instruction at {va - 3:#x}")
+        out[at] = 0
     site = auth.find_site(bytes(out))
     for k, octet in enumerate(address):
         out[site + 4 + 5 * k] = octet
@@ -169,7 +202,7 @@ def find_exe(game_dir: str) -> Path:
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fix the client's own bugs (試験結果 page, おまけ button), for handing out through the updater.")
+        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos), for handing out through the updater.")
     parser.add_argument("--game-dir", help="the folder that holds tmo.exe (or tmo.exe itself)")
     parser.add_argument("--address", help="the server address players' clients are pointed at")
     parser.add_argument("--update-dir", default=str(UPDATE_DIR),
@@ -198,7 +231,7 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"{source}: {exc}", file=sys.stderr)
         return 1
     print(f"{source}: the shipped build; authentication address {shown}, "
-          f"{len(SITES)} score loads and the おまけ button fixed")
+          f"{len(SITES)} score loads, the おまけ button and the 表情 photos fixed")
     if args.check:
         print(f"would write {dest} ({len(out)} bytes, sha256 {hashlib.sha256(out).hexdigest()[:16]}…)")
         return 0

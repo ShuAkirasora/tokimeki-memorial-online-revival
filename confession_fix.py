@@ -74,8 +74,11 @@ each only by adding:
 
 And `gallery.bin`, inside `idlist.arc`: thirty empty picture entries (five
 heroines, scenes 5 to 10) are filled with the event CG of that scene, in the
-first of each entry's twelve places -- the one this server's gallery data
-points the viewer at. Every other byte of the archive stays as it is,
+first six of each entry's twelve places -- one per expression. The first is
+the one the viewer opens a scene on; the other five are where its 表情 button
+would step to, and an event that has one picture shows that one picture
+there too, so the button -- enabled only when the next picture differs from
+the first -- stays grey instead of opening onto black. Every other byte of the archive stays as it is,
 including every other table in it; the one that says which version of the game
 this is (`property_text.bin`) is not touched.
 
@@ -746,15 +749,20 @@ EFFECT_COUNT_MASK = 0x3F
 # with npcId the heroine's index (天宮 0 .. 犬飼 4), slot 2..10 the picture's
 # place on the page -- slot n is her event n, which the page labels
 # Scene:0(n-1) -- and each photo a key of `bg.bin`, 0xffff where there is
-# none. The viewer looks a picture up by (npcId, slot) and draws photo[0][0]
-# for the one route and expression the server lights (see
-# server/mps_session.py, GALLERY_ROUTE).
+# none. The viewer looks a picture up by (npcId, slot) and opens a scene on
+# photo[0][0]; 表情 steps on to the next expression the server lights, and is
+# enabled only when that photo differs from the first (see
+# server/mps_session.py, GALLERY_EMOTION). These scenes have one picture, so
+# all six route-0 places get it: whatever expressions the server lights, the
+# next photo is the same one and the button stays grey.
 
 IDLIST_ARCHIVE = "idlist.arc"
 GALLERY_TABLE = "gallery.bin"
 BG_TABLE = "bg.bin"
 NO_PHOTO = 0xFFFF
 PHOTO_AT = 6
+#: photo[0][0..5]: the route-0 group, one place per expression.
+PHOTO_PLACES = 6
 
 #: npcId: (family name, {slot: the event CG, a `bg.bin` key}). Each key is
 #: checked against the name `bg.bin` gives it, 「<family name>イベント<slot>」,
@@ -923,11 +931,13 @@ def bg_names(blob: bytes, cipher: Blowfish, iv: bytes) -> dict[int, str]:
 
 
 def fix_gallery(blob: bytes, cipher: Blowfish, iv: bytes) -> tuple[bytes, int]:
-    """`idlist.arc` with the thirty pictures in place, and how many were written.
+    """`idlist.arc` with the thirty pictures in place, and how many places
+    were written (six per picture).
 
     0 written means the copy already has them. Anything in one of those
     places other than an empty entry or the recipe's own picture is refused:
-    that is not the table this was written against.
+    that is not the table this was written against. A copy an earlier version
+    of this tool fixed has the first place only, and gets the other five.
     """
     names = bg_names(blob, cipher, iv)
     for npc, (family, photos) in GALLERY_PHOTOS.items():
@@ -941,15 +951,17 @@ def fix_gallery(blob: bytes, cipher: Blowfish, iv: bytes) -> tuple[bytes, int]:
             for slot, key in photos.items()}
     written = 0
     for at, row in _rows(bytes(table)):
-        _, npc, slot, photo = struct.unpack_from("<4H", row)
+        _, npc, slot = struct.unpack_from("<3H", row)
         key = todo.pop((npc, slot), None)
         if key is None:
             continue
-        if photo == NO_PHOTO:
-            struct.pack_into("<H", table, at + PHOTO_AT, key)
-            written += 1
-        elif photo != key:
-            raise NotThisScript(f"slot {slot} of npc {npc} already has picture {photo}")
+        for place in range(PHOTO_PLACES):
+            photo = struct.unpack_from("<H", row, PHOTO_AT + 2 * place)[0]
+            if photo == NO_PHOTO:
+                struct.pack_into("<H", table, at + PHOTO_AT + 2 * place, key)
+                written += 1
+            elif photo != key:
+                raise NotThisScript(f"slot {slot} of npc {npc} already has picture {photo}")
     if todo:
         raise NotThisScript(f"no row for {sorted(todo)[0]}")
     if not written:
@@ -1029,7 +1041,7 @@ def main(argv: list[str] | None = None) -> int:
             say(f"  ! {IDLIST_ARCHIVE}: {exc}")
             failed += 1
         else:
-            say(f"  {IDLIST_ARCHIVE}: " + (f"{written} gallery pictures filled in"
+            say(f"  {IDLIST_ARCHIVE}: " + (f"{written} gallery picture places filled in"
                                            if written else "gallery already fixed in your copy"))
             if not args.check:
                 gallery_out.parent.mkdir(parents=True, exist_ok=True)

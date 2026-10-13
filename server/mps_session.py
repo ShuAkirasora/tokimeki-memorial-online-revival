@@ -569,14 +569,20 @@ GALLERY_EVENT_BITS = 9
 # ⚠️ The thumbnail and the full-size picture come from different places: the
 # thumbnail needs only the event bit, but opening it asks this table through
 # 0x68bd6d, so with no expression bit set the viewer had nothing to draw.
-# ⚠️ And only one expression per scene is reachable. The client picks the
-# picture with `(route == emotion) ? photo[0][emotion] : photo[1][emotion]`
-# (0x68bbe6), where every caller sweeps route 0..1 × emotion 0..5 -- so route 0
-# reaches photo[0][0] and nothing else, route 1 reaches photo[0][1], and the
-# other ten pairs land in the route-1 group, which is empty. Lighting the
-# second pair as well would need to know, per (candidate, scene), whether
-# photo[0][1] is there; where it is not, the 表情 button would turn itself on
-# (0x581418 enables it when 「first」 and 「next」 differ) and then draw nothing.
+# ⭐ Round 608: the 表情 button. The viewer opens a scene on the first
+# (route, expression) pair whose bit is set, in the order (0,0)..(0,5),
+# (1,0)..(1,5) (0x68bd6d, the order table at 0xd84a74); 表情 shows the next
+# pair set after the current one, wrapping round (0x68be28), and the button is
+# enabled while that next picture is a different one from the first (0x581418).
+# Which expressions a scene has is the ledger its events kept --
+# romance.PHOTO_BASE, 15 of 15 against the table -- so each scene's bits go
+# out on emotionFlag[route 0 + k*2] exactly as the ledger has them.
+# ⚠️ The client that shipped could not show them: its picture lookup tests
+# `route == emotion` where `route == 0` was meant (0x68bbe6; 「表情<slot>1<k>」
+# is route 0), so route 0 reached photo[0][0] alone and every further
+# expression fell into the empty route-1 group. ranking_fix.py hands out the
+# client with that test fixed. Expression 0 is every lit scene's own picture,
+# as it was before the ledger was kept: its bits are the event bits.
 GALLERY_EMOTION = 0
 # Route 0 is where a photo goes: it is the group the table fills, and the page
 # lights a slot if either route carries the bit (0x68bae8 loops both).
@@ -4461,13 +4467,25 @@ class MpsServer:
         if not touched:
             return
         changed = love.absorb_record(result.writes)
-        if changed and not self._chars(session).set_romance(session.chara_id, love):
+        # ⭐ Round 608: and the おまけ gallery's expression photos, which are
+        # the same writes with the scene and expression the address alone
+        # drops (romance.PHOTO_BASE).
+        photos = sorted((address - romance.PHOTO_BASE, scene, offset // 4)
+                        for (family, address, scene, offset) in result.subscripted
+                        if family == "PLAYER"
+                        and 0 <= address - romance.PHOTO_BASE < len(romance.CANDIDATES))
+        new_photos = love.absorb_photos(result.subscripted)
+        if (changed or new_photos) and not self._chars(session).set_romance(session.chara_id, love):
             print(f"[{self.tag}] 告白記録: 書き戻せませんでした")
             return
         print(f"[{self.tag}] 告白記録 "
               + " ".join(f"{address:#06x}={value!r}"
                          for address, value in sorted(touched.items()))
               + " -> " + ("記帳" if changed else "既に同じ値（記帳なし）"))
+        if photos:
+            print(f"[{self.tag}] 表情写真 "
+                  + " ".join(f"{list(romance.CANDIDATES)[i]}{scene}:{k}" for i, scene, k in photos)
+                  + " -> " + ("記帳" if new_photos else "既に記帳済み"))
 
     def _script_scene_day(self, session: "_Session", result) -> None:
         """Let a scenario stamp 「this one played today」 into the save.
@@ -9645,11 +9663,16 @@ class MpsServer:
                     )
                 store = self._chars(session)
                 best: dict[int, int] = {}
+                photos: dict[int, dict[int, int]] = {}
                 for record in store.records:
                     love = store.romance(int(record["charaId"]))
                     if love is not None:
                         for i, progress in love.gallery().items():
                             best[i] = max(best.get(i, 0), progress)
+                        for i, scenes in love.photos().items():
+                            mine = photos.setdefault(i, {})
+                            for scene, mask in scenes.items():
+                                mine[scene] = mine.get(scene, 0) | mask
                 seen = set(best)
                 entries = sorted(seen)[:GALLERY_LIST_MAX]
                 print(f"[{self.tag}] gallery list: "
@@ -9665,13 +9688,24 @@ class MpsServer:
                                  for k in range(shown))
                     event_words = [0] * GALLERY_ROUTES
                     event_words[GALLERY_ROUTE] = events
-                    # The same bits again on the one (route, expression) pair
-                    # whose picture the client can reach: opening a scene asks
-                    # the gallery table through that pair, so with these at 0
-                    # every scene opened to nothing. Where the table has no
-                    # picture the answer is the same 0xffff either way.
+                    # The same bits again on expression 0: opening a scene asks
+                    # the gallery table through its first lit pair, so with
+                    # these at 0 every scene opened to nothing. Then each
+                    # further expression her events wrote (GALLERY_EMOTION).
                     emotion_words = [0] * (GALLERY_ROUTES * GALLERY_EMOTIONS)
                     emotion_words[GALLERY_ROUTE + GALLERY_EMOTION * GALLERY_ROUTES] = events
+                    ledger = dict(photos.get(i, {}))
+                    if romance.GALLERY_PHOTOS_BACKFILL:
+                        name = list(romance.CANDIDATES)[i]
+                        for scene in range(GALLERY_FIRST_EVENT_BIT, GALLERY_FIRST_EVENT_BIT + shown):
+                            if scene not in ledger:
+                                ledger[scene] = romance.scene_photos_of(name).get(scene, 0)
+                    for scene, mask in ledger.items():
+                        if not GALLERY_FIRST_EVENT_BIT <= scene < GALLERY_FIRST_EVENT_BIT + GALLERY_EVENT_BITS:
+                            continue
+                        for k in range(GALLERY_EMOTIONS):
+                            if mask >> k & 1:
+                                emotion_words[GALLERY_ROUTE + k * GALLERY_ROUTES] |= 1 << scene
                     body += struct.pack(">H", i) + struct.pack(
                         f">{GALLERY_ROUTES + GALLERY_ROUTES * GALLERY_EMOTIONS}I",
                         *event_words, *emotion_words)

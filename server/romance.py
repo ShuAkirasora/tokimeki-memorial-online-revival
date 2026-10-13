@@ -745,6 +745,27 @@ PC_PLAYER_SEX = 0x3013
 PLAYER_RECORD_BASES = (0x2100, 0x2110, 0x2120, 0x2130, 0x2140, 0x2150,
                        0x2160, 0x2200, 0x2210)
 
+# ── The おまけ gallery's expression photos: PLAYER[0x2210+i][n][4k] ─────────
+#
+# ⭐⭐⭐ RESTORED (round 608). The last base of the block is never written
+# bare: each of her `_e0NN` writes it with two more operand bytes
+# (`gs3vm.SUBSCRIPT`), n = NN - 1 and 4k, always the value 1 -- and in
+# several places, one batch per way the event can end, so which k a play
+# writes depends on the choices made in it. n is the gallery's bit for that
+# event (bit n is her event n + 1, see mps_session.GALLERY_FIRST_EVENT_BIT)
+# and k an expression: for the three scenes the client's own gallery table
+# has photos for, the k each event's scripts can write are, scene by scene
+# and candidate by candidate, exactly the expression photos the table holds
+# (15 of 15). The client's handler for the write is an empty stub, so this
+# ledger was the original server's; what it can have fed is the one place
+# on the wire that names a (scene, expression) pair -- the gallery list's
+# emotionFlag (0x0313), which the viewer's 表情 button steps through.
+# ⚠️ Kept per candidate as {n: bitmask of k}, apart from ``record``: the
+# block keeps one value per cell, and this is many cells under one address.
+PHOTO_BASE = 0x2210
+#: emotionFlag[r + e*2] has six expressions per route; k is one of them.
+PHOTO_EXPRESSIONS = 6
+
 
 def _saved_record(saved) -> dict:
     """One candidate's register block as it comes back out of a save.
@@ -758,6 +779,69 @@ def _saved_record(saved) -> dict:
     return {str(base): saved[str(base)]
             for base in PLAYER_RECORD_BASES
             if isinstance(saved, dict) and str(base) in saved}
+
+
+def _saved_photos(saved) -> dict:
+    """``{n: bitmask of k}`` as it comes back out of a save (see PHOTO_BASE).
+
+    Keys are the scene as a decimal string in the file, ints in here; a key or
+    a mask that is not a non-negative number, or a mask with bits past the six
+    expressions, is a save this end did not write and is dropped.
+    """
+    if not isinstance(saved, dict):
+        return {}
+    kept: dict[int, int] = {}
+    for key, value in saved.items():
+        try:
+            scene, mask = int(key), int(value)
+        except (TypeError, ValueError):
+            continue
+        if scene >= 0 and 0 < mask < 1 << PHOTO_EXPRESSIONS:
+            kept[scene] = mask
+    return kept
+
+
+#: {name: {n: bitmask of k}}: every expression her `_e0NN` can write, over all
+#: their endings. Read once off the exports, which do not change while a
+#: server runs.
+_PHOTOS_BY_NAME: "dict[str, dict[int, int]] | None" = None
+
+
+def scene_photos_of(name: str) -> "dict[int, int]":
+    """Every expression photo `name`'s events can write, by scene. Empty
+    without exports. See GALLERY_PHOTOS_BACKFILL for what it is used for."""
+    global _PHOTOS_BY_NAME
+    if _PHOTOS_BY_NAME is None:
+        found: dict[str, dict[int, int]] = {who: {} for who in CANDIDATES}
+        by_stem = {stem: who for who, stem in SCRIPT_STEMS.items()}
+        for path in sorted(gs3vm.SCRIPT_DIR.glob("*.gs3.json")):
+            who = by_stem.get(path.name[:3])
+            if who is None:
+                continue
+            loaded = gs3vm.load(path.name[: -len(".gs3.json")])
+            if loaded is None:
+                continue
+            base = PHOTO_BASE + candidate_index(who)
+            for _ip, op, args in loaded.code:
+                if (gs3vm.DATA_WRITE.get(op) == "PLAYER"
+                        and len(args) > gs3vm.SUBSCRIPT + 1
+                        and int.from_bytes(args[2:4], "little") == base):
+                    scene, k = args[gs3vm.SUBSCRIPT], args[gs3vm.SUBSCRIPT + 1] // 4
+                    if scene and k < PHOTO_EXPRESSIONS:
+                        found[who][scene] = found[who].get(scene, 0) | 1 << k
+        _PHOTOS_BY_NAME = found
+    return _PHOTOS_BY_NAME.get(name, {})
+
+
+# ⚠️ INVENTED — what 表情 shows for a scene seen before this server kept the
+# ledger (PHOTO_BASE; round 608). Until then the writes reached the save as one
+# cell and the scene and expression were dropped, so a save shows a scene as
+# seen with nothing to say which of its endings was played. Such a scene -- one
+# the gallery lights and the ledger has nothing for -- is given every
+# expression her event can write, over all its endings: the most it can show,
+# as round 605 gave an older save the most scenes it could. False shows only
+# the first picture there, as before.
+GALLERY_PHOTOS_BACKFILL = True
 
 
 def _saved_scene_tally(saved) -> dict:
@@ -1245,6 +1329,11 @@ class Romance:
                 # written yet and is not supplied at all. Absent from saves
                 # before round 467, and an empty record is what a new game has.
                 "record": _saved_record(row.get("record")),
+                # ⭐ Round 608: the おまけ gallery's expression photos her
+                # `_e0NN` wrote, {scene: bitmask} (PHOTO_BASE). Grows like
+                # ``album`` and goes through 再入学 with it. Absent from saves
+                # before round 608 (GALLERY_PHOTOS_BACKFILL has those).
+                "photos": _saved_photos(row.get("photos")),
             }
         # PC[0x3a04]: whose letter event is running. -1 is what the new-game
         # reset writes, and it is what 「手紙を読まない」 puts back.
@@ -1413,6 +1502,33 @@ class Romance:
                 for name, row in self.state.items()
                 if row["debut"] or row["album"] or row["ending"]}
 
+    def photos(self) -> "dict[int, dict[int, int]]":
+        """Candidate index -> {scene: bitmask of expressions}, for `gallery`'s
+        candidates who have any: the photos her `_e0NN` wrote (PHOTO_BASE)."""
+        return {candidate_index(name): dict(row["photos"])
+                for name, row in self.state.items() if row["photos"]}
+
+    def absorb_photos(self, subscripted: dict) -> bool:
+        """Take a run's `PLAYER[0x2210+i][n][4k]` writes. True if one is new.
+
+        From `gs3vm.Result.subscripted`. Only ever adds: a photo seen stays
+        seen, as a scene does in ``album``.
+        """
+        names = list(CANDIDATES)
+        changed = False
+        for (family, address, scene, offset), value in subscripted.items():
+            index = address - PHOTO_BASE
+            k = offset // 4
+            if (family != "PLAYER" or not 0 <= index < len(names) or not value
+                    or not scene or offset % 4 or k >= PHOTO_EXPRESSIONS):
+                continue
+            row = self.state[names[index]]
+            mask = row["photos"].get(scene, 0)
+            if not mask & 1 << k:
+                row["photos"][scene] = mask | 1 << k
+                changed = True
+        return changed
+
     def _saw_up_to(self, row: dict) -> None:
         """Book her 進行度 into the gallery's count, which never goes down."""
         row["album"] = max(row["album"], row["progress"])
@@ -1467,7 +1583,8 @@ class Romance:
         (the `*_cells_of` partitions were measured for exactly this question).
         ⚠️ ``ending`` stays: it is the おまけ list's, 「過去に告白を受けたことが
         ある恋愛候補生」, and re-enrolling does not unhappen a confession.
-        ⚠️ ``album`` stays with it, for the gallery: what was seen stays seen.
+        ⚠️ ``album`` stays with it, for the gallery: what was seen stays seen;
+        and so do her expression photos (``photos``), for the same reason.
         ⚠️ A letter event of hers still armed is disarmed with her; anyone
         else's stays, like everything else outside her row.
 
@@ -1501,6 +1618,7 @@ class Romance:
             "album": self.state[name]["album"],
             "talk": dict(TALK_SLOT_DEFAULTS),
             "record": {},
+            "photos": self.state[name]["photos"],
         }
         if self.letter_event == candidate_index(name):
             self.letter_event = NO_LETTER_EVENT

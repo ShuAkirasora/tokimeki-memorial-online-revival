@@ -445,10 +445,11 @@ authentication.
 out through the game's own updater. Nothing is installed by hand and nothing else is touched;
 see [Fixing the confession scenes](#fixing-the-confession-scenes).
 
-**And, on a server that offers it, twenty-four bytes of code** — the one exception to "nothing
+**And, on a server that offers it, twenty-nine bytes of code** — the one exception to "nothing
 about how it behaves". The school paper's exam-ranking page reads its scores as signed bytes, so
-half the totals come out negative, and the title screen takes its own おまけ button away again
-four bytes after building it; the operator makes a fixed copy of the client from their own and
+half the totals come out negative, the title screen takes its own おまけ button away again
+four bytes after building it, and the おまけ gallery looks its expression photos up under the
+wrong condition, so none past the first can be shown; the operator makes a fixed copy of the client from their own and
 the updater replaces `tmo.exe` with it, the way the operated game shipped its client fixes. See
 [Fixing the client](#fixing-the-client).
 
@@ -683,7 +684,9 @@ scenes there, and opening one looks its full-size picture up in `gallery.bin`; o
 three scenes have one, so the other six open to a black screen under a thumbnail that promised a
 picture. The three that are filled are each that event's own CG, or a copy of it with the face
 redrawn — one of them names the event CG outright — so the empty six get the event CG of their
-scene, which the client has. That is the table.
+scene, which the client has, in every one of its expression places: those scenes have one
+picture, so the gallery's 表情 button finds nothing different to step to and stays grey rather
+than opening onto black. That is the table.
 
 The おまけ menu's ending replay plays each heroine's confession and epilogue again from its own
 copies of the two scripts, cut down — the same lines without the letter and the choice. The
@@ -711,8 +714,8 @@ expression goes with which line, the moment Yayoi's rain clears, and the line on
 epilogue turns pastel, are choices made here, because the original never played these scenes;
 the replays make the same choices for the same lines, and where a replay has lost a cut its full
 script makes, the cut is put back as the full script has it. In `idlist.arc`, thirty empty
-picture entries of `gallery.bin` — five heroines, scenes 5 to 10 — get that scene's event CG,
-each checked against the name the client's own background table gives it; every other byte of
+picture entries of `gallery.bin` — five heroines, scenes 5 to 10 — get that scene's event CG in
+their six expression places, each checked against the name the client's own background table gives it; every other byte of
 the archive stays as it was, including the table that says which version of the game this is.
 The recipes are the readable part of `confession_fix.py`, and they are the whole of what it
 does: it is not a general script or table editor.
@@ -759,6 +762,13 @@ open 転校, which this build shipped closed and the manual never mentions. The 
 appears only once a character of the account has received a confession, as the client always
 meant it to.
 
+And a third, inside おまけ. A scene of the gallery can hold several photos of the heroine, one
+per expression — the client's own table carries them — and its 表情 button steps through the
+ones the player has seen. The function that picks the photo takes the first group when the
+expression number equals the route number, where route 0 was meant, so only the first photo
+of a scene can ever be reached and the button stays grey. Five one-byte compares become
+compares with 0.
+
 **How it reaches players.** As the operated game shipped client fixes: its updater runs before
 the client on every start and replaces whole files, so a fix to the client's code was a new
 `tmo.exe`, in effect from the next start. This writes that file into `runtime/update/`, made
@@ -784,7 +794,7 @@ client still started against a server that offers the fix fetches it again.
 | `export_scripts.py` | the script exports, out of your own copy of the game |
 | `apply_fixes.py` | the two fixes next to it, `confession_fix.py` and `ranking_fix.py`, in one run |
 | `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, the おまけ replays, and the おまけ gallery's pictures, fixed for the updater to hand out |
-| `ranking_fix.py` | the exam-ranking page's twenty score loads and the おまけ button, fixed in a copy of your client for the updater to hand out |
+| `ranking_fix.py` | the exam-ranking page's twenty score loads, the おまけ button and the gallery's expression photos, fixed in a copy of your client for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |

@@ -490,6 +490,15 @@ DATA_READ = {
     0x8182: "PCITEM", 0x8184: "PCKEY", 0x8201: "PCEV", 0x8203: "PCEV32",
 }
 DATA_WRITE = {op + 1: family for op, family in DATA_READ.items()}
+# ⭐ Round 608: the two operand bytes after the address. Across the whole
+# corpus exactly three PLAYER bases ever set them, all in the forty-five
+# `<キャラ>_e0NN` and all as writes -- 0x2160, 0x2200 and 0x2210 (+ her index),
+# with the first byte the event's number less one and, for 0x2210, the second
+# four times an expression number (0..4). Nothing reads one back, so the cell
+# under the address alone answers as before; a write that carries them is
+# also kept with them (`Result.subscripted`), and 0x2210's is what the おまけ
+# gallery's expression photos are made of (`romance.PHOTO_BASE`).
+SUBSCRIPT = 4
 
 # ⭐ The キーワード pair, named apart because `Machine` decodes their operands
 # by a layout of their own (see the KEYWORD_OPS case). ⚠️ They stay in
@@ -1506,6 +1515,11 @@ class Result:
         # already in the other member's own Result, or it reached nobody and
         # this is the only record that it happened.
         self.other_writes: dict[tuple, int] = {}
+        # ⭐ `(family, address, a, b) -> value` for a write whose operand
+        # carries the two bytes after the address (`SUBSCRIPT`). In `writes`
+        # as well, under the address alone, as it always was; this is the
+        # same write with the rest of where it went.
+        self.subscripted: dict[tuple[str, int, int, int], int] = {}
         # {opcode: how often it was stepped over}. See `Machine._uninstructed`.
         self.passed: Counter = Counter()
 
@@ -1861,7 +1875,11 @@ class Machine:
                 slot = int.from_bytes(args[2:4], "little")
                 key = (DATA_WRITE[op], slot)
                 value = self._get(reg)
-                self._write_cell(key, value, _refer_actor(args))
+                actor = _refer_actor(args)
+                self._write_cell(key, value, actor)
+                a, b = (args[SUBSCRIPT], args[SUBSCRIPT + 1]) if len(args) > SUBSCRIPT + 1 else (0, 0)
+                if (a or b) and actor == self.actor and not _unknown(value):
+                    self.result.subscripted[(*key, a, b)] = value
             return i + 1
 
         if op == OP_CTX_REFER:
