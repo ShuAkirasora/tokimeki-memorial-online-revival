@@ -37,6 +37,16 @@ This build's own data is the defect, not the server and not the renderer, and
 nothing on the wire can carry an instruction into a script the client is
 already running. The fix has to be in the script files.
 
+The title screen's おまけ gallery has a hole of the same kind, in a table
+rather than a script. Each heroine has nine scenes there, and each opens to a
+full-size picture looked up in `gallery.bin` by heroine and scene. Only the
+first three scenes have a picture in that table; for the other six the entry
+is empty, and the viewer draws the empty entry -- a black screen -- where the
+scene's thumbnail promised a picture. The pictures are the events' own: the
+three that are filled are each event's CG or a copy of it with the face
+redrawn, and one of them (Inukai's second) names the event CG itself. So the
+six empty entries per heroine get the CG of that event, which the client has.
+
 What this changes
 -----------------
 Only the four confession scripts `amm_e011`, `yyi_e011`, `skr_e011` and
@@ -50,6 +60,13 @@ Only the four confession scripts `amm_e011`, `yyi_e011`, `skr_e011` and
     expression before a line -- and jumps back;
   * in `amm_e007` to `amm_e010`, one cast entry: the face overlay for that
     event's picture, which the script's header did not declare.
+
+And `gallery.bin`, inside `idlist.arc`: thirty empty picture entries (five
+heroines, scenes 5 to 10) are filled with the event CG of that scene, in the
+first of each entry's twelve places -- the one this server's gallery data
+points the viewer at. Every other byte of the archive stays as it is,
+including every other table in it; the one that says which version of the game
+this is (`property_text.bin`) is not touched.
 
 No instruction moves within the code, no label is added and nothing is
 removed, so every instruction keeps its number, and every jump and label its
@@ -90,9 +107,12 @@ copy of the game:
      `runtime/scripts/`. The server follows each scene alongside the client and
      has to be following the same script, or the scene still plays but the
      server loses track of it -- and with it the ending.
+  3. The fixed `idlist.arc` goes into `runtime/update/data/idlist/`. The server
+     reads nothing from it, so there is no export to go with it.
 
-Both halves together, always. Nothing here is a general script editor: the
-eleven recipes are the whole of what it does.
+Both halves together, always. Nothing here is a general script or table
+editor: the eleven recipes and the thirty pictures are the whole of what it
+does.
 
 The archives are encrypted. Like `export_scripts.py`, this works the key out of
 your own `tmo.exe` and writes it nowhere.
@@ -109,6 +129,8 @@ from export_scripts import (
     TMOC,
     Blowfish,
     Script,
+    _sjis,
+    arc_entries,
     archive_scripts,
     container_cipher,
     find_game_folder,
@@ -126,6 +148,8 @@ SCRIPT_DIR = HERE / "runtime" / "scripts"
 #: Where the client keeps scripts, relative to the game folder -- and so where
 #: the fixed archives sit under the update folder.
 SCRIPT_SUBDIR = Path("data") / "script"
+#: And the index tables, the same way.
+IDLIST_SUBDIR = Path("data") / "idlist"
 
 
 # --------------------------------------------------------- the instructions
@@ -469,6 +493,41 @@ BG_INFO = 0x5000
 EFFECT_COUNT_MASK = 0x3F
 
 
+# ------------------------------------------------------ the おまけ gallery
+#
+# `gallery.bin` is one of the index tables in `idlist.arc`: `IdBn`, a count at
+# +4, the record length at +0x10, records from +0x20. A record is
+#
+#     u16 key; u16 npcId; u16 slot; u16 photo[2][6]; u16 staffRoll[2]
+#
+# with npcId the heroine's index (天宮 0 .. 犬飼 4), slot 2..10 the picture's
+# place on the page -- slot n is her event n, which the page labels
+# Scene:0(n-1) -- and each photo a key of `bg.bin`, 0xffff where there is
+# none. The viewer looks a picture up by (npcId, slot) and draws photo[0][0]
+# for the one route and expression the server lights (see
+# server/mps_session.py, GALLERY_ROUTE).
+
+IDLIST_ARCHIVE = "idlist.arc"
+GALLERY_TABLE = "gallery.bin"
+BG_TABLE = "bg.bin"
+NO_PHOTO = 0xFFFF
+PHOTO_AT = 6
+
+#: npcId: (family name, {slot: the event CG, a `bg.bin` key}). Each key is
+#: checked against the name `bg.bin` gives it, 「<family name>イベント<slot>」,
+#: before anything is written. Two keys are stepped over because the client
+#: has a picture in the way: 2129 is Yayoi's eighth from behind
+#: (弥生イベント８振り向き), and 2190 is a withdrawn one (欠番・桜井イベント９).
+GALLERY_PHOTOS = {
+    0: ("天宮", {5: 2004, 6: 2005, 7: 2006, 8: 2007, 9: 2008, 10: 2009}),
+    1: ("春日", {5: 2066, 6: 2067, 7: 2068, 8: 2069, 9: 2070, 10: 2071}),
+    2: ("弥生", {5: 2125, 6: 2126, 7: 2127, 8: 2128, 9: 2130, 10: 2131}),
+    3: ("桜井", {5: 2185, 6: 2186, 7: 2187, 8: 2188, 9: 2189, 10: 2191}),
+    4: ("犬飼", {5: 2244, 6: 2245, 7: 2246, 8: 2247, 9: 2248, 10: 2249}),
+}
+_FULL_WIDTH = str.maketrans("0123456789", "０１２３４５６７８９")
+
+
 # ------------------------------------------------------------ the procedure
 
 
@@ -578,9 +637,91 @@ def seal_archive(blob: bytes, table: int, data_at: int, ssc: bytes, padding: byt
     return bytes(out)
 
 
+def _entry_at(blob: bytes, wanted: str) -> tuple[int, int]:
+    """`(data offset, stored size)` of the archive entry whose file name is `wanted`."""
+    table, size = struct.unpack_from("<II", blob, 4)
+    for i in range(size // 32):
+        _, _, name_at, name_len, data_at, stored, _, _ = struct.unpack_from(
+            "<8I", blob, table + i * 32)
+        name = blob[name_at:name_at + name_len].split(b"\0")[0].decode("ascii", "replace")
+        if Path(name).name == wanted:
+            return data_at, stored
+    raise NotThisScript(f"no {wanted} in it")
+
+
+def _open_table(payload: bytes, cipher: Blowfish, iv: bytes) -> bytes:
+    if payload[:4] != TMOC:
+        raise NotThisScript("not enciphered")
+    plain_len, cipher_len = struct.unpack_from("<II", payload, 4)
+    plain = cipher.cbc(payload[12:12 + cipher_len], iv)[:plain_len]
+    if plain[:4] != b"IdBn":
+        raise NotThisScript("not an index table")
+    return plain
+
+
+def _rows(table: bytes):
+    """`(offset, record)` for every record of an `IdBn` table."""
+    count = struct.unpack_from("<I", table, 4)[0]
+    length = struct.unpack_from("<H", table, 0x10)[0]
+    for i in range(count):
+        at = 0x20 + i * length
+        yield at, table[at:at + length]
+
+
+def bg_names(blob: bytes, cipher: Blowfish, iv: bytes) -> dict[int, str]:
+    """`{key: name}` from `bg.bin`, to check the recipe against."""
+    for name, payload in arc_entries(blob):
+        if Path(name).name == BG_TABLE:
+            table = _open_table(payload, cipher, iv)
+            name_at, name_len = struct.unpack_from("<HH", table, 0x0C)
+            return {int.from_bytes(r[:name_at], "little"): _sjis(r[name_at:name_at + name_len])
+                    for _, r in _rows(table)}
+    raise NotThisScript(f"no {BG_TABLE} in it")
+
+
+def fix_gallery(blob: bytes, cipher: Blowfish, iv: bytes) -> tuple[bytes, int]:
+    """`idlist.arc` with the thirty pictures in place, and how many were written.
+
+    0 written means the copy already has them. Anything in one of those
+    places other than an empty entry or the recipe's own picture is refused:
+    that is not the table this was written against.
+    """
+    names = bg_names(blob, cipher, iv)
+    for npc, (family, photos) in GALLERY_PHOTOS.items():
+        for slot, key in photos.items():
+            want = f"{family}イベント{str(slot).translate(_FULL_WIDTH)}"
+            if names.get(key) != want:
+                raise NotThisScript(f"bg {key} is {names.get(key)!r}, not {want!r}")
+    data_at, stored = _entry_at(blob, GALLERY_TABLE)
+    table = bytearray(_open_table(blob[data_at:data_at + stored], cipher, iv))
+    todo = {(npc, slot): key for npc, (_, photos) in GALLERY_PHOTOS.items()
+            for slot, key in photos.items()}
+    written = 0
+    for at, row in _rows(bytes(table)):
+        _, npc, slot, photo = struct.unpack_from("<4H", row)
+        key = todo.pop((npc, slot), None)
+        if key is None:
+            continue
+        if photo == NO_PHOTO:
+            struct.pack_into("<H", table, at + PHOTO_AT, key)
+            written += 1
+        elif photo != key:
+            raise NotThisScript(f"slot {slot} of npc {npc} already has picture {photo}")
+    if todo:
+        raise NotThisScript(f"no row for {sorted(todo)[0]}")
+    if not written:
+        return blob, 0
+    if len(table) % 8:                               # pragma: no cover - 3432 bytes as shipped
+        raise NotThisScript("the table does not fill its last cipher block")
+    payload = TMOC + struct.pack("<II", len(table), len(table)) + cipher.cbc_encrypt(bytes(table), iv)
+    if len(payload) != stored:                       # pragma: no cover - same length in, same out
+        raise NotThisScript("the table changed size")
+    return blob[:data_at] + payload + blob[data_at + stored:], written
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fix the confession scenes, for handing out through the updater.")
+        description="Fix the confession scenes and the おまけ gallery, for handing out through the updater.")
     parser.add_argument("--game-dir", help="the folder that holds tmo.exe")
     parser.add_argument("--check", action="store_true",
                         help="say what would be written, write nothing")
@@ -633,8 +774,27 @@ def main(argv: list[str] | None = None) -> int:
         scripts_out.mkdir(parents=True, exist_ok=True)
         write_exports(scripts_out, script, ids.get(f"{name}.ssb"))
 
+    gallery_out = Path(args.update_dir) / IDLIST_SUBDIR / IDLIST_ARCHIVE
+    source = idlist_dir / IDLIST_ARCHIVE if idlist_dir is not None else None
+    if source is None or not source.is_file():
+        say(f"  ? {IDLIST_ARCHIVE}: your copy has no such archive")
+        failed += 1
+    else:
+        try:
+            fixed_idlist, written = fix_gallery(source.read_bytes(), cipher, iv)
+        except (NotThisScript, ValueError, struct.error) as exc:
+            say(f"  ! {IDLIST_ARCHIVE}: {exc}")
+            failed += 1
+        else:
+            say(f"  {IDLIST_ARCHIVE}: " + (f"{written} gallery pictures filled in"
+                                           if written else "gallery already fixed in your copy"))
+            if not args.check:
+                gallery_out.parent.mkdir(parents=True, exist_ok=True)
+                gallery_out.write_bytes(fixed_idlist)
+
     if not args.check and not failed:
         say(f"  archives in {archive_out}")
+        say(f"  the gallery in {gallery_out}")
         say(f"  exports in {scripts_out}")
         say("  the server reads the exports as each scene starts; clients pick "
             "the archives up the next time they start")

@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Fix the 試験結果 page of the school paper, for handing out through the updater.
+"""Fix the client's own bugs, for handing out through the updater.
+
+Two fixes, one file -- the client is a single tmo.exe, so whatever is fixed in
+it goes out together:
+
+  * the 試験結果 page of the school paper (twenty bytes, below);
+  * the title screen's おまけ button, which this build never draws (four
+    bytes, after that).
 
 The paper's 試験結果 tab draws the exam rankings from six files this server
 publishes (server/newspaper.py). The client that shipped reads every score in
@@ -18,6 +25,23 @@ at each load, and nothing else moves. 合 then reads 0..800 as written, and the
 dash appears where the format says it should. (A total of exactly 255 also
 reads as the marker and draws a dash; that is the format's own choice of
 marker, and the fix keeps it rather than invent another.)
+
+  The おまけ button
+  ----------------
+  The manual describes おまけ as part of this game (p02_06, p02_07, p09_02:
+  a gallery of the scenes a character has seen and the endings received), and
+  two of the operator's notices fixed bugs in it (2006-04-19 and 04-26). The
+  client that shipped builds the title menu with the button and then, four
+  bytes later, takes it away again: at 0x6895DD ``mov byte [ebp+0x13], 0``
+  clears the "draw おまけ" flag whenever the nVersion property reads 1..5,
+  and this build's own data sets it to 5. Those four bytes become NOPs. The
+  other half of the condition is left as it is: the button still appears only
+  once some character of the account has received a confession (the 0x0316
+  list is not empty), as the client always meant it to.
+
+  ⚠️ Why not raise nVersion instead: the same property also opens 転校 (moving
+  to another school), which the manual never mentions and this build shipped
+  closed. Changing the client's test changes only the button.
 
   How it reaches players, and why that way
   ----------------------------------------
@@ -71,6 +95,11 @@ RETAIL_SHA256 = "df6652613021f554f09bebda6de890d2cee3fc8133e9f096817255e31bc6608
 IMAGE_BASE = 0x400000
 MOVSX, MOVZX = 0xBE, 0xB6
 
+#: The おまけ button's gate: the instruction that clears its flag, as shipped.
+OMAKE_GATE = 0x6895DD
+OMAKE_GATE_SHIPPED = "c6451300"
+NOP = 0x90
+
 #: The twenty loads, by address, with the instruction as shipped. The paper's
 #: ranking drawer (0x60CA11) reads a クラス row's eight averages and 合 first,
 #: then a 個人 row's eight scores and 合.
@@ -90,18 +119,25 @@ def offset(va: int) -> int:
 
 
 def as_shipped(data: bytes) -> bytes:
-    """The file with the authentication address and the twenty loads put back."""
+    """The file with the authentication address and both fixes put back.
+
+    So a copy already fixed -- by an earlier run of this tool, with or without
+    the おまけ button -- is recognised as the build it was made from.
+    """
     out = bytearray(data)
     site = auth.find_site(bytes(out))
     for k, octet in enumerate(auth.parse_ipv4(auth.ORIGINAL_ADDRESS)):
         out[site + 4 + 5 * k] = octet
     for va in SITES:
         out[offset(va) + 1] = MOVSX
+    at = offset(OMAKE_GATE)
+    if out[at:at + 4] == bytes([NOP] * 4):
+        out[at:at + 4] = bytes.fromhex(OMAKE_GATE_SHIPPED)
     return bytes(out)
 
 
 def fixed(data: bytes, address: bytes) -> bytes:
-    """The build as shipped, pointed at ``address``, with the twenty loads fixed."""
+    """The build as shipped, pointed at ``address``, with both fixes made."""
     if hashlib.sha256(as_shipped(data)).hexdigest() != RETAIL_SHA256:
         raise ValueError(
             "this tmo.exe is not the build this fix was written for, or carries "
@@ -112,6 +148,10 @@ def fixed(data: bytes, address: bytes) -> bytes:
         if out[at:at + 4] != bytes.fromhex(shipped):  # pragma: no cover - hash covers it
             raise ValueError(f"unexpected instruction at {va:#x}")
         out[at + 1] = MOVZX
+    at = offset(OMAKE_GATE)
+    if out[at:at + 4] != bytes.fromhex(OMAKE_GATE_SHIPPED):  # pragma: no cover - hash covers it
+        raise ValueError(f"unexpected instruction at {OMAKE_GATE:#x}")
+    out[at:at + 4] = bytes([NOP] * 4)
     site = auth.find_site(bytes(out))
     for k, octet in enumerate(address):
         out[site + 4 + 5 * k] = octet
@@ -129,7 +169,7 @@ def find_exe(game_dir: str) -> Path:
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fix the school paper's 試験結果 page, for handing out through the updater.")
+        description="Fix the client's own bugs (試験結果 page, おまけ button), for handing out through the updater.")
     parser.add_argument("--game-dir", help="the folder that holds tmo.exe (or tmo.exe itself)")
     parser.add_argument("--address", help="the server address players' clients are pointed at")
     parser.add_argument("--update-dir", default=str(UPDATE_DIR),
@@ -158,7 +198,7 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"{source}: {exc}", file=sys.stderr)
         return 1
     print(f"{source}: the shipped build; authentication address {shown}, "
-          f"{len(SITES)} score loads fixed")
+          f"{len(SITES)} score loads and the おまけ button fixed")
     if args.check:
         print(f"would write {dest} ({len(out)} bytes, sha256 {hashlib.sha256(out).hexdigest()[:16]}…)")
         return 0

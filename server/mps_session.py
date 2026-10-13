@@ -2111,6 +2111,9 @@ class _Session:
         # ⚠️ A knob whose default is the factory value, so forgetting to put it
         # back cannot leave a changed server behind.
         self.npc_event_end: str = "auto"
+        # The file of the タイトルイベント running now (0x6C00), so its 0x6C03
+        # knows whether it was an おまけ replay of somebody's confession.
+        self.title_event: "str | None" = None
         # MsgSvNotifyNpcControl bodies /npc has pushed, so that a map reload can
         # put the same chibis back. Bodies rather than parsed pairs: nothing
         # here needs to read them, only to send them again.
@@ -5220,6 +5223,7 @@ class MpsServer:
                       f"script — starting a stub (cast empty)")
                 found = script.stub(script_id)
             print(f"[{self.tag}] ⭐ title event {script_id:#06x} -> {found.file}")
+            session.title_event = found.file
             # ⛔️ Not the scenario's NPC cast. `npcInfo[]` names the 役柄 a
             # 代行ＮＰＣ plays (`script.ready_params`); a title event has one
             # 役柄 and a person in it, and its NPCs are declared by the file.
@@ -5238,8 +5242,25 @@ class MpsServer:
             # client is not waiting to be given a field back -- it is waiting to
             # be let into one, which is the 登校 it suspended.
             print(f"[{self.tag}] title event end")
-            return self._answer(
-                session, seen, script.MSG_SV_OK_TITLE_EVENT_END, b"")
+            reply = self._answer(session, seen, script.MSG_SV_OK_TITLE_EVENT_END, b"")
+            finished, session.title_event = session.title_event, None
+            whose = romance.omake_confession_of(finished)
+            if whose is None:
+                return reply
+            # ⭐ Round 605: おまけ→エンディング plays her `<キャラ>_o011` through
+            # this door, and the client then sits on a black screen: the Ok's
+            # handler is the shared empty stub here too, exactly as 0x5604's
+            # is after the locker's confession. The way on from that state is
+            # the same message, with her index: the credits, and after them
+            # the client asks for her epilogue itself.
+            # INVENTED — after an おまけ confession replay the server sends 0x5606 with her index, as after the campus one; no capture of the original's answer exists, only that 0x6C04 does nothing and 0x5606 is what the script listener is left waiting on.
+            print(f"[{self.tag}] おまけ: {list(romance.CANDIDATES)[whose]} の"
+                  f"エンディングへ (0x5606 npcId={whose})")
+            return reply + self._answer(
+                session, 0,
+                script.MSG_SV_NOTIFY_NPC_EVENT_CLEAR_CHARACTER_INFO,
+                script.npc_event_clear_params(whose),
+            )
 
         if msg_type == script.MSG_CL_REQUEST_NPC_EVENT_START:
             # The client has read the event record we pointed it at and is
@@ -9612,6 +9633,8 @@ class MpsServer:
                 # ending list, for the same reason (the menu lists people).
                 # p02_07: 「恋愛候補生がゲーム中に登場すると、おまけモードに
                 # 進むことができます」, and the manual's 登場 is Romance's debut.
+                # ⭐ Round 605: and anyone 再入学 has made a stranger again,
+                # with the scenes seen before it (`Romance.gallery`).
                 if not self._named(session):
                     print(f"[{self.tag}] gallery list from an unnamed connection "
                           f"({session.peer_host}): 0x0314 おまけデータが見つかりません")
@@ -9629,13 +9652,13 @@ class MpsServer:
                 seen = set(best)
                 entries = sorted(seen)[:GALLERY_LIST_MAX]
                 print(f"[{self.tag}] gallery list: "
-                      + (" ".join(f"{list(romance.CANDIDATES)[i]}(進行{best[i]})" if 0 <= i < 5 else f"{i:#x}"
+                      + (" ".join(f"{list(romance.CANDIDATES)[i]}(既読{best[i]})" if 0 <= i < 5 else f"{i:#x}"
                                   for i in entries)
                          if entries else "なし"))
                 body = struct.pack(">H", len(entries))
                 for i in entries:
-                    # Bit k is her event k + 1, so 進行度 メイン events seen is
-                    # bits 1..進行度 -- one slot fewer than this used to send.
+                    # Bit k is her event k + 1, so n メイン events seen is
+                    # bits 1..n -- one slot fewer than this used to send.
                     shown = min(best[i], GALLERY_EVENT_BITS)
                     events = sum(1 << (GALLERY_FIRST_EVENT_BIT + k)
                                  for k in range(shown))

@@ -441,15 +441,16 @@ leaves the file byte-for-byte as it was. The client's small trust store is not e
 locally generated certificate is accepted, and nothing has to be disabled to get through
 authentication.
 
-**And, on a server that offers it, eleven script files** — the confession scenes, one epilogue and six of Amamiya's events, fixed and handed
+**And, on a server that offers it, eleven script files and one table** — the confession scenes, one epilogue and six of Amamiya's events, and the おまけ gallery's pictures, fixed and handed
 out through the game's own updater. Nothing is installed by hand and nothing else is touched;
 see [Fixing the confession scenes](#fixing-the-confession-scenes).
 
-**And, on a server that offers it, twenty bytes of code** — the one exception to "nothing about
-how it behaves". The school paper's exam-ranking page reads its scores as signed bytes, so half
-the totals come out negative; the operator makes a fixed copy of the client from their own and
+**And, on a server that offers it, twenty-four bytes of code** — the one exception to "nothing
+about how it behaves". The school paper's exam-ranking page reads its scores as signed bytes, so
+half the totals come out negative, and the title screen takes its own おまけ button away again
+four bytes after building it; the operator makes a fixed copy of the client from their own and
 the updater replaces `tmo.exe` with it, the way the operated game shipped its client fixes. See
-[Fixing the exam rankings page](#fixing-the-exam-rankings-page).
+[Fixing the client](#fixing-the-client).
 
 ## Ports
 
@@ -677,6 +678,13 @@ laid exactly over the face in it, so the picture blinks and changes expression t
 other heroines' event pictures do — and none of those scripts declares it. Those are the other
 six files.
 
+The title screen's おまけ gallery has the same kind of hole, in a table. Each heroine has nine
+scenes there, and opening one looks its full-size picture up in `gallery.bin`; only the first
+three scenes have one, so the other six open to a black screen under a thumbnail that promised a
+picture. The three that are filled are each that event's own CG, or a copy of it with the face
+redrawn — one of them names the event CG outright — so the empty six get the event CG of their
+scene, which the client has. That is the table.
+
 **What it changes.** `amm_e011`, `yyi_e011`, `skr_e011`, `ink_e011`, `amm_e012` and `amm_e005`
 to `amm_e010`, and only by adding: the missing scene-effect counts; a detour at a few
 instructions that jumps to new code at the end of the script — register the parts, switch them
@@ -691,8 +699,12 @@ that event's own picture. Which parts belong to which background, and which pict
 belong to which event, are read from the client; which
 expression goes with which line, the moment Yayoi's rain clears, and the line on which
 Amamiya's epilogue turns pastel, are choices made here, because the original never played these
-scenes. The recipes are the readable part of
-`confession_fix.py`, and they are the whole of what it does: it is not a general script editor.
+scenes. In `idlist.arc`, thirty empty picture entries of `gallery.bin` — five heroines, scenes 5
+to 10 — get that scene's event CG, each checked against the name the client's own background
+table gives it; every other byte of the archive stays as it was, including the table that says
+which version of the game this is. The recipes are the readable part of
+`confession_fix.py`, and they are the whole of what it does: it is not a general script or table
+editor.
 
 **How to use it.** Run it on the server's machine, against a copy of the game (found the way the
 exporter finds it; `--game-dir` overrides, `--check` writes nothing). It writes two halves, and
@@ -701,18 +713,19 @@ both are needed:
 | Half | Where | What it is for |
 |---|---|---|
 | the eleven fixed archives | `runtime/update/data/script/` | every client that starts through BootFirst asks for updates first; the server offers what is in `runtime/update/`, and the client fetches each file that differs from its own and puts it in place |
+| the fixed `idlist.arc` | `runtime/update/data/idlist/` | the same way; the server reads nothing from it, so it has no export |
 | the eleven scripts, exported again from the fixed archives | `runtime/scripts/` | the server follows each scene alongside the client; following the old script, it loses track of the fixed one, and the ending that follows the confession is not played |
 
-Players do nothing: the next start fetches the files, about 160 KB in all, and every start after
+Players do nothing: the next start fetches the files, about 2 MB in all, and every start after
 that only compares them. The archives are enciphered; like the exporter, this works the key out
 of your own `tmo.exe` and writes it nowhere, and the archives it writes stay in `runtime/`, which
 is not part of this repository.
 
-**To take it back,** remove `runtime/update/` and export the eleven scripts again with
+**To take it back,** remove `runtime/update/data/` and export the eleven scripts again with
 `export_scripts.py`. Clients that already fetched the fixed files keep them until they are put
 back by hand, so a server that has once offered the fix should keep offering it.
 
-## Fixing the exam rankings page
+## Fixing the client
 
 ```
 python3 ranking_fix.py --game-dir <folder with tmo.exe> --address <your server's address>
@@ -725,6 +738,15 @@ them wrongly: every score on that page is loaded as a *signed* byte, so a total 
 480 is drawn as a negative number, and a subject not sat shows `-1` instead of the dash the page
 has for it. Twenty loads change from `movsx` to `movzx` — one byte each — and the page reads
 right.
+
+The same file carries one more fix. The manual describes おまけ — the title screen's gallery of
+the scenes a character has seen and the confessions received — and the operator's own notices
+fixed bugs in it, but the client that shipped never shows the button: right after building the
+menu with it, four bytes clear its flag whenever the build's version property reads 1 to 5, and
+this build's data says 5. Those four bytes become no-ops. Raising the version instead would also
+open 転校, which this build shipped closed and the manual never mentions. The button still
+appears only once a character of the account has received a confession, as the client always
+meant it to.
 
 **How it reaches players.** As the operated game shipped client fixes: its updater runs before
 the client on every start and replaces whole files, so a fix to the client's code was a new
@@ -750,8 +772,8 @@ client still started against a server that offers the fix fetches it again.
 | `set_auth_address.py` | the four-byte address change |
 | `export_scripts.py` | the script exports, out of your own copy of the game |
 | `apply_fixes.py` | the two fixes next to it, `confession_fix.py` and `ranking_fix.py`, in one run |
-| `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, fixed for the updater to hand out |
-| `ranking_fix.py` | the exam-ranking page's twenty score loads, fixed in a copy of your client for the updater to hand out |
+| `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, and the おまけ gallery's pictures, fixed for the updater to hand out |
+| `ranking_fix.py` | the exam-ranking page's twenty score loads and the おまけ button, fixed in a copy of your client for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |

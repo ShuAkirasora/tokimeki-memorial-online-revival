@@ -972,6 +972,19 @@ PC_ABILITY_BASE = 0x3100
 NPC_KIND_CAPTURE = 1
 
 
+def omake_confession_of(file: "str | None") -> "int | None":
+    """The candidate index whose おまけ confession replay ``file`` is, else None.
+
+    The エンディング page of おまけ starts `<キャラ>_o011` through the title
+    event door (0x6C00 with its scriptId, measured in round 348).
+    """
+    stem = Path(file).stem if file else ""
+    for index, name in enumerate(CANDIDATES):
+        if stem == f"{SCRIPT_STEMS[name]}_o011":
+            return index
+    return None
+
+
 def candidate_of_npc(npc_id: int) -> str | None:
     """Her name for the four bytes a spawn or a 0x6304 carries, or None.
 
@@ -1212,6 +1225,12 @@ class Romance:
                 # candidate and never cleared by anything short of a new game.
                 # Absent from saves before round 347; 0 is what nobody has yet.
                 "ending": int(row.get("ending", 0)),
+                # ⭐ Round 605: how many of her メイン events this character
+                # has seen, ever -- the おまけ gallery's count. ``progress`` is
+                # the story's and 再入学 puts it back to 0; this one only grows
+                # (see `_saw_up_to`). Saves before round 605 have no such key
+                # and get it worked out below; None marks them till then.
+                "album": int(row["album"]) if "album" in row else None,
                 # The 会話 bookkeeping her `_s102`/`_s104` keep (CTX_TALK_SLOTS
                 # and CTX_MAIN_SEEN). Absent from saves before round 346; 0 is
                 # what the original's new-game reset writes anyway.
@@ -1255,6 +1274,15 @@ class Romance:
             row = self.state[name]
             if who.debut is not None and row["ending"] and not row["debut"]:
                 row["debut"] = True
+        # Round 605: a save older than ``album`` gets the most it can show --
+        # where her story stands now, and all of it for one who has confessed
+        # (her confession is her last event, so the メイン ones came before
+        # it; a 再入学 written before this round took the count away but not
+        # the confession). Only then: in a newer save the count is the record.
+        for name, who in CANDIDATES.items():
+            row = self.state[name]
+            if row["album"] is None:
+                row["album"] = max(row["progress"], who.events if row["ending"] else 0)
         # ⭐⭐⭐ Round 469: the day each scenario last played, by the cell the
         # scenario stamps it into (`scene_day_cells`) and as a date the same
         # way ``lastTalk`` is one. ⚠️ Kept here rather than per candidate on
@@ -1332,13 +1360,15 @@ class Romance:
 
     def line(self, name: str) -> str:
         row = self.state[name]
+        album = f" 既読{row['album']}" if row["album"] else ""
         if not row["debut"]:
-            return f"{name}=未登場"
+            return f"{name}=未登場{album}"
         talk = row["talk"]
         return (
             f"{name}=進行{row['progress']}/{CANDIDATES[name].events}"
             f" 親密{row['intimacy']}/{intimacy_needed(row['progress'])}"
             f" 位置4:{cibi_key(name, row['progress'])}"
+            f"{album}"
             # The `_s102` slots, in the order the script writes them:
             # last 日常 / last 特別 / talks today @ last day, and d8 if set.
             f" 会話{talk['lastDaily']}/{talk['lastSpecial']}/{talk['todayTalks']}"
@@ -1370,13 +1400,22 @@ class Romance:
                 if self.state[name]["debut"]]
 
     def gallery(self) -> dict[int, int]:
-        """Candidate index -> her 進行度, for everyone who has appeared.
+        """Candidate index -> how many of her メイン events this character has seen.
 
-        What the gallery list's photo bits are made of: 進行度 is how many
-        メイン events she has shown this character after her debut.
+        What the gallery list's photo bits are made of: the count is of メイン
+        events after her debut, the same unit as 進行度. Everyone who has
+        appeared is listed, and so is everyone who has been seen or has
+        confessed even if 再入学 has since taken her 登場 away.
+
+        INVENTED — the おまけ gallery keeps what was seen through 再入学 (``album`` only grows; p02_06 resets her 出会い and says nothing of the gallery, and the 2006-04-19 notice (ann_view000000087) 「「おまけ」からは、従来通り告白を見ることができます」 needs her still listed after it).
         """
-        return {candidate_index(name): self.state[name]["progress"]
-                for name in CANDIDATES if self.state[name]["debut"]}
+        return {candidate_index(name): row["album"]
+                for name, row in self.state.items()
+                if row["debut"] or row["album"] or row["ending"]}
+
+    def _saw_up_to(self, row: dict) -> None:
+        """Book her 進行度 into the gallery's count, which never goes down."""
+        row["album"] = max(row["album"], row["progress"])
 
     # ── writing ────────────────────────────────────────────────────────────
     def debut(self, name: str) -> bool:
@@ -1428,6 +1467,7 @@ class Romance:
         (the `*_cells_of` partitions were measured for exactly this question).
         ⚠️ ``ending`` stays: it is the おまけ list's, 「過去に告白を受けたことが
         ある恋愛候補生」, and re-enrolling does not unhappen a confession.
+        ⚠️ ``album`` stays with it, for the gallery: what was seen stays seen.
         ⚠️ A letter event of hers still armed is disarmed with her; anyone
         else's stays, like everything else outside her row.
 
@@ -1458,6 +1498,7 @@ class Romance:
             "todayBest": 0,
             "letter": 0,
             "ending": self.state[name]["ending"],
+            "album": self.state[name]["album"],
             "talk": dict(TALK_SLOT_DEFAULTS),
             "record": {},
         }
@@ -1571,6 +1612,7 @@ class Romance:
         if not row["debut"] or row["progress"] >= CANDIDATES[name].events:
             return False
         row["progress"] += 1
+        self._saw_up_to(row)
         return True
 
     def set_progress(self, name: str, progress: int) -> bool:
@@ -1584,6 +1626,7 @@ class Romance:
         if row["progress"] == want:
             return False
         row["progress"] = want
+        self._saw_up_to(row)
         return True
 
     def set_intimacy(self, name: str, value: int) -> bool:
@@ -2085,6 +2128,8 @@ class Romance:
                     want = max(0, min(value - PROGRESS_OFFSET, CANDIDATES[name].events))
                     changed |= row["progress"] != want
                     row["progress"] = want
+                    changed |= row["album"] < want
+                    self._saw_up_to(row)
         return changed
 
     def reset_talk(self, name: str) -> bool:

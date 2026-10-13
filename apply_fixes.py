@@ -5,9 +5,11 @@ There are two, each with its own tool and its own section in the README:
 
   * confession_fix.py -- the confession scenes, Amamiya's epilogue and her
     events 5-10: eleven script archives into runtime/update/, and the same
-    eleven scripts exported again into runtime/scripts/;
-  * ranking_fix.py -- the 試験結果 page of the school paper: a tmo.exe with its
-    twenty score loads fixed, into runtime/update/.
+    eleven scripts exported again into runtime/scripts/; and the おまけ
+    gallery's pictures: idlist.arc, into runtime/update/;
+  * ranking_fix.py -- the client's own bugs: a tmo.exe with the 試験結果 page's
+    twenty score loads fixed and the おまけ button let through, into
+    runtime/update/.
 
 This runs the first and then the second against the same copy of the game, and
 says at the end which of them went through. Each tool still runs on its own,
@@ -71,10 +73,11 @@ def main(argv: "list[str] | None" = None) -> int:
     common = ["--game-dir", str(folder), "--update-dir", args.update_dir, *(["--check"] if args.check else [])]
 
     results = []
-    print("== confession scenes (confession_fix.py)")
-    results.append(("confession scenes", confession_fix.main([*common, "--scripts-dir", args.scripts_dir])))
-    print("\n== exam rankings page (ranking_fix.py)")
-    results.append(("exam rankings page",
+    print("== confession scenes and gallery (confession_fix.py)")
+    results.append(("confession scenes and gallery",
+                    confession_fix.main([*common, "--scripts-dir", args.scripts_dir])))
+    print("\n== the client: exam rankings page, おまけ button (ranking_fix.py)")
+    results.append(("the client",
                     ranking_fix.main([*common, "--address", args.address])))
 
     print()
