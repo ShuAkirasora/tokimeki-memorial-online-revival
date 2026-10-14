@@ -479,6 +479,7 @@ def lesson_emotion_params(sender_id: int, emotion: int) -> bytes:
 HELP = (
     "/go <地図名|番号> [x y] 移動",
     "/pos 現在地",
+    "/me 自分の charaId・アカウント・手帳・名前・現在地",
     "/maps <名前> 検索",
     "/dirs 方向の目盛りを置く",
     "/act [開始値] action の目盛りを置く (頭上アイコン探し)",

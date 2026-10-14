@@ -17687,6 +17687,27 @@ class MpsServer:
                                             f"{'両側' if both else '片側のみ'} "
                                             f"(相手の再入場で反映)")
 
+    def _me_console(self, session: "_Session", sequence: int) -> bytes:
+        """``/me``: who the speaker is, as this server files them.
+
+        The charaId above all, because the game never shows it and it is the
+        number everything else on the console is aimed with -- ``@<charaId>`` in
+        runtime/console.txt, ``/sys to``, ``/gm chat``, ``/couple``. The rest
+        (account, 手帳 slot, names, where they stand) is what it takes to be sure
+        the number belongs to the character you meant.
+        """
+        chara_id = session.chara_id
+        info = self._chars(session).find(chara_id)
+        names = self._chars(session).name_trio(chara_id)
+        who = f"{names[0]} {names[1]}（{names[2]}）" if names else "?"
+        frame = info[0] if info else "?"
+        where = f"{mapgraph.name(session.map_id)}({session.map_id}) {session.pos[0]},{session.pos[1]}"
+        return self._say(
+            session, sequence,
+            f"charaId={chara_id} ({chara_id:#010x}) account={session.account_id} "
+            f"手帳={frame} {who} {where}",
+        )
+
     def _sysmsg_console(
         self, session: "_Session", sequence: int, args: "list[str]"
     ) -> bytes:
@@ -17933,6 +17954,8 @@ class MpsServer:
             return self._sysmsg_console(session, sequence, said.split()[1:])
         if said.split()[:1] == ["/shutdown"]:
             return self._shutdown_console(session, sequence, said.split()[1:])
+        if said.split()[:1] == ["/me"]:
+            return self._me_console(session, sequence)
         reply = b""
         info = self._chars(session).find(session.chara_id)
         love = self._chars(session).romance(session.chara_id)
