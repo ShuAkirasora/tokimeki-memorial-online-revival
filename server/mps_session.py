@@ -1530,6 +1530,29 @@ def _peer_host(peer) -> str | None:
     return host
 
 
+#: What _console_target returns for an ``@`` it cannot read as a charaId.
+_BAD_TARGET = object()
+
+
+def _console_target(line: str):
+    """Split ``@<charaId> <command>`` off a runtime/console.txt line.
+
+    Returns (charaId, command) for a targeted line, (None, line) for a bare one,
+    and (_BAD_TARGET, line) when the ``@`` is there but its id is not a number --
+    which must not fall back to running everywhere, the one thing the prefix is
+    for. See MpsServer._drain_console.
+    """
+    if not line.startswith("@"):
+        return None, line
+    head, _, rest = line.partition(" ")
+    try:
+        target = int(head[1:], 0)
+    except ValueError:
+        return _BAD_TARGET, line
+    rest = rest.strip()
+    return (target, rest) if rest else (_BAD_TARGET, line)
+
+
 def _is_loopback(host: str | None) -> bool:
     """Is this the machine the server is on? None (peer not recorded) is not."""
     return bool(host) and (host.startswith("127.") or host in ("::1", "localhost"))
@@ -9613,6 +9636,14 @@ class MpsServer:
                     # And off both ends of every 受信拒否 list, for the reason
                     # the address book gives -- see ignores.IgnoreBook.forget.
                     self.accounts.ignores.forget(chara_id)
+                    # And out of the ＧＭコール queue. A call outlives its
+                    # caller's *session* on purpose (see gmcall.py), but not its
+                    # caller: once the character is gone nobody can cancel it,
+                    # and it would sit in every other caller's 「只今N件待ち」
+                    # count for good.
+                    if self.accounts.gmcalls.close(chara_id) is not None:
+                        print(f"[{self.tag}] charaId={chara_id}'s ＧＭコール closed "
+                              f"with it; {self.accounts.gmcalls.summary()}")
                     print(f"[{self.tag}] deleted charaId={chara_id}; left: {self._chars(session).summary()}")
                     return self._answer(session, sequence, MSG_SV_OK_CHARACTER_DESTROY, b"")
                 print(f"[{self.tag}] destroy: no charaId={chara_id}, answering Ng")
@@ -22319,6 +22350,15 @@ class MpsServer:
         it — the file is re-read whenever a packet arrives, and the client sends
         a timesync every 30 seconds even when it is doing nothing else, which is
         the only reason this works while the game is frozen.
+
+        ⚠️ A bare line runs once in EVERY session that is in the game when it
+        lands, each against its own character -- so on a server with more than
+        one player, ``/ab p …`` rewrites everybody's sheet. Prefix the line
+        with ``@<charaId>`` (decimal or 0x-hex) and only that character's
+        session runs it; the others step over it. A line aimed at a character
+        who is not logged in is simply never run: a session that logs in later
+        starts reading at the end of the file (see handle), so nothing is held
+        back for it and nothing fires by surprise at its next login.
         """
         if session.chara_id == 0:
             return b""
@@ -22333,6 +22373,12 @@ class MpsServer:
         for line in fresh.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
+                continue
+            target, line = _console_target(line)
+            if target is _BAD_TARGET:
+                print(f"[{self.tag}] console: unreadable @target, skipped: {line}")
+                continue
+            if target is not None and target != session.chara_id:
                 continue
             print(f"[{self.tag}] console: {line}")
             # seen=0: take_seq only ever moves forward, so a push that answers

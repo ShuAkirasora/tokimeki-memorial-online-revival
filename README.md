@@ -482,6 +482,11 @@ exist because sending a message by hand was the only way to find out what the cl
 with it. `/cmds` prints the list inside the game, which is the copy that cannot go stale. The
 client keeps `/help`, `/where` and a few other words for itself and never puts them on the wire.
 
+A line in `runtime/console.txt` runs once in every session that is in the game when it lands,
+each against its own character. With more than one player online, aim it: `@<charaId> /ab …`
+(decimal or `0x` hex) runs only for that character. A line aimed at someone who is not logged
+in is never run, not even at their next login.
+
 **Where you are.**
 
 | Command | Effect |
