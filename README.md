@@ -485,7 +485,8 @@ client keeps `/help`, `/where` and a few other words for itself and never puts t
 A line in `runtime/console.txt` runs once in every session that is in the game when it lands,
 each against its own character. With more than one player online, aim it: `@<charaId> /ab …`
 (decimal or `0x` hex) runs only for that character. A line aimed at someone who is not logged
-in is never run, not even at their next login.
+in is never run, not even at their next login. The charaId is in the server log when a player
+enters the school (`school login for charaId=…`), and in `runtime/accounts/<n>/characters.json`.
 
 **Where you are.**
 
