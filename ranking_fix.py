@@ -16,7 +16,8 @@ in it goes out together:
   * the staff roll of an おまけ ending, which nothing in this build can stop
     (five bytes and a 140-byte routine, after that);
   * the あとがき blackboard after an おまけ confession is left with
-    イベント中断 (eleven bytes and two short routines, last).
+    イベント中断, and after an おまけ epilogue (twelve bytes and two short
+    routines, last).
 
 The paper's 試験結果 tab draws the exam rankings from six files this server
 publishes (server/newspaper.py). The client that shipped reads every score in
@@ -163,6 +164,17 @@ marker, and the fix keeps it rather than invent another.)
   Nothing in the shipped client stores 5, so nothing else changes.
   ⚠️ Only in おまけ: after a confession on campus the Ok is the client's own
   way out of the story, and the あとがき there is the ending's last page.
+
+  The epilogue an おまけ replay ends on puts the board up too, by another way.
+  When a scenario ends (0x7204) the client goes by the kind of event, and
+  the epilogue is kind 2: a title event asked for from a staff roll (the
+  OK's handler 0x78608C stores the 2), which only an おまけ replay asks for
+  that way -- a confession on campus asks for its epilogue as a campus event
+  (kind 1), and 初登校 is a title event asked for from the キャラクター選択.
+  Kind 2 stores entry step 3 (0x7859BB), "blackboard first, then the page
+  the replay was started from". The fix makes that one immediate 6, and the
+  menu's routine takes 6 straight to step 5, the step the board's ＯＫ leads
+  to after a 3. Nothing in the shipped client stores 6 either.
 
   How it reaches players, and why that way
   ----------------------------------------
@@ -317,12 +329,31 @@ MENU_ENTRY_JUMP_SHIPPED = "0f85c6040000"       # jne 0x69F788 (entry step past 4
 MENU_ENTRY_CODE = 0xB58FB0
 MENU_ENTRY_ROUTINE = bytes.fromhex(
     "48"                # dec eax                     the entry step, less 4, less 1
-    "0f85d167b4ff"      # jne 0x69F788                not 5: as it always was
-    "8b45f0"            # mov eax,[ebp-0x10]          the menu
+    "7417"              # jz five
+    "48"                # dec eax                     ... less 1 again
+    "0f85ce67b4ff"      # jne 0x69F788                neither 5 nor 6: as it always was
+    "8b45f0"            # mov eax,[ebp-0x10]          6: the menu
+    "c6404401"          # mov byte [eax+0x44],1       the page the epilogue was played from, as after 3
+    "c7404005000000"    # mov dword [eax+0x40],5      step 5: the step the board's ＯＫ leads to
+    "eb0d"              # jmp out
+    "8b45f0"            # five: mov eax,[ebp-0x10]    5: the menu
     "885844"            # mov [eax+0x44],bl           (bl is 0) the ゲームメニュー, as after 4
     "c7404007000000"    # mov dword [eax+0x40],7      step 7: the step the board's ＯＫ leads to
-    "e9bf67b4ff"        # jmp 0x69F788
+    "e9ac67b4ff"        # out: jmp 0x69F788
 )
+#: The routine as an earlier version of this tool wrote it (5 only), so a
+#: copy fixed then is still recognised as the build it was made from.
+MENU_ENTRY_ROUTINE_FIVE_ONLY = bytes.fromhex(
+    "480f85d167b4ff8b45f0885844c7404007000000e9bf67b4ff")
+
+#: No あとがき after an おまけ epilogue. When a scenario ends (0x7204, handler
+#: 0x7857DB) the client goes by the kind of event; kind 2 -- a title event
+#: asked for from a staff roll, which only an おまけ replay asks for that way
+#: -- sets the menu's entry step to 3, "blackboard first, then the page".
+#: The immediate of that ``push 3`` becomes 6, which the menu routine above
+#: takes straight to the page.
+OMAKE_EPILOGUE_ENTRY = 0x7859BC
+OMAKE_EPILOGUE_ENTRY_SHIPPED, OMAKE_EPILOGUE_ENTRY_FIXED = 3, 6
 
 #: The twenty loads, by address, with the instruction as shipped. The paper's
 #: ranking drawer (0x60CA11) reads a クラス row's eight averages and 合 first,
@@ -387,8 +418,13 @@ def as_shipped(data: bytes) -> bytes:
     if out[at:at + 6] == menu_entry_jump():
         out[at:at + 6] = bytes.fromhex(MENU_ENTRY_JUMP_SHIPPED)
     at = offset(MENU_ENTRY_CODE)
-    if out[at:at + len(MENU_ENTRY_ROUTINE)] == MENU_ENTRY_ROUTINE:
-        out[at:at + len(MENU_ENTRY_ROUTINE)] = bytes(len(MENU_ENTRY_ROUTINE))
+    for routine in (MENU_ENTRY_ROUTINE, MENU_ENTRY_ROUTINE_FIVE_ONLY):
+        if out[at:at + len(routine)] == routine:
+            out[at:at + len(routine)] = bytes(len(routine))
+            break
+    at = offset(OMAKE_EPILOGUE_ENTRY)
+    if out[at - 1] == 0x6A and out[at] == OMAKE_EPILOGUE_ENTRY_FIXED:
+        out[at] = OMAKE_EPILOGUE_ENTRY_SHIPPED
     return bytes(out)
 
 
@@ -466,6 +502,10 @@ def fixed(data: bytes, address: bytes) -> bytes:
     if any(out[at:at + len(MENU_ENTRY_ROUTINE)]):  # pragma: no cover - hash covers it
         raise ValueError(f"the code section's tail at {MENU_ENTRY_CODE:#x} is not empty")
     out[at:at + len(MENU_ENTRY_ROUTINE)] = MENU_ENTRY_ROUTINE
+    at = offset(OMAKE_EPILOGUE_ENTRY)
+    if out[at - 1:at + 1] != bytes([0x6A, OMAKE_EPILOGUE_ENTRY_SHIPPED]):  # pragma: no cover - hash covers it
+        raise ValueError(f"unexpected instruction at {OMAKE_EPILOGUE_ENTRY - 1:#x}")
+    out[at] = OMAKE_EPILOGUE_ENTRY_FIXED
     site = auth.find_site(bytes(out))
     for k, octet in enumerate(address):
         out[site + 4 + 5 * k] = octet
@@ -483,7 +523,7 @@ def find_exe(game_dir: str) -> Path:
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos, Epilogue, イベント中断, おまけ staff roll, あとがき after an おまけ confession), for handing out through the updater.")
+        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos, Epilogue, イベント中断, おまけ staff roll, あとがき after an おまけ confession or epilogue), for handing out through the updater.")
     parser.add_argument("--game-dir", help="the folder that holds tmo.exe (or tmo.exe itself)")
     parser.add_argument("--address", help="the server address players' clients are pointed at")
     parser.add_argument("--update-dir", default=str(UPDATE_DIR),
@@ -513,8 +553,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
     print(f"{source}: the shipped build; authentication address {shown}, "
           f"{len(SITES)} score loads, the おまけ button, the 表情 photos, the Epilogue, "
-          f"イベント中断, the おまけ staff roll and the あとがき after leaving an おまけ "
-          f"confession fixed")
+          f"イベント中断, the おまけ staff roll and the あとがき after an おまけ "
+          f"confession or epilogue fixed")
     if args.check:
         print(f"would write {dest} ({len(out)} bytes, sha256 {hashlib.sha256(out).hexdigest()[:16]}…)")
         return 0

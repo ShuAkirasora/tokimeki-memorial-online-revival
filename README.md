@@ -829,7 +829,10 @@ client already has reaches the ゲームメニュー without that board, so the 
 an おまけ replay, by the same field, the seven bytes that ask for "blackboard first" call a
 short routine that asks for the new way instead, and the menu's first step, through a second
 short routine, takes it straight to the step after the board. On campus the blackboard still
-closes the ending.
+closes the ending. The epilogue an おまけ replay ends on asks for the same board another way —
+it is the one kind of event the client ever starts from a staff roll as a title event, and its
+end asks the menu for "blackboard first, then the page" — so that one byte asks for a second new
+way, which the same routine takes straight to the page.
 
 **How it reaches players.** As the operated game shipped client fixes: its updater runs before
 the client on every start and replaces whole files, so a fix to the client's code was a new
@@ -856,7 +859,7 @@ client still started against a server that offers the fix fetches it again.
 | `export_scripts.py` | the script exports, out of your own copy of the game |
 | `apply_fixes.py` | the two fixes next to it, `confession_fix.py` and `ranking_fix.py`, in one run |
 | `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, the おまけ replays, and the おまけ gallery's pictures, fixed for the updater to hand out |
-| `ranking_fix.py` | the exam-ranking page's twenty score loads, the おまけ button, the gallery's expression photos and its Epilogue, イベント中断, Esc on an おまけ staff roll, no あとがき after leaving an おまけ confession, fixed in a copy of your client for the updater to hand out |
+| `ranking_fix.py` | the exam-ranking page's twenty score loads, the おまけ button, the gallery's expression photos and its Epilogue, イベント中断, Esc on an おまけ staff roll, no あとがき after an おまけ confession or epilogue, fixed in a copy of your client for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |

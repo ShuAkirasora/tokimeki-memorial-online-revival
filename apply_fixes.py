@@ -11,7 +11,8 @@ There are two, each with its own tool and its own section in the README:
     twenty score loads fixed, the おまけ button let through, the gallery's
     expression photos reachable, its Epilogue opening, イベント中断
     working in a one-player event, Esc ending an おまけ staff roll and no
-    あとがき after an おまけ confession is left, into runtime/update/.
+    あとがき after an おまけ confession is left or an おまけ epilogue ends,
+    into runtime/update/.
 
 This runs the first and then the second against the same copy of the game, and
 says at the end which of them went through. Each tool still runs on its own,

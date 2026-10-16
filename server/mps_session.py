@@ -7509,8 +7509,9 @@ class MpsServer:
             session.npc_talking = False
             self._presence_icon_onlookers(session)
         # Only her `_o011` is followed by a 0x6C03 to steer; `_o012` ends on
-        # 0x7204 alone (kind 3: the あとがき, then the エンディング page),
-        # exactly as when it is watched to the end.
+        # 0x7204 alone (kind 2: the あとがき, then the エンディング page; the
+        # client fix in ranking_fix.py leaves the あとがき out), exactly as
+        # when it is watched to the end.
         session.title_interrupted = (
             romance.omake_confession_of(session.title_event) is not None)
         return self._answer(session, seen, script.MSG_SV_NOTIFY_SCRIPT_END, b"")
