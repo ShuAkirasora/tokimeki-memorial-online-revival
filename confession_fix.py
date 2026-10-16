@@ -318,7 +318,9 @@ def expression(actor: int, emotion: int, first: bool = False) -> bytes:
 
     The second byte, 0x40, makes the script wait until the change has finished
     (the client's own debug text calls the flag "end detection"). Kasuga's
-    script sets it on a scene's first change only, and so do these.
+    script sets it on a scene's first change only, and so do these, but for
+    the one made under her first animation, which has to be done before the
+    animation's frame goes.
     """
     return op(0x5280, actor, 0x40 if first else 0, emotion & 0xFF, emotion >> 8)
 
@@ -585,6 +587,22 @@ def plate_off(ip: int, operands: tuple) -> tuple:
 #     6-8 the third, 9-10 the ribbon and collar, 11-17 the eyes-shut frames and
 #     18-20 a blush for each pose; her confession registers one part for the
 #     picture before first, so there each number is one more.
+#   * Each expression is drawn for one pose, and the client's own names for
+#     them say which: 普通１, 普通３, 普通５ and so on, the first pose with her
+#     head up, the second and third with it lowered. The scripts open on 普通５
+#     and only switch the first pose on after the first animation, where they
+#     change to 普通１: so she starts with her head down, in the third pose,
+#     and the animation is her looking up. The third pose goes on with the
+#     ribbon and collar, still in the dark. The scripts switch the face overlay
+#     back on after the animation and change the expression after that, which
+#     leaves 普通５ on the raised head for a moment; and a change made while the
+#     overlay is off does not take. So the overlay goes on, the expression
+#     changes (and the script waits for it, as the change does not happen at
+#     once) and the third pose gives way to the first while the animation's
+#     last frame still covers her, and only then does the frame go. (The
+#     first pose stays what goes on with the sunflowers, as an earlier version
+#     of this tool had it, so a copy that version fixed takes only the new
+#     detours.)
 #   * Between two poses the script switches the old one off, changes the
 #     expression -- which waits for the overlay -- and only then switches the
 #     new one on, so for a moment there is a face and no head. The change goes
@@ -599,16 +617,20 @@ KASUGA_POSE_CHANGES = (             # emotion, from, to; the first has no blush
     (52, 0, 1), (51, 1, 0), (53, 0, 1), (56, 1, 2), (48, 2, 0),
     (54, 0, 1), (50, 1, 0), (54, 0, 1), (48, 1, 0),
 )
-#: script: (the sunflowers go up, the line before each change, the first part)
+KASUGA_RIBBON = (10, 9)             # as the scripts switch them on
+KASUGA_LOOK_UP = 15                 # the first animation's eyes-shut frame
+KASUGA_LOOKING_UP = 47              # 普通１, the expression after it
+#: script: (the sunflowers go up, the line before each change, the first part,
+#: the ribbon and collar go on, the first animation)
 KASUGA_CLOSE_UP = {
-    "ksg_e011": (575, (718, 834, 994, 1029, 1064, 1153, 1204, 1255, 1306), 1),
-    "ksg_o011": (191, (339, 455, 615, 650, 685, 774, 825, 876, 927), 0),
+    "ksg_e011": (575, (718, 834, 994, 1029, 1064, 1153, 1204, 1255, 1306), 1, 588, 609),
+    "ksg_o011": (191, (339, 455, 615, 650, 685, 774, 825, 876, 927), 0, 202, 230),
 }
 
 
 def kasuga_close_up(name: str, load: bytes = b"") -> list:
     """The detours for one of the two scripts; `load` goes in first."""
-    up, lines, first = KASUGA_CLOSE_UP[name]
+    up, lines, first, ribbon, look_up = KASUGA_CLOSE_UP[name]
     hidden = [i for i in range(KASUGA_PARTS) if i not in KASUGA_POSES[0][:3]]
     hooks = [(up, BG_SHOW, b"", load + b"".join(hide(first + i) for i in hidden))]
     for k, (ip, (emotion, old, new)) in enumerate(zip(lines, KASUGA_POSE_CHANGES)):
@@ -618,6 +640,16 @@ def kasuga_close_up(name: str, load: bytes = b"") -> list:
         hooks.append((ip, TALK, b"", expression(0x60, emotion)
                       + b"".join(hide(first + i) for i in off)
                       + b"".join(show(first + i) for i in on)))
+    head_up, head_down = KASUGA_POSES[0][:3], KASUGA_POSES[2][:3]
+    hooks.append((ribbon, b"".join(show(first + i) for i in KASUGA_RIBBON), b"",
+                  b"".join(hide(first + i) for i in head_up)
+                  + b"".join(show(first + i) for i in head_down)))
+    frame = first + KASUGA_LOOK_UP
+    animation = show(frame) + op(0x5105, frame | 0x80, 0)     # and wait for it
+    hooks.append((look_up, animation + hide(frame) + face_show(0x60), b"", b"",
+                  animation + face_show(0x60) + expression(0x60, KASUGA_LOOKING_UP, first=True)
+                  + b"".join(hide(first + i) for i in head_down)
+                  + b"".join(show(first + i) for i in head_up) + hide(frame)))
     return hooks
 
 
@@ -844,7 +876,7 @@ class NotThisScript(Exception):
 
 def already_fixed(ssc: bytes, recipe: dict) -> bool:
     """True when every background the recipe gives effects to already has them
-    and its first detour is already there; with no detours, when its first
+    and all its detours are already there; with no detours, when its first
     in-place edit is."""
     sec = ssc_sections(ssc)
     code = ssc[sec["code"]:sec["aux"]]
@@ -853,8 +885,8 @@ def already_fixed(ssc: bytes, recipe: dict) -> bool:
         return code[2 * ip:2 * ip + len(replacement)] == replacement
     counts = [struct.unpack_from("<I", code, 2 * ip + 8)[0] & EFFECT_COUNT_MASK
               for ip in recipe["effects"]]
-    detoured = (not recipe["hooks"]
-                or struct.unpack_from("<H", code, 2 * recipe["hooks"][0][0])[0] == JUMP)
+    detoured = all(struct.unpack_from("<H", code, 2 * hook[0])[0] == JUMP
+                   for hook in recipe["hooks"])
     return all(counts) and detoured
 
 
@@ -885,6 +917,8 @@ def apply_recipe(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
         code[2 * ip:2 * ip + len(original)] = replacement
 
     for ip, original, before, after, *moved in recipe["hooks"]:
+        if struct.unpack_from("<H", code, 2 * ip)[0] == JUMP:
+            continue            # a detour an earlier version of this tool put in
         if isinstance(original, int):
             if struct.unpack_from("<H", code, 2 * ip)[0] != original:
                 raise NotThisScript(f"ip {ip} is not opcode {original:#06x}")

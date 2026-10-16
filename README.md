@@ -679,7 +679,9 @@ shut, meant only for the moments the script animates them. Her face and its expr
 underneath; she confesses with her eyes shut and two heads of hair, while her staff-roll card
 has her looking out of the same picture. Her script is the fifth file: everything but her first
 pose is switched off when the picture goes up, and each change of pose is made in one step, so
-that no moment shows her face without her head.
+that no moment shows her face without her head. Each of her expressions is drawn for one pose,
+and the client's names for them say which; the scene opens on one drawn for her head lowered,
+so it opens in that pose, and changes to the first under the animation of her looking up.
 
 Amamiya's epilogue, the scene the client plays straight after her staff roll, has the same kind
 of gap. The other four epilogues each show the heroine's own picture and then a pastel copy of it
