@@ -682,6 +682,9 @@ pose is switched off when the picture goes up, and each change of pose is made i
 that no moment shows her face without her head. Each of her expressions is drawn for one pose,
 and the client's names for them say which; the scene opens on one drawn for her head lowered,
 so it opens in that pose, and changes to the first under the animation of her looking up.
+The client changes an expression only at her next blink, so each change of pose now waits for
+the new face and is made in that blink, rather than showing the new head with the old face.
+The tool takes a copy an earlier version fixed back to the shipped script before fixing it.
 
 Amamiya's epilogue, the scene the client plays straight after her staff roll, has the same kind
 of gap. The other four epilogues each show the heroine's own picture and then a pastel copy of it

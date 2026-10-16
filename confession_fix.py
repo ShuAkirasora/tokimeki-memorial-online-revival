@@ -319,8 +319,8 @@ def expression(actor: int, emotion: int, first: bool = False) -> bytes:
     The second byte, 0x40, makes the script wait until the change has finished
     (the client's own debug text calls the flag "end detection"). Kasuga's
     script sets it on a scene's first change only, and so do these, but for
-    the one made under her first animation, which has to be done before the
-    animation's frame goes.
+    the changes Kasuga's close-up makes along with a change of pose (see
+    there).
     """
     return op(0x5280, actor, 0x40 if first else 0, emotion & 0xFF, emotion >> 8)
 
@@ -573,16 +573,14 @@ def plate_off(ip: int, operands: tuple) -> tuple:
 
 # Kasuga's close-up on the sunflowers (2073) has twenty-one parts, and both
 # her confession and its replay register them all and switch them line by
-# line. (The replay alone leaves the sunflowers' count at 0.) Two things still
-# keep her face from showing, in both:
+# line. (The replay alone leaves the sunflowers' count at 0.) Three things
+# still keep her face from showing right, in both:
 #
 #   * This client draws every registered part until it is switched off, and
 #     the scripts switch on only what they want. So the whole set stays up at
 #     once: the three poses of hair and body, and on top of them the seven
 #     frames of her eyes-shut figure, which the scripts mean only for the
 #     moments their animations play. The face overlay is under that figure.
-#     When the sunflowers go up, everything but the first pose (without its
-#     blush, as the scripts first show it) is switched off.
 #     In registration order the parts are 0-2 the first pose, 3-5 the second,
 #     6-8 the third, 9-10 the ribbon and collar, 11-17 the eyes-shut frames and
 #     18-20 a blush for each pose; her confession registers one part for the
@@ -592,22 +590,22 @@ def plate_off(ip: int, operands: tuple) -> tuple:
 #     head up, the second and third with it lowered. The scripts open on 普通５
 #     and only switch the first pose on after the first animation, where they
 #     change to 普通１: so she starts with her head down, in the third pose,
-#     and the animation is her looking up. The third pose goes on with the
-#     ribbon and collar, still in the dark. The scripts switch the face overlay
-#     back on after the animation and change the expression after that, which
-#     leaves 普通５ on the raised head for a moment; and a change made while the
-#     overlay is off does not take. So the overlay goes on, the expression
-#     changes (and the script waits for it, as the change does not happen at
-#     once) and the third pose gives way to the first while the animation's
-#     last frame still covers her, and only then does the frame go. (The
-#     first pose stays what goes on with the sunflowers, as an earlier version
-#     of this tool had it, so a copy that version fixed takes only the new
-#     detours.)
-#   * Between two poses the script switches the old one off, changes the
-#     expression -- which waits for the overlay -- and only then switches the
-#     new one on, so for a moment there is a face and no head. The change goes
-#     in after the line before it instead, with the old pose off and the new
-#     on straight after; the script's own switches then find it done.
+#     and the animation is her looking up. When the sunflowers go up,
+#     everything but the third pose (without its blush, as the scripts never
+#     show it there) is switched off.
+#   * The client changes an expression at her next blink, not at once, and
+#     the script goes on unless the change is told to wait. Between two poses
+#     the scripts switch the old one off, change the expression and switch the
+#     new one on: for a moment a face and no head, then the new head with the
+#     old face until she blinks. The change goes in after the line before it
+#     instead, and waits; the old pose gives way to the new one straight
+#     after, so she changes pose in a blink, and the script's own switches
+#     find it done. After the first animation the scripts switch the face
+#     overlay back on before they change the expression, and a change made
+#     while the overlay is off does not take: so there the overlay goes on and
+#     the expression changes, waiting, while the animation's last frame still
+#     covers her, the third pose gives way to the first, and only then does
+#     the frame go.
 #
 # And the replay shows the face overlay without ever loading it; her
 # confession loads it right after putting up the sunflowers, and so does this.
@@ -617,39 +615,39 @@ KASUGA_POSE_CHANGES = (             # emotion, from, to; the first has no blush
     (52, 0, 1), (51, 1, 0), (53, 0, 1), (56, 1, 2), (48, 2, 0),
     (54, 0, 1), (50, 1, 0), (54, 0, 1), (48, 1, 0),
 )
-KASUGA_RIBBON = (10, 9)             # as the scripts switch them on
 KASUGA_LOOK_UP = 15                 # the first animation's eyes-shut frame
 KASUGA_LOOKING_UP = 47              # 普通１, the expression after it
-#: script: (the sunflowers go up, the line before each change, the first part,
-#: the ribbon and collar go on, the first animation)
+#: script: (the sunflowers go up, the first animation, the line before each
+#: change of pose, the first part)
 KASUGA_CLOSE_UP = {
-    "ksg_e011": (575, (718, 834, 994, 1029, 1064, 1153, 1204, 1255, 1306), 1, 588, 609),
-    "ksg_o011": (191, (339, 455, 615, 650, 685, 774, 825, 876, 927), 0, 202, 230),
+    "ksg_e011": (575, 609, (718, 834, 994, 1029, 1064, 1153, 1204, 1255, 1306), 1),
+    "ksg_o011": (191, 230, (339, 455, 615, 650, 685, 774, 825, 876, 927), 0),
 }
+#: Where an earlier version switched the third pose on, as the ribbon and
+#: collar go on: (ip, the instructions there).
+KASUGA_RETIRED = {"ksg_e011": [(588, show(11) + show(10))],
+                  "ksg_o011": [(202, show(10) + show(9))]}
 
 
 def kasuga_close_up(name: str, load: bytes = b"") -> list:
     """The detours for one of the two scripts; `load` goes in first."""
-    up, lines, first, ribbon, look_up = KASUGA_CLOSE_UP[name]
-    hidden = [i for i in range(KASUGA_PARTS) if i not in KASUGA_POSES[0][:3]]
-    hooks = [(up, BG_SHOW, b"", load + b"".join(hide(first + i) for i in hidden))]
-    for k, (ip, (emotion, old, new)) in enumerate(zip(lines, KASUGA_POSE_CHANGES)):
-        off, on = KASUGA_POSES[old], KASUGA_POSES[new]
-        if k == 0:
-            off, on = off[:3], on[:3]
-        hooks.append((ip, TALK, b"", expression(0x60, emotion)
-                      + b"".join(hide(first + i) for i in off)
-                      + b"".join(show(first + i) for i in on)))
+    up, look_up, lines, first = KASUGA_CLOSE_UP[name]
     head_up, head_down = KASUGA_POSES[0][:3], KASUGA_POSES[2][:3]
-    hooks.append((ribbon, b"".join(show(first + i) for i in KASUGA_RIBBON), b"",
-                  b"".join(hide(first + i) for i in head_up)
-                  + b"".join(show(first + i) for i in head_down)))
+    hidden = [i for i in range(KASUGA_PARTS) if i not in head_down]
+    hooks = [(up, BG_SHOW, b"", load + b"".join(hide(first + i) for i in hidden))]
     frame = first + KASUGA_LOOK_UP
     animation = show(frame) + op(0x5105, frame | 0x80, 0)     # and wait for it
     hooks.append((look_up, animation + hide(frame) + face_show(0x60), b"", b"",
                   animation + face_show(0x60) + expression(0x60, KASUGA_LOOKING_UP, first=True)
                   + b"".join(hide(first + i) for i in head_down)
                   + b"".join(show(first + i) for i in head_up) + hide(frame)))
+    for k, (ip, (emotion, old, new)) in enumerate(zip(lines, KASUGA_POSE_CHANGES)):
+        off, on = KASUGA_POSES[old], KASUGA_POSES[new]
+        if k == 0:
+            off, on = off[:3], on[:3]
+        hooks.append((ip, TALK, b"", expression(0x60, emotion, first=True)
+                      + b"".join(hide(first + i) for i in off)
+                      + b"".join(show(first + i) for i in on)))
     return hooks
 
 
@@ -719,7 +717,8 @@ RECIPES = {
               for k, (ip, e) in enumerate(INUKAI_LINES.items())],
         ],
     ),
-    "ksg_e011": dict(effects={}, hooks=kasuga_close_up("ksg_e011")),
+    "ksg_e011": dict(effects={}, hooks=kasuga_close_up("ksg_e011"),
+                     retired=KASUGA_RETIRED["ksg_e011"]),
     "amm_e012": dict(
         effects={},
         swap=[(4, background(AMAMIYA_PLAY_NAME, AMAMIYA_SEA),
@@ -756,7 +755,8 @@ RECIPES = {
             *[(ip, TALK, expression(0x61, e), b"") for ip, e in AMAMIYA_REPLAY_LIGHT_LINES.items()],
         ],
     ),
-    "ksg_o011": dict(effects={14: 21}, hooks=kasuga_close_up("ksg_o011", face_load(0x60))),
+    "ksg_o011": dict(effects={14: 21}, hooks=kasuga_close_up("ksg_o011", face_load(0x60)),
+                     retired=KASUGA_RETIRED["ksg_o011"]),
     "yyi_o011": dict(
         effects={},
         swap=[(4, background(0x0004, UNDERWATER), background(0x0004, YAYOI_BOARD)),
@@ -874,10 +874,11 @@ class NotThisScript(Exception):
     """The file is not the script the recipe was written against."""
 
 
-def already_fixed(ssc: bytes, recipe: dict) -> bool:
+def already_fixed(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bool:
     """True when every background the recipe gives effects to already has them
     and all its detours are already there; with no detours, when its first
-    in-place edit is."""
+    in-place edit is. A copy whose detours an earlier version of this tool
+    wrote is not fixed unless they are the ones this version writes."""
     sec = ssc_sections(ssc)
     code = ssc[sec["code"]:sec["aux"]]
     if not recipe["effects"] and not recipe["hooks"]:
@@ -887,7 +888,61 @@ def already_fixed(ssc: bytes, recipe: dict) -> bool:
               for ip in recipe["effects"]]
     detoured = all(struct.unpack_from("<H", code, 2 * hook[0])[0] == JUMP
                    for hook in recipe["hooks"])
-    return all(counts) and detoured
+    if not (all(counts) and detoured):
+        return False
+    if "overlay" in recipe:
+        return True
+    return apply_recipe(as_shipped(ssc, recipe, lengths), recipe, lengths) == ssc
+
+
+def as_shipped(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
+    """The script as it shipped, from a copy some version of this tool fixed.
+
+    Each detour's original goes back where its jump is (and so does that of
+    each detour in `retired`, one an earlier version made and this one does
+    not), each swap is undone, and the code the detours added at the end is
+    dropped. A copy nothing has touched comes back as it is. The scene-effect
+    counts stay; `apply_recipe` takes a count that is already right. Not for
+    a recipe that adds to the cast, which this cannot take out again.
+    """
+    sec = ssc_sections(ssc)
+    if sec is None:
+        raise NotThisScript("not a scenario script")
+    code = bytearray(ssc[sec["code"]:sec["aux"]])
+    starts = []
+    for ip, original, before, _after, *_moved in recipe["hooks"]:
+        if struct.unpack_from("<H", code, 2 * ip)[0] != JUMP:
+            continue
+        start = struct.unpack_from("<I", code, 2 * ip + 4)[0] >> 12
+        starts.append(start)
+        if isinstance(original, int):
+            at = 2 * start + len(before)
+            if struct.unpack_from("<H", code, at)[0] != original:
+                raise NotThisScript(f"the detour at ip {ip} does not hold opcode {original:#06x}")
+            original = bytes(code[at:at + lengths[original]])
+        code[2 * ip:2 * ip + len(original)] = original
+    for ip, original in recipe.get("retired", ()):
+        if struct.unpack_from("<H", code, 2 * ip)[0] == JUMP:
+            starts.append(struct.unpack_from("<I", code, 2 * ip + 4)[0] >> 12)
+            code[2 * ip:2 * ip + len(original)] = original
+    for ip, original, replacement in recipe.get("swap", ()):
+        if code[2 * ip:2 * ip + len(replacement)] == replacement:
+            code[2 * ip:2 * ip + len(original)] = original
+    if starts:
+        del code[2 * min(starts):]
+    return with_code(ssc, sec, code)
+
+
+def with_code(ssc: bytes, sec: dict, code: bytearray) -> bytes:
+    """`ssc` with its code section replaced, the header's sizes to match."""
+    code += bytes(-len(code) % 4)
+    header = bytearray(ssc[sec["hdr"]:sec["code"]])
+    words = len(code) // 4
+    struct.pack_into("<II", header, 0, 4 + words + sec["aux_dw"] + sec["pool_dw"], words)
+    fixed = ssc[:sec["hdr"]] + bytes(header) + bytes(code) + ssc[sec["aux"]:]
+    if ssc_sections(fixed)["code"] != sec["code"]:
+        raise NotThisScript("the code would move")              # pragma: no cover
+    return fixed
 
 
 def apply_recipe(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
@@ -917,8 +972,6 @@ def apply_recipe(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
         code[2 * ip:2 * ip + len(original)] = replacement
 
     for ip, original, before, after, *moved in recipe["hooks"]:
-        if struct.unpack_from("<H", code, 2 * ip)[0] == JUMP:
-            continue            # a detour an earlier version of this tool put in
         if isinstance(original, int):
             if struct.unpack_from("<H", code, 2 * ip)[0] != original:
                 raise NotThisScript(f"ip {ip} is not opcode {original:#06x}")
@@ -933,14 +986,7 @@ def apply_recipe(ssc: bytes, recipe: dict, lengths: dict[int, int]) -> bytes:
         start = len(code) // 2
         code += before + (moved[0] if moved else original) + after + jump(ip + n // 2)
         code[2 * ip:2 * ip + n] = jump(start) + ret() * ((n - 8) // 4)
-    code += bytes(-len(code) % 4)
-
-    header = bytearray(ssc[sec["hdr"]:sec["code"]])
-    words = len(code) // 4
-    struct.pack_into("<II", header, 0, 4 + words + sec["aux_dw"] + sec["pool_dw"], words)
-    fixed = ssc[:sec["hdr"]] + bytes(header) + bytes(code) + ssc[sec["aux"]:]
-    if ssc_sections(fixed)["code"] != sec["code"]:
-        raise NotThisScript("the code would move")              # pragma: no cover
+    fixed = with_code(ssc, sec, code)
     if "overlay" in recipe:
         entry = overlay_entry(ssc, recipe["overlay"])
         fixed = add_cast(fixed, entry)
@@ -1101,11 +1147,12 @@ def main(argv: list[str] | None = None) -> int:
         blob = path.read_bytes()
         try:
             table, data_at, ssc, padding = open_archive(blob, cipher, iv)
-            if already_fixed(ssc, recipe):
+            if already_fixed(ssc, recipe, lengths):
                 # A copy this server has already updated: hand it out as it is.
                 fixed_ssc, fixed_blob, how = ssc, blob, "already fixed in your copy"
             else:
-                fixed_ssc = apply_recipe(ssc, recipe, lengths)
+                shipped = ssc if "overlay" in recipe else as_shipped(ssc, recipe, lengths)
+                fixed_ssc = apply_recipe(shipped, recipe, lengths)
                 fixed_blob = seal_archive(blob, table, data_at, fixed_ssc, padding, cipher, iv)
                 how = f"{len(ssc)} -> {len(fixed_ssc)} bytes of script"
             script = Script(name, fixed_ssc, ops)
