@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fix the client's own bugs, for handing out through the updater.
 
-Five fixes, one file -- the client is a single tmo.exe, so whatever is fixed
+Six fixes, one file -- the client is a single tmo.exe, so whatever is fixed
 in it goes out together:
 
   * the 試験結果 page of the school paper (twenty bytes, below);
@@ -12,7 +12,9 @@ in it goes out together:
   * the おまけ gallery's Epilogue, which opens onto a black screen for anyone
     but an account whose only ending is Amamiya's (three bytes, after that);
   * 「イベント中断」 in a one-player event, which this build draws grey and
-    wires to nothing (nine bytes, last).
+    wires to nothing (nine bytes, after that);
+  * the staff roll of an おまけ ending, which nothing in this build can stop
+    (five bytes and a 140-byte routine, last).
 
 The paper's 試験結果 tab draws the exam rankings from six files this server
 publishes (server/newspaper.py). The client that shipped reads every score in
@@ -104,6 +106,36 @@ marker, and the fix keeps it rather than invent another.)
   ⚠️ ポーズ stays grey: a pause tells the others in the party to wait, and
   the client's own sentence for it says a one-player event has no one to tell.
 
+  Esc on an おまけ staff roll
+  ---------------------------
+  Replaying an ending from おまけ plays the confession, then the full staff
+  roll -- about five minutes, theme song and all -- then the epilogue. The
+  confession and the epilogue can be left with イベント中断 (above); the roll
+  cannot. It is a screen of its own with no menu, and the client gives it no
+  key at all: its update (0x82172B) is a seven-step sequence -- fade in,
+  start the song, wait for it, scroll, wait for the song to end, fade out,
+  move on -- that only time advances. So a player who replays an ending for
+  the scene sits through the whole roll every time.
+
+  The fix gives the roll Esc, a key several of the client's own screens
+  already bind (0x69061E, 0x80062D, 0x80EC04, 0x82ADB1, 0x85C09B). Five
+  bytes at the top of the update (0x821734) jump to a routine in the unused
+  tail of the code section (0xB58F00, zero-filled and mapped as code), and
+  the routine asks three things each frame: is the roll past its first
+  step and not yet fading out (steps 2..5); was Esc pressed this frame, by
+  the client's own keyboard state (0xA55319: down now, up the frame
+  before); and is this the roll of an おまけ replay. The last is the field
+  the roll itself reads at its end (0x81F84D) to decide what follows: 6
+  there asks for the epilogue as a title event (0x6C00), the way おまけ
+  plays it, and 5 as a campus event (0x5600), the way a confession does.
+  If all three hold it does what step 5 does when the song ends, with the
+  song stopped first and the shorter of the roll's two fades: music off,
+  fade to black, step 6. From there nothing differs: the roll's own last
+  step asks for the epilogue, exactly as when it runs out. Then it puts back
+  the five bytes it took and jumps back.
+  ⚠️ Only in おまけ: the roll that follows a confession on campus is the
+  first time the player sees it, and it plays as it always did.
+
   How it reaches players, and why that way
   ----------------------------------------
   The way the operated game shipped client fixes. Its updater runs before the
@@ -183,6 +215,56 @@ RETIRE_SLOTS = {
     0xBD60D4: (0x5F88DC, 0x73F781),        # the box: nothing -> 「イベントを中断しますか？」
 }
 
+#: Esc on an おまけ staff roll: the five bytes the hook takes at the top of the
+#: roll's update, and the routine it jumps to (position-dependent: every rel32
+#: below is worked out for ROLL_ESC_CODE).
+ROLL_ESC_HOOK = 0x821734
+ROLL_ESC_HOOK_SHIPPED = "8b46604857"       # mov eax,[esi+0x60]; dec eax; push edi
+ROLL_ESC_CODE = 0xB58F00
+ROLL_ESC_ROUTINE = bytes.fromhex(
+    "8b4660"            # mov eax,[esi+0x60]          the roll's step
+    "83e802"            # sub eax,2
+    "83f803"            # cmp eax,3
+    "7777"              # ja done                     only steps 2..5
+    "e88facefff"        # call 0xA53B9F               the keyboard
+    "8bc8"              # mov ecx,eax
+    "6a1b"              # push 0x1B                   Esc
+    "e800c4efff"        # call 0xA55319               pressed this frame?
+    "84c0"              # test al,al
+    "7465"              # jz done
+    "6a006a0054"        # push 0; push 0; push esp
+    "e8c6aa8aff"        # call 0x4039ED               the event being played (a shared pointer)
+    "59"                # pop ecx
+    "8b0424"            # mov eax,[esp]
+    "85c0740a"          # test eax,eax; jz release
+    "8b4044"            # mov eax,[eax+0x44]
+    "85c07403"          # test eax,eax; jz release
+    "8b4028"            # mov eax,[eax+0x28]          its kind
+    "50"                # release: push eax
+    "8b4c2408"          # mov ecx,[esp+8]
+    "85c97405"          # test ecx,ecx; jz kept
+    "e868828aff"        # call 0x4011AF               let the pointer go
+    "58"                # kept: pop eax
+    "83c408"            # add esp,8
+    "83f806"            # cmp eax,6                   an おまけ replay (5 is campus)
+    "7532"              # jne done
+    "6a00"              # push 0                      no song
+    "8bc4"              # mov eax,esp
+    "6a0050"            # push 0; push eax
+    "8d4e58"            # lea ecx,[esi+0x58]
+    "e823eab0ff"        # call 0x667982               the song: fade it out, play nothing
+    "c7042403000000"    # mov dword [esp],3           fade to black ...
+    "8bc4"              # mov eax,esp
+    "ff35602fbe00"      # push dword [0xBE2F60]       ... over the roll's 2.0 s
+    "50"                # push eax
+    "8d8ef0000000"      # lea ecx,[esi+0xf0]
+    "e81160c3ff"        # call 0x78EF8B
+    "58"                # pop eax
+    "c7466006000000"    # mov dword [esi+0x60],6      step 6: wait for the fade
+    "8b46604857"        # done: the five bytes the hook took
+    "e9ad87ccff"        # jmp 0x821739
+)
+
 #: The twenty loads, by address, with the instruction as shipped. The paper's
 #: ranking drawer (0x60CA11) reads a クラス row's eight averages and 合 first,
 #: then a 個人 row's eight scores and 合.
@@ -230,7 +312,18 @@ def as_shipped(data: bytes) -> bytes:
     for va, (shipped, fix) in RETIRE_SLOTS.items():
         if out[offset(va):offset(va) + 4] == fix.to_bytes(4, "little"):
             out[offset(va):offset(va) + 4] = shipped.to_bytes(4, "little")
+    at = offset(ROLL_ESC_HOOK)
+    if out[at:at + 5] == roll_esc_jump():
+        out[at:at + 5] = bytes.fromhex(ROLL_ESC_HOOK_SHIPPED)
+    at = offset(ROLL_ESC_CODE)
+    if out[at:at + len(ROLL_ESC_ROUTINE)] == ROLL_ESC_ROUTINE:
+        out[at:at + len(ROLL_ESC_ROUTINE)] = bytes(len(ROLL_ESC_ROUTINE))
     return bytes(out)
+
+
+def roll_esc_jump() -> bytes:
+    """``jmp ROLL_ESC_CODE``, as written at ROLL_ESC_HOOK."""
+    return b"\xe9" + (ROLL_ESC_CODE - (ROLL_ESC_HOOK + 5)).to_bytes(4, "little", signed=True)
 
 
 def fixed(data: bytes, address: bytes) -> bytes:
@@ -266,6 +359,14 @@ def fixed(data: bytes, address: bytes) -> bytes:
         if out[offset(va):offset(va) + 4] != shipped.to_bytes(4, "little"):  # pragma: no cover - hash covers it
             raise ValueError(f"unexpected entry at {va:#x}")
         out[offset(va):offset(va) + 4] = fix.to_bytes(4, "little")
+    at = offset(ROLL_ESC_HOOK)
+    if out[at:at + 5] != bytes.fromhex(ROLL_ESC_HOOK_SHIPPED):  # pragma: no cover - hash covers it
+        raise ValueError(f"unexpected instruction at {ROLL_ESC_HOOK:#x}")
+    out[at:at + 5] = roll_esc_jump()
+    at = offset(ROLL_ESC_CODE)
+    if any(out[at:at + len(ROLL_ESC_ROUTINE)]):  # pragma: no cover - hash covers it
+        raise ValueError(f"the code section's tail at {ROLL_ESC_CODE:#x} is not empty")
+    out[at:at + len(ROLL_ESC_ROUTINE)] = ROLL_ESC_ROUTINE
     site = auth.find_site(bytes(out))
     for k, octet in enumerate(address):
         out[site + 4 + 5 * k] = octet
@@ -283,7 +384,7 @@ def find_exe(game_dir: str) -> Path:
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos, Epilogue, イベント中断), for handing out through the updater.")
+        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos, Epilogue, イベント中断, おまけ staff roll), for handing out through the updater.")
     parser.add_argument("--game-dir", help="the folder that holds tmo.exe (or tmo.exe itself)")
     parser.add_argument("--address", help="the server address players' clients are pointed at")
     parser.add_argument("--update-dir", default=str(UPDATE_DIR),
@@ -312,8 +413,8 @@ def main(argv: "list[str] | None" = None) -> int:
         print(f"{source}: {exc}", file=sys.stderr)
         return 1
     print(f"{source}: the shipped build; authentication address {shown}, "
-          f"{len(SITES)} score loads, the おまけ button, the 表情 photos, the Epilogue "
-          f"and イベント中断 fixed")
+          f"{len(SITES)} score loads, the おまけ button, the 表情 photos, the Epilogue, "
+          f"イベント中断 and the おまけ staff roll fixed")
     if args.check:
         print(f"would write {dest} ({len(out)} bytes, sha256 {hashlib.sha256(out).hexdigest()[:16]}…)")
         return 0

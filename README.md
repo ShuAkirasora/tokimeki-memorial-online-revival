@@ -795,6 +795,19 @@ keeps the opposite answer: it opens the Epilogue only when nobody but Amamiya ha
 then for every candidate, ending or not — and otherwise opens it black and steps over it. Three
 bytes make the viewer's copy the page's.
 
+A fifth: イベント中断. Right-clicking an event offers to interrupt it, but the client finished
+that item only for a ドラマイベント played by a party; in everything a player watches alone — a
+campus event, an おまけ ending — it is grey and wired to nothing. One byte lights it and two
+table entries point it at the party version's own code, so はい sends the same interrupt.
+
+And a sixth, for the おまけ endings. Replaying one plays the confession, then the full staff
+roll — about five minutes — then the epilogue, and nothing in the client can stop the roll: it
+takes no key at all. The fix gives it Esc: a five-byte hook at the top of the roll's update jumps
+to a short routine in the unused, zero-filled tail of the code section, which — only during an
+おまけ replay, by the field the roll itself reads at its end — fades the song and the screen out
+the way the roll's own end does and lets it ask for the epilogue as usual. The roll after a
+confession on campus is left as it was.
+
 **How it reaches players.** As the operated game shipped client fixes: its updater runs before
 the client on every start and replaces whole files, so a fix to the client's code was a new
 `tmo.exe`, in effect from the next start. This writes that file into `runtime/update/`, made
@@ -820,7 +833,7 @@ client still started against a server that offers the fix fetches it again.
 | `export_scripts.py` | the script exports, out of your own copy of the game |
 | `apply_fixes.py` | the two fixes next to it, `confession_fix.py` and `ranking_fix.py`, in one run |
 | `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, the おまけ replays, and the おまけ gallery's pictures, fixed for the updater to hand out |
-| `ranking_fix.py` | the exam-ranking page's twenty score loads, the おまけ button, the gallery's expression photos and its Epilogue, fixed in a copy of your client for the updater to hand out |
+| `ranking_fix.py` | the exam-ranking page's twenty score loads, the おまけ button, the gallery's expression photos and its Epilogue, イベント中断, Esc on an おまけ staff roll, fixed in a copy of your client for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |
