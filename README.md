@@ -720,12 +720,20 @@ at all; Sakurai's confession has nothing but its lines — no picture, no
 window, no fade — and plays on black; Amamiya's shows only her eyes and mouth by the window. Those
 are the last ten files.
 
+The epilogues have one fault the confessions do not. The client starts one straight after the
+staff roll, and there it brings the first background up on its own; every epilogue then fades in
+from black, so the scene shows, drops to black, and fades in again with the heroine in it.
+Kasuga's, Yayoi's, Sakurai's and Inukai's own epilogues black the screen out first, right after
+switching to the event screen; Amamiya's and all five replays do not, and get that same fade-out.
+Scenes started from the map or a menu are already black when they begin, so the scripts that
+skip it elsewhere are left alone.
+
 **What it changes.** `amm_e011`, `ksg_e011`, `yyi_e011`, `skr_e011`, `ink_e011`, `amm_e012`, `amm_e005` to
 `amm_e010`, and the ten replay copies `<name>_o011` and `<name>_o012`, and only by adding: the
 missing scene-effect counts; a detour at a few instructions that jumps to new code at the end of
 the script — register the parts, switch them on or off, change the heroine's expression before a line —
-and back; and, in `amm_e007` to `amm_e010`, one cast entry for the face overlay. No instruction
-moves within the code and nothing is removed, so every instruction keeps its number and every
+and back, or black the screen out before an epilogue's first background is loaded; and, in
+`amm_e007` to `amm_e010`, one cast entry for the face overlay. No instruction moves within the code and nothing is removed, so every instruction keeps its number and every
 jump its target. The cast entry is 56 bytes in the header, so in those four scripts the code
 starts 56 bytes later in the file; the server takes that offset from the export. A few
 instructions are changed in place at the same length, each explained in the script: one points

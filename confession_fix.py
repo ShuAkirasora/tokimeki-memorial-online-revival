@@ -571,6 +571,30 @@ def plate_off(ip: int, operands: tuple) -> tuple:
     return (ip, bg_show(slot, *rest), bg_show(slot | PLATE_OFF, *rest))
 
 
+# Every epilogue opens with a fade in from black, and the screen is not black
+# when it starts: switching to the event screen after the credits brings the
+# first background up on its own, so the scene shows, drops to black, and
+# fades in again with her in it. Kasuga's, Yayoi's, Sakurai's and Inukai's own
+# epilogues black the screen out right after the switch, before anything is
+# loaded; the five replays and Amamiya's epilogue do not, and get the same
+# fade-out here, ahead of the first load.
+EPILOGUE_OPENINGS = {               # script: (ip of the first load, what follows it)
+    "ksg_o012": (29, bg_show(0, 0, 0, 0, 0, 0, 0, 0x70, 0, 0)),
+    "yyi_o012": (41, bg_show(0, 0, 0, 0, 0, 0, 0, 0xB0, 0, 0)),
+    "skr_o012": (29, bg_show(0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0)),
+    "ink_o012": (30, face_load(0x60)),
+    "amm_o012": (30, face_load(0x60)),
+    "amm_e012": (38, face_load(0x60)),
+}
+EPILOGUE_BLACK_OUT = 4              # the speed the other epilogues use
+
+
+def black_first(name: str) -> tuple:
+    """A hook: black the screen out before the epilogue's first load."""
+    ip, after_load = EPILOGUE_OPENINGS[name]
+    return (ip, bg_load(0) + after_load, black_out(EPILOGUE_BLACK_OUT), b"")
+
+
 # Kasuga's close-up on the sunflowers (2073) has twenty-one parts, and both
 # her confession and its replay register them all and switch them line by
 # line. (The replay alone leaves the sunflowers' count at 0.) Three things
@@ -661,7 +685,7 @@ def replay_epilogue(name: str) -> dict:
     ip, place, picture, up, operands = REPLAY_EPILOGUES[name]
     return dict(effects={}, swap=[(ip, background(place, UNDERWATER),
                                    background(place, picture)),
-                                  plate_off(up, operands)], hooks=[])
+                                  plate_off(up, operands)], hooks=[black_first(name)])
 
 
 RECIPES = {
@@ -724,6 +748,7 @@ RECIPES = {
         swap=[(4, background(AMAMIYA_PLAY_NAME, AMAMIYA_SEA),
                background(AMAMIYA_PLAY_NAME, AMAMIYA_STAGE))],
         hooks=[
+            black_first("amm_e012"),
             # Right after slot 0 is declared, so the pastel is slot 1.
             (4, background(AMAMIYA_PLAY_NAME, AMAMIYA_STAGE), b"",
              background(AMAMIYA_PLAY_NAME, AMAMIYA_PASTEL)),
@@ -812,6 +837,7 @@ RECIPES = {
         swap=[(4, background(AMAMIYA_PLAY_NAME, UNDERWATER),
                background(AMAMIYA_PLAY_NAME, AMAMIYA_STAGE))],
         hooks=[
+            black_first("amm_o012"),
             (4, background(AMAMIYA_PLAY_NAME, AMAMIYA_STAGE), b"",
              background(AMAMIYA_PLAY_NAME, AMAMIYA_PASTEL)),
             (46, face_show(0x60) + call(4), b"", b"",
