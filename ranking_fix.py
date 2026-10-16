@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Fix the client's own bugs, for handing out through the updater.
 
-Six fixes, one file -- the client is a single tmo.exe, so whatever is fixed
+Seven fixes, one file -- the client is a single tmo.exe, so whatever is fixed
 in it goes out together:
 
   * the 試験結果 page of the school paper (twenty bytes, below);
@@ -14,7 +14,9 @@ in it goes out together:
   * 「イベント中断」 in a one-player event, which this build draws grey and
     wires to nothing (nine bytes, after that);
   * the staff roll of an おまけ ending, which nothing in this build can stop
-    (five bytes and a 140-byte routine, last).
+    (five bytes and a 140-byte routine, after that);
+  * the あとがき blackboard after an おまけ confession is left with
+    イベント中断 (eleven bytes and two short routines, last).
 
 The paper's 試験結果 tab draws the exam rankings from six files this server
 publishes (server/newspaper.py). The client that shipped reads every score in
@@ -135,6 +137,32 @@ marker, and the fix keeps it rather than invent another.)
   the five bytes it took and jumps back.
   ⚠️ Only in おまけ: the roll that follows a confession on campus is the
   first time the player sees it, and it plays as it always did.
+
+  No あとがき after leaving an おまけ confession
+  ----------------------------------------------
+  The あとがき is the blackboard that closes a story: a teacher explains
+  再入学 to a player who has just been given an ending. The client puts it up
+  on the way back to the menus after one -- the Ok of leaving the school
+  (0x030A) as it arrives in an event (0x7838F3) sets the menu's entry step to
+  4, and the menu (0x69F235) reads 4 as "blackboard first, then on its ＯＫ
+  the ゲームメニュー" (its own steps 9..12, then 7). An おまけ confession left
+  with イベント中断 comes back the same way -- it is the only answer that
+  brings this client out of the replay onto a menu at all -- so the player
+  who skipped the scene is shown the story's closing lecture.
+
+  The entry steps the menu knows are 0..4, and none of the others leads to
+  the ゲームメニュー without the board: 0 replays the start-up logos, 1 is the
+  login box, 2 the キャラクター選択, 3 the board again. So the fix adds one,
+  in two places. In the Ok's handler, seven bytes at 0x783910 (``push 4;
+  call 0x640F80``, the store of the 4) call a routine after the roll's
+  (0xB58F90) that stores 5 instead when the event is an おまけ replay -- the
+  field the roll reads (kind 6) -- and 4 otherwise. In the menu, the jump
+  taken for anything past 4 (0x69F2BC, to the end of the step) is pointed at
+  a second routine (0xB58FB0): 5 there goes straight to step 7, as the
+  board's ＯＫ would, and every other value takes the jump it always took.
+  Nothing in the shipped client stores 5, so nothing else changes.
+  ⚠️ Only in おまけ: after a confession on campus the Ok is the client's own
+  way out of the story, and the あとがき there is the ending's last page.
 
   How it reaches players, and why that way
   ----------------------------------------
@@ -265,6 +293,37 @@ ROLL_ESC_ROUTINE = bytes.fromhex(
     "e9ad87ccff"        # jmp 0x821739
 )
 
+#: No あとがき after an おまけ confession left with イベント中断. First the seven
+#: bytes the hook takes in the Ok of leaving the school (0x7838F3, with the
+#: context 0x4039ED hands out in ecx) and the routine it calls; then the jump
+#: in the menu's first step (0x69F235) that takes every entry step past 4 to
+#: the end of the step, and the routine it is pointed at instead. Both
+#: routines are position-dependent, like the roll's.
+OMAKE_LOGOUT_HOOK = 0x783910
+OMAKE_LOGOUT_HOOK_SHIPPED = "6a04e869d6ebff"   # push 4; call 0x640F80
+OMAKE_LOGOUT_CODE = 0xB58F90
+OMAKE_LOGOUT_ROUTINE = bytes.fromhex(
+    "6a04"              # push 4                      blackboard first ...
+    "8b4144"            # mov eax,[ecx+0x44]          the event being played
+    "85c0740d"          # test eax,eax; jz store
+    "83782806"          # cmp dword [eax+0x28],6      an おまけ replay?
+    "7507"              # jne store
+    "c7042405000000"    # mov dword [esp],5           ... or straight to the ゲームメニュー
+    "e8d57faeff"        # store: call 0x640F80
+    "c3"                # ret
+)
+MENU_ENTRY_JUMP = 0x69F2BC
+MENU_ENTRY_JUMP_SHIPPED = "0f85c6040000"       # jne 0x69F788 (entry step past 4)
+MENU_ENTRY_CODE = 0xB58FB0
+MENU_ENTRY_ROUTINE = bytes.fromhex(
+    "48"                # dec eax                     the entry step, less 4, less 1
+    "0f85d167b4ff"      # jne 0x69F788                not 5: as it always was
+    "8b45f0"            # mov eax,[ebp-0x10]          the menu
+    "885844"            # mov [eax+0x44],bl           (bl is 0) the ゲームメニュー, as after 4
+    "c7404007000000"    # mov dword [eax+0x40],7      step 7: the step the board's ＯＫ leads to
+    "e9bf67b4ff"        # jmp 0x69F788
+)
+
 #: The twenty loads, by address, with the instruction as shipped. The paper's
 #: ranking drawer (0x60CA11) reads a クラス row's eight averages and 合 first,
 #: then a 個人 row's eight scores and 合.
@@ -318,12 +377,36 @@ def as_shipped(data: bytes) -> bytes:
     at = offset(ROLL_ESC_CODE)
     if out[at:at + len(ROLL_ESC_ROUTINE)] == ROLL_ESC_ROUTINE:
         out[at:at + len(ROLL_ESC_ROUTINE)] = bytes(len(ROLL_ESC_ROUTINE))
+    at = offset(OMAKE_LOGOUT_HOOK)
+    if out[at:at + 7] == omake_logout_call():
+        out[at:at + 7] = bytes.fromhex(OMAKE_LOGOUT_HOOK_SHIPPED)
+    at = offset(OMAKE_LOGOUT_CODE)
+    if out[at:at + len(OMAKE_LOGOUT_ROUTINE)] == OMAKE_LOGOUT_ROUTINE:
+        out[at:at + len(OMAKE_LOGOUT_ROUTINE)] = bytes(len(OMAKE_LOGOUT_ROUTINE))
+    at = offset(MENU_ENTRY_JUMP)
+    if out[at:at + 6] == menu_entry_jump():
+        out[at:at + 6] = bytes.fromhex(MENU_ENTRY_JUMP_SHIPPED)
+    at = offset(MENU_ENTRY_CODE)
+    if out[at:at + len(MENU_ENTRY_ROUTINE)] == MENU_ENTRY_ROUTINE:
+        out[at:at + len(MENU_ENTRY_ROUTINE)] = bytes(len(MENU_ENTRY_ROUTINE))
     return bytes(out)
 
 
 def roll_esc_jump() -> bytes:
     """``jmp ROLL_ESC_CODE``, as written at ROLL_ESC_HOOK."""
     return b"\xe9" + (ROLL_ESC_CODE - (ROLL_ESC_HOOK + 5)).to_bytes(4, "little", signed=True)
+
+
+def omake_logout_call() -> bytes:
+    """``call OMAKE_LOGOUT_CODE; nop; nop``, as written at OMAKE_LOGOUT_HOOK."""
+    rel = OMAKE_LOGOUT_CODE - (OMAKE_LOGOUT_HOOK + 5)
+    return b"\xe8" + rel.to_bytes(4, "little", signed=True) + bytes([NOP] * 2)
+
+
+def menu_entry_jump() -> bytes:
+    """``jne MENU_ENTRY_CODE``, as written at MENU_ENTRY_JUMP."""
+    rel = MENU_ENTRY_CODE - (MENU_ENTRY_JUMP + 6)
+    return b"\x0f\x85" + rel.to_bytes(4, "little", signed=True)
 
 
 def fixed(data: bytes, address: bytes) -> bytes:
@@ -367,6 +450,22 @@ def fixed(data: bytes, address: bytes) -> bytes:
     if any(out[at:at + len(ROLL_ESC_ROUTINE)]):  # pragma: no cover - hash covers it
         raise ValueError(f"the code section's tail at {ROLL_ESC_CODE:#x} is not empty")
     out[at:at + len(ROLL_ESC_ROUTINE)] = ROLL_ESC_ROUTINE
+    at = offset(OMAKE_LOGOUT_HOOK)
+    if out[at:at + 7] != bytes.fromhex(OMAKE_LOGOUT_HOOK_SHIPPED):  # pragma: no cover - hash covers it
+        raise ValueError(f"unexpected instruction at {OMAKE_LOGOUT_HOOK:#x}")
+    out[at:at + 7] = omake_logout_call()
+    at = offset(OMAKE_LOGOUT_CODE)
+    if any(out[at:at + len(OMAKE_LOGOUT_ROUTINE)]):  # pragma: no cover - hash covers it
+        raise ValueError(f"the code section's tail at {OMAKE_LOGOUT_CODE:#x} is not empty")
+    out[at:at + len(OMAKE_LOGOUT_ROUTINE)] = OMAKE_LOGOUT_ROUTINE
+    at = offset(MENU_ENTRY_JUMP)
+    if out[at:at + 6] != bytes.fromhex(MENU_ENTRY_JUMP_SHIPPED):  # pragma: no cover - hash covers it
+        raise ValueError(f"unexpected instruction at {MENU_ENTRY_JUMP:#x}")
+    out[at:at + 6] = menu_entry_jump()
+    at = offset(MENU_ENTRY_CODE)
+    if any(out[at:at + len(MENU_ENTRY_ROUTINE)]):  # pragma: no cover - hash covers it
+        raise ValueError(f"the code section's tail at {MENU_ENTRY_CODE:#x} is not empty")
+    out[at:at + len(MENU_ENTRY_ROUTINE)] = MENU_ENTRY_ROUTINE
     site = auth.find_site(bytes(out))
     for k, octet in enumerate(address):
         out[site + 4 + 5 * k] = octet
@@ -384,7 +483,7 @@ def find_exe(game_dir: str) -> Path:
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos, Epilogue, イベント中断, おまけ staff roll), for handing out through the updater.")
+        description="Fix the client's own bugs (試験結果 page, おまけ button, 表情 photos, Epilogue, イベント中断, おまけ staff roll, あとがき after an おまけ confession), for handing out through the updater.")
     parser.add_argument("--game-dir", help="the folder that holds tmo.exe (or tmo.exe itself)")
     parser.add_argument("--address", help="the server address players' clients are pointed at")
     parser.add_argument("--update-dir", default=str(UPDATE_DIR),
@@ -414,7 +513,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
     print(f"{source}: the shipped build; authentication address {shown}, "
           f"{len(SITES)} score loads, the おまけ button, the 表情 photos, the Epilogue, "
-          f"イベント中断 and the おまけ staff roll fixed")
+          f"イベント中断, the おまけ staff roll and the あとがき after leaving an おまけ "
+          f"confession fixed")
     if args.check:
         print(f"would write {dest} ({len(out)} bytes, sha256 {hashlib.sha256(out).hexdigest()[:16]}…)")
         return 0

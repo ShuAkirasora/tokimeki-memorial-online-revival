@@ -808,6 +808,16 @@ to a short routine in the unused, zero-filled tail of the code section, which �
 the way the roll's own end does and lets it ask for the epilogue as usual. The roll after a
 confession on campus is left as it was.
 
+And a seventh, after the fifth. An おまけ confession left with イベント中断 comes back to the
+menus the way a finished story does — the only way this client has out of the replay — and the
+client puts up the story's closing blackboard on that way: the あとがき, a teacher explaining
+再入学 to a player who has just been given an ending. None of the ways into the menus the
+client already has reaches the ゲームメニュー without that board, so the fix adds one: during
+an おまけ replay, by the same field, the seven bytes that ask for "blackboard first" call a
+short routine that asks for the new way instead, and the menu's first step, through a second
+short routine, takes it straight to the step after the board. On campus the blackboard still
+closes the ending.
+
 **How it reaches players.** As the operated game shipped client fixes: its updater runs before
 the client on every start and replaces whole files, so a fix to the client's code was a new
 `tmo.exe`, in effect from the next start. This writes that file into `runtime/update/`, made
@@ -833,7 +843,7 @@ client still started against a server that offers the fix fetches it again.
 | `export_scripts.py` | the script exports, out of your own copy of the game |
 | `apply_fixes.py` | the two fixes next to it, `confession_fix.py` and `ranking_fix.py`, in one run |
 | `confession_fix.py` | the confession scenes, Amamiya's epilogue and her events 5–10, the おまけ replays, and the おまけ gallery's pictures, fixed for the updater to hand out |
-| `ranking_fix.py` | the exam-ranking page's twenty score loads, the おまけ button, the gallery's expression photos and its Epilogue, イベント中断, Esc on an おまけ staff roll, fixed in a copy of your client for the updater to hand out |
+| `ranking_fix.py` | the exam-ranking page's twenty score loads, the おまけ button, the gallery's expression photos and its Epilogue, イベント中断, Esc on an おまけ staff roll, no あとがき after leaving an おまけ confession, fixed in a copy of your client for the updater to hand out |
 | `issue_code.py` | issue, list, revoke and unbind registration codes |
 | `server/` | the services; `run_all.py` binds them in one asyncio loop, `mps_session.py` is the packet layer and the bulk of it |
 | `reference/` | the tables above, and the opcode table the exporter reads |

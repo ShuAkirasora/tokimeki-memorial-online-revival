@@ -5299,7 +5299,9 @@ class MpsServer:
                 # the campus map, which a title-screen connection has none of
                 # (black, then 0x4000); 0x030A, the Ok of leaving the school,
                 # puts up the same あとがき blackboard a finished replay ends
-                # on and its ＯＫ lands on the ゲームメニュー.
+                # on and its ＯＫ lands on the ゲームメニュー. The client fix
+                # (ranking_fix.py) skips the blackboard on this way, so a
+                # patched client goes straight to the ゲームメニュー.
                 # INVENTED — after イベント中断 in an おまけ confession replay the server answers 0x6C03 with 0x6C04 and then 0x030A (OkSchoolLogout); the shipped client could not send it there, so there is no original answer, and of the three the client takes this is the one that reaches a menu.
                 session.title_interrupted = False
                 print(f"[{self.tag}] おまけ: {finished} 中断 -> ゲームメニュー (0x030a)")
